@@ -1,0 +1,12 @@
+/target
+/data
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+/reference

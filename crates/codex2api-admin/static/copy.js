@@ -1,0 +1,66 @@
+(() => {
+  window.bindCopyButtons = (root = document) => root.querySelectorAll('[data-copy-target], [data-key-copy]').forEach((button) => {
+    if (button.dataset.copyBound === 'true') return;
+    button.dataset.copyBound = 'true';
+    const originalTitle = button.getAttribute('title');
+    const originalAriaLabel = button.getAttribute('aria-label');
+    const label = document.createElement('span');
+    label.className = 'copy-label';
+    label.append(...button.childNodes);
+    const feedback = document.createElement('span');
+    feedback.className = 'copy-feedback';
+    feedback.setAttribute('aria-hidden', 'true');
+    feedback.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4 10-10" pathLength="1"/></svg><span></span>';
+    const message = feedback.querySelector('span');
+    button.append(label, feedback);
+    button.classList.add('copy-button');
+    button.setAttribute('aria-live', 'polite');
+    let timer;
+    const reset = () => {
+      button.classList.remove('copy-success', 'copy-error');
+      for (const [name, value] of [['title', originalTitle], ['aria-label', originalAriaLabel]]) {
+        if (value === null) button.removeAttribute(name);
+        else button.setAttribute(name, value);
+      }
+    };
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      window.clearTimeout(timer);
+      reset();
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      try {
+        let text;
+        if (button.dataset.keyCopy) {
+          const manager = button.closest('[data-key-manager]');
+          const response = await fetch(button.dataset.keyCopy, {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ csrf: manager.dataset.keyCsrf })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `请求失败（HTTP ${response.status}）`);
+          text = result.token;
+        } else {
+          text = document.getElementById(button.dataset.copyTarget)?.textContent;
+        }
+        if (typeof text !== 'string' || !text) throw new Error('没有可复制的内容');
+        await navigator.clipboard.writeText(text);
+        message.textContent = '已复制';
+        button.title = '复制成功';
+        button.setAttribute('aria-label', '已复制');
+        button.classList.add('copy-success');
+      } catch (error) {
+        message.textContent = '复制失败';
+        button.title = error instanceof Error ? error.message : String(error);
+        button.setAttribute('aria-label', '复制失败');
+        button.classList.add('copy-error');
+      } finally {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        timer = window.setTimeout(reset, 1800);
+      }
+    });
+  });
+  window.bindCopyButtons();
+})();

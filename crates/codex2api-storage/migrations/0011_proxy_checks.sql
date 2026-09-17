@@ -1,0 +1,14 @@
+ALTER TABLE outbound_proxies ADD COLUMN exit_ip TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN country_code TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN country TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN region TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN city TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN connection_ok INTEGER;
+ALTER TABLE outbound_proxies ADD COLUMN connection_latency_ms INTEGER;
+ALTER TABLE outbound_proxies ADD COLUMN connection_error TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN connection_checked_at TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN quality_ok INTEGER;
+ALTER TABLE outbound_proxies ADD COLUMN quality_latency_ms INTEGER;
+ALTER TABLE outbound_proxies ADD COLUMN quality_http_status INTEGER;
+ALTER TABLE outbound_proxies ADD COLUMN quality_error TEXT;
+ALTER TABLE outbound_proxies ADD COLUMN quality_checked_at TEXT;

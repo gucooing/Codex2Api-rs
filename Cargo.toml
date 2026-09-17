@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/codex2api",
+    "crates/codex2api-admin",
+    "crates/codex2api-accounts",
+    "crates/codex2api-api",
+    "crates/codex2api-auth",
+    "crates/codex2api-storage",
+    "crates/codex2api-upstream",
+    "crates/codex2api-version",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.93"
+
+[workspace.dependencies]
+anyhow = "1"
+argon2 = "0.5"
+async-stream = "0.3"
+axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+chrono-tz = "0.10"
+codex2api-accounts = { path = "crates/codex2api-accounts" }
+codex2api-admin = { path = "crates/codex2api-admin" }
+codex2api-api = { path = "crates/codex2api-api" }
+codex2api-auth = { path = "crates/codex2api-auth" }
+codex2api-storage = { path = "crates/codex2api-storage" }
+codex2api-upstream = { path = "crates/codex2api-upstream" }
+codex2api-version = { path = "crates/codex2api-version" }
+eventsource-stream = "0.2"
+futures = "0.3"
+http = "1"
+os_info = "3"
+rand = "0.9"
+reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "stream", "cookies", "socks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono", "uuid", "migrate"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs", "net", "sync", "time", "io-util"] }
+tokio-stream = "0.1"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "cors", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+zstd = "0.13"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots", "proxy"] }
+tungstenite = { version = "0.27", features = ["deflate", "proxy"] }
+rustls = { version = "0.23.45", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }
+tokio-rustls = "0.26"
+
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
