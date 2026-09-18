@@ -1,6 +1,6 @@
 //! Client request ledger. Never retain prompts, response text, image bytes or bearer keys.
 use axum::body::{Body, Bytes};
-use codex2api_storage::{Account, ProxyApiKey, Storage, UsageRecord};
+use codex2api_storage::{Account, Storage, UsageRecord};
 use codex2api_upstream::{Endpoint, RequestMetadata};
 use futures::Stream;
 use serde::Deserialize;
@@ -30,7 +30,8 @@ impl UsageContext {
     pub fn new(
         storage: Storage,
         account: &Account,
-        key: &ProxyApiKey,
+        credential_id: &str,
+        credential_name: &str,
         endpoint: &str,
         transport: &'static str,
     ) -> Self {
@@ -44,13 +45,8 @@ impl UsageContext {
                 .or(account.email.as_deref())
                 .unwrap_or(&account.id)
                 .into(),
-            key_id: key.id.clone(),
-            key_name: key
-                .name
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&key.key_prefix)
-                .into(),
+            key_id: credential_id.into(),
+            key_name: credential_name.into(),
             endpoint: endpoint.into(),
             transport,
         }
@@ -89,7 +85,10 @@ impl UsageContext {
 }
 
 pub(crate) fn billable(endpoint: Endpoint) -> bool {
-    !matches!(endpoint, Endpoint::Models | Endpoint::Usage)
+    !matches!(
+        endpoint,
+        Endpoint::Models | Endpoint::Usage | Endpoint::InputTokens
+    )
 }
 
 pub(crate) struct RequestLog {

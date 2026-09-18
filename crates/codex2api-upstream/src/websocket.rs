@@ -69,7 +69,10 @@ impl UpstreamClient {
             normalize_response_identity(&mut metadata, &self.identity().installation_id, &inbound)?;
         if let Some(kind) = realtime {
             crate::realtime::add_realtime_headers(&mut extra, &inbound);
-            if kind == crate::RealtimeKind::Live {
+            if matches!(
+                kind,
+                crate::RealtimeKind::Live | crate::RealtimeKind::CodexSideband
+            ) {
                 extra.insert(
                     "openai-alpha",
                     http::HeaderValue::from_static("quicksilver=v2"),

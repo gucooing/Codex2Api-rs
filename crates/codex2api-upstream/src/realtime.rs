@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 pub enum RealtimeKind {
     Realtime,
     Live,
+    CodexSideband,
 }
 
 pub fn realtime_url(
@@ -17,6 +18,15 @@ pub fn realtime_url(
     call_id: Option<&str>,
     query: Option<&str>,
 ) -> Result<reqwest::Url> {
+    if kind == RealtimeKind::CodexSideband {
+        let id = call_id
+            .ok_or_else(|| UpstreamError::InvalidRequest("Missing realtime call ID".into()))?;
+        crate::backend::validate_segment(id)?;
+        let mut url = reqwest::Url::parse("wss://chatgpt.com/backend-api/codex/").unwrap();
+        url.path_segments_mut().unwrap().pop_if_empty().push(id);
+        append_realtime_query(&mut url, query)?;
+        return Ok(url);
+    }
     let path = if kind == RealtimeKind::Live {
         "live"
     } else {

@@ -60,7 +60,7 @@ async fn assert_final_schema(storage: &Storage) {
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, 14);
     assert!(columns.iter().any(|s| s == "actual_model"));
     assert!(columns.iter().any(|s| s == "service_tier"));
     let key_columns: Vec<String> =
@@ -112,6 +112,7 @@ async fn startup_migrates_fresh_v3_v4_and_manually_cleaned_v4_databases() {
         ("v10", 10, false),
         ("v11", 11, false),
         ("v12", 12, false),
+        ("v13", 13, false),
     ] {
         let path = temp.path().join(format!("{name}.sqlite"));
         if version > 0 {

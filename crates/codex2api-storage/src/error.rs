@@ -20,6 +20,8 @@ pub enum StorageError {
     OAuthPendingNotFound,
     #[error("proxy api key not found")]
     ApiKeyNotFound,
+    #[error("OAuth 凭据或绑定账户不可用，请选择已启用且完成授权的账户")]
+    OAuthCredentialUnavailable,
     #[error("代理不存在")]
     ProxyNotFound,
     #[error("代理配置已更改，请重新检测")]

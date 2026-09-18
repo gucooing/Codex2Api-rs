@@ -6,6 +6,81 @@ use codex2api_storage::{AccountStatus, ProxyApiKey};
 use crate::error::{ApiError, Result};
 use crate::state::ApiState;
 
+#[derive(Clone)]
+pub(crate) enum AccessCheck {
+    ApiKey(String),
+    OAuth(String),
+}
+
+impl AccessCheck {
+    pub async fn allowed(
+        &self,
+        storage: &codex2api_storage::Storage,
+    ) -> codex2api_storage::Result<bool> {
+        match self {
+            Self::ApiKey(hash) => Ok(storage.lookup_proxy_api_key_by_hash(hash).await?.is_some()),
+            Self::OAuth(hash) => {
+                let allowed = storage.lookup_oauth_access_hash(hash).await?.is_some();
+                if allowed {
+                    storage.touch_oauth_access(hash).await?;
+                }
+                Ok(allowed)
+            }
+        }
+    }
+}
+
+pub(crate) struct RequestCredential {
+    pub id: String,
+    pub name: String,
+    pub access: AccessCheck,
+}
+
+pub(crate) async fn authenticate_request(
+    state: &ApiState,
+    headers: &HeaderMap,
+    oauth: Option<axum::Extension<codex2api_storage::OAuthAccess>>,
+) -> Result<(RequestCredential, AccountContext)> {
+    if let Some(axum::Extension(oauth)) = oauth {
+        let ctx = state.accounts.load_context(&oauth.account_id).await?;
+        if ctx.account.status != AccountStatus::Active {
+            return Err(ApiError::account_disabled());
+        }
+        let expected = ctx.account.chatgpt_account_id.as_deref().unwrap_or("");
+        if headers
+            .get_all("chatgpt-account-id")
+            .iter()
+            .any(|v| v.to_str().ok() != Some(expected))
+        {
+            return Err(ApiError::openai(
+                axum::http::StatusCode::FORBIDDEN,
+                "permission_error",
+                "The account does not match this OAuth credential.",
+                Some("account_mismatch"),
+            ));
+        }
+        state.storage.touch_oauth_access(&oauth.token_hash).await?;
+        state.storage.touch_account(&oauth.account_id).await?;
+        return Ok((
+            RequestCredential {
+                id: oauth.credential_id,
+                name: oauth.name,
+                access: AccessCheck::OAuth(oauth.token_hash),
+            },
+            ctx,
+        ));
+    }
+    let (key, ctx) = authenticate(state, headers).await?;
+    Ok((
+        RequestCredential {
+            id: key.id,
+            name: key.name.filter(|s| !s.is_empty()).unwrap_or(key.key_prefix),
+            access: AccessCheck::ApiKey(key.key_hash),
+        },
+        ctx,
+    ))
+}
+
 /// Resolve `Authorization: Bearer <proxy api key>` to an isolated account context.
 pub async fn authenticate(
     state: &ApiState,

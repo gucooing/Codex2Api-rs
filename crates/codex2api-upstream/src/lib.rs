@@ -14,6 +14,7 @@
 
 mod backend;
 mod client;
+mod compat;
 mod endpoint;
 mod error;
 mod headers;
@@ -31,6 +32,7 @@ mod proxy_fixture;
 
 pub use backend::BackendEndpoint;
 pub use client::{DEFAULT_STREAM_IDLE_TIMEOUT, UpstreamClient, responses_url};
+pub use compat::{ChatgptEndpoint, responses_subpath_url};
 pub use endpoint::Endpoint;
 pub use error::{Result, UpstreamError};
 pub use headers::{

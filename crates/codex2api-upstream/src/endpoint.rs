@@ -11,6 +11,8 @@ use codex2api_version::{CHATGPT_CODEX_BASE_URL, CODEX_PACKAGE_VERSION};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Endpoint {
     Responses,
+    Compact,
+    InputTokens,
     Guardian,
     GuardianClassifier,
     Models,
@@ -25,6 +27,8 @@ impl Endpoint {
     pub fn codex_path(self) -> &'static str {
         match self {
             Self::Responses => "responses",
+            Self::Compact => "responses/compact",
+            Self::InputTokens => "responses/input_tokens",
             Self::Guardian => "guardian",
             Self::GuardianClassifier => "guardian-classifier",
             Self::Models => "models",
@@ -38,6 +42,7 @@ impl Endpoint {
 
     pub fn url(self) -> String {
         match self {
+            Self::InputTokens => "https://api.openai.com/v1/responses/input_tokens".into(),
             Self::Usage => "https://chatgpt.com/backend-api/wham/usage".into(),
             Self::Models => {
                 format!("{CHATGPT_CODEX_BASE_URL}/models?client_version={CODEX_PACKAGE_VERSION}")
@@ -61,7 +66,7 @@ impl Endpoint {
         }
     }
 
-    fn prepare(
+    pub(crate) fn prepare(
         self,
         body: &[u8],
         inbound: &HeaderMap,
@@ -82,6 +87,15 @@ impl Endpoint {
             });
         }
         let mut value = decode_body(body, inbound)?;
+        if self == Self::InputTokens {
+            let mut headers = normalize_protocol_headers(inbound, installation_id)?;
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert("accept", HeaderValue::from_static("application/json"));
+            return Ok(PreparedRequest {
+                body: Bytes::from(serde_json::to_vec(&value)?),
+                headers,
+            });
+        }
         let mut headers = if value.get("client_metadata").is_some() {
             normalize_response_identity(&mut value, installation_id, inbound)?
         } else {
@@ -123,7 +137,7 @@ impl UpstreamClient {
             endpoint.method(),
             &endpoint.url(),
             prepared,
-            endpoint != Endpoint::Usage,
+            !matches!(endpoint, Endpoint::Usage | Endpoint::InputTokens),
         )
         .await
     }

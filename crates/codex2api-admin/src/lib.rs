@@ -18,7 +18,8 @@ mod views;
 use axum::Router;
 use axum::routing::{get, post};
 use handlers::{
-    accounts, auth, fingerprint, keys, oauth, official, proxies, settings, usage_records,
+    accounts, auth, fingerprint, keys, oauth, oauth_credentials, official, proxies, settings,
+    usage_records,
 };
 
 pub use state::AdminState;
@@ -30,10 +31,33 @@ pub fn router(state: AdminState) -> Router {
         // Account list, account state and proxy keys.
         .route("/admin", get(accounts::dashboard))
         .route("/admin/", get(accounts::dashboard))
-        .route("/admin/settings", get(settings::page).post(settings::save))
+        .route(
+            "/admin/settings",
+            get(settings::gateway_page).post(settings::save_gateway),
+        )
+        .route(
+            "/admin/settings/security",
+            get(settings::page).post(settings::save),
+        )
         .route("/admin/usage", get(usage_records::page))
         .route("/admin/keys", get(keys::page).post(keys::create))
         .route("/admin/keys/{key_id}/{action}", post(keys::action))
+        .route(
+            "/admin/oauth/credentials",
+            get(oauth_credentials::page).post(oauth_credentials::create),
+        )
+        .route(
+            "/admin/oauth/credentials/{id}/{action}",
+            post(oauth_credentials::action),
+        )
+        .route(
+            "/admin/oauth/accounts/{account_id}",
+            get(oauth_credentials::detail),
+        )
+        .route(
+            "/admin/oauth/accounts/{account_id}/delete",
+            post(oauth_credentials::delete_account),
+        )
         .route("/admin/proxies", get(proxies::page).post(proxies::create))
         .route(
             "/admin/proxies/{id}/edit",

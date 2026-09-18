@@ -36,6 +36,7 @@ codex2api-version = { path = "crates/codex2api-version" }
 eventsource-stream = "0.2"
 futures = "0.3"
 http = "1"
+hmac = "0.12"
 os_info = "3"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "stream", "cookies", "socks"] }

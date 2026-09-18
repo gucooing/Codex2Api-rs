@@ -6,9 +6,11 @@
 
 mod api_key;
 mod error;
+mod oauth;
 mod password;
 mod proxy;
 mod quota;
+mod settings;
 mod storage;
 mod types;
 mod usage;
@@ -18,9 +20,13 @@ pub use api_key::{
     proxy_api_key_prefix,
 };
 pub use error::{Result, StorageError};
+pub use oauth::{
+    OAuthAccess, OAuthAccountSummary, OAuthCredential, OAuthDevice, OAuthDeviceIdentity,
+};
 pub use password::{hash_password, verify_password};
 pub use proxy::{OutboundProxy, ProxyConnectionCheck, ProxyQualityCheck, parse_proxy_url};
 pub use quota::QuotaSnapshot;
+pub use settings::{GatewaySettings, UaMode};
 pub use storage::{DEFAULT_ADMIN_SESSION_TTL, DEFAULT_OAUTH_PENDING_TTL, Storage};
 pub use types::{
     Account, AccountRuntime, AccountStatus, AccountTokens, AccountUpdate, AdminSession, AdminUser,

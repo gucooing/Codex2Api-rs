@@ -54,6 +54,65 @@ $env:CODEX2API_DB = "D:\data\codex2api.sqlite"
 .\codex2api.exe
 ```
 
+## 第三方客户端 OAuth 接入
+
+在管理端顶栏 **OAuth** 中添加 RT，选择一个已启用且完成官方授权的账户，再复制 RT 到第三方客户端。首页按账户展示 RT 数量、登录设备数和最近使用时间；点击 **详情** 管理该账户的多个 RT，并查看各 RT 的登录设备、首次/最近登录和最近使用时间。这里签发的是代理自己的 RT，真实官方 RT 始终留在服务端。
+
+账户行的 **删除** 会清除该账户全部代理 RT、Access Token 和设备记录，保留原始账户、官方授权、API Key 和历史用量。
+
+客户端需要支持修改服务基础地址并通过 RT 刷新登录。统一基础地址为 `http://服务地址/api/oauth/chatgpt`，接口如下：
+
+| 功能 | 路径 |
+| --- | --- |
+| 令牌刷新 | `POST /api/oauth/chatgpt/oauth/token` |
+| 撤销代理令牌 | `POST /api/oauth/chatgpt/oauth/revoke` |
+| Responses | `POST /api/oauth/chatgpt/backend-api/codex/responses` |
+| 上下文压缩 | `POST /api/oauth/chatgpt/backend-api/codex/responses/compact` |
+| 其他 Responses 子接口 | `POST /api/oauth/chatgpt/backend-api/codex/responses/{子路径}`（校验路径片段） |
+| Responses WebSocket | `ws://服务地址/api/oauth/chatgpt/backend-api/codex/responses` |
+| 模型列表 | `GET /api/oauth/chatgpt/backend-api/codex/models` |
+| 额度查询 | `GET /api/oauth/chatgpt/backend-api/wham/usage` |
+| 账户查询 | `GET /api/oauth/chatgpt/backend-api/wham/accounts/check` |
+| RT 导入后的账户信息 | `GET /api/oauth/chatgpt/backend-api/accounts/check/v4-2023-04-27` |
+| 订阅到期时间 | `GET /api/oauth/chatgpt/backend-api/subscriptions?account_id=绑定账户ID` |
+| 关闭训练数据共享 | `PATCH /api/oauth/chatgpt/backend-api/settings/account_user_setting?feature=training_allowed&value=false` |
+| 输入 Token 计数 | `POST /api/oauth/chatgpt/v1/responses/input_tokens` |
+| 实时会话创建 | `POST /api/oauth/chatgpt/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas` |
+| 实时会话事件通道 | `ws://服务地址/api/oauth/chatgpt/backend-api/codex/{call_id}` |
+
+现有 Codex 和 WHAM 路由均可通过此前缀访问，包括图片、搜索和账户资料。HTTP/WS 由应用提供，证书和外部 HTTPS/WSS 由反向代理处理；反向代理需保留请求路径并支持 WebSocket Upgrade。
+
+Sub2API 的地址字段可按以下示例配置（客户端与代理在同一台机器）：
+
+```json
+{
+  "responses_url": "http://127.0.0.1:8080/api/oauth/chatgpt/backend-api/codex/responses",
+  "chatgpt_base_url": "http://127.0.0.1:8080/api/oauth/chatgpt",
+  "auth_base_url": "http://127.0.0.1:8080/api/oauth/chatgpt",
+  "platform_base_url": "http://127.0.0.1:8080/api/oauth/chatgpt"
+}
+```
+
+Responses 子路径和同级模型、图片、搜索、实时接口按该客户端的地址重写规则保留。输入 Token 计数单独转发到官方 `https://api.openai.com/v1/responses/input_tokens`，不计作已消耗推理用量；如果上游不接受该账户的凭据，保留真实错误，由客户端决定是否采用本地估算。
+
+令牌接口接受 JSON 或 `application/x-www-form-urlencoded`，例如：
+
+```json
+{
+  "grant_type": "refresh_token",
+  "refresh_token": "从管理端复制的代理 RT",
+  "client_id": "app_EMoamEEZ73f0CkXaXp7hrann"
+}
+```
+
+成功返回 `access_token`、`refresh_token`、`id_token`、`token_type: "Bearer"`、`expires_in: 3600` 和 `scope`。`client_id` 可以省略；填写时必须为上例的 Codex client ID。代理签发的 JWT 使用自身签发方 `codex2api`，账户声明反映绑定账户，不是 OpenAI 签发的令牌。
+
+RT 固定绑定一个账户，刷新时保持不变，直到暂停、删除或撤销；每次刷新签发独立的一小时 Access Token。业务接口使用 `Authorization: Bearer <access_token>`。如果发送 `ChatGPT-Account-ID`，必须与绑定账户一致。暂停 RT 会作废已签发的 Access Token；重新启用后需刷新获取新令牌。删除 RT 或账户会清除关联令牌。撤销 Access Token 只影响该令牌，撤销 RT 会删除该凭据及其全部 Access Token，不会撤销上游官方授权。
+
+登录设备按刷新请求中的 `x-codex-installation-id` 识别，未提供时按 User-Agent 归类；同 UA 的多个设备可能合并，这些标识由客户端提供，不代表设备已被验证。刷新令牌更新最近登录时间，HTTP 鉴权和 WebSocket 业务消息更新最近使用时间。设备记录不代表当前在线状态。
+
+此前缀仅接受代理 OAuth Access Token，原 API Key 接口仍使用 API Key。计费请求继续执行 UA 黑白名单，并接入用量管理。用量列表和筛选项统一称为“来源”：API Key 调用显示 Key 名称，OAuth 调用显示 RT 设置的名称。WebSocket 在转发每条业务消息前重新检查有效期与凭据状态。此模块实现代理 RT 登录流程，不包含浏览器授权码/设备码登录、PAT 验证或 Agent Identity 任务注册。
+
 ## 跟进官方 Codex 更新
 
 向 AI 下达“更新 Codex”或“升级官方 Codex 到 0.155.0”等命令后，按

@@ -3,6 +3,7 @@ pub(crate) mod account;
 pub(crate) mod fingerprint;
 pub(crate) mod keys;
 pub(crate) mod oauth;
+pub(crate) mod oauth_credentials;
 pub(crate) mod official;
 pub(crate) mod proxies;
 pub(crate) mod settings;
@@ -64,11 +65,17 @@ pub(crate) fn page(title: &str, nav: &str, body: &str) -> String {
 }
 
 pub(crate) fn nav(current: &str) -> String {
+    let oauth_active = if current == "oauth-credentials" {
+        " active"
+    } else {
+        ""
+    };
+    let settings_active = if current == "settings" { " active" } else { "" };
     let (account_active, usage_active, keys_active, proxies_active) = match current {
         "usage-records" => ("", " active", "", ""),
         "keys" => ("", "", " active", ""),
         "proxies" => ("", "", "", " active"),
-        "settings" => ("", "", "", ""),
+        "settings" | "oauth-credentials" => ("", "", "", ""),
         _ => (" active", "", "", ""),
     };
     format!(
@@ -79,14 +86,15 @@ pub(crate) fn nav(current: &str) -> String {
       <a class="main-tab{account_active}" href="/admin">账户管理</a>
       <a class="main-tab{usage_active}" href="/admin/usage">用量管理</a>
       <a class="main-tab{keys_active}" href="/admin/keys">API Key</a>
+      <a class="main-tab{oauth_active}" href="/admin/oauth/credentials">OAuth</a>
       <a class="main-tab{proxies_active}" href="/admin/proxies">代理配置</a>
     </nav>
+    <a class="main-tab top-settings{settings_active}" href="/admin/settings">设置</a>
     <details class="top-menu" data-admin-menu>
       <summary class="btn ghost" aria-label="管理菜单" aria-expanded="false" aria-controls="admin-menu-options">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
       </summary>
       <div class="top-menu-options" id="admin-menu-options">
-        <a href="/admin/settings">设置</a>
         <form method="post" action="/admin/logout"><button type="submit">退出</button></form>
       </div>
     </details>

@@ -375,6 +375,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "codex2api-accounts",
  "codex2api-auth",
@@ -382,10 +383,12 @@ dependencies = [
  "codex2api-upstream",
  "codex2api-version",
  "futures",
+ "hmac",
  "http",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
@@ -393,6 +396,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tower",
  "tracing",
+ "url",
  "uuid",
 ]
 

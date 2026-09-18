@@ -132,7 +132,7 @@ impl Storage {
     }
 
     pub async fn usage_key_options(&self) -> Result<Vec<UsageKeyOption>> {
-        Ok(sqlx::query_as::<_,UsageKeyOption>("SELECT k.id, COALESCE(NULLIF(k.name,''), k.key_prefix) AS name, COALESCE(NULLIF(a.display_name,''),NULLIF(a.email,''),a.id) AS account_name FROM proxy_api_keys k JOIN accounts a ON a.id=k.account_id ORDER BY account_name,name")
+        Ok(sqlx::query_as::<_,UsageKeyOption>("SELECT k.id, COALESCE(NULLIF(k.name,''), k.key_prefix) AS name, COALESCE(NULLIF(a.display_name,''),NULLIF(a.email,''),a.id) AS account_name FROM proxy_api_keys k JOIN accounts a ON a.id=k.account_id UNION ALL SELECT c.id, c.name, COALESCE(NULLIF(a.display_name,''),NULLIF(a.email,''),a.id) AS account_name FROM oauth_credentials c JOIN accounts a ON a.id=c.account_id ORDER BY account_name,name")
             .fetch_all(self.pool()).await?)
     }
 

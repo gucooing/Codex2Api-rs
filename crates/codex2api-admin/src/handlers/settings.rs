@@ -1,9 +1,91 @@
 use crate::{AdminState, response, session, views};
-use axum::extract::{Form, State};
+use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use codex2api_storage::StorageError;
+use codex2api_storage::{GatewaySettings, StorageError, UaMode};
 use serde::Deserialize;
+
+#[derive(Default, Deserialize)]
+pub struct GatewayQuery {
+    #[serde(default)]
+    saved: bool,
+}
+
+#[derive(Deserialize)]
+pub struct GatewayForm {
+    csrf: String,
+    ua_mode: UaMode,
+    ua_rules: String,
+}
+
+fn render_gateway(
+    status: StatusCode,
+    csrf: &str,
+    settings: &GatewaySettings,
+    saved: bool,
+    error: Option<&str>,
+) -> Response {
+    (
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        Html(views::settings::gateway(csrf, settings, saved, error)),
+    )
+        .into_response()
+}
+
+pub async fn gateway_page(
+    State(state): State<AdminState>,
+    Query(query): Query<GatewayQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(session) = session::load_session(&state.storage, &headers).await else {
+        return Redirect::to("/admin/login").into_response();
+    };
+    match state.storage.gateway_settings().await {
+        Ok(settings) => render_gateway(
+            StatusCode::OK,
+            &super::official::csrf_token(&session.id),
+            &settings,
+            query.saved,
+            None,
+        ),
+        Err(err) => response::storage_error("无法加载网关设置", err),
+    }
+}
+
+pub async fn save_gateway(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Form(form): Form<GatewayForm>,
+) -> Response {
+    let Some(session) = session::load_session(&state.storage, &headers).await else {
+        return Redirect::to("/admin/login").into_response();
+    };
+    let csrf = super::official::csrf_token(&session.id);
+    let settings = GatewaySettings::from_lines(form.ua_mode, &form.ua_rules);
+    if form.csrf != csrf {
+        return render_gateway(
+            StatusCode::FORBIDDEN,
+            &csrf,
+            &settings,
+            false,
+            Some("请刷新页面后重试"),
+        );
+    }
+    match state.storage.save_gateway_settings(&settings).await {
+        Ok(()) => Redirect::to("/admin/settings?saved=true").into_response(),
+        Err(err) => {
+            tracing::error!(%err, "failed to save gateway settings");
+            render_gateway(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &csrf,
+                &settings,
+                false,
+                Some("保存失败，请稍后重试"),
+            )
+        }
+    }
+}
 
 #[derive(Deserialize)]
 pub struct SettingsForm {

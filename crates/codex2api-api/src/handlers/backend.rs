@@ -9,12 +9,13 @@ use std::collections::HashMap;
 pub async fn forward(
     State(state): State<ApiState>,
     Extension(endpoint): Extension<BackendEndpoint>,
+    oauth: Option<Extension<codex2api_storage::OAuthAccess>>,
     Path(parameters): Path<HashMap<String, String>>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
-    let (_, ctx) = crate::auth::authenticate(&state, &headers).await?;
+    let (_, ctx) = crate::auth::authenticate_request(&state, &headers, oauth).await?;
     let upstream = state.upstream.get(&ctx.account.id).await?;
     let response = upstream
         .forward_backend(endpoint, &parameters, uri.query(), body, headers)

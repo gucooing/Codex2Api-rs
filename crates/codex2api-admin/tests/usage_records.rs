@@ -88,6 +88,9 @@ async fn usage_list_requires_login_filters_history_and_renders_reasoning_and_uni
     assert!(html.contains("xhigh"));
     assert!(html.contains("xhigh · fast"));
     assert!(html.contains("<th>模型 / 接口</th><th>推理强度</th>"));
+    assert!(html.contains("<th>来源</th>"));
+    assert!(html.contains("<label>来源<select"));
+    assert!(!html.contains("<th>API Key</th>"));
     assert!(!html.contains("<th>真实模型</th>"));
     assert!(
         html.contains(r#"<strong class="record-model-changed">gpt-test-&gt;actual-model</strong>"#)
@@ -109,6 +112,7 @@ async fn usage_list_requires_login_filters_history_and_renders_reasoning_and_uni
         .next()
         .unwrap();
     assert!(rows.contains("Alice"));
+    assert!(rows.contains("Key One"));
     assert!(!rows.contains("Bob"));
     for (status, expected_id) in [
         ("completed", "one"),

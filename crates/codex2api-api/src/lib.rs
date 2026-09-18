@@ -14,12 +14,13 @@ mod handlers;
 mod response;
 mod state;
 mod usage;
+mod user_agent;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Extension};
-use axum::routing::{get, post};
-use codex2api_upstream::{BackendEndpoint, Endpoint, RealtimeKind};
-use handlers::{backend, codex, realtime, system, websocket};
+use axum::routing::{get, patch, post};
+use codex2api_upstream::{BackendEndpoint, ChatgptEndpoint, Endpoint, RealtimeKind};
+use handlers::{backend, chatgpt, codex, oauth, realtime, system, websocket};
 
 pub use error::{ApiError, OpenAiError, OpenAiErrorBody, Result, openai_json};
 pub use state::ApiState;
@@ -46,12 +47,62 @@ pub fn routes() -> Router<ApiState> {
 }
 
 pub fn router(state: ApiState) -> Router {
-    routes().with_state(state)
+    let oauth_api = Router::new()
+        .nest(
+            "/backend-api/codex",
+            codex_routes().route(
+                "/{call_id}",
+                get(realtime::socket).layer(Extension(RealtimeKind::CodexSideband)),
+            ),
+        )
+        .nest("/backend-api/wham", backend_routes())
+        .route(
+            "/backend-api/accounts/check/v4-2023-04-27",
+            get(chatgpt::forward).layer(Extension(ChatgptEndpoint::AccountsCheck)),
+        )
+        .route(
+            "/backend-api/subscriptions",
+            get(chatgpt::forward).layer(Extension(ChatgptEndpoint::Subscriptions)),
+        )
+        .route(
+            "/backend-api/settings/account_user_setting",
+            patch(chatgpt::forward).layer(Extension(ChatgptEndpoint::Privacy)),
+        )
+        .route(
+            "/v1/responses/input_tokens",
+            post(codex::forward).layer(Extension(Endpoint::InputTokens)),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            oauth::require_oauth,
+        ))
+        .route(
+            "/oauth/token",
+            post(oauth::token).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/oauth/revoke",
+            post(oauth::revoke).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .layer(DefaultBodyLimit::max(codex2api_upstream::MAX_REQUEST_BYTES));
+    routes().nest(oauth::PREFIX, oauth_api).with_state(state)
 }
 
 /// Relative to /v1 (or /backend-api/codex). GET inference routes upgrade to WebSocket.
 fn codex_routes() -> Router<ApiState> {
     Router::new()
+        .route(
+            "/responses/compact",
+            post(codex::forward).layer(Extension(Endpoint::Compact)),
+        )
+        .route(
+            "/responses/input_tokens",
+            post(codex::forward).layer(Extension(Endpoint::InputTokens)),
+        )
+        .route(
+            "/responses/{*subpath}",
+            post(codex::forward).layer(Extension(Endpoint::Compact)),
+        )
         // Inference.
         .route(
             "/responses",

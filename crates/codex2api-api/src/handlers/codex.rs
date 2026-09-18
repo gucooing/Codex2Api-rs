@@ -1,24 +1,34 @@
 use crate::response::forward_response;
 use axum::body::{Body, Bytes};
-use axum::extract::Extension;
 use axum::extract::State;
+use axum::extract::{Extension, Path};
 use axum::http::HeaderMap;
 use axum::response::Response;
 
-use crate::auth::authenticate;
+use crate::auth::authenticate_request;
 use crate::error::Result;
 use crate::state::ApiState;
 
 /// Rebuild official request identity while preserving the conversation and response stream.
 pub async fn forward(
+    _: crate::user_agent::AllowedUserAgent,
     State(state): State<ApiState>,
     Extension(endpoint): Extension<codex2api_upstream::Endpoint>,
+    Path(parameters): Path<std::collections::HashMap<String, String>>,
+    oauth: Option<Extension<codex2api_storage::OAuthAccess>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
     let start = std::time::Instant::now();
     let requested_at = chrono::Utc::now().timestamp_millis();
-    let (key, ctx) = authenticate(&state, &headers).await?;
+    let subpath = parameters.get("subpath");
+    if let Some(subpath) = subpath {
+        codex2api_upstream::responses_subpath_url(subpath)?;
+    }
+    let path = subpath
+        .map(|s| format!("responses/{s}"))
+        .unwrap_or_else(|| endpoint.codex_path().into());
+    let (key, ctx) = authenticate_request(&state, &headers, oauth).await?;
     let mut log = if crate::usage::billable(endpoint) {
         let bytes = body.clone();
         let inbound = headers.clone();
@@ -31,8 +41,9 @@ pub async fn forward(
             crate::usage::UsageContext::new(
                 state.storage.clone(),
                 &ctx.account,
-                &key,
-                &format!("/v1/{}", endpoint.codex_path()),
+                &key.id,
+                &key.name,
+                &format!("/v1/{path}"),
                 "http",
             )
             .start(metadata, start, requested_at)
@@ -43,7 +54,13 @@ pub async fn forward(
     };
     let result = async {
         let upstream = state.upstream.get(&ctx.account.id).await?;
-        upstream.forward_endpoint(endpoint, body, headers).await
+        if let Some(subpath) = subpath {
+            upstream
+                .forward_responses_subpath(subpath, body, headers)
+                .await
+        } else {
+            upstream.forward_endpoint(endpoint, body, headers).await
+        }
     }
     .await;
     let response = match result {

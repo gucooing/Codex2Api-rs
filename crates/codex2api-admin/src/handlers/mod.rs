@@ -4,6 +4,7 @@ pub(crate) mod auth;
 pub(crate) mod fingerprint;
 pub(crate) mod keys;
 pub(crate) mod oauth;
+pub(crate) mod oauth_credentials;
 pub(crate) mod official;
 pub(crate) mod proxies;
 pub(crate) mod settings;

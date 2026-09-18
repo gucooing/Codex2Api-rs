@@ -1,4 +1,45 @@
 (() => {
+  const writeClipboard = async (text, button) => {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch (_) {
+        // HTTP deployments and denied clipboard permissions need the selection fallback.
+      }
+    }
+    const focused = document.activeElement;
+    const selection = window.getSelection();
+    const ranges = [];
+    if (selection) {
+      for (let index = 0; index < selection.rangeCount; index++) {
+        ranges.push(selection.getRangeAt(index).cloneRange());
+      }
+    }
+    const inputSelection = focused && typeof focused.selectionStart === 'number'
+      ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.readOnly = true;
+    textarea.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px;';
+    // A modal dialog makes elements outside it inert, including a body-level textarea.
+    (button.closest('dialog[open]') || document.body).append(textarea);
+    try {
+      textarea.focus({ preventScroll: true });
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      if (!document.execCommand('copy')) throw new Error('浏览器拒绝复制，请检查剪贴板权限');
+    } finally {
+      textarea.remove();
+      focused?.focus({ preventScroll: true });
+      if (inputSelection) focused.setSelectionRange(...inputSelection);
+      if (selection) {
+        selection.removeAllRanges();
+        ranges.forEach((range) => selection.addRange(range));
+      }
+    }
+  };
+
   window.bindCopyButtons = (root = document) => root.querySelectorAll('[data-copy-target], [data-key-copy]').forEach((button) => {
     if (button.dataset.copyBound === 'true') return;
     button.dataset.copyBound = 'true';
@@ -42,10 +83,11 @@
           if (!response.ok) throw new Error(result.error || `请求失败（HTTP ${response.status}）`);
           text = result.token;
         } else {
-          text = document.getElementById(button.dataset.copyTarget)?.textContent;
+          const target = document.getElementById(button.dataset.copyTarget);
+          text = target && ('value' in target ? target.value : target.textContent);
         }
         if (typeof text !== 'string' || !text) throw new Error('没有可复制的内容');
-        await navigator.clipboard.writeText(text);
+        await writeClipboard(text, button);
         message.textContent = '已复制';
         button.title = '复制成功';
         button.setAttribute('aria-label', '已复制');

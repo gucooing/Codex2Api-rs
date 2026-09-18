@@ -58,7 +58,13 @@ header.top {
   padding: 0 1rem;
 }
 header.top h1 { font-size: 1.05rem; margin: 0; font-weight: 650; white-space: nowrap; flex-shrink: 0; }
-.top-menu { position: relative; margin-left: auto; flex-shrink: 0; }
+.top-menu { position: relative; flex-shrink: 0; }
+.top-settings { margin-left: auto; }
+.settings-tabs { height: 48px; margin-bottom: 1rem; border-bottom: 1px solid var(--line); }
+.gateway-settings { max-width: 46rem; }
+.gateway-settings textarea { width: 100%; resize: vertical; }
+.gateway-settings .hint { margin: 0; }
+.oauth-device-ua { max-width: 26rem; overflow-wrap: anywhere; }
 .top-menu summary { list-style: none; }
 .top-menu summary::-webkit-details-marker { display: none; }
 .top-menu-options { position: absolute; top: calc(100% + 0.4rem); right: 0; min-width: 8rem; padding: 0.3rem; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }

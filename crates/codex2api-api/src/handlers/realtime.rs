@@ -7,13 +7,15 @@ use codex2api_upstream::{RealtimeKind, strip_hop_by_hop_headers};
 use std::collections::HashMap;
 
 pub async fn call(
+    _: crate::user_agent::AllowedUserAgent,
     State(state): State<ApiState>,
     Extension(kind): Extension<RealtimeKind>,
+    oauth: Option<Extension<codex2api_storage::OAuthAccess>>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
-    let (_, ctx) = crate::auth::authenticate(&state, &headers).await?;
+    let (_, ctx) = crate::auth::authenticate_request(&state, &headers, oauth).await?;
     let client = state.upstream.get(&ctx.account.id).await?;
     let response = client
         .forward_realtime_call(kind, uri.query(), body, headers)
@@ -26,14 +28,16 @@ pub async fn call(
 }
 
 pub async fn socket(
+    _: crate::user_agent::AllowedUserAgent,
     State(state): State<ApiState>,
     Extension(kind): Extension<RealtimeKind>,
+    oauth: Option<Extension<codex2api_storage::OAuthAccess>>,
     Path(parameters): Path<HashMap<String, String>>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    let (key, ctx) = crate::auth::authenticate(&state, &headers).await?;
+    let (key, ctx) = crate::auth::authenticate_request(&state, &headers, oauth).await?;
     let client = state.upstream.get(&ctx.account.id).await?;
     let (upstream, mut headers) = client
         .connect_realtime(
@@ -62,7 +66,7 @@ pub async fn socket(
                 upstream,
                 identity,
                 true,
-                Some((state.storage, key.key_hash)),
+                Some((state.storage, key.access)),
             )
         });
     response.headers_mut().extend(headers);

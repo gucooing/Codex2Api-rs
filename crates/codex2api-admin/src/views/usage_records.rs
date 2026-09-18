@@ -154,7 +154,7 @@ pub(crate) fn render(
             },
         ));
     }
-    let mut options = "<option value=\"\">全部 API Key</option>".to_string();
+    let mut options = "<option value=\"\">全部来源</option>".to_string();
     for key in keys {
         options.push_str(&format!(
             r#"<option value="{}" {}>{} · {}</option>"#,
@@ -172,10 +172,10 @@ pub(crate) fn render(
         r#"<section class="card">
 <form class="record-filters" method="get" action="/admin/usage" id="usage-filter-form">
 <label>账户<input type="text" name="account" value="{}" list="usage-account-options" autocomplete="off"><datalist id="usage-account-options">{account_options}</datalist></label>
-<label>API Key<select name="api_key">{options}</select></label>{}<label>状态<select name="status">{status_options}</select></label>{}{}
+<label>来源<select name="api_key">{options}</select></label>{}<label>状态<select name="status">{status_options}</select></label>{}{}
 <input type="hidden" name="tz_offset" value="{}"><div class="record-filter-actions"><button type="submit">查询</button><a class="btn secondary" href="/admin/usage">重置</a></div>
 </form></section>
-<section class="card usage-records"><div class="table-wrap"><table><thead><tr><th>账户</th><th>API Key</th><th>模型 / 接口</th><th>推理强度</th><th>用量</th><th>耗时</th><th>请求时间</th><th>状态</th></tr></thead><tbody>"#,
+<section class="card usage-records"><div class="table-wrap"><table><thead><tr><th>账户</th><th>来源</th><th>模型 / 接口</th><th>推理强度</th><th>用量</th><th>耗时</th><th>请求时间</th><th>状态</th></tr></thead><tbody>"#,
         esc(&filters.account),
         input("model", "模型", &filters.model, "text"),
         input("from", "开始时间", &filters.from, "datetime-local"),

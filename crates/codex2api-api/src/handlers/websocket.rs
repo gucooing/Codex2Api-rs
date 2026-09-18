@@ -5,23 +5,26 @@ use axum::response::Response;
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
-use crate::auth::authenticate;
+use crate::auth::{AccessCheck, authenticate_request};
 use crate::{ApiState, Result};
 use codex2api_upstream::{
     Endpoint, UpstreamWebSocket, normalize_response_identity, strip_hop_by_hop_headers,
 };
 
 pub async fn responses_websocket(
+    _: crate::user_agent::AllowedUserAgent,
     State(state): State<ApiState>,
     Extension(endpoint): Extension<Endpoint>,
+    oauth: Option<Extension<codex2api_storage::OAuthAccess>>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    let (key, ctx) = authenticate(&state, &headers).await?;
+    let (key, ctx) = authenticate_request(&state, &headers, oauth).await?;
     let ledger = crate::usage::WsLedger::new(crate::usage::UsageContext::new(
         state.storage.clone(),
         &ctx.account,
-        &key,
+        &key.id,
+        &key.name,
         &format!("/v1/{}", endpoint.codex_path()),
         "websocket",
     ));
@@ -49,7 +52,7 @@ pub async fn responses_websocket(
                 false,
                 timezone,
                 Some(ledger),
-                Some((state.storage, key.key_hash)),
+                Some((state.storage, key.access)),
             )
         });
     response.headers_mut().extend(response_headers);
@@ -99,7 +102,7 @@ pub(crate) async fn bridge(
     upstream: UpstreamWebSocket,
     installation_id: String,
     realtime: bool,
-    key_access: Option<(codex2api_storage::Storage, String)>,
+    key_access: Option<(codex2api_storage::Storage, AccessCheck)>,
 ) {
     bridge_recorded(
         client,
@@ -120,7 +123,7 @@ async fn bridge_recorded(
     realtime: bool,
     timezone: Option<String>,
     ledger: Option<crate::usage::WsLedger>,
-    key_access: Option<(codex2api_storage::Storage, String)>,
+    key_access: Option<(codex2api_storage::Storage, AccessCheck)>,
 ) {
     let ledger = ledger.map(tokio::sync::Mutex::new);
     let (mut client_tx, mut client_rx) = client.split();
@@ -129,14 +132,13 @@ async fn bridge_recorded(
         while let Some(message) = client_rx.next().await {
             let message = message.map_err(|e| e.to_string())?;
             if matches!(&message, Message::Text(_) | Message::Binary(_))
-                && let Some((storage, hash)) = &key_access
-                && storage
-                    .lookup_proxy_api_key_by_hash(hash)
+                && let Some((storage, access)) = &key_access
+                && !access
+                    .allowed(storage)
                     .await
                     .map_err(|error| error.to_string())?
-                    .is_none()
             {
-                return Err("API Key is paused or deleted".to_string());
+                return Err("Request credential is no longer valid".to_string());
             }
             let message = match message {
                 Message::Text(text) => UpstreamMessage::Text(
@@ -252,7 +254,10 @@ mod tests {
             .await
             .unwrap();
         let key = storage.create_proxy_api_key(&first.id, None).await.unwrap();
-        let key_access = (storage.clone(), key.record.key_hash.clone());
+        let key_access = (
+            storage.clone(),
+            AccessCheck::ApiKey(key.record.key_hash.clone()),
+        );
         let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream_listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
