@@ -151,7 +151,7 @@ pub async fn account_page(
 ) -> Response {
     if !matches!(
         query.tab.as_str(),
-        "info" | "fingerprint" | "usage" | "details" | "credits"
+        "info" | "fingerprint" | "usage" | "details" | "credits" | "turn-state"
     ) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -161,6 +161,21 @@ pub async fn account_page(
         Err(error) => return storage_error("无法加载账户", error),
     };
     let content = match query.tab.as_str() {
+        "turn-state" => {
+            let Some(session) = crate::session::load_session(&state.storage, &headers).await else {
+                return Redirect::to("/admin/login").into_response();
+            };
+            match super::turn_state::content(
+                &state,
+                &account,
+                &super::official::csrf_token(&session.id),
+            )
+            .await
+            {
+                Ok(content) => content,
+                Err(error) => return storage_error("无法加载状态复用配置", error),
+            }
+        }
         "fingerprint" => {
             let Some(session) = crate::session::load_session(&state.storage, &headers).await else {
                 return Redirect::to("/admin/login").into_response();

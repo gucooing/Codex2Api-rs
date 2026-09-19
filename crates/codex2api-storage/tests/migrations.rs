@@ -60,7 +60,7 @@ async fn assert_final_schema(storage: &Storage) {
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    assert_eq!(version, 14);
+    assert_eq!(version, 15);
     assert!(columns.iter().any(|s| s == "actual_model"));
     assert!(columns.iter().any(|s| s == "service_tier"));
     let key_columns: Vec<String> =

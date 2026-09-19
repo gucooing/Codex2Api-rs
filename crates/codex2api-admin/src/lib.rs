@@ -19,7 +19,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use handlers::{
     accounts, auth, fingerprint, keys, oauth, oauth_credentials, official, proxies, settings,
-    usage_records,
+    turn_state, usage_records,
 };
 
 pub use state::AdminState;
@@ -69,6 +69,11 @@ pub fn router(state: AdminState) -> Router {
         .route("/admin/accounts/{id}", get(accounts::account_page))
         .route("/admin/accounts/{id}/quota", get(accounts::account_quota))
         .route("/admin/accounts/{id}/fingerprint", post(fingerprint::save))
+        .route("/admin/accounts/{id}/turn-state", post(turn_state::save))
+        .route(
+            "/admin/accounts/{id}/turn-state/clear",
+            post(turn_state::clear),
+        )
         .route(
             "/admin/accounts/{id}/delete",
             post(accounts::delete_account),

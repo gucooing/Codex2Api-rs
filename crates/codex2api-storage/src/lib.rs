@@ -12,6 +12,7 @@ mod proxy;
 mod quota;
 mod settings;
 mod storage;
+mod turn_state;
 mod types;
 mod usage;
 
@@ -28,6 +29,7 @@ pub use proxy::{OutboundProxy, ProxyConnectionCheck, ProxyQualityCheck, parse_pr
 pub use quota::QuotaSnapshot;
 pub use settings::{GatewaySettings, UaMode};
 pub use storage::{DEFAULT_ADMIN_SESSION_TTL, DEFAULT_OAUTH_PENDING_TTL, Storage};
+pub use turn_state::{TurnStateCache, TurnStateProbeResult, TurnStateSettings};
 pub use types::{
     Account, AccountRuntime, AccountStatus, AccountTokens, AccountUpdate, AdminSession, AdminUser,
     IssuedProxyApiKey, NewAccount, OAuthPending, ProxyApiKey,

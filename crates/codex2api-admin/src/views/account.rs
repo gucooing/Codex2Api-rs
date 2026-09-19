@@ -15,6 +15,7 @@ pub(crate) fn render(
     for (key, label) in [
         ("info", "账户信息"),
         ("fingerprint", "指纹"),
+        ("turn-state", "状态复用（实验）"),
         ("usage", "用量明细（官方数据）"),
         ("details", "账户详细信息"),
     ] {

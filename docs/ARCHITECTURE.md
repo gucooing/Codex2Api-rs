@@ -10,6 +10,11 @@ Implementation is aligned with official Codex:
 
 Official source is reference only. Do not depend on `codex-rs` crates.
 
+An administrator may opt an individual account into experimental HTTP turn-state
+reuse. This defaults off and is an explicit exception to the official per-turn
+routing contract, not a new aligned baseline. Settings, cache and probe leases
+are in SQLite; tokens never cross accounts. See [implementation notes](TURN_STATE_REUSE_PLAN.md).
+
 ## Process
 
 One Rust process:

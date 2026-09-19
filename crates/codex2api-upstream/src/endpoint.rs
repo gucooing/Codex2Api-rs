@@ -126,6 +126,9 @@ impl UpstreamClient {
         body: Bytes,
         inbound: HeaderMap,
     ) -> Result<reqwest::Response> {
+        if endpoint == Endpoint::Responses {
+            return self.forward_responses(body, inbound).await;
+        }
         let installation_id = self.identity().installation_id.clone();
         let timezone = self.identity().http_fingerprint.timezone.clone();
         let prepared = tokio::task::spawn_blocking(move || {
