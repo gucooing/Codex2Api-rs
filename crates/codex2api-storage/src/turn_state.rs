@@ -172,6 +172,34 @@ impl Storage {
             .bind(i64::from(injected)).bind(i64::from(!injected)).bind(&entry.account_id).bind(&entry.model).bind(&entry.owner).bind(&entry.revision).execute(self.pool()).await?;
         Ok(())
     }
+
+    pub async fn save_turn_state_token(
+        &self,
+        entry: &TurnStateCache,
+        token: &str,
+        issued_at: i64,
+        ttl: i64,
+        renew: i64,
+        now: i64,
+        status: i64,
+        result: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE turn_state_cache SET token=?, issued_at=?, expires_at=?, refresh_at=?, strikes=0, last_probe_at=?, probe_status=?, probe_result=?, next_probe_at=0 WHERE account_id=? AND model=? AND owner=? AND revision=?")
+            .bind(token)
+            .bind(issued_at)
+            .bind(issued_at + ttl - 30)
+            .bind(issued_at + ttl - renew)
+            .bind(now)
+            .bind(status)
+            .bind(result)
+            .bind(&entry.account_id)
+            .bind(&entry.model)
+            .bind(&entry.owner)
+            .bind(&entry.revision)
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
     pub async fn observe_turn_state(&self, entry: &TurnStateCache, valid: bool) -> Result<()> {
         sqlx::query("UPDATE turn_state_cache SET refresh_at=CASE WHEN ?=0 AND strikes>=1 THEN 0 ELSE refresh_at END, strikes=CASE WHEN ? THEN 0 ELSE strikes+1 END WHERE account_id=? AND model=? AND owner=? AND revision=? AND token=?")
             .bind(valid).bind(valid).bind(&entry.account_id).bind(&entry.model).bind(&entry.owner).bind(&entry.revision).bind(&entry.token).execute(self.pool()).await?;

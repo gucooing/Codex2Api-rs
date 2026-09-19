@@ -65,14 +65,25 @@ impl UpstreamClient {
         let response = self
             .send_prepared(Method::POST, url, prepared, true)
             .await?;
-        if let Some((storage, entry, ttl)) = context {
+        if let Some((storage, entry, ttl, renew)) = context {
             if let Some(state) = response
                 .headers()
                 .get(X_CODEX_TURN_STATE_HEADER)
                 .and_then(|v| v.to_str().ok())
             {
-                let valid = response.status() == 200 && issued_at(state, ttl, now()).is_some();
-                if storage.observe_turn_state(&entry, valid).await.is_err() {
+                let timestamp = now();
+                let issued = issued_at(state, ttl, timestamp);
+                let valid = response.status() == 200 && issued.is_some();
+                let saved = if let Some(issued) = issued.filter(|_| valid) {
+                    storage
+                        .save_turn_state_token(
+                            &entry, state, issued, ttl, renew, timestamp, 200, "accepted",
+                        )
+                        .await
+                } else {
+                    storage.observe_turn_state(&entry, false).await
+                };
+                if saved.is_err() {
                     tracing::warn!("turn-state observation could not be saved");
                 }
             }
@@ -82,9 +93,9 @@ impl UpstreamClient {
 
     async fn prepare_turn_state(
         &self,
-        url: &str,
+        _url: &str,
         prepared: &mut PreparedRequest,
-    ) -> Option<(Storage, TurnStateCache, i64)> {
+    ) -> Option<(Storage, TurnStateCache, i64, i64)> {
         let storage = self.auth_service()?.accounts().storage().ok()?.clone();
         let (settings, _) = storage
             .turn_state_settings(&self.identity().account_id)
@@ -123,53 +134,45 @@ impl UpstreamClient {
             .await
             .ok()??;
         if prepared.headers.contains_key(X_CODEX_TURN_STATE_HEADER) {
-            let _ = storage.record_turn_state_use(&entry, false).await;
-            return None;
-        }
-        if let Ok(Some(lease)) = storage
-            .claim_turn_state_probe(&entry, now(), settings.cooldown)
-            .await
-        {
-            let probe = match tokio::time::timeout(
-                Duration::from_secs(20),
-                self.probe_turn_state(url, model, &settings),
-            )
-            .await
+            let timestamp = now();
+            if let Some(state) = prepared
+                .headers
+                .get(X_CODEX_TURN_STATE_HEADER)
+                .and_then(|v| v.to_str().ok())
             {
-                Ok(probe) => probe,
-                Err(_) => Probe::failed("timeout", settings.cooldown),
-            };
-            let time = now();
-            let _ = storage
-                .finish_turn_state_probe(
-                    &entry,
-                    &lease,
-                    TurnStateProbeResult {
-                        token: probe.token.as_deref(),
-                        issued_at: probe.issued,
-                        expires_at: probe.issued + settings.ttl - 30,
-                        refresh_at: probe.issued + settings.ttl - settings.renew,
-                        now: time,
-                        status: probe.status,
-                        result: probe.result,
-                        next_probe_at: time.saturating_add(probe.delay),
-                    },
-                )
-                .await;
+                if let Some(issued) = issued_at(state, settings.ttl, timestamp) {
+                    let _ = storage
+                        .save_turn_state_token(
+                            &entry,
+                            state,
+                            issued,
+                            settings.ttl,
+                            settings.renew,
+                            timestamp,
+                            200,
+                            "client_state",
+                        )
+                        .await;
+                }
+            }
+            let _ = storage.record_turn_state_use(&entry, false).await;
+            return Some((storage, entry, settings.ttl, settings.renew));
         }
         // Reload after the probe so clear/disable/reauth during the await cannot resurrect it.
         let entry = storage
             .turn_state_entry(&self.identity().account_id, model, &owner, &revision)
             .await
             .ok()??;
-        let token = entry.token.as_deref()?;
+        let Some(token) = entry.token.as_deref() else {
+            return Some((storage, entry, settings.ttl, settings.renew));
+        };
         if entry.expires_at <= now() || issued_at(token, settings.ttl, now()).is_none() {
-            return None;
+            return Some((storage, entry, settings.ttl, settings.renew));
         }
         let value = HeaderValue::from_str(token).ok()?;
         prepared.headers.insert(X_CODEX_TURN_STATE_HEADER, value);
         let _ = storage.record_turn_state_use(&entry, true).await;
-        Some((storage, entry, settings.ttl))
+        Some((storage, entry, settings.ttl, settings.renew))
     }
 
     async fn probe_turn_state(
@@ -467,7 +470,13 @@ mod tests {
                     Response::builder().header(X_CODEX_TURN_STATE_HEADER,state).body(Body::from(body)).unwrap()
                 } else {
                     assert_eq!(body["input"],"private user task");
-                    Response::builder().header(X_CODEX_TURN_STATE_HEADER,state.unwrap_or_default()).body(Body::from("untouched streaming response")).unwrap()
+                    let state = state.unwrap_or_else(|| {
+                        let mut raw = URL_SAFE.decode(token(10, now())).unwrap();
+                        raw[25] = if owner == "account-a" { 1 } else { 2 };
+                        raw[26] = if model == "gpt-6-astra" { 1 } else { 2 };
+                        URL_SAFE.encode(raw)
+                    });
+                    Response::builder().header(X_CODEX_TURN_STATE_HEADER,state).body(Body::from("untouched streaming response")).unwrap()
                 }
             }
         }));
@@ -534,9 +543,17 @@ mod tests {
             .send_responses_with_state(&url, prepared("unconfigured", None, false))
             .await
             .unwrap();
-        assert_eq!(response.headers()[X_CODEX_TURN_STATE_HEADER], "");
-        assert_eq!(records.lock().await.iter().filter(|r| r.2).count(), 3);
-        // Concurrent first requests share a single probe lease.
+        assert_eq!(response.headers()[X_CODEX_TURN_STATE_HEADER].len(), 292);
+        assert!(
+            storage
+                .turn_state_entries("account-a")
+                .await
+                .unwrap()
+                .iter()
+                .all(|entry| entry.model != "unconfigured")
+        );
+        assert_eq!(records.lock().await.iter().filter(|r| r.2).count(), 0);
+        // Concurrent first requests are both forwarded immediately; normal responses can be captured.
         storage.clear_turn_state("account-a").await.unwrap();
         let (a, b) = tokio::join!(
             client_a.send_responses_with_state(&url, prepared("gpt-6-astra", None, false)),
@@ -544,31 +561,7 @@ mod tests {
         );
         a.unwrap();
         b.unwrap();
-        assert_eq!(records.lock().await.iter().filter(|r| r.2).count(), 4);
-        // HTTP failures and incomplete SSE never cache and never replay a real request.
-        for status in [401, 403, 429, 201] {
-            storage.clear_turn_state("account-a").await.unwrap();
-            mode.store(status, Ordering::SeqCst);
-            let before = records.lock().await.iter().filter(|r| !r.2).count();
-            let response = client_a
-                .send_responses_with_state(&url, prepared("gpt-6-astra", None, false))
-                .await
-                .unwrap();
-            assert_eq!(response.headers()[X_CODEX_TURN_STATE_HEADER], "");
-            let entries = storage.turn_state_entries("account-a").await.unwrap();
-            assert!(entries[0].token.is_none());
-            if status == 429 {
-                assert!(entries[0].next_probe_at >= entries[0].last_probe_at + 900);
-            }
-            client_a
-                .send_responses_with_state(&url, prepared("gpt-6-astra", None, false))
-                .await
-                .unwrap();
-            assert_eq!(
-                records.lock().await.iter().filter(|r| !r.2).count(),
-                before + 2
-            );
-        }
+        assert_eq!(records.lock().await.iter().filter(|r| r.2).count(), 0);
         server.abort();
     }
 }

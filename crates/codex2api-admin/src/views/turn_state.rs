@@ -64,7 +64,7 @@ pub(crate) fn render(
 <label>缓存 TTL（秒）<input type="number" name="ttl" min="120" max="3600" value="{ttl}" required></label>
 <label>提前续期（秒，必须小于 TTL）<input type="number" name="renew" min="30" max="3599" value="{renew}" required></label>
 <label>失败冷却（秒）<input type="number" name="cooldown" min="30" max="3600" value="{cooldown}" required></label>
-<p class="muted">仅接受 10 块状态；时间配置是本地策略。探针最多等待 20 秒，会产生额外上游请求。保存配置会清除旧缓存及统计。</p>
+<p class="muted">仅接受 10 块状态；时间配置是本地策略。正常请求不会等待探针；探针只是没有可用状态时的辅助采集。保存配置会清除旧缓存及统计。</p>
 <button type="submit">保存配置</button></form></section>
 <section class="card"><div class="row-actions"><a class="btn secondary" href="/admin/accounts/{id}?tab=turn-state">刷新状态</a>
 <form method="post" action="/admin/accounts/{id}/turn-state/clear"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">清除本账户缓存</button></form></div>
