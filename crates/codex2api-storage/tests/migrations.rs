@@ -39,6 +39,13 @@ async fn old_database(path: &Path, through: i64, drop_error_column: bool) {
         sqlx::query("INSERT INTO proxy_api_keys (id,account_id,key_hash,key_prefix,created_at) VALUES ('legacy-kept','legacy-account','kept-hash','c2a_kept','2026-09-17')")
             .execute(&pool).await.unwrap();
     }
+    if through >= 15 {
+        sqlx::query("INSERT INTO turn_state_settings(account_id,revision,config) VALUES ('legacy-account','old-revision',?)")
+            .bind(r#"{"enabled":true,"models":["gpt-6-astra"],"ttl":1800,"renew":300,"cooldown":300}"#)
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO turn_state_cache(account_id,model,owner,revision,token) VALUES ('legacy-account','gpt-6-astra','owner','old-revision','old-cache')")
+            .execute(&pool).await.unwrap();
+    }
     if drop_error_column {
         sqlx::query("ALTER TABLE usage_records DROP COLUMN error_message")
             .execute(&pool)
@@ -60,7 +67,31 @@ async fn assert_final_schema(storage: &Storage) {
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    assert_eq!(version, 15);
+    assert_eq!(version, 16);
+    let state_columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('turn_state_cache')")
+            .fetch_all(storage.pool())
+            .await
+            .unwrap();
+    assert!(state_columns.iter().any(|name| name == "response_result"));
+    assert!(
+        !state_columns
+            .iter()
+            .any(|name| name.contains("probe") || name.contains("lease"))
+    );
+    let (settings, revision) = storage.turn_state_settings("legacy-account").await.unwrap();
+    if revision == "old-revision" {
+        assert!(settings.enabled);
+        assert_eq!(settings.ttl, 1800);
+        assert_eq!(settings.models, ["gpt-6-astra"]);
+        assert!(
+            storage
+                .turn_state_entries("legacy-account")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
     assert!(columns.iter().any(|s| s == "actual_model"));
     assert!(columns.iter().any(|s| s == "service_tier"));
     let key_columns: Vec<String> =
@@ -113,6 +144,8 @@ async fn startup_migrates_fresh_v3_v4_and_manually_cleaned_v4_databases() {
         ("v11", 11, false),
         ("v12", 12, false),
         ("v13", 13, false),
+        ("v14", 14, false),
+        ("v15", 15, false),
     ] {
         let path = temp.path().join(format!("{name}.sqlite"));
         if version > 0 {

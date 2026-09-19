@@ -1,5 +1,5 @@
 use codex2api_storage::{
-    AccountStatus, AccountTokens, NewAccount, Storage, TurnStateProbeResult, TurnStateSettings,
+    AccountStatus, AccountTokens, NewAccount, Storage, TurnStateObservation, TurnStateSettings,
 };
 
 async fn account(storage: &Storage, id: &str) {
@@ -10,40 +10,42 @@ async fn account(storage: &Storage, id: &str) {
     new.status = AccountStatus::Active;
     storage.create_account(new).await.unwrap();
 }
-fn success<'a>(token: &'a str, time: i64) -> TurnStateProbeResult<'a> {
-    TurnStateProbeResult {
-        token: Some(token),
-        issued_at: time,
-        expires_at: time + 3570,
-        refresh_at: time + 3000,
-        now: time,
-        status: 200,
-        result: "accepted",
-        next_probe_at: time + 300,
+fn observation(token: Option<&str>, issued_at: i64, from_client: bool) -> TurnStateObservation<'_> {
+    TurnStateObservation {
+        from_client,
+        token,
+        issued_at,
+        now: issued_at,
+        status: if from_client { 0 } else { 200 },
+        result: if token.is_some() {
+            "accepted"
+        } else {
+            "missing_header"
+        },
+        length: token.map_or(0, |t| t.len() as i64),
+        blocks: if token.is_some() { 10 } else { 0 },
+        injected: false,
     }
 }
 
 #[tokio::test]
-async fn turn_state_isolation_leases_persistence_and_invalidation() {
+async fn natural_state_is_isolated_persistent_and_monotonic_under_concurrent_captures() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.sqlite");
     let storage = Storage::open(&path).await.unwrap();
     for id in ["a", "b"] {
         account(&storage, id).await;
     }
-    assert!(!storage.turn_state_settings("a").await.unwrap().0.enabled);
-    let config = TurnStateSettings {
+    let settings = TurnStateSettings {
         enabled: true,
         ..Default::default()
     };
-    storage
-        .save_turn_state_settings("a", &config)
-        .await
-        .unwrap();
-    storage
-        .save_turn_state_settings("b", &config)
-        .await
-        .unwrap();
+    for id in ["a", "b"] {
+        storage
+            .save_turn_state_settings(id, &settings)
+            .await
+            .unwrap();
+    }
     let (_, rev) = storage.turn_state_settings("a").await.unwrap();
     storage
         .ensure_turn_state_entry("a", "model", "owner-b", &rev)
@@ -59,119 +61,148 @@ async fn turn_state_isolation_leases_persistence_and_invalidation() {
         .await
         .unwrap()
         .unwrap();
-    let (first, second) = tokio::join!(
-        storage.claim_turn_state_probe(&entry, 100, 300),
-        storage.claim_turn_state_probe(&entry, 100, 300)
+    let (a, b) = tokio::join!(
+        storage.record_turn_state_observation(
+            &entry,
+            &settings,
+            observation(Some("new-state"), 200, false)
+        ),
+        storage.record_turn_state_observation(
+            &entry,
+            &settings,
+            observation(Some("older-state"), 100, false)
+        )
     );
-    let leases: Vec<_> = [first.unwrap(), second.unwrap()]
-        .into_iter()
-        .flatten()
-        .collect();
-    assert_eq!(leases.len(), 1);
+    a.unwrap();
+    b.unwrap();
     storage
-        .finish_turn_state_probe(&entry, &leases[0], success("secret-a", 100))
+        .record_turn_state_observation(&entry, &settings, observation(None, 300, false))
         .await
         .unwrap();
-    assert!(
-        storage
-            .turn_state_entry("a", "other-model", "owner-a", &rev)
-            .await
-            .unwrap()
-            .is_none()
-    );
     assert!(storage.turn_state_entries("b").await.unwrap().is_empty());
-    let reopened = Storage::open(&path).await.unwrap();
-    let entry = reopened
-        .turn_state_entry("a", "model", "owner-a", &rev)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(entry.token.as_deref(), Some("secret-a"));
     assert!(
         storage
-            .claim_turn_state_probe(&entry, 200, 300)
+            .turn_state_entry("a", "other", "owner-a", &rev)
             .await
             .unwrap()
             .is_none()
     );
-    storage.record_turn_state_use(&entry, true).await.unwrap();
-    storage.record_turn_state_use(&entry, false).await.unwrap();
-    storage.observe_turn_state(&entry, false).await.unwrap();
-    storage.observe_turn_state(&entry, false).await.unwrap();
-    let entry = storage
+    let reopened = Storage::open(&path).await.unwrap();
+    let saved = reopened
         .turn_state_entry("a", "model", "owner-a", &rev)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        (entry.injections, entry.client_states, entry.refresh_at),
-        (1, 1, 0)
-    );
-    let lease = storage
-        .claim_turn_state_probe(&entry, 500, 300)
+    assert_eq!(saved.token.as_deref(), Some("new-state"));
+    assert_eq!(saved.source, "response");
+    assert_eq!(saved.response_count, 3);
+    assert_eq!(saved.response_result, "missing_header");
+    assert_eq!(saved.expires_at, 3770);
+    assert!((1..=2).contains(&saved.response_captures));
+}
+
+#[tokio::test]
+async fn clear_reconfigure_and_reauthorize_reject_inflight_observations() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("state.sqlite"))
         .await
-        .unwrap()
         .unwrap();
-    storage.clear_turn_state("a").await.unwrap();
+    account(&storage, "a").await;
+    let settings = TurnStateSettings {
+        enabled: true,
+        ..Default::default()
+    };
     storage
-        .finish_turn_state_probe(&entry, &lease, success("stale", 500))
+        .save_turn_state_settings("a", &settings)
         .await
         .unwrap();
-    storage
-        .ensure_turn_state_entry("a", "model", "owner-a", &rev)
-        .await
-        .unwrap();
-    assert!(storage.turn_state_entries("a").await.unwrap().is_empty());
-    let (_, rev) = storage.turn_state_settings("a").await.unwrap();
-    storage
-        .ensure_turn_state_entry("a", "model", "owner-a", &rev)
-        .await
-        .unwrap();
-    storage
-        .upsert_account_tokens(AccountTokens {
-            account_id: "a".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    storage
-        .upsert_account_tokens(AccountTokens {
-            account_id: "a".into(),
-            access_token: Some("new".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(storage.turn_state_entries("a").await.unwrap().is_empty());
-    assert_ne!(storage.turn_state_settings("a").await.unwrap().1, rev);
-    let (_, rev) = storage.turn_state_settings("a").await.unwrap();
-    storage
-        .ensure_turn_state_entry("a", "model", "owner-a", &rev)
-        .await
-        .unwrap();
-    storage
-        .save_turn_state_settings("a", &TurnStateSettings::default())
-        .await
-        .unwrap();
-    assert!(storage.turn_state_entries("a").await.unwrap().is_empty());
+    for action in ["clear", "settings", "auth", "identity"] {
+        let (_, revision) = storage.turn_state_settings("a").await.unwrap();
+        storage
+            .ensure_turn_state_entry("a", "model", "owner-a", &revision)
+            .await
+            .unwrap();
+        let entry = storage
+            .turn_state_entry("a", "model", "owner-a", &revision)
+            .await
+            .unwrap()
+            .unwrap();
+        storage
+            .record_turn_state_observation(
+                &entry,
+                &settings,
+                observation(Some("client-state"), 200, true),
+            )
+            .await
+            .unwrap();
+        match action {
+            "clear" => storage.clear_turn_state("a").await.unwrap(),
+            "settings" => storage
+                .save_turn_state_settings("a", &settings)
+                .await
+                .unwrap(),
+            "auth" => {
+                storage
+                    .upsert_account_tokens(AccountTokens {
+                        account_id: "a".into(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                storage
+                    .upsert_account_tokens(AccountTokens {
+                        account_id: "a".into(),
+                        access_token: Some("changed".into()),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+            "identity" => {
+                sqlx::query("UPDATE accounts SET chatgpt_account_id='new-owner' WHERE id='a'")
+                    .execute(storage.pool())
+                    .await
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert_ne!(storage.turn_state_settings("a").await.unwrap().1, revision);
+        storage
+            .record_turn_state_observation(
+                &entry,
+                &settings,
+                observation(Some("late-state"), 400, false),
+            )
+            .await
+            .unwrap();
+        storage
+            .ensure_turn_state_entry("a", "model", "owner-a", &revision)
+            .await
+            .unwrap();
+        assert!(storage.turn_state_entries("a").await.unwrap().is_empty());
+    }
     storage.delete_account("a").await.unwrap();
     assert_eq!(storage.turn_state_settings("a").await.unwrap().1, "");
 }
 
 #[test]
-fn turn_state_configuration_is_bounded() {
-    assert!(TurnStateSettings::default().validate().is_ok());
+fn settings_accept_legacy_json_but_remove_probe_configuration_on_save() {
+    let settings: TurnStateSettings = serde_json::from_str(
+        r#"{"enabled":true,"models":["gpt-6-astra"],"ttl":3600,"renew":600,"cooldown":300}"#,
+    )
+    .unwrap();
+    assert!(settings.enabled);
+    assert!(settings.validate().is_ok());
+    let saved = serde_json::to_value(settings).unwrap();
+    assert!(saved.get("renew").is_none());
+    assert!(saved.get("cooldown").is_none());
     for settings in [
         TurnStateSettings {
             ttl: i64::MAX,
             ..Default::default()
         },
         TurnStateSettings {
-            renew: 3600,
-            ..Default::default()
-        },
-        TurnStateSettings {
-            cooldown: 0,
+            ttl: 119,
             ..Default::default()
         },
         TurnStateSettings {

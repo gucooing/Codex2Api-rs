@@ -161,7 +161,7 @@ impl UpstreamClient {
         self.forward_to(&responses_url(), body, headers).await
     }
 
-    async fn forward_to(
+    pub(crate) async fn forward_to(
         &self,
         url: &str,
         body: Bytes,
@@ -208,24 +208,6 @@ impl UpstreamClient {
             }
             return Ok(response);
         }
-    }
-
-    /// A bounded experiment probe is never retried as a generation request.
-    pub(crate) async fn send_probe_prepared(
-        &self,
-        url: &str,
-        prepared: PreparedRequest,
-    ) -> Result<reqwest::Response> {
-        self.synchronize_auth().await?;
-        let mut headers = self.default_headers()?;
-        headers.extend(prepared.headers);
-        Ok(self
-            .http
-            .post(url)
-            .headers(headers)
-            .body(prepared.body)
-            .send()
-            .await?)
     }
 
     /// POST `/responses` with extra headers already in a [`HeaderMap`].

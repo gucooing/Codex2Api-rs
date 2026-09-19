@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use codex2api_storage::{
-    AccountStatus, NewAccount, Storage, TurnStateProbeResult, TurnStateSettings,
+    AccountStatus, NewAccount, Storage, TurnStateObservation, TurnStateSettings,
 };
 use tower::ServiceExt;
 
@@ -72,7 +72,7 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
     )
     .unwrap();
     assert!(html.contains("状态复用（实验）"));
-    assert!(html.contains("WebSocket 不参与实验"));
+    assert!(html.contains("WebSocket 不参与"));
     let csrf = html
         .split("name=\"csrf\" value=\"")
         .nth(1)
@@ -91,8 +91,6 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
                         ("enabled", "on"),
                         ("models", "gpt-6-astra"),
                         ("ttl", ttl),
-                        ("renew", "600"),
-                        ("cooldown", "300"),
                     ])
                     .finish(),
             ))
@@ -113,7 +111,7 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
     }
     assert_eq!(
         app.clone()
-            .oneshot(post("/admin/accounts/a/turn-state", csrf, "120"))
+            .oneshot(post("/admin/accounts/a/turn-state", csrf, "119"))
             .await
             .unwrap()
             .status(),
@@ -144,29 +142,43 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
         .unwrap()
         .unwrap();
     let time = chrono::Utc::now().timestamp();
-    let lease = storage
-        .claim_turn_state_probe(&entry, time, 300)
-        .await
-        .unwrap()
-        .unwrap();
+    let settings = storage.turn_state_settings("a").await.unwrap().0;
     storage
-        .finish_turn_state_probe(
+        .record_turn_state_observation(
             &entry,
-            &lease,
-            TurnStateProbeResult {
+            &settings,
+            TurnStateObservation {
+                from_client: false,
                 token: Some("NEVER_DISPLAY_THIS_SECRET"),
                 issued_at: time,
-                expires_at: time + 3570,
-                refresh_at: time + 3000,
                 now: time,
                 status: 200,
                 result: "accepted",
-                next_probe_at: time + 300,
+                length: 292,
+                blocks: 10,
+                injected: false,
             },
         )
         .await
         .unwrap();
-    storage.record_turn_state_use(&entry, true).await.unwrap();
+    storage
+        .record_turn_state_observation(
+            &entry,
+            &settings,
+            TurnStateObservation {
+                from_client: true,
+                token: None,
+                issued_at: 0,
+                now: time,
+                status: 0,
+                result: "cache_preferred",
+                length: 0,
+                blocks: 0,
+                injected: true,
+            },
+        )
+        .await
+        .unwrap();
     let response = app.clone().oneshot(get()).await.unwrap();
     let html = String::from_utf8(
         to_bytes(response.into_body(), usize::MAX)
@@ -176,8 +188,41 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
     )
     .unwrap();
     assert!(html.contains("缓存可用"));
-    assert!(html.contains("累计注入次数</dt><dd>1"));
+    assert!(html.contains("累计缓存使用次数</dt><dd>1"));
     assert!(!html.contains("NEVER_DISPLAY_THIS_SECRET"));
+    assert!(html.contains("正常上游响应"));
+    assert!(html.contains("覆盖客户端 state"));
+    assert!(!html.contains("探针"));
+    assert!(!html.contains("name=\"renew\""));
+    assert!(!html.contains("name=\"cooldown\""));
+    storage
+        .record_turn_state_observation(
+            &entry,
+            &settings,
+            TurnStateObservation {
+                from_client: false,
+                token: None,
+                issued_at: 0,
+                now: time,
+                status: 200,
+                result: "missing_header",
+                length: 0,
+                blocks: 0,
+                injected: false,
+            },
+        )
+        .await
+        .unwrap();
+    let response = app.clone().oneshot(get()).await.unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("未携带 state 头；HTTP 200"));
+    assert!(html.contains("缓存可用"));
     assert_eq!(
         app.clone()
             .oneshot(post("/admin/accounts/a/turn-state/clear", csrf, "3600"))

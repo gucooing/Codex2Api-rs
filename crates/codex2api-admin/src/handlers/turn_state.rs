@@ -33,8 +33,6 @@ pub struct SettingsForm {
     enabled: Option<String>,
     models: String,
     ttl: i64,
-    renew: i64,
-    cooldown: i64,
 }
 #[derive(Deserialize)]
 pub struct ClearForm {
@@ -80,8 +78,6 @@ pub async fn save(
         enabled: form.enabled.as_deref() == Some("on"),
         models,
         ttl: form.ttl,
-        renew: form.renew,
-        cooldown: form.cooldown,
     };
     if let Err(error) = settings.validate() {
         return (

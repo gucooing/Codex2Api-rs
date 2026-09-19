@@ -4,7 +4,7 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
-    #[error("模型列表或时间配置无效：TTL 120–3600 秒，提前续期 30 秒至 TTL 以内，冷却 30–3600 秒")]
+    #[error("模型列表或时间配置无效：需配置 1–16 个模型，TTL 120–3600 秒")]
     InvalidTurnStateSettings,
     #[error("invalid admin credentials")]
     InvalidCredentials,
