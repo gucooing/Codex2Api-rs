@@ -16,7 +16,8 @@ Do not depend on official `codex-rs` crates. Official source is reference only.
 Explicit optional exception: per-account experimental turn-state reuse may replay
 same-account/same-model state across turns on HTTP Responses when enabled by the
 administrator. It defaults off, collects state only from normal HTTP traffic,
-and gives a valid cache priority over caller-provided state. It does not change
+and preserves eligible caller-provided state while refreshing the cache. Cached
+state only replaces missing or ineligible caller state. It does not change
 WebSocket behavior or send auxiliary probes. See `docs/TURN_STATE_REUSE_PLAN.md`. Do not describe
 this experiment as official protocol alignment or proven model-quality improvement.
 

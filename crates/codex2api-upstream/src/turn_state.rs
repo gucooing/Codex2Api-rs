@@ -183,22 +183,19 @@ impl UpstreamClient {
             return Ok(None);
         };
         let time = now();
-        let mut observed = inspect(
+        let observed = inspect(
             prepared.headers.get(X_CODEX_TURN_STATE_HEADER),
             settings.ttl,
             time,
         );
-        // Once collected, the cached target state wins over any client-provided state.
+        // Preserve eligible client state and refresh the cache; use cache only as fallback.
         let cached = entry
             .token
             .as_deref()
             .and_then(|v| HeaderValue::from_str(v).ok());
-        let inject =
-            entry.expires_at > time && inspect(cached.as_ref(), settings.ttl, time).token.is_some();
-        if inject {
-            observed.token = None;
-            observed.result = "cache_preferred";
-        }
+        let inject = observed.token.is_none()
+            && entry.expires_at > time
+            && inspect(cached.as_ref(), settings.ttl, time).token.is_some();
         storage
             .record_turn_state_observation(
                 &entry,
@@ -452,7 +449,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn turn_state_response_capture_then_cached_state_overrides_every_client_header() {
+    async fn turn_state_response_capture_then_cache_replaces_only_missing_or_invalid_state() {
         let h = Harness::new(true).await;
         let target = token(10, now(), 1);
         h.reply.lock().await.state = Some(target.clone());
@@ -471,7 +468,7 @@ mod tests {
             None,
             Some("bad-client-state".to_owned()),
             Some(token(9, now(), 3)),
-            Some(token(10, now() + 1, 4)),
+            Some(token(10, now() - 3600, 4)),
         ] {
             let response = h
                 .send(&h.a, "gpt-6-astra", client_state.as_deref(), false)
@@ -495,6 +492,48 @@ mod tests {
         assert_eq!(entry.response_result, "wrong_blocks");
         assert_eq!(entry.response_blocks, 9);
         assert_eq!(entry.response_captures, 1);
+    }
+
+    #[tokio::test]
+    async fn turn_state_healthy_traffic_passes_through_and_refreshes_fallback_without_extending_old_state()
+     {
+        let h = Harness::new(true).await;
+        let time = now();
+        let initial = token(10, time - 100, 1);
+        let newer = token(10, time - 50, 2);
+        let response_state = token(10, time, 3);
+        h.send(&h.a, "gpt-6-astra", Some(&initial), false).await;
+        let initial_expiry = h.entry().await.expires_at;
+        h.send(&h.a, "gpt-6-astra", Some(&newer), true).await;
+        let entry = h.entry().await;
+        assert_eq!(entry.token.as_deref(), Some(newer.as_str()));
+        assert_eq!(entry.source, "client");
+        assert_eq!(entry.injections, 0);
+        assert_eq!(entry.expires_at, initial_expiry + 50);
+        // Eligible older client state still passes through; only storage refuses regression.
+        h.send(&h.a, "gpt-6-astra", Some(&initial), false).await;
+        assert_eq!(h.entry().await.request_result, "older_state");
+        assert_eq!(h.entry().await.token.as_deref(), Some(newer.as_str()));
+        h.send(&h.a, "gpt-6-astra", Some("invalid"), false).await;
+        assert_eq!(h.entry().await.request_result, "invalid_encoding");
+        // A newer normal response refreshes the cache even with a healthy client state.
+        h.reply.lock().await.state = Some(response_state.clone());
+        h.send(&h.a, "gpt-6-astra", Some(&newer), false).await;
+        let refreshed = h.entry().await;
+        assert_eq!(refreshed.token.as_deref(), Some(response_state.as_str()));
+        assert_eq!(refreshed.source, "response");
+        assert_eq!(refreshed.expires_at, time + 3570);
+        h.send(&h.a, "gpt-6-astra", None, false).await;
+        assert_eq!(h.entry().await.expires_at, refreshed.expires_at);
+        let seen = h.seen.lock().await;
+        assert_eq!(seen.len(), 6);
+        for (request, expected) in
+            seen.iter()
+                .zip([&initial, &newer, &initial, &newer, &newer, &response_state])
+        {
+            assert_eq!(request.state.as_deref(), Some(expected.as_str()));
+        }
+        assert_eq!(h.entry().await.injections, 2);
     }
 
     #[tokio::test]

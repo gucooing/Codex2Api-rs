@@ -14,7 +14,7 @@ fn result_label(result: &str) -> &'static str {
         "expired" => "state 超出本地有效期",
         "http_error" => "上游 HTTP 请求失败，未采集",
         "network_error" => "上游连接失败",
-        "cache_preferred" => "已使用目标缓存（覆盖客户端 state）",
+        "cache_preferred" => "已使用目标缓存（旧版记录）",
         _ => "尚未观察到",
     }
 }
@@ -96,14 +96,14 @@ pub(crate) fn render(
     }
     format!(
         r#"<section class="card"><h2>实验性 turn-state 复用</h2>
-<p>仅从正常流量采集：无有效缓存时采集客户端携带的目标 state，也会采集正常上游响应头中的目标 state。一旦缓存可用，后续请求统一使用缓存，覆盖客户端携带的 state。</p>
+<p>仅从正常流量采集并更新缓存：合格的客户端 state 原样透传，同时更新缓存；客户端 state 缺失、不符合目标条件或过期时，才使用有效缓存替换。正常上游响应中的合格 state 也会更新缓存。</p>
 <p class="muted">按账户和模型隔离，仅适用 HTTP Responses。WebSocket 不参与。10 块结构和有效期是本地筛选条件，不代表已验证令牌签名，也不保证回答质量。</p>
 <form class="stack" method="post" action="/admin/accounts/{id}/turn-state">
 <input type="hidden" name="csrf" value="{csrf}">
 <label class="row-actions"><input type="checkbox" name="enabled" {checked}> 启用本账户的状态复用</label>
 <label>适用模型（每行一个，精确匹配）<textarea name="models" rows="3" required>{models}</textarea></label>
 <label>缓存 TTL（秒）<input type="number" name="ttl" min="120" max="3600" value="{ttl}" required></label>
-<p class="muted">有效期按 state 自带时间戳计算，并预留 30 秒。保存配置会清除旧缓存和统计。</p>
+<p class="muted">通过正常流量中的新 state 更新缓存，不发送保活请求，也不延长旧 state 的有效期。有效期按 state 自带时间戳计算，并预留 30 秒。保存配置会清除旧缓存和统计。</p>
 <button type="submit">保存配置</button></form></section>
 <section class="card"><div class="row-actions"><a class="btn secondary" href="/admin/accounts/{id}?tab=turn-state">刷新状态</a>
 <form method="post" action="/admin/accounts/{id}/turn-state/clear"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">清除本账户缓存</button></form></div>

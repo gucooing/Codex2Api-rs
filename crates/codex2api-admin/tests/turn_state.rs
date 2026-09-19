@@ -171,7 +171,7 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
                 issued_at: 0,
                 now: time,
                 status: 0,
-                result: "cache_preferred",
+                result: "missing_header",
                 length: 0,
                 blocks: 0,
                 injected: true,
@@ -191,7 +191,9 @@ async fn turn_state_page_is_account_scoped_authenticated_and_never_displays_toke
     assert!(html.contains("累计缓存使用次数</dt><dd>1"));
     assert!(!html.contains("NEVER_DISPLAY_THIS_SECRET"));
     assert!(html.contains("正常上游响应"));
-    assert!(html.contains("覆盖客户端 state"));
+    assert!(html.contains("合格的客户端 state 原样透传"));
+    assert!(html.contains("才使用有效缓存替换"));
+    assert!(html.contains("不延长旧 state 的有效期"));
     assert!(!html.contains("探针"));
     assert!(!html.contains("name=\"renew\""));
     assert!(!html.contains("name=\"cooldown\""));
