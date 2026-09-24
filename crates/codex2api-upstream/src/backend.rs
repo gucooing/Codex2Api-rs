@@ -18,6 +18,11 @@ pub enum BackendEndpoint {
     Tasks,
     Task,
     SiblingTurns,
+    TaskTurns,
+    TaskTurn,
+    TaskLogs,
+    CancelTask,
+    ArchiveTask,
     CreateTask,
     Messages,
     ThreadUsage,
@@ -25,7 +30,7 @@ pub enum BackendEndpoint {
 }
 
 impl BackendEndpoint {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 19] = [
         Self::Usage,
         Self::Accounts,
         Self::Profile,
@@ -36,6 +41,11 @@ impl BackendEndpoint {
         Self::Tasks,
         Self::Task,
         Self::SiblingTurns,
+        Self::TaskTurns,
+        Self::TaskTurn,
+        Self::TaskLogs,
+        Self::CancelTask,
+        Self::ArchiveTask,
         Self::CreateTask,
         Self::Messages,
         Self::ThreadUsage,
@@ -55,6 +65,11 @@ impl BackendEndpoint {
             Self::Task => "tasks/{task_id}",
             Self::SiblingTurns => "tasks/{task_id}/turns/{turn_id}/sibling_turns",
             Self::CreateTask => "tasks",
+            Self::TaskTurns => "tasks/{task_id}/turns",
+            Self::TaskTurn => "tasks/{task_id}/turns/{turn_id}",
+            Self::TaskLogs => "tasks/{task_id}/turns/{turn_id}/logs",
+            Self::CancelTask => "tasks/{task_id}/cancel",
+            Self::ArchiveTask => "tasks/{task_id}/archive",
             Self::Messages => "workspace-messages",
             Self::ThreadUsage => "usage/thread_usage/query",
             Self::TurnEstimates => "usage/thread-estimates/query",
@@ -63,9 +78,12 @@ impl BackendEndpoint {
 
     pub fn method(self) -> Method {
         match self {
-            Self::ConsumeCredit | Self::CreateTask | Self::ThreadUsage | Self::TurnEstimates => {
-                Method::POST
-            }
+            Self::ConsumeCredit
+            | Self::CreateTask
+            | Self::ThreadUsage
+            | Self::TurnEstimates
+            | Self::CancelTask
+            | Self::ArchiveTask => Method::POST,
             _ => Method::GET,
         }
     }
@@ -94,17 +112,17 @@ impl BackendEndpoint {
                 segments.push(value);
             }
         }
-        if self == Self::Tasks {
-            if let Some(query) = query {
-                let parsed = reqwest::Url::parse(&format!("https://local/?{query}"))
-                    .map_err(|_| UpstreamError::InvalidRequest("Invalid task query".into()))?;
-                for (key, value) in parsed.query_pairs() {
-                    if matches!(
-                        key.as_ref(),
-                        "limit" | "task_filter" | "environment_id" | "cursor"
-                    ) {
-                        url.query_pairs_mut().append_pair(&key, &value);
-                    }
+        if self == Self::Tasks
+            && let Some(query) = query
+        {
+            let parsed = reqwest::Url::parse(&format!("https://local/?{query}"))
+                .map_err(|_| UpstreamError::InvalidRequest("Invalid task query".into()))?;
+            for (key, value) in parsed.query_pairs() {
+                if matches!(
+                    key.as_ref(),
+                    "limit" | "task_filter" | "environment_id" | "cursor"
+                ) {
+                    url.query_pairs_mut().append_pair(&key, &value);
                 }
             }
         }
@@ -135,7 +153,11 @@ impl BackendEndpoint {
             headers.insert("x-openai-codex-luna-reserve", HeaderValue::from_static("1"));
         }
         let body = if self.method() == Method::POST {
-            let value = decode_body(body, inbound)?;
+            let value = if body.is_empty() && matches!(self, Self::CancelTask | Self::ArchiveTask) {
+                serde_json::json!({})
+            } else {
+                decode_body(body, inbound)?
+            };
             if self == Self::ConsumeCredit
                 && value
                     .get("redeem_request_id")

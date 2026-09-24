@@ -9,10 +9,34 @@ use tower::ServiceExt;
 async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() {
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().join("ua.sqlite")).await.unwrap();
-    let accounts = codex2api_accounts::AccountStore::open(storage.clone());
+    let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let account = accounts.create_pending().await.unwrap().account;
-    let key = storage
-        .create_proxy_api_key(&account.id, None)
+    let consumer = codex2api_storage::VirtualAccount {
+        provider_id: "chatgpt".into(),
+        id: "ua-consumer".into(),
+        username: "ua-consumer".into(),
+        password_hash: "fixture".into(),
+        name: "Consumer".into(),
+        email: "consumer@example.test".into(),
+        plan_type: "plus".into(),
+        plan_id: "plus".into(),
+        subscription_expires_at: None,
+        enabled: true,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    storage.save_virtual_account(&consumer).await.unwrap();
+    let device = storage
+        .create_virtual_device(&consumer, "refresh", &Default::default())
+        .await
+        .unwrap()
+        .unwrap();
+    storage
+        .register_virtual_access(
+            &device,
+            "refresh",
+            "ua-token",
+            chrono::Utc::now().timestamp() + 600,
+        )
         .await
         .unwrap();
     let auth = codex2api_auth::AuthService::new(accounts.clone()).unwrap();
@@ -53,7 +77,7 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
                     Request::builder()
                         .method(method)
                         .uri(&path)
-                        .header("authorization", format!("Bearer {}", key.token))
+                        .header("authorization", "Bearer ua-token")
                         .header("user-agent", "BLOCKED desktop CLIENT/1.0")
                         .body(Body::from("not-json"))
                         .unwrap(),
@@ -71,15 +95,6 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
             assert_eq!(body["error"]["code"], "user_agent_blocked");
         }
     }
-    assert!(
-        storage
-            .get_proxy_api_key(&key.record.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .last_used_at
-            .is_none()
-    );
     assert!(
         storage
             .get_account(&account.id)
@@ -117,19 +132,19 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
             UaMode::Whitelist,
             "codex*cli\ntrusted",
             Some("other"),
-            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::UNAUTHORIZED,
         ),
         (
             UaMode::Whitelist,
             "codex*cli",
             None,
-            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::UNAUTHORIZED,
         ),
         (
             UaMode::Whitelist,
             "",
             Some("codex_cli"),
-            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::UNAUTHORIZED,
         ),
         (
             UaMode::Blacklist,

@@ -30,7 +30,7 @@ pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetad
         model: value
             .get("model")
             .and_then(Value::as_str)
-            .map(|s| s.chars().take(256).collect()),
+            .map(str::to_owned),
         reasoning_effort: value
             .pointer("/reasoning/effort")
             .and_then(Value::as_str)
@@ -47,7 +47,7 @@ pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetad
     })
 }
 
-pub(crate) fn decode_body(body: &[u8], inbound: &HeaderMap) -> Result<Value> {
+pub fn decode_body(body: &[u8], inbound: &HeaderMap) -> Result<Value> {
     if body.len() > MAX_REQUEST_BYTES {
         return Err(UpstreamError::RequestTooLarge);
     }
@@ -137,10 +137,10 @@ pub fn normalize_response_identity(
             insert_header(&mut headers, header, value);
         }
     }
-    if !headers.contains_key(X_CLIENT_REQUEST_ID_HEADER) {
-        if let Some(thread) = headers.get(THREAD_ID_HEADER).cloned() {
-            headers.insert(X_CLIENT_REQUEST_ID_HEADER, thread);
-        }
+    if !headers.contains_key(X_CLIENT_REQUEST_ID_HEADER)
+        && let Some(thread) = headers.get(THREAD_ID_HEADER).cloned()
+    {
+        headers.insert(X_CLIENT_REQUEST_ID_HEADER, thread);
     }
     if let Some(value) = metadata.get_mut(X_CODEX_TURN_METADATA_HEADER) {
         let text = value.as_str().ok_or_else(|| {

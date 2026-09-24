@@ -5,7 +5,7 @@ use axum::{
     routing::post,
 };
 use base64::Engine;
-use codex2api_accounts::{AccountIdentity, AccountStore, HostRuntime, new_installation_id};
+use codex2api_accounts::{AccountIdentity, HostRuntime, SupplierAccountStore, new_installation_id};
 use codex2api_auth::{AuthService, LoginFlow, OAuthConfig};
 use codex2api_storage::Storage;
 use serde_json::json;
@@ -84,7 +84,8 @@ async fn manual_callback_validates_full_url_and_works_with_occupied_callback_por
         ..Default::default()
     };
     let auth =
-        AuthService::with_config(AccountStore::open(storage.clone()), config.clone()).unwrap();
+        AuthService::with_config(SupplierAccountStore::open(storage.clone()), config.clone())
+            .unwrap();
     let pending = auth
         .begin_manual_login_with_proxy(None, false, Some(&proxy.id))
         .await
@@ -99,7 +100,8 @@ async fn manual_callback_validates_full_url_and_works_with_occupied_callback_por
     ));
     storage.close().await;
     let storage = Storage::open(&path).await.unwrap();
-    let auth = AuthService::with_config(AccountStore::open(storage.clone()), config).unwrap();
+    let auth =
+        AuthService::with_config(SupplierAccountStore::open(storage.clone()), config).unwrap();
     let valid = format!(
         "{}?code=browser-code&state={}",
         pending.redirect_uri, pending.state
@@ -220,7 +222,8 @@ async fn refresh_token_login_uses_the_draft_identity_proxy_and_persists_only_the
         token_url: format!("{issuer}/oauth/token"),
         ..Default::default()
     };
-    let auth = AuthService::with_config(AccountStore::open(storage.clone()), config).unwrap();
+    let auth =
+        AuthService::with_config(SupplierAccountStore::open(storage.clone()), config).unwrap();
     let identity = AccountIdentity::new(
         uuid::Uuid::new_v4().to_string(),
         new_installation_id(),
@@ -247,7 +250,7 @@ async fn refresh_token_login_uses_the_draft_identity_proxy_and_persists_only_the
         .unwrap();
     assert_eq!(
         done.account.status,
-        codex2api_storage::AccountStatus::Active
+        codex2api_storage::SupplierStatus::Active
     );
     assert_eq!(done.account.installation_id, identity.installation_id);
     assert_eq!(done.account.os_type, "Ubuntu");
@@ -301,7 +304,7 @@ async fn callback_draft_is_not_saved_until_success_and_deduplicates_accounts() {
         .await
         .unwrap();
     let auth = AuthService::with_config(
-        AccountStore::open(storage.clone()),
+        SupplierAccountStore::open(storage.clone()),
         OAuthConfig {
             issuer: "http://official.invalid".into(),
             token_url: "http://official.invalid/oauth/token".into(),
@@ -393,7 +396,7 @@ async fn draft_device_enforces_poll_interval_and_saves_only_after_authorization(
         .await
         .unwrap();
     let auth = AuthService::with_config(
-        AccountStore::open(storage.clone()),
+        SupplierAccountStore::open(storage.clone()),
         OAuthConfig {
             token_url: format!("{issuer}/oauth/token"),
             issuer,
@@ -466,7 +469,8 @@ async fn device_code_uses_official_requests_persists_pending_state_and_enforces_
         ..Default::default()
     };
     let auth =
-        AuthService::with_config(AccountStore::open(storage.clone()), config.clone()).unwrap();
+        AuthService::with_config(SupplierAccountStore::open(storage.clone()), config.clone())
+            .unwrap();
     let pending = auth
         .begin_manual_login_with_proxy(None, true, Some(&proxy.id))
         .await
@@ -494,7 +498,8 @@ async fn device_code_uses_official_requests_persists_pending_state_and_enforces_
     );
     storage.close().await;
     let storage = Storage::open(&path).await.unwrap();
-    let auth = AuthService::with_config(AccountStore::open(storage.clone()), config).unwrap();
+    let auth =
+        AuthService::with_config(SupplierAccountStore::open(storage.clone()), config).unwrap();
     assert!(
         auth.poll_device_login(&pending.state)
             .await

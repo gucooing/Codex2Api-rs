@@ -1,5 +1,5 @@
 use axum::extract::FromRef;
-use codex2api_accounts::AccountStore;
+use codex2api_accounts::SupplierAccountStore;
 use codex2api_storage::Storage;
 use codex2api_upstream::UpstreamPool;
 
@@ -9,24 +9,42 @@ use codex2api_upstream::UpstreamPool;
 #[derive(Clone)]
 pub struct ApiState {
     pub storage: Storage,
-    pub accounts: AccountStore,
+    pub accounts: SupplierAccountStore,
     pub upstream: UpstreamPool,
+    pub public_base_url: Option<String>,
 }
 
 impl ApiState {
-    pub fn new(storage: Storage, accounts: AccountStore, upstream: UpstreamPool) -> Self {
+    pub fn new(storage: Storage, accounts: SupplierAccountStore, upstream: UpstreamPool) -> Self {
         Self {
             storage,
             accounts,
             upstream,
+            public_base_url: None,
         }
+    }
+
+    pub fn with_public_base_url(mut self, value: &str) -> anyhow::Result<Self> {
+        let url = url::Url::parse(value)?;
+        anyhow::ensure!(
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "CODEX2API_PUBLIC_BASE_URL must be an HTTP(S) origin without a path, credentials, query or fragment"
+        );
+        self.public_base_url = Some(url.origin().ascii_serialization());
+        Ok(self)
     }
 
     pub fn storage(&self) -> &Storage {
         &self.storage
     }
 
-    pub fn accounts(&self) -> &AccountStore {
+    pub fn accounts(&self) -> &SupplierAccountStore {
         &self.accounts
     }
 
@@ -41,7 +59,7 @@ impl FromRef<ApiState> for Storage {
     }
 }
 
-impl FromRef<ApiState> for AccountStore {
+impl FromRef<ApiState> for SupplierAccountStore {
     fn from_ref(state: &ApiState) -> Self {
         state.accounts.clone()
     }

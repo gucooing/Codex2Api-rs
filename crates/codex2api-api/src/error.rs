@@ -13,6 +13,8 @@ pub type Result<T> = std::result::Result<T, ApiError>;
 /// Public API failure mapped to OpenAI-style `{ "error": { ... } }` JSON.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    #[error(transparent)]
+    Service(#[from] codex2api_service::ServiceError),
     #[error("{message}")]
     OpenAi {
         status: StatusCode,
@@ -25,7 +27,7 @@ pub enum ApiError {
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error(transparent)]
-    Account(#[from] AccountError),
+    SupplierAccount(#[from] AccountError),
 }
 
 impl ApiError {
@@ -43,21 +45,21 @@ impl ApiError {
         }
     }
 
-    pub fn missing_api_key() -> Self {
+    pub fn missing_token() -> Self {
         Self::openai(
             StatusCode::UNAUTHORIZED,
             "authentication_error",
-            "You didn't provide an API key. Provide it in an Authorization header using Bearer auth (Authorization: Bearer YOUR_KEY).",
-            Some("missing_api_key"),
+            "Provide a virtual account access token using Authorization: Bearer.",
+            Some("missing_token"),
         )
     }
 
-    pub fn invalid_api_key() -> Self {
+    pub fn invalid_token() -> Self {
         Self::openai(
             StatusCode::UNAUTHORIZED,
             "authentication_error",
-            "Incorrect API key provided.",
-            Some("invalid_api_key"),
+            "Invalid or expired virtual account access token.",
+            Some("invalid_token"),
         )
     }
 
@@ -139,6 +141,7 @@ impl OpenAiErrorBody {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
+            Self::Service(error) => service_error_response(error),
             Self::OpenAi {
                 status,
                 error_type,
@@ -146,11 +149,8 @@ impl IntoResponse for ApiError {
                 code,
             } => openai_response(status, error_type, message, code),
             Self::Upstream(err) => upstream_error_response(err),
-            Self::Storage(StorageError::ApiKeyNotFound) => {
-                ApiError::invalid_api_key().into_response()
-            }
             Self::Storage(StorageError::AccountNotFound(_)) => {
-                ApiError::invalid_api_key().into_response()
+                ApiError::invalid_token().into_response()
             }
             Self::Storage(err) => {
                 tracing::error!(error = %err, "storage error");
@@ -161,8 +161,10 @@ impl IntoResponse for ApiError {
                     None,
                 )
             }
-            Self::Account(AccountError::NotFound(_)) => ApiError::invalid_api_key().into_response(),
-            Self::Account(err) => {
+            Self::SupplierAccount(AccountError::NotFound(_)) => {
+                ApiError::invalid_token().into_response()
+            }
+            Self::SupplierAccount(err) => {
                 tracing::error!(error = %err, "account error");
                 openai_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -322,6 +324,65 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+fn service_error_response(error: codex2api_service::ServiceError) -> Response {
+    use codex2api_core::PolicyError;
+    use codex2api_service::ServiceError;
+    let (status, kind, code) = match &error {
+        ServiceError::Storage(_) => {
+            return match error {
+                ServiceError::Storage(e) => ApiError::Storage(e).into_response(),
+                _ => unreachable!(),
+            };
+        }
+        ServiceError::BudgetExceeded => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "virtual_quota_exceeded",
+        ),
+        ServiceError::PricingUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "model_pricing_unavailable",
+        ),
+        ServiceError::Policy(PolicyError::InvalidModel) => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "invalid_model",
+        ),
+        ServiceError::Policy(PolicyError::InvalidModelScope) => (
+            StatusCode::CONFLICT,
+            "configuration_error",
+            "invalid_model_policy",
+        ),
+        ServiceError::Policy(PolicyError::UnsupportedProvider) => (
+            StatusCode::NOT_IMPLEMENTED,
+            "server_error",
+            "provider_unavailable",
+        ),
+        ServiceError::Policy(PolicyError::ProviderMismatch) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "provider_mismatch",
+        ),
+        ServiceError::Policy(PolicyError::SubscriptionRequired) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "subscription_required",
+        ),
+        ServiceError::Policy(PolicyError::ModelNotEntitled) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "model_not_entitled",
+        ),
+        ServiceError::Policy(PolicyError::ModelUnavailable) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "model_unavailable",
+        ),
+    };
+    openai_response(status, kind, error.to_string(), Some(code))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,12 +391,15 @@ mod tests {
     fn openai_json_shape() {
         let value = openai_json(
             "authentication_error",
-            "Incorrect API key provided.",
-            Some("invalid_api_key"),
+            "Invalid or expired virtual account access token.",
+            Some("invalid_token"),
         );
         assert_eq!(value["error"]["type"], "authentication_error");
-        assert_eq!(value["error"]["code"], "invalid_api_key");
-        assert_eq!(value["error"]["message"], "Incorrect API key provided.");
+        assert_eq!(value["error"]["code"], "invalid_token");
+        assert_eq!(
+            value["error"]["message"],
+            "Invalid or expired virtual account access token."
+        );
     }
 
     #[test]

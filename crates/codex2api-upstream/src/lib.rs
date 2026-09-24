@@ -13,7 +13,9 @@
 //! Protocol construction lives in request/headers; transport lives in client/websocket/stream.
 
 mod backend;
+mod catalog;
 mod client;
+pub use catalog::codex_model_descriptor;
 mod compat;
 mod endpoint;
 mod error;
@@ -43,8 +45,8 @@ pub use headers::{
     insert_header, strip_hop_by_hop_headers,
 };
 pub use pool::UpstreamPool;
-pub use realtime::{RealtimeKind, realtime_url};
-pub use request::{MAX_REQUEST_BYTES, normalize_response_identity};
+pub use realtime::{RealtimeKind, realtime_call_models, realtime_url};
+pub use request::{MAX_REQUEST_BYTES, decode_body, normalize_response_identity};
 pub use request::{RequestMetadata, request_metadata};
 pub use stream::{SseEvent, SseForwardStream, format_sse_event, spawn_sse_forward};
 pub use timezone::apply_response_timezone;

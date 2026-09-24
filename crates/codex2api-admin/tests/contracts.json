@@ -1,0 +1,833 @@
+{
+  "session": {
+    "authenticated": true,
+    "username": "admin",
+    "csrf_token": "session-csrf-token"
+  },
+  "overview": {
+    "supplier_count": 1,
+    "consumer_count": 1,
+    "enabled_consumers": 1,
+    "models_count": 5
+  },
+  "plans": {
+    "items": [
+      {
+        "id": "free",
+        "provider_id": "chatgpt",
+        "name": "free",
+        "enabled": true,
+        "revision": 0,
+        "updated_at_ms": 1,
+        "model_access": "all",
+        "models": [],
+        "free_model_access": "none",
+        "free_models": [],
+        "free_access_enabled": false,
+        "primary_cost_limit_usd": "0",
+        "weekly_cost_limit_usd": "0",
+        "free_primary_cost_limit_usd": "0",
+        "free_weekly_cost_limit_usd": "0",
+        "spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ],
+        "free_spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ]
+      },
+      {
+        "id": "plus",
+        "provider_id": "chatgpt",
+        "name": "plus",
+        "enabled": true,
+        "revision": 1,
+        "updated_at_ms": 1,
+        "model_access": "all",
+        "models": [],
+        "free_model_access": "none",
+        "free_models": [],
+        "free_access_enabled": false,
+        "primary_cost_limit_usd": "2",
+        "weekly_cost_limit_usd": "10",
+        "free_primary_cost_limit_usd": "0",
+        "free_weekly_cost_limit_usd": "0",
+        "spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "10"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "2"
+          }
+        ],
+        "free_spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ]
+      },
+      {
+        "id": "pro",
+        "provider_id": "chatgpt",
+        "name": "pro",
+        "enabled": true,
+        "revision": 0,
+        "updated_at_ms": 1,
+        "model_access": "all",
+        "models": [],
+        "free_model_access": "none",
+        "free_models": [],
+        "free_access_enabled": false,
+        "primary_cost_limit_usd": null,
+        "weekly_cost_limit_usd": null,
+        "free_primary_cost_limit_usd": "0",
+        "free_weekly_cost_limit_usd": "0",
+        "spending_windows": [],
+        "free_spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ]
+      },
+      {
+        "id": "business",
+        "provider_id": "chatgpt",
+        "name": "business",
+        "enabled": true,
+        "revision": 0,
+        "updated_at_ms": 1,
+        "model_access": "all",
+        "models": [],
+        "free_model_access": "none",
+        "free_models": [],
+        "free_access_enabled": false,
+        "primary_cost_limit_usd": null,
+        "weekly_cost_limit_usd": null,
+        "free_primary_cost_limit_usd": "0",
+        "free_weekly_cost_limit_usd": "0",
+        "spending_windows": [],
+        "free_spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ]
+      },
+      {
+        "id": "enterprise",
+        "provider_id": "chatgpt",
+        "name": "enterprise",
+        "enabled": true,
+        "revision": 0,
+        "updated_at_ms": 1,
+        "model_access": "all",
+        "models": [],
+        "free_model_access": "none",
+        "free_models": [],
+        "free_access_enabled": false,
+        "primary_cost_limit_usd": null,
+        "weekly_cost_limit_usd": null,
+        "free_primary_cost_limit_usd": "0",
+        "free_weekly_cost_limit_usd": "0",
+        "spending_windows": [],
+        "free_spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ]
+      },
+      {
+        "id": "edu",
+        "provider_id": "chatgpt",
+        "name": "edu",
+        "enabled": true,
+        "revision": 0,
+        "updated_at_ms": 1,
+        "model_access": "all",
+        "models": [],
+        "free_model_access": "none",
+        "free_models": [],
+        "free_access_enabled": false,
+        "primary_cost_limit_usd": null,
+        "weekly_cost_limit_usd": null,
+        "free_primary_cost_limit_usd": "0",
+        "free_weekly_cost_limit_usd": "0",
+        "spending_windows": [],
+        "free_spending_windows": [
+          {
+            "duration_seconds": 604800,
+            "cost_limit_usd": "0"
+          },
+          {
+            "duration_seconds": 18000,
+            "cost_limit_usd": "0"
+          }
+        ]
+      }
+    ]
+  },
+  "models": {
+    "items": [
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-5.6",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "unavailable",
+        "codex_metadata_source": null,
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "8",
+            "cached_rate": "0.8",
+            "cache_write_rate": "10",
+            "output_rate": "40"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "16",
+            "cached_rate": "1.6",
+            "cache_write_rate": "20",
+            "output_rate": "60"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "2",
+            "cached_rate": "0.2",
+            "cache_write_rate": "2.5",
+            "output_rate": "10"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "15"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "20"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "8",
+            "cached_rate": "0.8",
+            "cache_write_rate": "10",
+            "output_rate": "30"
+          }
+        ],
+        "image_prices": []
+      },
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-5.6-luna",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "verified",
+        "codex_metadata_source": "a8964cb1bad67bc26a826fb07d1bef99c6a3f008",
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "0.4",
+            "cached_rate": "0.04",
+            "cache_write_rate": "0.5",
+            "output_rate": "2.4"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "0.8",
+            "cached_rate": "0.08",
+            "cache_write_rate": "1",
+            "output_rate": "3.6"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "0.1",
+            "cached_rate": "0.01",
+            "cache_write_rate": "0.125",
+            "output_rate": "0.6"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "0.2",
+            "cached_rate": "0.02",
+            "cache_write_rate": "0.25",
+            "output_rate": "0.9"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "0.2",
+            "cached_rate": "0.02",
+            "cache_write_rate": "0.25",
+            "output_rate": "1.2"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "0.4",
+            "cached_rate": "0.04",
+            "cache_write_rate": "0.5",
+            "output_rate": "1.8"
+          }
+        ],
+        "image_prices": []
+      },
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-5.6-sol",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "verified",
+        "codex_metadata_source": "a8964cb1bad67bc26a826fb07d1bef99c6a3f008",
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "8",
+            "cached_rate": "0.8",
+            "cache_write_rate": "10",
+            "output_rate": "40"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "16",
+            "cached_rate": "1.6",
+            "cache_write_rate": "20",
+            "output_rate": "60"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "2",
+            "cached_rate": "0.2",
+            "cache_write_rate": "2.5",
+            "output_rate": "10"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "15"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "20"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "8",
+            "cached_rate": "0.8",
+            "cache_write_rate": "10",
+            "output_rate": "30"
+          }
+        ],
+        "image_prices": []
+      },
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-5.6-terra",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "verified",
+        "codex_metadata_source": "a8964cb1bad67bc26a826fb07d1bef99c6a3f008",
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "24"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "8",
+            "cached_rate": "0.8",
+            "cache_write_rate": "10",
+            "output_rate": "36"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "1",
+            "cached_rate": "0.1",
+            "cache_write_rate": "1.25",
+            "output_rate": "6"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "2",
+            "cached_rate": "0.2",
+            "cache_write_rate": "2.5",
+            "output_rate": "9"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "2",
+            "cached_rate": "0.2",
+            "cache_write_rate": "2.5",
+            "output_rate": "12"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "18"
+          }
+        ],
+        "image_prices": []
+      },
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-6-astra",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "verified",
+        "codex_metadata_source": "a8964cb1bad67bc26a826fb07d1bef99c6a3f008",
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "20",
+            "cached_rate": "2",
+            "cache_write_rate": "25",
+            "output_rate": "100"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "40",
+            "cached_rate": "4",
+            "cache_write_rate": "50",
+            "output_rate": "150"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "5",
+            "cached_rate": "0.5",
+            "cache_write_rate": "6.25",
+            "output_rate": "25"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "10",
+            "cached_rate": "1",
+            "cache_write_rate": "12.5",
+            "output_rate": "37.5"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "10",
+            "cached_rate": "1",
+            "cache_write_rate": "12.5",
+            "output_rate": "50"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "20",
+            "cached_rate": "2",
+            "cache_write_rate": "25",
+            "output_rate": "75"
+          }
+        ],
+        "image_prices": []
+      }
+    ]
+  },
+  "consumer": {
+    "id": "contract-consumer",
+    "provider_id": "chatgpt",
+    "username": "contract-consumer",
+    "name": "Contract consumer",
+    "email": "consumer@example.test",
+    "plan_id": "plus",
+    "plan_type": "plus",
+    "subscription_expires_at": null,
+    "enabled": true,
+    "created_at": "2026-09-22T00:00:00+00:00",
+    "effective_plan": "plus",
+    "plan_name": "plus",
+    "subscription_status": "active"
+  },
+  "routing": {
+    "items": [
+      {
+        "virtual_account_id": "contract-consumer",
+        "provider_id": "chatgpt",
+        "supplier_account_id": null,
+        "revision": 1
+      }
+    ]
+  },
+  "usage": {
+    "records": [
+      {
+        "id": "contract-usage",
+        "account_id": "contract-supplier",
+        "account_name": "Contract supplier",
+        "subject_id": "contract-consumer",
+        "subject_name": "Contract consumer",
+        "subject_kind": "virtual_account",
+        "provider_id": "chatgpt",
+        "endpoint": "/v1/responses",
+        "transport": "http",
+        "model": "gpt-6-astra",
+        "actual_model": null,
+        "upstream_request_id": null,
+        "reasoning_effort": null,
+        "service_tier": null,
+        "input_tokens": 1000,
+        "output_tokens": 100,
+        "cached_tokens": 100,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 20,
+        "image_size": null,
+        "image_count": null,
+        "image_usage_json": null,
+        "first_byte_ms": null,
+        "total_ms": null,
+        "requested_at_ms": 1,
+        "status": "completed",
+        "http_status": 200,
+        "error_code": null,
+        "error_message": null,
+        "cost_nano_usd": 14100000,
+        "billing_status": "priced",
+        "billing_model": "gpt-6-astra"
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20
+  },
+  "task_records": {
+    "items": [
+      {
+        "id": "contract-task",
+        "owner": "contract-consumer",
+        "source": "d8fa7d24-8fd0-47ca-8ad6-50902249d93a",
+        "value": {
+          "task": {
+            "id": "contract-task",
+            "title": "Recorded test task",
+            "status": "completed"
+          }
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      }
+    ]
+  },
+  "subscription_records": {
+    "items": [
+      {
+        "id": "change_expiry",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "change_expiry",
+          "previous_plan_name": "Previous plan",
+          "plan_name": "Plus",
+          "expires_at": "2027-09-22T00:00:00Z",
+          "origin": "admin",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      },
+      {
+        "id": "change_plan",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "change_plan",
+          "previous_plan_name": "Previous plan",
+          "plan_name": "Plus",
+          "expires_at": "2027-09-22T00:00:00Z",
+          "origin": "admin",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      },
+      {
+        "id": "renew",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "renew",
+          "previous_plan_name": "Previous plan",
+          "plan_name": "Plus",
+          "expires_at": "2027-09-22T00:00:00Z",
+          "origin": "admin",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      },
+      {
+        "id": "grant",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "grant",
+          "previous_plan_name": "Previous plan",
+          "plan_name": "Plus",
+          "expires_at": "2027-09-22T00:00:00Z",
+          "origin": "admin",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      },
+      {
+        "id": "1496b419-8e0f-42b3-9ef4-2772a576ccc3",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "grant",
+          "origin": "system",
+          "plan_type": "plus",
+          "plan_id": "plus",
+          "plan_name": "plus",
+          "previous_plan_name": null,
+          "previous_plan_id": null,
+          "expires_at": null,
+          "previous_plan": null,
+          "previous_expires_at": null,
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      }
+    ]
+  },
+  "diagnostics": {
+    "items": [
+      {
+        "id": 1,
+        "source": "ces",
+        "owner": "contract-consumer",
+        "record_count": 1,
+        "summaries": [
+          {
+            "type": "network",
+            "count": 1
+          }
+        ],
+        "attempts": 1,
+        "first_seen_at_ms": 1,
+        "last_seen_at_ms": 1
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20
+  },
+  "client_state": {
+    "key": "cloud_preferences",
+    "value": {
+      "branch_format": "codex/{task_id}",
+      "git_diff_mode": "unified"
+    },
+    "revision": 1,
+    "write_origin": "client",
+    "updated_at_ms": 1,
+    "fields": []
+  },
+  "consumer_usage": {
+    "summary": {
+      "lifetime_tokens": 1100,
+      "peak_daily_tokens": 1100,
+      "current_streak_days": 1,
+      "longest_streak_days": 1,
+      "longest_running_turn_sec": null,
+      "daily_usage_buckets": [
+        {
+          "start_date": "2026-09-24",
+          "tokens": 1100
+        }
+      ]
+    },
+    "quota": {
+      "account_id": "contract-consumer",
+      "user_id": "user-contract-consumer",
+      "plan_type": "plus",
+      "rate_limit": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary_window": {
+          "depth": 1,
+          "limit_window_seconds": 18000,
+          "started_at": 1790220648,
+          "reset_at": 1,
+          "reset_after_seconds": 1,
+          "used_percent": 0,
+          "allowed": true,
+          "used_usd": "0.0141",
+          "limit_usd": "2",
+          "remaining_usd": "1.9859",
+          "effective_remaining_usd": "1.9859"
+        },
+        "secondary_window": {
+          "depth": 0,
+          "limit_window_seconds": 604800,
+          "started_at": 1790035200,
+          "reset_at": 1,
+          "reset_after_seconds": 1,
+          "used_percent": 0,
+          "allowed": true,
+          "used_usd": "0.0141",
+          "limit_usd": "10",
+          "remaining_usd": "9.9859",
+          "effective_remaining_usd": "9.9859"
+        },
+        "windows": [
+          {
+            "depth": 0,
+            "limit_window_seconds": 604800,
+            "started_at": 1790035200,
+            "reset_at": 1,
+            "reset_after_seconds": 1,
+            "used_percent": 0,
+            "allowed": true,
+            "used_usd": "0.0141",
+            "limit_usd": "10",
+            "remaining_usd": "9.9859",
+            "effective_remaining_usd": "9.9859"
+          },
+          {
+            "depth": 1,
+            "limit_window_seconds": 18000,
+            "started_at": 1790220648,
+            "reset_at": 1,
+            "reset_after_seconds": 1,
+            "used_percent": 0,
+            "allowed": true,
+            "used_usd": "0.0141",
+            "limit_usd": "2",
+            "remaining_usd": "1.9859",
+            "effective_remaining_usd": "1.9859"
+          }
+        ]
+      },
+      "credits": {
+        "has_credits": false,
+        "unlimited": false,
+        "balance": null
+      },
+      "billing": {
+        "currency": "USD",
+        "used_nano_usd": 14100000,
+        "used_usd": "0.0141",
+        "pending_requests": 0,
+        "unpriced_requests": 0,
+        "legacy_requests": 0,
+        "started_at": "2026-09-24T03:30:47Z"
+      }
+    }
+  },
+  "task_execution_records": {
+    "items": [
+      {
+        "id": "contract-task",
+        "owner": "contract-consumer",
+        "source": "d8fa7d24-8fd0-47ca-8ad6-50902249d93a",
+        "value": {
+          "task_id": "contract-task",
+          "model": "gpt-6-astra"
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      }
+    ]
+  },
+  "task_operation_records": {
+    "items": [
+      {
+        "id": "operation-fixture",
+        "owner": "contract-consumer",
+        "source": "d8fa7d24-8fd0-47ca-8ad6-50902249d93a",
+        "value": {
+          "task_id": "contract-task",
+          "operation": "follow_up",
+          "status": "failed",
+          "reason": "task_model_unavailable",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      }
+    ]
+  }
+}

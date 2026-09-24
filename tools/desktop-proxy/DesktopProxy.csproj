@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Codex2API.DesktopProxy</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <BaseOutputPath>../../target/desktop-proxy/bin/</BaseOutputPath>
+    <PublishSingleFile>true</PublishSingleFile>
+    <DebugType>none</DebugType>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup><EmbeddedResource Include="AddressHook.cjs" LogicalName="AddressHook" /></ItemGroup>
+</Project>

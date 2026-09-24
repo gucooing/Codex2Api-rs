@@ -174,7 +174,7 @@ pub fn strip_hop_by_hop_headers(headers: &mut HeaderMap) {
 }
 
 /// Forward allowlisted headers used by the pinned official Codex client.
-/// Account identity, credentials, cookies and transport headers are generated separately.
+/// SupplierAccount identity, credentials, cookies and transport headers are generated separately.
 pub(crate) fn protocol_headers(inbound: &HeaderMap) -> HeaderMap {
     let mut inbound = inbound.clone();
     strip_hop_by_hop_headers(&mut inbound);

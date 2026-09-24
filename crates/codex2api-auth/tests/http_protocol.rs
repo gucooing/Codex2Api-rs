@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{Json, Router, body::Bytes, http::HeaderMap, routing::post};
-use codex2api_accounts::{AccountIdentity, AccountStore, HostRuntime};
+use codex2api_accounts::{AccountIdentity, HostRuntime, SupplierAccountStore};
 use codex2api_auth::transport::AccountHttpClients;
 use codex2api_auth::{
     AuthService, OAuthConfig, exchange_code_for_tokens, refresh_tokens, revoke_tokens,
@@ -113,7 +113,7 @@ async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
     let storage = codex2api_storage::Storage::open(temp.path().join("test.sqlite"))
         .await
         .unwrap();
-    let accounts = AccountStore::open(storage.clone());
+    let accounts = SupplierAccountStore::open(storage.clone());
     let pending = accounts.create_pending().await.unwrap();
     let id = pending.account.id.clone();
     let mut tokens = codex2api_auth::persist::chatgpt_auth(

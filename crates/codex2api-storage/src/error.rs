@@ -18,8 +18,6 @@ pub enum StorageError {
     DuplicateChatgptAccountId,
     #[error("oauth pending state not found or expired")]
     OAuthPendingNotFound,
-    #[error("proxy api key not found")]
-    ApiKeyNotFound,
     #[error("OAuth 凭据或绑定账户不可用，请选择已启用且完成授权的账户")]
     OAuthCredentialUnavailable,
     #[error("代理不存在")]
@@ -50,14 +48,14 @@ pub enum StorageError {
 
 impl From<sqlx::Error> for StorageError {
     fn from(err: sqlx::Error) -> Self {
-        if let sqlx::Error::Database(db) = &err {
-            if db.is_unique_violation() {
-                let msg = db.message().to_string();
-                if msg.contains("chatgpt_account_id") {
-                    return StorageError::DuplicateChatgptAccountId;
-                }
-                return StorageError::Constraint(msg);
+        if let sqlx::Error::Database(db) = &err
+            && db.is_unique_violation()
+        {
+            let msg = db.message().to_string();
+            if msg.contains("chatgpt_account_id") {
+                return StorageError::DuplicateChatgptAccountId;
             }
+            return StorageError::Constraint(msg);
         }
         StorageError::Sqlx(err)
     }

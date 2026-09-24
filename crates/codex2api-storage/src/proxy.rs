@@ -77,7 +77,7 @@ impl Storage {
         &self,
     ) -> Result<std::collections::HashMap<String, i64>> {
         let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT proxy_id,COUNT(*) FROM accounts WHERE proxy_id IS NOT NULL GROUP BY proxy_id",
+            "SELECT proxy_id,COUNT(*) FROM supplier_accounts WHERE proxy_id IS NOT NULL GROUP BY proxy_id",
         )
         .fetch_all(self.pool())
         .await?;
@@ -189,23 +189,24 @@ impl Storage {
     pub async fn delete_outbound_proxy(&self, id: &str, confirm_unbind: bool) -> Result<bool> {
         let mut tx = self.pool().begin().await?;
         if !confirm_unbind {
-            let result = sqlx::query("DELETE FROM outbound_proxies WHERE id=? AND NOT EXISTS (SELECT 1 FROM accounts WHERE proxy_id=?)")
+            let result = sqlx::query("DELETE FROM outbound_proxies WHERE id=? AND NOT EXISTS (SELECT 1 FROM supplier_accounts WHERE proxy_id=?)")
                 .bind(id).bind(id).execute(&mut *tx).await?;
             if result.rows_affected() > 0 {
                 tx.commit().await?;
                 return Ok(true);
             }
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts WHERE proxy_id=?")
-                .bind(id)
-                .fetch_one(&mut *tx)
-                .await?;
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM supplier_accounts WHERE proxy_id=?")
+                    .bind(id)
+                    .fetch_one(&mut *tx)
+                    .await?;
             if count > 0 {
                 return Err(StorageError::ProxyHasBindings(count));
             }
             tx.commit().await?;
             return Ok(false);
         }
-        sqlx::query("UPDATE accounts SET proxy_id=NULL, updated_at=? WHERE proxy_id=?")
+        sqlx::query("UPDATE supplier_accounts SET proxy_id=NULL, updated_at=? WHERE proxy_id=?")
             .bind(chrono::Utc::now().to_rfc3339())
             .bind(id)
             .execute(&mut *tx)
@@ -222,16 +223,17 @@ impl Storage {
         &self,
         account_id: &str,
         proxy_id: Option<&str>,
-    ) -> Result<crate::Account> {
+    ) -> Result<crate::SupplierAccount> {
         if let Some(id) = proxy_id {
             self.require_outbound_proxy(id).await?;
         }
-        let result = sqlx::query("UPDATE accounts SET proxy_id=?, updated_at=? WHERE id=?")
-            .bind(proxy_id)
-            .bind(chrono::Utc::now().to_rfc3339())
-            .bind(account_id)
-            .execute(self.pool())
-            .await?;
+        let result =
+            sqlx::query("UPDATE supplier_accounts SET proxy_id=?, updated_at=? WHERE id=?")
+                .bind(proxy_id)
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(account_id)
+                .execute(self.pool())
+                .await?;
         if result.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account_id.to_owned()));
         }
@@ -272,7 +274,7 @@ mod tests {
         }
         let proxy = storage.list_outbound_proxies().await.unwrap().remove(0);
         let mut account = storage
-            .create_account(crate::NewAccount::pending_identity(
+            .create_account(crate::NewSupplierAccount::pending_identity(
                 uuid::Uuid::new_v4().to_string(),
                 "codex_cli_rs",
                 "ua",

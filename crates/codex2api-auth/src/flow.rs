@@ -9,7 +9,7 @@ use crate::persist::{
 };
 use crate::tokens::{TokenSet, token_set_from_auth};
 use codex2api_accounts::AuthDotJson;
-use codex2api_accounts::{AccountIdentity, AccountStore};
+use codex2api_accounts::{AccountIdentity, SupplierAccountStore};
 use codex2api_storage::Storage;
 
 /// High-level ChatGPT OAuth helper used by the admin UI.
@@ -19,23 +19,23 @@ use codex2api_storage::Storage;
 /// this service never binds a local callback listener.
 #[derive(Clone)]
 pub struct AuthService {
-    accounts: AccountStore,
+    accounts: SupplierAccountStore,
     cfg: OAuthConfig,
     clients: Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::transport::AccountHttpClients>>>>,
     pub(crate) drafts: Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::draft::DraftLogin>>>>,
 }
 
 impl AuthService {
-    pub fn new(accounts: AccountStore) -> Result<Self> {
+    pub fn new(accounts: SupplierAccountStore) -> Result<Self> {
         Self::with_config(accounts, OAuthConfig::default())
     }
 
-    pub fn with_storage(storage: Storage, accounts: AccountStore) -> Result<Self> {
+    pub fn with_storage(storage: Storage, accounts: SupplierAccountStore) -> Result<Self> {
         let _ = storage;
         Self::new(accounts)
     }
 
-    pub fn with_config(accounts: AccountStore, cfg: OAuthConfig) -> Result<Self> {
+    pub fn with_config(accounts: SupplierAccountStore, cfg: OAuthConfig) -> Result<Self> {
         Ok(Self {
             accounts,
             cfg,
@@ -52,7 +52,7 @@ impl AuthService {
         Ok(self.accounts.storage()?)
     }
 
-    pub fn accounts(&self) -> &AccountStore {
+    pub fn accounts(&self) -> &SupplierAccountStore {
         &self.accounts
     }
 

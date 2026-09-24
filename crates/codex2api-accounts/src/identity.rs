@@ -237,7 +237,7 @@ impl AccountIdentity {
         }
     }
 
-    pub fn from_account(account: &codex2api_storage::Account) -> Self {
+    pub fn from_account(account: &codex2api_storage::SupplierAccount) -> Self {
         let http_fingerprint = HttpFingerprint::from_json(&account.http_fingerprint_json)
             .unwrap_or_else(|_| HttpFingerprint {
                 timezone: None,

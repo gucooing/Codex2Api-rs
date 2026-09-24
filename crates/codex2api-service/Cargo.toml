@@ -1,0 +1,17 @@
+[package]
+name = "codex2api-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+codex2api-core.workspace = true
+codex2api-storage.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"
+serde_json.workspace = true
+sqlx.workspace = true

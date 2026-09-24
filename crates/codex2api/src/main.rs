@@ -27,7 +27,8 @@ async fn main() -> Result<()> {
     storage.ensure_default_admin().await?;
     storage.recover_interrupted_usage().await?;
 
-    let app = codex2api::router(storage.clone())?;
+    let public_base_url = std::env::var("CODEX2API_PUBLIC_BASE_URL").ok();
+    let app = codex2api::router_with_public_base_url(storage.clone(), public_base_url.as_deref())?;
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

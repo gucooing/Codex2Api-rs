@@ -316,7 +316,11 @@ dependencies = [
  "codex2api-storage",
  "codex2api-upstream",
  "codex2api-version",
+ "codex2api-web",
+ "serde_json",
+ "tempfile",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -328,6 +332,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex2api-core",
  "codex2api-storage",
  "codex2api-version",
  "rand 0.9.5",
@@ -350,19 +355,18 @@ dependencies = [
  "chrono-tz",
  "codex2api-accounts",
  "codex2api-auth",
+ "codex2api-core",
  "codex2api-storage",
  "codex2api-upstream",
  "codex2api-version",
- "http",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
+ "sqlx",
  "tempfile",
- "thiserror",
  "tokio",
  "tower",
- "tower-http",
  "tracing",
  "url",
  "urlencoding",
@@ -378,10 +382,14 @@ dependencies = [
  "base64",
  "chrono",
  "codex2api-accounts",
+ "codex2api-admin",
  "codex2api-auth",
+ "codex2api-core",
+ "codex2api-service",
  "codex2api-storage",
  "codex2api-upstream",
  "codex2api-version",
+ "flate2",
  "futures",
  "hmac",
  "http",
@@ -389,6 +397,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sqlx",
  "tempfile",
  "thiserror",
  "tokio",
@@ -430,11 +439,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex2api-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "codex2api-service"
+version = "0.1.0"
+dependencies = [
+ "codex2api-core",
+ "codex2api-storage",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "codex2api-storage"
 version = "0.1.0"
 dependencies = [
  "argon2",
  "chrono",
+ "codex2api-core",
  "codex2api-version",
  "rand 0.9.5",
  "serde",
@@ -488,6 +519,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "codex2api-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

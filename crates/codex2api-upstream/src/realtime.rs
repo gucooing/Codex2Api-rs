@@ -138,6 +138,50 @@ pub(crate) async fn prepare_call(
     })
 }
 
+/// Extract the model from the same SDP/JSON/multipart decoder used for forwarding.
+#[derive(Default)]
+pub struct RealtimeSessionModels {
+    pub model: Option<String>,
+    pub transcription_model: Option<String>,
+}
+
+pub async fn realtime_call_models(
+    body: Bytes,
+    inbound: &HeaderMap,
+) -> Result<RealtimeSessionModels> {
+    let prepared = prepare_call(body, inbound, "").await?;
+    if prepared
+        .headers
+        .get("content-type")
+        .is_some_and(|v| v == "application/sdp")
+    {
+        return Ok(RealtimeSessionModels::default());
+    }
+    let value: Value = serde_json::from_slice(&prepared.body)?;
+    if value
+        .pointer("/session/audio/input/transcription")
+        .is_some_and(|v| !v.is_null())
+        && value
+            .pointer("/session/audio/input/transcription/model")
+            .is_none_or(|v| !v.is_string())
+    {
+        return Err(UpstreamError::InvalidRequest(
+            "An explicit transcription model is required".into(),
+        ));
+    }
+    let model = |path| match value.pointer(path) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(model)) => Ok(Some(model.clone())),
+        _ => Err(UpstreamError::InvalidRequest(
+            "Session model must be a string".into(),
+        )),
+    };
+    Ok(RealtimeSessionModels {
+        model: model("/session/model")?,
+        transcription_model: model("/session/audio/input/transcription/model")?,
+    })
+}
+
 pub(crate) fn add_realtime_headers(headers: &mut HeaderMap, inbound: &HeaderMap) {
     if let Some(id) = inbound.get("x-session-id") {
         headers.insert("x-session-id", id.clone());

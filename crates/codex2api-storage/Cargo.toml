@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+codex2api-core.workspace = true
 argon2.workspace = true
 chrono.workspace = true
 codex2api-version.workspace = true

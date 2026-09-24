@@ -18,8 +18,7 @@ pub const CODEX_REF_COMMIT: &str = "a8964cb1bad67bc26a826fb07d1bef99c6a3f008";
 pub const CODEX_REF_COMMIT_DATE: &str = "2026-09-15T05:44:41Z";
 
 /// First-line commit message of the reference snapshot.
-pub const CODEX_REF_COMMIT_MESSAGE: &str =
-    "Render standalone display math in the TUI (#45612)";
+pub const CODEX_REF_COMMIT_MESSAGE: &str = "Render standalone display math in the TUI (#45612)";
 
 /// Local path of the official source snapshot in this repo.
 pub const CODEX_REF_PATH: &str = "reference/codex";
@@ -84,7 +83,12 @@ pub const OAUTH_SCOPE: &str =
 
 /// User-Agent format used by official Codex CLI:
 /// `{originator}/{build_version} ({os_type} {os_version}; {arch}) {terminal_ua}`
-pub fn official_user_agent(os_type: &str, os_version: &str, arch: &str, terminal_ua: &str) -> String {
+pub fn official_user_agent(
+    os_type: &str,
+    os_version: &str,
+    arch: &str,
+    terminal_ua: &str,
+) -> String {
     format!(
         "{DEFAULT_ORIGINATOR}/{CODEX_PACKAGE_VERSION} ({os_type} {os_version}; {arch}) {terminal_ua}"
     )

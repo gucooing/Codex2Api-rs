@@ -122,8 +122,17 @@ impl UpstreamClient {
                 )
                 .await
             })
-            .await
-            .map_err(|_| UpstreamError::Stream("WebSocket connection timed out.".into()))?;
+            .await;
+            let connected = match connected {
+                Ok(value) => value,
+                Err(_) => {
+                    self.record_communication_error("与 ChatGPT 官方 WebSocket 连接超时")
+                        .await;
+                    return Err(UpstreamError::Stream(
+                        "WebSocket connection timed out.".into(),
+                    ));
+                }
+            };
             match connected {
                 Ok((socket, response)) => {
                     self.cookies.set_cookies(
@@ -138,12 +147,17 @@ impl UpstreamClient {
                         self.refresh_access_token(&token).await?;
                         continue;
                     }
+                    self.record_http_status(response.status().as_u16()).await;
                     return Err(UpstreamError::status(
                         response.status(),
                         String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()),
                     ));
                 }
-                Err(error) => return Err(UpstreamError::Stream(error.to_string())),
+                Err(error) => {
+                    self.record_communication_error("与 ChatGPT 官方 WebSocket 通信失败")
+                        .await;
+                    return Err(UpstreamError::Stream(error.to_string()));
+                }
             }
         }
     }

@@ -33,7 +33,7 @@ pub enum UpstreamError {
     #[error(transparent)]
     Auth(#[from] AuthError),
     #[error(transparent)]
-    Account(#[from] AccountError),
+    SupplierAccount(#[from] AccountError),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
     #[error(transparent)]
@@ -65,7 +65,7 @@ fn truncate_body(body: String) -> String {
     } else {
         let mut cut = body;
         cut.truncate(MAX);
-        cut.push_str("…");
+        cut.push('…');
         cut
     }
 }

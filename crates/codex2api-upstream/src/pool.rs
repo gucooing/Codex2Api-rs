@@ -43,10 +43,10 @@ impl UpstreamPool {
     pub async fn get(&self, account_id: &str) -> Result<Arc<UpstreamClient>> {
         let mut map = self.clients.lock().await;
         let clients = self.auth.account_http(account_id).await?;
-        if let Some(existing) = map.get(account_id) {
-            if Arc::ptr_eq(&existing.account_http, &clients) {
-                return Ok(existing.clone());
-            }
+        if let Some(existing) = map.get(account_id)
+            && Arc::ptr_eq(&existing.account_http, &clients)
+        {
+            return Ok(existing.clone());
         }
         let ctx = self.auth.accounts().load_context(account_id).await?;
         let mut client = UpstreamClient::from_context(ctx, Some(self.auth.clone()))?;

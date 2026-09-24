@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use codex2api_storage::{Account, AccountStatus, AccountUpdate, NewAccount, Storage, StorageError};
+use codex2api_storage::{
+    NewSupplierAccount, Storage, StorageError, SupplierAccount, SupplierAccountUpdate,
+    SupplierStatus,
+};
 
 use crate::auth_json::AuthDotJson;
 use crate::error::{AccountError, Result};
@@ -9,24 +12,24 @@ use crate::identity::{AccountIdentity, HostRuntime, new_installation_id};
 
 /// SQLite-backed store for isolated per-account Codex identity.
 ///
-/// Account identity, installation_id, and tokens live on the account row /
-/// `account_tokens` table. No per-account filesystem home is created.
+/// SupplierAccount identity, installation_id, and tokens live on the account row /
+/// `supplier_tokens` table. No per-account filesystem home is created.
 #[derive(Debug, Clone)]
-pub struct AccountStore {
+pub struct SupplierAccountStore {
     storage: Option<Storage>,
 }
 
 /// Pending authorization context created before OAuth identity is known.
 #[derive(Debug, Clone)]
 pub struct PendingAccount {
-    pub account: Account,
+    pub account: SupplierAccount,
     pub identity: AccountIdentity,
 }
 
 /// Result of binding OAuth identity onto a pending (or existing) account.
 #[derive(Debug, Clone)]
 pub struct BoundAccount {
-    pub account: Account,
+    pub account: SupplierAccount,
     pub identity: AccountIdentity,
     /// True when an existing row for the same `chatgpt_account_id` was reused.
     pub reused_existing: bool,
@@ -44,13 +47,13 @@ pub struct OauthIdentity {
 
 /// Loaded runtime context for an account.
 #[derive(Debug, Clone)]
-pub struct AccountContext {
-    pub account: Account,
+pub struct SupplierContext {
+    pub account: SupplierAccount,
     pub identity: AccountIdentity,
     pub auth: Option<AuthDotJson>,
 }
 
-impl AccountStore {
+impl SupplierAccountStore {
     pub fn new() -> Self {
         Self { storage: None }
     }
@@ -94,7 +97,7 @@ impl AccountStore {
     ) -> Result<PendingAccount> {
         validate_account_id(&identity.account_id)?;
         let storage = self.storage()?;
-        let mut new = NewAccount::pending_identity(
+        let mut new = NewSupplierAccount::pending_identity(
             identity.installation_id.clone(),
             identity.originator.clone(),
             identity.user_agent.clone(),
@@ -121,7 +124,7 @@ impl AccountStore {
         if oauth.chatgpt_account_id.trim().is_empty() {
             return Err(AccountError::MissingChatgptAccountId);
         }
-        let mut new = NewAccount::pending_identity(
+        let mut new = NewSupplierAccount::pending_identity(
             &identity.installation_id,
             &identity.originator,
             &identity.user_agent,
@@ -139,7 +142,7 @@ impl AccountStore {
         new.plan_type = oauth.plan_type;
         let account = self
             .storage()?
-            .save_authorized_account(new, auth.to_account_tokens(&identity.account_id), proxy_id)
+            .save_authorized_account(new, auth.to_supplier_tokens(&identity.account_id), proxy_id)
             .await?;
         Ok(BoundAccount {
             reused_existing: account.id != identity.account_id,
@@ -158,10 +161,10 @@ impl AccountStore {
         mut oauth: OauthIdentity,
         auth: Option<&AuthDotJson>,
     ) -> Result<BoundAccount> {
-        if oauth.chatgpt_account_id.trim().is_empty() {
-            if let Some(from_auth) = auth.and_then(AuthDotJson::chatgpt_account_id) {
-                oauth.chatgpt_account_id = from_auth.to_string();
-            }
+        if oauth.chatgpt_account_id.trim().is_empty()
+            && let Some(from_auth) = auth.and_then(AuthDotJson::chatgpt_account_id)
+        {
+            oauth.chatgpt_account_id = from_auth.to_string();
         }
         let chatgpt_account_id = oauth.chatgpt_account_id.trim().to_string();
         if chatgpt_account_id.is_empty() {
@@ -193,7 +196,7 @@ impl AccountStore {
 
     pub fn refuse_installation_id_rotation(
         &self,
-        account: &Account,
+        account: &SupplierAccount,
         requested: &str,
     ) -> Result<()> {
         if account.installation_id == requested {
@@ -211,7 +214,7 @@ impl AccountStore {
         let storage = self.storage()?;
         let account = storage.get_account(&pending.account.id).await?;
         if let Some(account) = account {
-            if account.status != AccountStatus::Pending {
+            if account.status != SupplierStatus::Pending {
                 return Err(AccountError::NotPending(account.id));
             }
             if account.chatgpt_account_id.is_some() {
@@ -222,16 +225,23 @@ impl AccountStore {
         Ok(())
     }
 
-    pub async fn load_context(&self, account_id: &str) -> Result<AccountContext> {
+    pub async fn load_context(&self, account_id: &str) -> Result<SupplierContext> {
         validate_account_id(account_id)?;
         let storage = self.storage()?;
         let account = storage
             .get_account(account_id)
             .await?
             .ok_or_else(|| AccountError::NotFound(account_id.to_string()))?;
+        if account.provider_id != codex2api_core::CHATGPT {
+            return Err(AccountError::Storage(
+                codex2api_storage::StorageError::Constraint(
+                    "This supplier requires its own provider adapter".into(),
+                ),
+            ));
+        }
         let identity = AccountIdentity::from_account(&account);
         let auth = self.load_auth_for_account(&account).await?;
-        Ok(AccountContext {
+        Ok(SupplierContext {
             account,
             identity,
             auth,
@@ -248,15 +258,18 @@ impl AccountStore {
         Ok(AccountIdentity::from_account(&account))
     }
 
-    pub async fn load_auth_for_account(&self, account: &Account) -> Result<Option<AuthDotJson>> {
+    pub async fn load_auth_for_account(
+        &self,
+        account: &SupplierAccount,
+    ) -> Result<Option<AuthDotJson>> {
         let storage = self.storage()?;
-        match storage.load_account_tokens(&account.id).await? {
+        match storage.load_supplier_tokens(&account.id).await? {
             Some(tokens) => {
-                let mut auth = AuthDotJson::from_account_tokens(&tokens)?;
-                if auth.chatgpt_account_id().is_none() {
-                    if let Some(tokens_inner) = auth.tokens.as_mut() {
-                        tokens_inner.account_id = account.chatgpt_account_id.clone();
-                    }
+                let mut auth = AuthDotJson::from_supplier_tokens(&tokens)?;
+                if auth.chatgpt_account_id().is_none()
+                    && let Some(tokens_inner) = auth.tokens.as_mut()
+                {
+                    tokens_inner.account_id = account.chatgpt_account_id.clone();
                 }
                 if auth.tokens.is_some() || auth.auth_mode.is_some() {
                     Ok(Some(auth))
@@ -272,7 +285,7 @@ impl AccountStore {
         validate_account_id(account_id)?;
         let storage = self.storage()?;
         storage
-            .upsert_account_tokens(auth.to_account_tokens(account_id))
+            .upsert_supplier_tokens(auth.to_supplier_tokens(account_id))
             .await?;
         Ok(())
     }
@@ -288,27 +301,27 @@ impl AccountStore {
             .get_account(&pending.account.id)
             .await?
             .ok_or_else(|| AccountError::NotFound(pending.account.id.clone()))?;
-        if current.status != AccountStatus::Pending {
+        if current.status != SupplierStatus::Pending {
             return Err(AccountError::NotPending(current.id));
         }
 
         if let Some(auth) = auth {
             storage
-                .upsert_account_tokens(auth.to_account_tokens(&current.id))
+                .upsert_supplier_tokens(auth.to_supplier_tokens(&current.id))
                 .await?;
         }
 
         let account = storage
             .update_account(
                 &current.id,
-                AccountUpdate {
-                    status: Some(AccountStatus::Active),
+                SupplierAccountUpdate {
+                    status: Some(SupplierStatus::Active),
                     display_name: oauth.display_name.or(oauth.email.clone()),
                     chatgpt_account_id: Some(oauth.chatgpt_account_id),
                     chatgpt_user_id: oauth.chatgpt_user_id,
                     email: oauth.email,
                     plan_type: oauth.plan_type,
-                    ..AccountUpdate::default()
+                    ..SupplierAccountUpdate::default()
                 },
             )
             .await?;
@@ -323,7 +336,7 @@ impl AccountStore {
     async fn reuse_existing(
         &self,
         pending: &PendingAccount,
-        existing: Account,
+        existing: SupplierAccount,
         oauth: OauthIdentity,
         auth: Option<&AuthDotJson>,
     ) -> Result<BoundAccount> {
@@ -341,19 +354,19 @@ impl AccountStore {
 
         if let Some(auth) = auth {
             storage
-                .upsert_account_tokens(auth.to_account_tokens(&existing.id))
+                .upsert_supplier_tokens(auth.to_supplier_tokens(&existing.id))
                 .await?;
         }
 
         let status = match existing.status {
-            AccountStatus::Disabled | AccountStatus::Pending => Some(AccountStatus::Active),
-            AccountStatus::Active => None,
+            SupplierStatus::Disabled | SupplierStatus::Pending => Some(SupplierStatus::Active),
+            SupplierStatus::Active => None,
         };
 
         let account = storage
             .update_account(
                 &existing.id,
-                AccountUpdate {
+                SupplierAccountUpdate {
                     status,
                     display_name: oauth
                         .display_name
@@ -363,7 +376,7 @@ impl AccountStore {
                     chatgpt_user_id: oauth.chatgpt_user_id.or(existing.chatgpt_user_id.clone()),
                     email: oauth.email.or(existing.email.clone()),
                     plan_type: oauth.plan_type.or(existing.plan_type.clone()),
-                    ..AccountUpdate::default()
+                    ..SupplierAccountUpdate::default()
                 },
             )
             .await?;
@@ -391,7 +404,7 @@ impl AccountStore {
     }
 }
 
-impl Default for AccountStore {
+impl Default for SupplierAccountStore {
     fn default() -> Self {
         Self::new()
     }

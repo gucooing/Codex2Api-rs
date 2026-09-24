@@ -38,7 +38,7 @@ pub enum AuthError {
     #[error("chatgpt_account_id is required to bind an account")]
     MissingChatgptAccountId,
     #[error(transparent)]
-    Account(AccountError),
+    SupplierAccount(AccountError),
     #[error(transparent)]
     Storage(#[from] codex2api_storage::StorageError),
     #[error(transparent)]
@@ -67,7 +67,7 @@ impl From<AccountError> for AuthError {
             AccountError::MissingChatgptAccountId => Self::MissingChatgptAccountId,
             AccountError::Storage(storage) => Self::Storage(storage),
             AccountError::Json(json) => Self::Json(json),
-            other => Self::Account(other),
+            other => Self::SupplierAccount(other),
         }
     }
 }

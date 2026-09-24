@@ -6,16 +6,16 @@ use sqlx::FromRow;
 
 use crate::error::{Result, StorageError};
 
-/// Account lifecycle stored in `accounts.status`.
+/// SupplierAccount lifecycle stored in `accounts.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum AccountStatus {
+pub enum SupplierStatus {
     Pending,
     Active,
     Disabled,
 }
 
-impl AccountStatus {
+impl SupplierStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -25,13 +25,13 @@ impl AccountStatus {
     }
 }
 
-impl fmt::Display for AccountStatus {
+impl fmt::Display for SupplierStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl FromStr for AccountStatus {
+impl FromStr for SupplierStatus {
     type Err = StorageError;
 
     fn from_str(s: &str) -> Result<Self> {
@@ -63,10 +63,11 @@ pub struct AdminSession {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Account {
+pub struct SupplierAccount {
+    pub provider_id: String,
     pub id: String,
     pub proxy_id: Option<String>,
-    pub status: AccountStatus,
+    pub status: SupplierStatus,
     pub display_name: Option<String>,
     pub chatgpt_account_id: Option<String>,
     pub chatgpt_user_id: Option<String>,
@@ -88,9 +89,10 @@ pub struct Account {
 
 /// Fields required to insert an account row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewAccount {
+pub struct NewSupplierAccount {
+    pub provider_id: String,
     pub id: Option<String>,
-    pub status: AccountStatus,
+    pub status: SupplierStatus,
     pub display_name: Option<String>,
     pub chatgpt_account_id: Option<String>,
     pub chatgpt_user_id: Option<String>,
@@ -106,7 +108,9 @@ pub struct NewAccount {
     pub http_fingerprint_json: String,
 }
 
-impl NewAccount {
+impl NewSupplierAccount {
+    // The frozen supplier identity is persisted as these independent fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn pending_identity(
         installation_id: impl Into<String>,
         originator: impl Into<String>,
@@ -118,8 +122,9 @@ impl NewAccount {
         http_fingerprint_json: impl Into<String>,
     ) -> Self {
         Self {
+            provider_id: codex2api_core::CHATGPT.into(),
             id: None,
-            status: AccountStatus::Pending,
+            status: SupplierStatus::Pending,
             display_name: None,
             chatgpt_account_id: None,
             chatgpt_user_id: None,
@@ -139,8 +144,8 @@ impl NewAccount {
 
 /// Partial update. `Some` replaces the stored value; `None` leaves it unchanged.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AccountUpdate {
-    pub status: Option<AccountStatus>,
+pub struct SupplierAccountUpdate {
+    pub status: Option<SupplierStatus>,
     pub display_name: Option<String>,
     pub chatgpt_account_id: Option<String>,
     pub chatgpt_user_id: Option<String>,
@@ -156,7 +161,7 @@ pub struct AccountUpdate {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, FromRow)]
-pub struct AccountTokens {
+pub struct SupplierTokens {
     pub account_id: String,
     pub auth_mode: Option<String>,
     pub id_token: Option<String>,
@@ -179,35 +184,15 @@ pub struct OAuthPending {
     pub last_polled_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct ProxyApiKey {
-    pub id: String,
-    pub account_id: String,
-    pub name: Option<String>,
-    pub key_hash: String,
-    pub key_prefix: String,
-    pub created_at: String,
-    pub last_used_at: Option<String>,
-    pub paused_at: Option<String>,
-    pub can_copy: bool,
-}
-
-/// Newly issued proxy key. Plaintext is also retained for authenticated admin copying.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IssuedProxyApiKey {
-    pub record: ProxyApiKey,
-    pub token: String,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, FromRow)]
-pub struct AccountRuntime {
+pub struct SupplierRuntime {
     pub account_id: String,
     pub session_id: Option<String>,
     pub extra_json: Option<String>,
     pub updated_at: String,
 }
 
-impl AccountRuntime {
+impl SupplierRuntime {
     pub fn extra_value(&self) -> Result<Option<serde_json::Value>> {
         match &self.extra_json {
             Some(raw) => Ok(Some(serde_json::from_str(raw)?)),

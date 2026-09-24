@@ -1,12 +1,12 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use codex2api_storage::AccountTokens;
+use codex2api_storage::SupplierTokens;
 
 use crate::error::Result;
 
 /// In-memory ChatGPT token payload. Shape matches official `auth.json` so
-/// request/token fields stay compatible; persistence is SQLite `account_tokens`.
+/// request/token fields stay compatible; persistence is SQLite `supplier_tokens`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct AuthDotJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,14 +59,12 @@ impl AuthDotJson {
             .filter(|s| !s.is_empty())
     }
 
-    pub fn to_account_tokens(&self, account_id: &str) -> AccountTokens {
+    pub fn to_supplier_tokens(&self, account_id: &str) -> SupplierTokens {
         let nested = self.tokens.as_ref();
-        AccountTokens {
+        SupplierTokens {
             account_id: account_id.to_string(),
             auth_mode: self.auth_mode.clone(),
-            id_token: nested
-                .map(|t| t.id_token.clone())
-                .filter(|s| !s.is_empty()),
+            id_token: nested.map(|t| t.id_token.clone()).filter(|s| !s.is_empty()),
             access_token: nested
                 .map(|t| t.access_token.clone())
                 .filter(|s| !s.is_empty()),
@@ -81,7 +79,7 @@ impl AuthDotJson {
         }
     }
 
-    pub fn from_account_tokens(tokens: &AccountTokens) -> Result<Self> {
+    pub fn from_supplier_tokens(tokens: &SupplierTokens) -> Result<Self> {
         if let Some(raw) = tokens.raw_auth_json.as_deref() {
             let trimmed = raw.trim();
             if !trimmed.is_empty() {

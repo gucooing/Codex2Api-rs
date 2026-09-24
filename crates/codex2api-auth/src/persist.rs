@@ -7,13 +7,13 @@ use crate::tokens::{
     parse_chatgpt_jwt_claims, should_refresh, token_set_from_auth,
 };
 use codex2api_accounts::{
-    AccountIdentity, AccountStore, AuthDotJson, BoundAccount, OauthIdentity, PendingAccount,
-    TokenData,
+    AccountIdentity, AuthDotJson, BoundAccount, OauthIdentity, PendingAccount,
+    SupplierAccountStore, TokenData,
 };
-use codex2api_storage::{Account, AccountStatus, AccountUpdate, Storage};
+use codex2api_storage::{Storage, SupplierAccount, SupplierAccountUpdate, SupplierStatus};
 
 pub async fn persist_auth(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     account_id: &str,
     auth: &AuthDotJson,
 ) -> Result<()> {
@@ -21,7 +21,10 @@ pub async fn persist_auth(
     Ok(())
 }
 
-pub async fn load_auth(accounts: &AccountStore, account: &Account) -> Result<Option<AuthDotJson>> {
+pub async fn load_auth(
+    accounts: &SupplierAccountStore,
+    account: &SupplierAccount,
+) -> Result<Option<AuthDotJson>> {
     Ok(accounts.load_auth_for_account(account).await?)
 }
 
@@ -30,7 +33,7 @@ pub fn auth_from_exchanged(tokens: &ExchangedTokens, claims: &IdTokenInfo) -> Au
 }
 
 pub async fn persist_exchanged_tokens(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     account_id: &str,
     tokens: &ExchangedTokens,
     claims: &IdTokenInfo,
@@ -41,7 +44,7 @@ pub async fn persist_exchanged_tokens(
 }
 
 pub async fn bind_completed_login(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     pending: &PendingAccount,
     claims: &IdTokenInfo,
     auth: &AuthDotJson,
@@ -65,7 +68,7 @@ pub async fn bind_completed_login(
 }
 
 pub async fn complete_login(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     http: &reqwest::Client,
     cfg: &OAuthConfig,
     pending: &PendingAccount,
@@ -92,7 +95,7 @@ pub async fn complete_login(
 
 #[derive(Debug, Clone)]
 pub struct CompletedLogin {
-    pub account: Account,
+    pub account: SupplierAccount,
     pub identity: AccountIdentity,
     pub reused_existing: bool,
     pub claims: IdTokenInfo,
@@ -101,10 +104,10 @@ pub struct CompletedLogin {
 }
 
 pub async fn refresh_account(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     http: &reqwest::Client,
     cfg: &OAuthConfig,
-    account: &Account,
+    account: &SupplierAccount,
     force: bool,
 ) -> Result<AuthDotJson> {
     let mut auth = load_auth(accounts, account)
@@ -126,29 +129,27 @@ pub async fn refresh_account(
         .or_else(|| account.chatgpt_account_id.clone());
     let refresh: RefreshResponse = refresh_tokens(http, cfg, &refresh_token).await?;
     apply_refresh(&mut auth, &refresh)?;
-    if let Some(expected) = previous_account_id.as_deref() {
-        if let Some(new_id) = auth.tokens.as_ref().and_then(|t| t.account_id.as_deref()) {
-            if new_id != expected {
-                return Err(AuthError::AccountMismatch);
-            }
-        }
+    if let Some(expected) = previous_account_id.as_deref()
+        && let Some(new_id) = auth.tokens.as_ref().and_then(|t| t.account_id.as_deref())
+        && new_id != expected
+    {
+        return Err(AuthError::AccountMismatch);
     }
     persist_auth(accounts, &account.id, &auth).await?;
-    if let Some(tokens) = auth.tokens.as_ref() {
-        if let Ok(claims) = parse_chatgpt_jwt_claims(&tokens.id_token) {
-            if let Ok(oauth) = claims.oauth_identity() {
-                let _ = update_account_identity(accounts.storage()?, &account.id, &oauth).await;
-            }
-        }
+    if let Some(tokens) = auth.tokens.as_ref()
+        && let Ok(claims) = parse_chatgpt_jwt_claims(&tokens.id_token)
+        && let Ok(oauth) = claims.oauth_identity()
+    {
+        let _ = update_account_identity(accounts.storage()?, &account.id, &oauth).await;
     }
     Ok(auth)
 }
 
 pub async fn revoke_account(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     http: &reqwest::Client,
     cfg: &OAuthConfig,
-    account: &Account,
+    account: &SupplierAccount,
 ) -> Result<()> {
     let auth = load_auth(accounts, account).await?;
     let (refresh, access) = match auth.as_ref().and_then(|a| a.tokens.as_ref()) {
@@ -166,7 +167,7 @@ pub async fn revoke_account(
 }
 
 pub async fn pending_from_account(
-    accounts: &AccountStore,
+    accounts: &SupplierAccountStore,
     account_id: &str,
 ) -> Result<PendingAccount> {
     let ctx = accounts.load_context(account_id).await?;
@@ -180,18 +181,18 @@ async fn update_account_identity(
     storage: &Storage,
     account_id: &str,
     oauth: &OauthIdentity,
-) -> Result<Account> {
+) -> Result<SupplierAccount> {
     Ok(storage
         .update_account(
             account_id,
-            AccountUpdate {
-                status: Some(AccountStatus::Active),
+            SupplierAccountUpdate {
+                status: Some(SupplierStatus::Active),
                 display_name: oauth.display_name.clone().or(oauth.email.clone()),
                 chatgpt_account_id: Some(oauth.chatgpt_account_id.clone()),
                 chatgpt_user_id: oauth.chatgpt_user_id.clone(),
                 email: oauth.email.clone(),
                 plan_type: oauth.plan_type.clone(),
-                ..AccountUpdate::default()
+                ..SupplierAccountUpdate::default()
             },
         )
         .await?)

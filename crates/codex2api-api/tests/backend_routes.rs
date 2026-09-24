@@ -5,12 +5,12 @@ use axum::{
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn all_backend_routes_require_the_bound_proxy_key_and_only_accept_official_methods() {
+async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_official_methods() {
     let temp = tempfile::tempdir().unwrap();
     let storage = codex2api_storage::Storage::open(temp.path().join("test.sqlite"))
         .await
         .unwrap();
-    let accounts = codex2api_accounts::AccountStore::open(storage.clone());
+    let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let auth = codex2api_auth::AuthService::new(accounts.clone()).unwrap();
     let state = codex2api_api::ApiState::new(
         storage.clone(),
@@ -101,8 +101,8 @@ async fn all_backend_routes_require_the_bound_proxy_key_and_only_accept_official
                 .oneshot(Request::get(&path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
-            // Registered WebSocket GET, but the fixture has no upgrade headers.
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            // Authentication precedes WebSocket upgrade validation.
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
     }
     let response = app
@@ -128,7 +128,7 @@ async fn all_backend_routes_require_the_bound_proxy_key_and_only_accept_official
             .oneshot(Request::post(path).body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{path}");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
     let response = app
         .oneshot(
@@ -138,6 +138,6 @@ async fn all_backend_routes_require_the_bound_proxy_key_and_only_accept_official
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     storage.close().await;
 }

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+codex2api-core.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
@@ -16,7 +17,6 @@ codex2api-storage.workspace = true
 codex2api-version.workspace = true
 codex2api-upstream.workspace = true
 bytes.workspace = true
-http.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
 url.workspace = true
@@ -24,12 +24,11 @@ urlencoding.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
-tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+sqlx.workspace = true
 tempfile = "3"
 tower.workspace = true

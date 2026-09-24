@@ -6,7 +6,7 @@ use http::header::HeaderMap;
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use codex2api_accounts::{AccountContext, AccountIdentity};
+use codex2api_accounts::{AccountIdentity, SupplierContext};
 use codex2api_auth::AuthService;
 use codex2api_version::{CHATGPT_CODEX_BASE_URL, RESPONSES_PATH};
 
@@ -49,7 +49,7 @@ impl UpstreamClient {
         Self::build(identity, access_token, chatgpt_account_id, None)
     }
 
-    pub fn from_context(ctx: AccountContext, auth: Option<AuthService>) -> Result<Self> {
+    pub fn from_context(ctx: SupplierContext, auth: Option<AuthService>) -> Result<Self> {
         let account_id = ctx.account.id.clone();
         let tokens = ctx
             .auth
@@ -201,12 +201,20 @@ impl UpstreamClient {
             if method != http::Method::GET || !prepared.body.is_empty() {
                 request = request.body(prepared.body.clone());
             }
-            let response = request.send().await?;
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    self.record_communication_error("与 ChatGPT 官方连接失败或超时")
+                        .await;
+                    return Err(error.into());
+                }
+            };
             if response.status() == StatusCode::UNAUTHORIZED && !retried && self.auth.is_some() {
                 retried = true;
                 self.refresh_access_token(&rejected_token).await?;
                 continue;
             }
+            self.record_http_status(response.status().as_u16()).await;
             return Ok(response);
         }
     }
@@ -309,11 +317,37 @@ impl UpstreamClient {
 
     pub(crate) async fn refresh_access_token(&self, rejected_token: &str) -> Result<()> {
         let auth = self.auth.as_ref().ok_or(UpstreamError::Unauthorized)?;
-        let refreshed = auth
+        let refreshed = match auth
             .refresh_rejected_token(&self.identity.account_id, rejected_token)
             .await
-            .map_err(UpstreamError::Refresh)?;
+        {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                self.record_communication_error("ChatGPT 官方授权刷新失败，请恢复检查或重新授权")
+                    .await;
+                return Err(UpstreamError::Refresh(error));
+            }
+        };
         self.apply_auth(&refreshed)
+    }
+
+    pub(crate) async fn record_http_status(&self, status: u16) {
+        // Invalid consumer requests and quota exhaustion are not supplier outages.
+        if matches!(status, 401 | 403 | 408) || status >= 500 {
+            self.record_communication_error(&format!("ChatGPT 官方通信失败（HTTP {status}）"))
+                .await;
+        }
+    }
+
+    pub(crate) async fn record_communication_error(&self, message: &str) {
+        if let Some(auth) = &self.auth
+            && let Ok(storage) = auth.accounts().storage()
+            && let Err(error) = storage
+                .record_supplier_error(&self.identity.account_id, message)
+                .await
+        {
+            tracing::error!(account_id=%self.identity.account_id, %error, "failed to persist supplier health");
+        }
     }
 
     fn apply_auth(&self, refreshed: &codex2api_auth::AuthDotJson) -> Result<()> {
@@ -362,6 +396,150 @@ mod tests {
             responses_url(),
             "https://chatgpt.com/backend-api/codex/responses"
         );
+    }
+
+    #[tokio::test]
+    async fn communication_failure_is_sticky_and_does_not_confuse_invalid_requests_or_quota() {
+        use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
+        let path =
+            std::env::temp_dir().join(format!("supplier-health-{}.sqlite", uuid::Uuid::new_v4()));
+        let storage = codex2api_storage::Storage::open(&path).await.unwrap();
+        let accounts = SupplierAccountStore::open(storage.clone());
+        let account = accounts.create_pending().await.unwrap().account;
+        accounts
+            .save_auth_for_account(
+                &account.id,
+                &AuthDotJson::chatgpt(
+                    TokenData {
+                        id_token: "fixture".into(),
+                        access_token: "fixture".into(),
+                        refresh_token: "fixture".into(),
+                        account_id: Some(account.id.clone()),
+                    },
+                    Some(chrono::Utc::now()),
+                ),
+            )
+            .await
+            .unwrap();
+        let auth = AuthService::new(accounts.clone()).unwrap();
+        let client = UpstreamClient::from_context(
+            accounts.load_context(&account.id).await.unwrap(),
+            Some(auth),
+        )
+        .unwrap()
+        .with_direct_test_http();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/{status}",
+                    axum::routing::get(
+                        |axum::extract::Path(status): axum::extract::Path<u16>| async move {
+                            (http::StatusCode::from_u16(status).unwrap(), "{}")
+                        },
+                    ),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        for status in [200, 400, 404, 429] {
+            client
+                .send_prepared(
+                    http::Method::GET,
+                    &format!("http://{addr}/{status}"),
+                    PreparedRequest {
+                        body: Bytes::new(),
+                        headers: HeaderMap::new(),
+                    },
+                    false,
+                )
+                .await
+                .unwrap();
+            assert!(
+                storage
+                    .supplier_health(&account.id)
+                    .await
+                    .unwrap()
+                    .error_message
+                    .is_none()
+            );
+        }
+        for status in [403, 503, 200] {
+            client
+                .send_prepared(
+                    http::Method::GET,
+                    &format!("http://{addr}/{status}"),
+                    PreparedRequest {
+                        body: Bytes::new(),
+                        headers: HeaderMap::new(),
+                    },
+                    false,
+                )
+                .await
+                .unwrap();
+            assert!(
+                storage
+                    .supplier_health(&account.id)
+                    .await
+                    .unwrap()
+                    .error_message
+                    .is_some()
+            );
+        }
+        let health = storage.supplier_health(&account.id).await.unwrap();
+        assert!(
+            storage
+                .recover_supplier(&account.id, health.revision)
+                .await
+                .unwrap()
+        );
+        server.abort();
+        let _ = server.await;
+        assert!(
+            client
+                .send_prepared(
+                    http::Method::GET,
+                    &format!("http://{addr}/200"),
+                    PreparedRequest {
+                        body: Bytes::new(),
+                        headers: HeaderMap::new()
+                    },
+                    false
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            storage
+                .supplier_health(&account.id)
+                .await
+                .unwrap()
+                .error_message
+                .is_some()
+        );
+        drop(client);
+        storage.close().await;
+        let reopened = codex2api_storage::Storage::open(&path).await.unwrap();
+        assert!(
+            reopened
+                .supplier_health(&account.id)
+                .await
+                .unwrap()
+                .error_message
+                .is_some()
+        );
+        reopened.close().await;
+        // SQLite can briefly retain its final file handle on Windows after pool close.
+        for _ in 0..10 {
+            if std::fs::remove_file(&path).is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[tokio::test]

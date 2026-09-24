@@ -10,3 +10,7 @@
 *.swo
 .DS_Store
 /reference
+/frontend/node_modules/
+/frontend/.next/
+/frontend/out/
+/frontend/*.tsbuildinfo

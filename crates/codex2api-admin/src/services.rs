@@ -12,10 +12,26 @@ pub(crate) async fn quota(
     refresh: bool,
 ) -> Result<codex2api_storage::QuotaSnapshot, String> {
     state
-        .quota_cache
-        .get_or_fetch(id, refresh, || async {
-            request(state, id, E::Usage, &HashMap::new(), None, None).await
-        })
+        .supplier_cache
+        .get_or_fetch(
+            id,
+            codex2api_storage::SupplierInfoSection::Quota,
+            refresh,
+            || async {
+                let value = request(state, id, E::Usage, &HashMap::new(), None, None).await?;
+                if value.get("rate_limit").is_none()
+                    && value.get("plan_type").and_then(Value::as_str).is_none()
+                {
+                    state
+                        .storage
+                        .record_supplier_error(id, "ChatGPT 官方额度响应格式无效")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    return Err("ChatGPT 官方额度响应格式无效".into());
+                }
+                Ok(value)
+            },
+        )
         .await
 }
 
@@ -33,7 +49,7 @@ pub(crate) async fn request(
             .require_account(id)
             .await
             .map_err(|e| e.to_string())?;
-        if account.status == codex2api_storage::AccountStatus::Pending {
+        if account.status == codex2api_storage::SupplierStatus::Pending {
             return Err("账户尚未完成授权".into());
         }
         let client = state.upstream.get(id).await.map_err(|e| e.to_string())?;
@@ -47,9 +63,28 @@ pub(crate) async fn request(
             .await
             .map_err(|e| e.to_string())?;
         let status = response.status();
-        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| format!("官方返回 HTTP {}，响应不是 JSON", status.as_u16()))?;
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                state
+                    .storage
+                    .record_supplier_error(id, "ChatGPT 官方响应读取失败")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Err("ChatGPT 官方响应读取失败".into());
+            }
+        };
+        let value: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                state
+                    .storage
+                    .record_supplier_error(id, "ChatGPT 官方响应格式无效")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Err(format!("官方返回 HTTP {}，响应不是 JSON", status.as_u16()));
+            }
+        };
         if !status.is_success() {
             let message = value
                 .pointer("/error/message")
@@ -64,13 +99,19 @@ pub(crate) async fn request(
         }
         Ok(value)
     };
-    tokio::time::timeout(std::time::Duration::from_secs(30), future)
-        .await
-        .map_err(|_| {
-            if endpoint == E::ConsumeCredit {
+    match tokio::time::timeout(std::time::Duration::from_secs(30), future).await {
+        Ok(result) => result,
+        Err(_) => {
+            state
+                .storage
+                .record_supplier_error(id, "ChatGPT 官方请求超时")
+                .await
+                .map_err(|e| e.to_string())?;
+            Err(if endpoint == E::ConsumeCredit {
                 "官方响应超时，操作结果尚未确认，请先查看额度状态".to_string()
             } else {
                 "官方请求超时，请重试".to_string()
-            }
-        })?
+            })
+        }
+    }
 }

@@ -1,11 +1,11 @@
-use codex2api_storage::{AccountTokens, NewAccount, Storage};
+use codex2api_storage::{NewSupplierAccount, Storage, SupplierTokens};
 
 #[tokio::test]
 async fn authorized_account_and_credentials_commit_together() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("authorized.sqlite");
     let storage = Storage::open(&path).await.unwrap();
-    let mut account = NewAccount::pending_identity(
+    let mut account = NewSupplierAccount::pending_identity(
         "installation",
         "codex_cli_rs",
         "ua",
@@ -17,13 +17,13 @@ async fn authorized_account_and_credentials_commit_together() {
     );
     account.id = Some("draft".into());
     account.chatgpt_account_id = Some("chatgpt-account".into());
-    let tokens = AccountTokens {
+    let tokens = SupplierTokens {
         account_id: "draft".into(),
         access_token: Some("access-fixture".into()),
         refresh_token: Some("refresh-fixture".into()),
         ..Default::default()
     };
-    sqlx::query("CREATE TRIGGER reject_tokens BEFORE INSERT ON account_tokens BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+    sqlx::query("CREATE TRIGGER reject_tokens BEFORE INSERT ON supplier_tokens BEGIN SELECT RAISE(ABORT, 'test failure'); END")
         .execute(storage.pool()).await.unwrap();
     assert!(
         storage
@@ -34,7 +34,7 @@ async fn authorized_account_and_credentials_commit_together() {
     assert!(storage.list_accounts().await.unwrap().is_empty());
     assert!(
         storage
-            .load_account_tokens("draft")
+            .load_supplier_tokens("draft")
             .await
             .unwrap()
             .is_none()
@@ -47,7 +47,7 @@ async fn authorized_account_and_credentials_commit_together() {
         .save_authorized_account(account, tokens, None)
         .await
         .unwrap();
-    assert_eq!(saved.status, codex2api_storage::AccountStatus::Active);
+    assert_eq!(saved.status, codex2api_storage::SupplierStatus::Active);
     storage.close().await;
     let storage = Storage::open(&path).await.unwrap();
     assert_eq!(storage.list_accounts().await.unwrap().len(), 1);
@@ -61,7 +61,7 @@ async fn authorized_account_and_credentials_commit_together() {
     );
     assert_eq!(
         storage
-            .load_account_tokens("draft")
+            .load_supplier_tokens("draft")
             .await
             .unwrap()
             .unwrap()
