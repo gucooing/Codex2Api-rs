@@ -195,13 +195,15 @@ async fn assert_final_schema(storage: &Storage) {
             .fetch_all(storage.pool())
             .await
             .unwrap();
-    assert!(!columns.iter().any(|s| s == "error_message"));
+    for name in ["error_message", "error_code", "upstream_request_id"] {
+        assert!(columns.iter().any(|column| column == name));
+    }
     let version: i64 =
         sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success=1")
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    assert_eq!(version, 33);
+    assert_eq!(version, MIGRATIONS.iter().map(|m| m.version).max().unwrap());
     let virtual_columns: Vec<String> =
         sqlx::query_scalar("SELECT name FROM pragma_table_info('virtual_accounts')")
             .fetch_all(storage.pool())

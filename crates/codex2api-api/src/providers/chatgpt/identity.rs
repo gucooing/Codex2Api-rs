@@ -419,6 +419,20 @@ mod isolation_tests {
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         storage.save_virtual_account(&account).await.unwrap();
+        // SSE 中只有已开始使用的内层窗口才会作为 primary 返回。
+        storage
+            .insert_usage(&codex2api_storage::UsageRecord {
+                id: "prior-request".into(),
+                account_id: "supplier".into(),
+                subject_id: account.id.clone(),
+                endpoint: "/v1/responses".into(),
+                transport: "sse".into(),
+                requested_at_ms: chrono::Utc::now().timestamp_millis(),
+                status: "in_progress".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         let mut plan = storage
             .virtual_plan(&account.plan_id)
             .await

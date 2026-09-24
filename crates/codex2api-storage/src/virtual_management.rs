@@ -600,11 +600,8 @@ impl Storage {
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let billing = self.billing_summary(owner).await?;
         let paid = account.effective_plan_at(now) != "free";
-        let config = if paid || account.plan_type == "free" {
-            plan.config.clone()
-        } else {
-            json!({"spending_windows":plan.config["free_spending_windows"]})
-        };
+        let rules =
+            crate::plan_spending_windows(&plan.config, !paid && account.plan_type != "free")?;
         let mut allowed = self
             .effective_entitlements_at(owner, now)
             .await?
@@ -616,7 +613,6 @@ impl Storage {
         } else {
             stored_anchor
         };
-        let rules = crate::plan_spending_windows(&config, false)?;
         let windows = self
             .nested_spending_windows(owner, &rules, anchor, now)
             .await?;

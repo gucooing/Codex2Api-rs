@@ -287,6 +287,20 @@ mod tests {
             metadata["rate_limit"]["primary_window"]["used_percent"],
             17.0
         );
+        // 内层窗口从首次使用开始，先为本账户建立请求记录。
+        storage
+            .insert_usage(&codex2api_storage::UsageRecord {
+                id: "prior-request".into(),
+                account_id: first.id.clone(),
+                subject_id: account.id.clone(),
+                endpoint: "/v1/responses".into(),
+                transport: "websocket".into(),
+                requested_at_ms: chrono::Utc::now().timestamp_millis(),
+                status: "in_progress".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         let mut plan = storage
             .virtual_plan(&account.plan_id)
             .await

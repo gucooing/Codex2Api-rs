@@ -1972,8 +1972,12 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
     )
     .await;
     let usage = storage.virtual_quota(&account.id).await.unwrap();
-    assert!(usage["rate_limit"]["primary_window"].is_null());
-    assert_eq!(usage["rate_limit"]["secondary_window"]["limit_usd"], "100");
+    assert_eq!(usage["rate_limit"]["primary_window"]["limit_usd"], "100");
+    assert_eq!(
+        usage["rate_limit"]["primary_window"]["limit_window_seconds"],
+        604800
+    );
+    assert!(usage["rate_limit"]["secondary_window"].is_null());
     assert_eq!(usage["billing"]["unpriced_requests"], 1);
     storage
         .save_virtual_resource(
@@ -2023,7 +2027,7 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
         "1234"
     );
     assert_eq!(
-        reopened.virtual_quota(&account.id).await.unwrap()["rate_limit"]["secondary_window"]["limit_usd"],
+        reopened.virtual_quota(&account.id).await.unwrap()["rate_limit"]["primary_window"]["limit_usd"],
         "100"
     );
     assert_eq!(
@@ -4673,6 +4677,20 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     account.plan_id = "plus".into();
     storage
         .save_virtual_account_operation(&account, "admin")
+        .await
+        .unwrap();
+    // 用量记录启动内层窗口，随后验证其零额度在所有执行入口生效。
+    storage
+        .insert_usage(&UsageRecord {
+            id: "prior-plan-request".into(),
+            account_id: test_supplier(&storage, &account).await.unwrap(),
+            subject_id: account.id.clone(),
+            endpoint: "/v1/responses".into(),
+            transport: "http".into(),
+            requested_at_ms: chrono::Utc::now().timestamp_millis(),
+            status: "in_progress".into(),
+            ..Default::default()
+        })
         .await
         .unwrap();
     let quota = json_body(
