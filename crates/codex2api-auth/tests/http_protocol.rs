@@ -38,8 +38,8 @@ async fn oauth_exchange_refresh_and_revoke_use_the_right_identity() {
         &http.raw,
         &cfg,
         "http://localhost:1455/auth/callback",
-        "verifier",
-        "code",
+        "verifier +&",
+        "code +&",
     )
     .await
     .unwrap();
@@ -47,10 +47,17 @@ async fn oauth_exchange_refresh_and_revoke_use_the_right_identity() {
     assert!(!headers.contains_key("originator"));
     assert!(!headers.contains_key("user-agent"));
     assert_eq!(headers["content-type"], "application/x-www-form-urlencoded");
+    assert_eq!(
+        std::str::from_utf8(&body).unwrap(),
+        format!(
+            "grant_type=authorization_code&client_id={}&code=code+%2B%26&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&code_verifier=verifier+%2B%26",
+            codex2api_version::OAUTH_CLIENT_ID,
+        )
+    );
     let form: std::collections::HashMap<_, _> =
         url::form_urlencoded::parse(&body).into_owned().collect();
     assert_eq!(form["grant_type"], "authorization_code");
-    assert_eq!(form["code_verifier"], "verifier");
+    assert_eq!(form["code_verifier"], "verifier +&");
 
     codex2api_auth::oauth::obtain_api_key(&http.raw, &cfg, "id")
         .await

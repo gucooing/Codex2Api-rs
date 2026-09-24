@@ -8,6 +8,77 @@ use serde_json::json;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn workspace_details_are_local_readonly_and_show_credential_invalidation() {
+    let f = Fixture::new().await;
+    let account = f.state.accounts.create_pending().await.unwrap().account;
+    let other = f.state.accounts.create_pending().await.unwrap().account;
+    let path = format!(
+        "/admin/api/suppliers/{}/official?section=details",
+        account.id
+    );
+    // An unauthed supplier proves that viewing this page cannot depend on a provider request.
+    let empty = f.get(&path).await;
+    assert_eq!(empty["routing"]["status"], "not_observed");
+    assert!(empty["value"].is_null());
+    f.storage
+        .update_account(
+            &account.id,
+            codex2api_storage::SupplierAccountUpdate {
+                chatgpt_account_id: Some("selected".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let revision = f
+        .storage
+        .supplier_auth_revision(&account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot = codex2api_storage::QuotaSnapshot {
+        value: json!({"accounts":[{"id":"selected","workspace_backend_origin":"https://regional.example","account_routing_override":"us"}]}),
+        observed_at: chrono::Utc::now(),
+    };
+    assert!(
+        f.storage
+            .store_supplier_routing_snapshot(&account.id, revision, &snapshot)
+            .await
+            .unwrap()
+    );
+    let ready = f.get(&path).await;
+    assert_eq!(ready["routing"]["status"], "ready");
+    assert_eq!(
+        ready["routing"]["backend_origin"],
+        "https://regional.example"
+    );
+    assert_eq!(ready["routing"]["constraint"], "us");
+    assert!(ready["routing"].get("auth_revision").is_none());
+    let credential = codex2api_auth::persist::chatgpt_auth(
+        "id".into(),
+        "access".into(),
+        "refresh".into(),
+        Some("selected".into()),
+    );
+    f.state
+        .accounts
+        .save_auth_for_account(&account.id, &credential)
+        .await
+        .unwrap();
+    let stale = f.get(&path).await;
+    assert_eq!(stale["routing"]["status"], "stale");
+    assert_eq!(stale["value"], ready["value"]);
+    assert_eq!(
+        f.get(&format!(
+            "/admin/api/suppliers/{}/official?section=details",
+            other.id
+        ))
+        .await["routing"]["status"],
+        "not_observed"
+    );
+}
+
+#[tokio::test]
 async fn supplier_detail_reads_cached_official_username() {
     let f = Fixture::new().await;
     let account = f.state.accounts.create_pending().await.unwrap().account;

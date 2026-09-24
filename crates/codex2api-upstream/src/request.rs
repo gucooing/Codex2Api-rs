@@ -154,7 +154,13 @@ pub fn normalize_response_identity(
             headers.insert(X_CODEX_TURN_METADATA_HEADER, ascii_json_header(&turn)?);
         }
     }
-    if !headers.contains_key("x-codex-routing-hint")
+    if headers
+        .get(crate::headers::X_CODEX_GUARDIAN_HEADER)
+        .is_some_and(|v| v == "reviewer")
+    {
+        body.as_object_mut().unwrap().remove("service_tier");
+        headers.remove("x-codex-routing-hint");
+    } else if !headers.contains_key("x-codex-routing-hint")
         && let Some(model) = body.get("model").and_then(Value::as_str)
     {
         let hint = match body.get("service_tier").and_then(Value::as_str) {

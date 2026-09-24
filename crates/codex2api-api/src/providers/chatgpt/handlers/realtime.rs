@@ -231,6 +231,7 @@ pub async fn socket(
                 None,
                 ledger,
                 (state.storage, key.access),
+                None,
             )
         });
     response.headers_mut().extend(headers);

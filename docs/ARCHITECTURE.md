@@ -3,8 +3,8 @@
 Implementation is aligned with official Codex:
 
 - repo: https://github.com/openai/codex
-- commit: `a8964cb1bad67bc26a826fb07d1bef99c6a3f008`
-- date: 2026-09-15T05:44:41Z
+- commit: `b412ff32c417f855c2b2d1581b77058eed87c84b`
+- date: 2026-09-23T00:45:44Z
 - snapshot: `reference/codex`
 - constants: `crates/codex2api-version`
 
@@ -378,7 +378,7 @@ From `reference/codex` at the pinned commit:
 
 - originator: `codex_cli_rs` (constant)
 - User-Agent formula (official `get_codex_user_agent`): `{originator}/{CARGO_PKG_VERSION} ({os_type} {os_version}; {arch}) {terminal_token}`
-- UA version token is the packaged release `0.154.0` (constant)
+- UA version token is the packaged release `0.156.1` (constant)
 - OS / arch / version / terminal are rolled once per account from official `os_info` + terminal-detection value sets, then frozen on that account row. Same account always sends the same UA. Do not read the proxy host.
 - ChatGPT Codex base: `https://chatgpt.com/backend-api/codex`
 - Responses path: `/responses`

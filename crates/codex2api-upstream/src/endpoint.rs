@@ -42,6 +42,9 @@ impl Endpoint {
 
     pub fn url(self) -> String {
         match self {
+            Self::Guardian | Self::GuardianClassifier => {
+                format!("{CHATGPT_CODEX_BASE_URL}/responses")
+            }
             Self::InputTokens => "https://api.openai.com/v1/responses/input_tokens".into(),
             Self::Usage => "https://chatgpt.com/backend-api/wham/usage".into(),
             Self::Models => {
@@ -74,11 +77,8 @@ impl Endpoint {
         timezone: Option<&str>,
     ) -> Result<PreparedRequest> {
         if self.is_response() {
-            let mut prepared = prepare_responses(body, inbound, installation_id, timezone)?;
-            if self != Self::Responses && !inbound.contains_key("x-codex-routing-hint") {
-                prepared.headers.remove("x-codex-routing-hint");
-            }
-            return Ok(prepared);
+            let inbound = self.response_headers(inbound.clone());
+            return prepare_responses(body, &inbound, installation_id, timezone);
         }
         if self.method() == Method::GET {
             return Ok(PreparedRequest {
@@ -117,6 +117,21 @@ impl Endpoint {
             headers,
         })
     }
+
+    pub(crate) fn response_headers(self, mut headers: HeaderMap) -> HeaderMap {
+        let guardian = match self {
+            Self::Guardian => Some("reviewer"),
+            Self::GuardianClassifier => Some("classifier"),
+            _ => None,
+        };
+        if let Some(guardian) = guardian {
+            headers.insert(
+                crate::headers::X_CODEX_GUARDIAN_HEADER,
+                HeaderValue::from_static(guardian),
+            );
+        }
+        headers
+    }
 }
 
 impl UpstreamClient {
@@ -154,7 +169,7 @@ mod tests {
     fn endpoints_and_version_are_official_and_not_caller_selected() {
         assert_eq!(
             Endpoint::Models.url(),
-            "https://chatgpt.com/backend-api/codex/models?client_version=0.154.0"
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.156.1"
         );
         assert_eq!(
             Endpoint::Usage.url(),
@@ -206,6 +221,10 @@ mod tests {
                 "openai-project",
                 "x-codex-routing-hint",
             ] {
+                if endpoint == Endpoint::Guardian && name == "x-codex-routing-hint" {
+                    assert!(!prepared.headers.contains_key(name));
+                    continue;
+                }
                 assert_eq!(
                     prepared.headers[name], inbound[name],
                     "{endpoint:?}: {name}"

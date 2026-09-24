@@ -302,7 +302,53 @@ pub async fn official(
     Path(id): Path<String>,
     Query(q): Query<OfficialQuery>,
 ) -> ApiResult {
-    s.storage.require_account(&id).await?;
+    let account = s.storage.require_account(&id).await?;
+    if q.section == "details" {
+        let refresh_error = if q.refresh {
+            match s.upstream.get(&id).await {
+                Ok(client) => client
+                    .refresh_workspace_details()
+                    .await
+                    .err()
+                    .map(|e| e.to_string()),
+                Err(error) => Some(error.to_string()),
+            }
+        } else {
+            None
+        };
+        let snapshot = s.storage.supplier_routing_snapshot(&id).await?;
+        let current_revision = s.storage.supplier_auth_revision(&id).await?;
+        let mut routing =
+            json!({"status":"not_observed","backend_origin":null,"constraint":null,"message":null});
+        let (value, observed_at) = match snapshot {
+            Some((snapshot, revision)) => {
+                match codex2api_upstream::WorkspaceRoute::from_accounts(
+                    &snapshot.value,
+                    account.chatgpt_account_id.as_deref().unwrap_or(""),
+                ) {
+                    Ok(route) => {
+                        routing["backend_origin"] = route.backend_origin.into();
+                        routing["constraint"] = route.account_routing_override.into();
+                        routing["status"] = if revision.is_some() && revision == current_revision {
+                            "ready"
+                        } else {
+                            "stale"
+                        }
+                        .into();
+                    }
+                    Err(error) => {
+                        routing["status"] = "invalid".into();
+                        routing["message"] = error.to_string().into();
+                    }
+                }
+                (snapshot.value, Some(snapshot.observed_at))
+            }
+            None => (Value::Null, None),
+        };
+        return Ok(Json(
+            json!({"value":value,"observed_at":observed_at,"refresh_error":refresh_error,"routing":routing}),
+        ));
+    }
     let (section, endpoint) = match q.section.as_str() {
         "quota" => (SupplierInfoSection::Quota, E::Usage),
         "usage" => (SupplierInfoSection::Usage, E::Profile),

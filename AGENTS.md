@@ -8,7 +8,7 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `a8964cb1bad67bc26a826fb07d1bef99c6a3f008` (2026-09-15T05:44:41Z)
+- commit: `b412ff32c417f855c2b2d1581b77058eed87c84b` (2026-09-23T00:45:44Z)
 - constants: `crates/codex2api-version`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
@@ -40,7 +40,7 @@ validation are complete.
 ## Official constants (do not invent)
 
 - originator: `codex_cli_rs`
-- package version in UA: `0.154.0`
+- package version in UA: `0.156.1`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`

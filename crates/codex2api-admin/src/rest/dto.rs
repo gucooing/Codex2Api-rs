@@ -28,6 +28,8 @@ impl AccountListQuery {
 #[derive(Serialize)]
 pub struct Session {
     pub authenticated: bool,
+    pub app_version: &'static str,
+    pub codex_cli_version: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

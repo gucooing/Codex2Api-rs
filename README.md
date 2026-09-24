@@ -12,9 +12,9 @@
 
 当前实现对齐的官方版本：
 
-- 发布版: `0.154.0`（tag `rust-v0.154.0`，commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`）
-- 源码快照: `a8964cb1bad67bc26a826fb07d1bef99c6a3f008`（2026-09-15T05:44:41Z）
-- User-Agent 版本写死为 `0.154.0`，不用源码树的 `0.0.0`
+- 发布版: `0.156.1`（tag `rust-v0.156.1`，commit `b412ff32c417f855c2b2d1581b77058eed87c84b`）
+- 源码快照: `b412ff32c417f855c2b2d1581b77058eed87c84b`（2026-09-23T00:45:44Z）
+- User-Agent 版本写死为 `0.156.1`，不用源码树的 `0.0.0`
 - 常量 crate: `crates/codex2api-version`
 - 架构说明: `docs/ARCHITECTURE.md`
 

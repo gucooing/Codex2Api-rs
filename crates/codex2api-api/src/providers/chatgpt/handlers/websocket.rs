@@ -11,6 +11,11 @@ use codex2api_upstream::{
     Endpoint, UpstreamWebSocket, normalize_response_identity, strip_hop_by_hop_headers,
 };
 
+pub(crate) struct ResponseSession {
+    workspace: Option<codex2api_upstream::WorkspaceConnection>,
+    guardian_reviewer: bool,
+}
+
 pub async fn responses_websocket(
     _: crate::user_agent::AllowedUserAgent,
     State(state): State<ApiState>,
@@ -30,7 +35,12 @@ pub async fn responses_websocket(
         "websocket",
     ));
     let upstream = state.upstream.get(&ctx.account.id).await?;
-    let (socket, mut response_headers) = upstream.connect_websocket(endpoint, headers).await?;
+    let guardian_reviewer = endpoint == Endpoint::Guardian
+        || headers
+            .get("x-codex-guardian")
+            .is_some_and(|value| value == "reviewer");
+    let (socket, mut response_headers, workspace) =
+        upstream.connect_websocket(endpoint, headers).await?;
     ledger.response_headers(&response_headers);
     crate::providers::chatgpt::identity::quota_headers(
         &state.storage,
@@ -61,6 +71,10 @@ pub async fn responses_websocket(
                 timezone,
                 ledger,
                 (state.storage, key.access),
+                Some(ResponseSession {
+                    workspace,
+                    guardian_reviewer,
+                }),
             )
         });
     response.headers_mut().extend(response_headers);
@@ -71,12 +85,20 @@ fn prepare_message(
     text: &str,
     installation_id: &str,
     timezone: Option<&str>,
+    guardian_reviewer: bool,
 ) -> codex2api_upstream::Result<String> {
     let mut value: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| codex2api_upstream::UpstreamError::InvalidRequest(e.to_string()))?;
     if value.get("type").and_then(serde_json::Value::as_str) == Some("response.create") {
         codex2api_upstream::apply_response_timezone(&mut value, timezone)?;
-        normalize_response_identity(&mut value, installation_id, &HeaderMap::new())?;
+        let mut headers = HeaderMap::new();
+        if guardian_reviewer {
+            headers.insert(
+                "x-codex-guardian",
+                axum::http::HeaderValue::from_static("reviewer"),
+            );
+        }
+        normalize_response_identity(&mut value, installation_id, &headers)?;
     }
     Ok(serde_json::to_string(&value)?)
 }
@@ -113,11 +135,15 @@ pub(crate) async fn bridge_recorded(
     timezone: Option<String>,
     ledger: crate::usage::WsLedger,
     consumer_access: (codex2api_storage::Storage, AccessCheck),
+    response_session: Option<ResponseSession>,
 ) {
     let ledger = tokio::sync::Mutex::new(ledger);
     let (storage, access) = consumer_access;
     let (mut client_tx, mut client_rx) = client.split();
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    let guardian_reviewer = response_session
+        .as_ref()
+        .is_some_and(|session| session.guardian_reviewer);
     let to_upstream = async {
         while let Some(message) = client_rx.next().await {
             let message = match message {
@@ -127,6 +153,13 @@ pub(crate) async fn bridge_recorded(
                     return Err(relay_error(error));
                 }
             };
+            if matches!(message, Message::Text(_) | Message::Binary(_))
+                && let Some(connection) = response_session
+                    .as_ref()
+                    .and_then(|session| session.workspace.as_ref())
+            {
+                connection.check_current().await?;
+            }
             if matches!(&message, Message::Text(_) | Message::Binary(_))
                 && !access.allowed(&storage).await?
             {
@@ -137,7 +170,12 @@ pub(crate) async fn bridge_recorded(
                     (if realtime {
                         prepare_realtime_message(&text, &installation_id)
                     } else {
-                        prepare_message(&text, &installation_id, timezone.as_deref())
+                        prepare_message(
+                            &text,
+                            &installation_id,
+                            timezone.as_deref(),
+                            guardian_reviewer,
+                        )
                     })?
                     .into(),
                 ),
@@ -147,7 +185,13 @@ pub(crate) async fn bridge_recorded(
                         crate::ApiError::bad_request("Expected a UTF-8 Responses frame.")
                     })?;
                     UpstreamMessage::Text(
-                        prepare_message(text, &installation_id, timezone.as_deref())?.into(),
+                        prepare_message(
+                            text,
+                            &installation_id,
+                            timezone.as_deref(),
+                            guardian_reviewer,
+                        )?
+                        .into(),
                     )
                 }
                 Message::Close(frame) => {
@@ -502,6 +546,7 @@ mod tests {
                                     account_id: supplier.id,
                                 },
                             ),
+                            None,
                         )
                     })
                 }
@@ -848,6 +893,7 @@ mod tests {
                                     account_id: real.id,
                                 },
                             ),
+                            None,
                         )
                     })
                 }
@@ -978,14 +1024,15 @@ mod tests {
         let original = serde_json::json!({"type":"response.create", "previous_response_id":"previous",
             "generate":false, "input":[{"content":"do not change"}],
             "client_metadata":{"x-codex-installation-id":"caller", "turn_id":"turn", "session_id":"session"}});
-        let out: serde_json::Value =
-            serde_json::from_str(&prepare_message(&original.to_string(), "account", None).unwrap())
-                .unwrap();
+        let out: serde_json::Value = serde_json::from_str(
+            &prepare_message(&original.to_string(), "account", None, false).unwrap(),
+        )
+        .unwrap();
         let mut expected = original;
         expected["client_metadata"]["x-codex-installation-id"] = "account".into();
         assert_eq!(out, expected);
         let configured: serde_json::Value = serde_json::from_str(
-            &prepare_message(&expected.to_string(), "account", Some("Asia/Taipei")).unwrap(),
+            &prepare_message(&expected.to_string(), "account", Some("Asia/Taipei"), false).unwrap(),
         )
         .unwrap();
         assert_eq!(configured["previous_response_id"], "previous");

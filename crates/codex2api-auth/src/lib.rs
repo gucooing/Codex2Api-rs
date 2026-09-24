@@ -1,7 +1,7 @@
 //! Official ChatGPT/Codex OAuth login, refresh, and revoke.
 //!
 //! Behavior matches official Codex CLI at the pinned commit
-//! `a8964cb1bad67bc26a826fb07d1bef99c6a3f008`.
+//! `b412ff32c417f855c2b2d1581b77058eed87c84b`.
 //!
 //! The library never opens a system browser. Callers (admin UI) receive
 //! an authorization URL or device code and present it to the user.

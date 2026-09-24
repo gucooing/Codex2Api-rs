@@ -49,6 +49,95 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn supplier_routing_migration_preserves_credentials_and_marks_legacy_snapshots_unverified() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("routing-v38.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 38)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO supplier_accounts(id,status,installation_id,originator,user_agent,os_type,os_version,arch,home_dir,created_at,updated_at) VALUES('legacy','active','keep-installation','codex_cli_rs','old-agent','Windows','11','x86_64','','2026-09-24','2026-09-24')").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO supplier_tokens(account_id,access_token,refresh_token,updated_at) VALUES('legacy','old-access','keep-refresh','2026-09-24')").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO supplier_info_cache(account_id,section,response_json,observed_at) VALUES('legacy','details','{\"accounts\":[]}','2026-09-24T00:00:00Z')").execute(&pool).await.unwrap();
+    pool.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    assert_eq!(
+        storage
+            .require_account("legacy")
+            .await
+            .unwrap()
+            .installation_id,
+        "keep-installation"
+    );
+    let snapshot = storage
+        .supplier_auth_snapshot("legacy")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.auth_revision, 0);
+    assert_eq!(snapshot.tokens.access_token.as_deref(), Some("old-access"));
+    let (details, revision) = storage
+        .supplier_routing_snapshot("legacy")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(revision.is_none());
+    assert!(
+        storage
+            .store_supplier_routing_snapshot("legacy", 0, &details)
+            .await
+            .unwrap()
+    );
+    let mut tokens = snapshot.tokens;
+    tokens.access_token = Some("renewed-access".into());
+    storage.upsert_supplier_tokens(tokens).await.unwrap();
+    assert_eq!(
+        storage.supplier_auth_revision("legacy").await.unwrap(),
+        Some(1)
+    );
+    assert!(
+        !storage
+            .store_supplier_routing_snapshot("legacy", 0, &details)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .load_supplier_tokens("legacy")
+            .await
+            .unwrap()
+            .unwrap()
+            .refresh_token
+            .as_deref(),
+        Some("keep-refresh")
+    );
+    storage.close().await;
+    let reopened = Storage::open(&path).await.unwrap();
+    assert_eq!(
+        reopened.supplier_auth_revision("legacy").await.unwrap(),
+        Some(1)
+    );
+}
+
+#[tokio::test]
 async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("catalog-v26.sqlite");

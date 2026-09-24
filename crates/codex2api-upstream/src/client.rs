@@ -23,6 +23,14 @@ pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 struct TokenState {
     access_token: String,
     chatgpt_account_id: Option<String>,
+    revision: i64,
+}
+
+pub(crate) struct RequestAuth {
+    pub headers: HeaderMap,
+    pub access_token: String,
+    pub account_id: Option<String>,
+    pub revision: i64,
 }
 
 /// Per-account HTTP client for official Codex servers.
@@ -31,6 +39,8 @@ struct TokenState {
 /// Do not clone the inner client across accounts. HTTP uses the pinned client's
 /// standard transport defaults; no TLS/JA3 spoofing is performed.
 pub struct UpstreamClient {
+    #[cfg(test)]
+    pub(crate) discovery_url: Option<String>,
     http: reqwest::Client,
     identity: AccountIdentity,
     tokens: RwLock<TokenState>,
@@ -91,11 +101,14 @@ impl UpstreamClient {
         let clients = Arc::new(AccountHttpClients::new(&identity)?);
         let http = clients.api.clone();
         Ok(Self {
+            #[cfg(test)]
+            discovery_url: None,
             http,
             identity,
             tokens: RwLock::new(TokenState {
                 access_token,
                 chatgpt_account_id,
+                revision: 0,
             }),
             auth,
             stream_idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
@@ -188,15 +201,40 @@ impl UpstreamClient {
         self.synchronize_auth().await?;
         let mut retried = false;
         loop {
-            let (mut upstream_headers, rejected_token) = self.authenticated_headers()?;
+            let auth = self.request_auth()?;
+            let routing = if crate::routing::is_workspace_endpoint(url) {
+                match self.workspace_route(&auth, false).await {
+                    Ok(route) => Some(route),
+                    Err(error) if error.is_unauthorized() && !retried && self.auth.is_some() => {
+                        retried = true;
+                        self.refresh_access_token(&auth.access_token).await?;
+                        continue;
+                    }
+                    Err(error) => {
+                        if error.is_unauthorized() {
+                            self.record_http_status(401).await;
+                        }
+                        return Err(error);
+                    }
+                }
+            } else {
+                None
+            };
+            let mut upstream_headers = auth.headers;
             if !provider_version {
                 upstream_headers.remove("version");
                 upstream_headers.remove("originator");
             }
             upstream_headers.extend(prepared.headers.clone());
-            let mut request = self
-                .http
-                .request(method.clone(), url)
+            let routed_url;
+            let (client, request_url) = if let Some(route) = &routing {
+                routed_url = route.route.apply(url, &mut upstream_headers)?;
+                (&self.account_http.routed_api, routed_url.as_str())
+            } else {
+                (&self.http, url)
+            };
+            let mut request = client
+                .request(method.clone(), request_url)
                 .headers(upstream_headers);
             if method != http::Method::GET || !prepared.body.is_empty() {
                 request = request.body(prepared.body.clone());
@@ -211,8 +249,13 @@ impl UpstreamClient {
             };
             if response.status() == StatusCode::UNAUTHORIZED && !retried && self.auth.is_some() {
                 retried = true;
-                self.refresh_access_token(&rejected_token).await?;
+                self.refresh_access_token(&auth.access_token).await?;
                 continue;
+            }
+            if routing.is_some() && response.status().is_redirection() {
+                return Err(UpstreamError::WorkspaceRouting(
+                    "workspace redirects are not allowed".into(),
+                ));
             }
             self.record_http_status(response.status().as_u16()).await;
             return Ok(response);
@@ -284,51 +327,49 @@ impl UpstreamClient {
     }
 
     pub(crate) fn authenticated_headers(&self) -> Result<(HeaderMap, String)> {
+        let auth = self.request_auth()?;
+        Ok((auth.headers, auth.access_token))
+    }
+
+    pub(crate) fn request_auth(&self) -> Result<RequestAuth> {
         let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
-        Ok((
-            default_headers(
+        Ok(RequestAuth {
+            headers: default_headers(
                 &self.identity,
                 &tokens.access_token,
                 tokens.chatgpt_account_id.as_deref(),
             )?,
-            tokens.access_token.clone(),
-        ))
+            access_token: tokens.access_token.clone(),
+            account_id: tokens.chatgpt_account_id.clone(),
+            revision: tokens.revision,
+        })
     }
 
     pub(crate) async fn synchronize_auth(&self) -> Result<()> {
         let Some(auth) = &self.auth else {
             return Ok(());
         };
-        match auth.refresh(&self.identity.account_id, false).await {
-            Ok(current) => self.apply_auth(&current),
-            Err(error) => {
-                // Official proactive refresh keeps the cached auth on transient failure.
-                tracing::warn!(%error, "proactive token refresh failed");
-                let ctx = auth
-                    .accounts()
-                    .load_context(&self.identity.account_id)
-                    .await?;
-                self.apply_auth(ctx.auth.as_ref().ok_or_else(|| {
-                    UpstreamError::MissingAccessToken(self.identity.account_id.clone())
-                })?)
-            }
+        if let Err(error) = auth.refresh(&self.identity.account_id, false).await {
+            // Official proactive refresh keeps persisted auth on transient failure.
+            tracing::warn!(%error, "proactive token refresh failed");
         }
+        self.load_current_auth().await
     }
 
     pub(crate) async fn refresh_access_token(&self, rejected_token: &str) -> Result<()> {
         let auth = self.auth.as_ref().ok_or(UpstreamError::Unauthorized)?;
-        let refreshed = match auth
+        match auth
             .refresh_rejected_token(&self.identity.account_id, rejected_token)
             .await
         {
-            Ok(refreshed) => refreshed,
+            Ok(_) => (),
             Err(error) => {
                 self.record_communication_error("ChatGPT 官方授权刷新失败，请恢复检查或重新授权")
                     .await;
                 return Err(UpstreamError::Refresh(error));
             }
         };
-        self.apply_auth(&refreshed)
+        self.load_current_auth().await
     }
 
     pub(crate) async fn record_http_status(&self, status: u16) {
@@ -350,7 +391,14 @@ impl UpstreamClient {
         }
     }
 
-    fn apply_auth(&self, refreshed: &codex2api_auth::AuthDotJson) -> Result<()> {
+    async fn load_current_auth(&self) -> Result<()> {
+        let auth = self.auth.as_ref().ok_or(UpstreamError::Unauthorized)?;
+        let snapshot = auth
+            .storage()?
+            .supplier_auth_snapshot(&self.identity.account_id)
+            .await?
+            .ok_or_else(|| UpstreamError::MissingAccessToken(self.identity.account_id.clone()))?;
+        let refreshed = codex2api_auth::AuthDotJson::from_supplier_tokens(&snapshot.tokens)?;
         let tokens = refreshed
             .tokens
             .as_ref()
@@ -367,7 +415,8 @@ impl UpstreamClient {
             .or_else(|| refreshed.chatgpt_account_id().map(str::to_string));
         let mut state = self.tokens.write().unwrap_or_else(|e| e.into_inner());
         state.access_token = tokens.access_token.clone();
-        state.chatgpt_account_id = chatgpt_account_id;
+        state.chatgpt_account_id = chatgpt_account_id.or(snapshot.chatgpt_account_id);
+        state.revision = snapshot.auth_revision;
         Ok(())
     }
 }
@@ -724,7 +773,7 @@ mod tests {
             }
             assert_eq!(received_headers["authorization"], "Bearer test-token");
             assert_eq!(received_headers["originator"], "codex_cli_rs");
-            assert_eq!(received_headers["version"], "0.154.0");
+            assert_eq!(received_headers["version"], "0.156.1");
             for name in ["forwarded", "via", "x-forwarded-for", "x-custom"] {
                 assert!(!received_headers.contains_key(name), "{name}");
             }

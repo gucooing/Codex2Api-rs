@@ -30,6 +30,12 @@ pub enum UpstreamError {
     Stream(String),
     #[error("SSE stream idle timeout")]
     StreamIdleTimeout,
+    #[error("supplier workspace routing failed: {0}")]
+    WorkspaceRouting(String),
+    #[error("supplier credentials or workspace routing changed; reconnect and retry")]
+    WorkspaceChanged,
+    #[error(transparent)]
+    Storage(#[from] codex2api_storage::StorageError),
     #[error(transparent)]
     Auth(#[from] AuthError),
     #[error(transparent)]

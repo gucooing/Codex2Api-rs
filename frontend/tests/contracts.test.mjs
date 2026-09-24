@@ -26,6 +26,8 @@ test("actual session, overview, consumer and route DTOs match their consumers", 
   assert.equal(fixture.session.authenticated, true);
   string(fixture.session.username);
   string(fixture.session.csrf_token);
+  string(fixture.session.app_version);
+  string(fixture.session.codex_cli_version);
   for (const key of ["supplier_count", "consumer_count", "enabled_consumers", "models_count"])
     number(fixture.overview[key]);
   for (const key of [

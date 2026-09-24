@@ -14,6 +14,10 @@ pub enum AccountError {
     InvalidInstallationId(String),
     #[error("invalid or empty HTTP fingerprint for account")]
     InvalidHttpFingerprint,
+    #[error(
+        "account `{0}` has an invalid or concurrently changed stored fingerprint; identity was not regenerated"
+    )]
+    InvalidStoredFingerprint(String),
     #[error("chatgpt_account_id is required to bind an account")]
     MissingChatgptAccountId,
     #[error("account `{0}` is not in pending status")]

@@ -120,15 +120,22 @@ try:
         assert models["data"],"Expected the installed client's documented builtin fallback for an empty remote catalog"
         print("Native Desktop observed builtin fallback for an empty authorized remote catalog: "+json.dumps([model["model"] for model in models["data"]]))
     else:
-        expected_models={"gpt-5.6-luna","gpt-6-astra"}
+        expected_models={"gpt-5.6-luna","gpt-6-astra","gpt-6-sol","gpt-6-luna"}
         assert {model["model"] for model in models["data"]}==expected_models, [model["model"] for model in models["data"]]
         assert models["nextCursor"] is None,models
         assert all(model["supportedReasoningEfforts"] for model in models["data"]),models
-        first=client.call("model/list",{"includeHidden":True,"limit":1})
-        second=client.call("model/list",{"includeHidden":True,"limit":1,"cursor":first["nextCursor"]})
-        assert {model["model"] for page in [first,second] for model in page["data"]}==expected_models
-        assert second["nextCursor"] is None
-        print("Native Desktop model/list decoded only the two granted pinned descriptors, with valid reasoning capabilities and pagination; the Rust fixture also requires an actual proxy catalog fetch.")
+        pages=[]
+        cursor=None
+        while True:
+            page=client.call("model/list",{"includeHidden":True,"limit":1,"cursor":cursor})
+            pages.extend(page["data"])
+            cursor=page["nextCursor"]
+            if cursor is None: break
+            assert len(pages)<10,"Model pagination did not terminate"
+        assert {model["model"] for model in pages}==expected_models
+        if os.environ.get("CODEX2API_TEST_MODEL_OUTPUT"):
+            Path(os.environ["CODEX2API_TEST_MODEL_OUTPUT"]).write_text(json.dumps(models["data"]),encoding="utf-8")
+        print("Native Desktop model/list decoded the four granted pinned descriptors, including GPT-6 Sol/Luna, with reasoning capabilities and pagination; the Rust fixture also requires an actual proxy catalog fetch.")
 
     if os.environ.get("CODEX2API_TEST_CUSTOM_PROVIDER"):
         config=client.call("config/read",{"includeLayers":False})["config"]

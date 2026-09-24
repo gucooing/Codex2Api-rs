@@ -1390,6 +1390,12 @@ function OfficialData({
     quota?: SupplierQuota;
     observed_at?: string;
     refresh_error?: string | null;
+    routing?: {
+      status: "not_observed" | "ready" | "stale" | "invalid";
+      backend_origin: string | null;
+      constraint: "NO_CONSTRAINT" | "us" | "us_cr" | null;
+      message: string | null;
+    };
   }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
   const root = resource.data?.value;
   const value = root && typeof root === "object" && !Array.isArray(root) ? root : {};
@@ -1422,6 +1428,39 @@ function OfficialData({
             <CardDescription>采集时间：{date(resource.data?.observed_at)}</CardDescription>
           )}
         </div>
+
+        {section === "details" && (
+          <FieldGroup className="grid gap-3 sm:grid-cols-3">
+            <Field>
+              <FieldTitle>官方执行地址</FieldTitle>
+              <FieldDescription>{resource.data?.routing?.backend_origin ?? "—"}</FieldDescription>
+            </Field>
+            <Field>
+              <FieldTitle>区域约束</FieldTitle>
+              <FieldDescription>
+                {resource.data?.routing?.constraint
+                  ? { NO_CONSTRAINT: "无区域约束", us: "美国", us_cr: "美国（us_cr）" }[
+                      resource.data.routing.constraint
+                    ]
+                  : "—"}
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldTitle>路由状态</FieldTitle>
+              <FieldDescription>
+                {resource.data?.routing
+                  ? {
+                      not_observed: "尚未采集",
+                      ready: "可用",
+                      stale: "凭据已变更，待重新采集",
+                      invalid: "官方路由资料无效",
+                    }[resource.data.routing.status]
+                  : "—"}
+                {resource.data?.routing?.message && `：${resource.data.routing.message}`}
+              </FieldDescription>
+            </Field>
+          </FieldGroup>
+        )}
 
         {
           <>

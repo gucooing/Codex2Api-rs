@@ -257,6 +257,18 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
             map_upstream_status_body(status, &body)
         }
+        UpstreamError::WorkspaceChanged => openai_response(
+            StatusCode::CONFLICT,
+            "api_error",
+            "Supplier credentials or workspace routing changed. Reconnect and retry.",
+            Some("supplier_workspace_changed"),
+        ),
+        UpstreamError::WorkspaceRouting(message) => openai_response(
+            StatusCode::BAD_GATEWAY,
+            "api_error",
+            message,
+            Some("supplier_workspace_routing_failed"),
+        ),
         UpstreamError::StreamIdleTimeout => openai_response(
             StatusCode::GATEWAY_TIMEOUT,
             "api_error",

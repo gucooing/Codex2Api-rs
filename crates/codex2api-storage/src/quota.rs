@@ -57,7 +57,7 @@ impl Storage {
         if section == SupplierInfoSection::Quota {
             return self.store_account_quota(account_id, snapshot).await;
         }
-        sqlx::query("INSERT INTO supplier_info_cache(account_id, section, response_json, observed_at) VALUES(?, ?, ?, ?) ON CONFLICT(account_id, section) DO UPDATE SET response_json=excluded.response_json, observed_at=excluded.observed_at")
+        sqlx::query("INSERT INTO supplier_info_cache(account_id, section, response_json, observed_at) VALUES(?, ?, ?, ?) ON CONFLICT(account_id, section) DO UPDATE SET response_json=excluded.response_json, observed_at=excluded.observed_at, auth_revision=NULL")
             .bind(account_id).bind(section.as_str()).bind(serde_json::to_string(&snapshot.value)?).bind(snapshot.observed_at).execute(self.pool()).await?;
         Ok(())
     }

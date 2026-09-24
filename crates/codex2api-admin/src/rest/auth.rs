@@ -50,6 +50,8 @@ pub async fn login(
         )],
         Json(dto::Session {
             authenticated: true,
+            app_version: codex2api_version::APP_VERSION,
+            codex_cli_version: codex2api_version::CODEX_PACKAGE_VERSION,
             username: Some(form.username.trim().into()),
             csrf_token: Some(session::csrf_token(&value.id)),
         }),
@@ -63,6 +65,8 @@ pub async fn current(State(state): State<AdminState>, headers: HeaderMap) -> Api
     let user = state.storage.require_admin_user().await?;
     Ok(Json(dto::value(dto::Session {
         authenticated: true,
+        app_version: codex2api_version::APP_VERSION,
+        codex_cli_version: codex2api_version::CODEX_PACKAGE_VERSION,
         username: Some(user.username),
         csrf_token: Some(session::csrf_token(&value.id)),
     })))

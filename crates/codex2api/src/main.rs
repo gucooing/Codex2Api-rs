@@ -24,6 +24,9 @@ async fn main() -> Result<()> {
     );
 
     let storage = Storage::open(&db_path).await?;
+    codex2api_accounts::SupplierAccountStore::open(storage.clone())
+        .align_user_agents()
+        .await?;
     storage.ensure_default_admin().await?;
     storage.recover_interrupted_usage().await?;
 

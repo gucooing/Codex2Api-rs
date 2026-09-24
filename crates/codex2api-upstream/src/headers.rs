@@ -16,6 +16,7 @@ pub const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_CODEX_WINDOW_ID_HEADER: &str = "x-codex-window-id";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+pub const X_CODEX_GUARDIAN_HEADER: &str = "x-codex-guardian";
 pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
 pub const ACCEPT_EVENT_STREAM: &str = "text/event-stream";
@@ -186,6 +187,7 @@ pub(crate) fn protocol_headers(inbound: &HeaderMap) -> HeaderMap {
         X_CODEX_WINDOW_ID_HEADER,
         X_CODEX_TURN_METADATA_HEADER,
         X_CODEX_TURN_STATE_HEADER,
+        X_CODEX_GUARDIAN_HEADER,
         X_CODEX_PARENT_THREAD_ID_HEADER,
         X_OPENAI_SUBAGENT_HEADER,
         "x-codex-beta-features",
@@ -229,7 +231,7 @@ mod tests {
         let identity = AccountIdentity::new("a", "installation", HostRuntime::generate());
         let headers = default_headers(&identity, "token", Some("account")).unwrap();
         assert_eq!(headers["originator"], "codex_cli_rs");
-        assert_eq!(headers["version"], "0.154.0");
+        assert_eq!(headers["version"], "0.156.1");
         assert_eq!(headers["authorization"], "Bearer token");
         assert_eq!(headers["chatgpt-account-id"], "account");
         assert_eq!(

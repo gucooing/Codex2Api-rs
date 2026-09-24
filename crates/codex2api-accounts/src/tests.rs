@@ -4,7 +4,7 @@ use super::*;
 fn originator_and_release_version_are_official_constants() {
     let runtime = HostRuntime::generate();
     assert_eq!(runtime.originator, "codex_cli_rs");
-    assert!(runtime.user_agent.starts_with("codex_cli_rs/0.154.0 "));
+    assert!(runtime.user_agent.starts_with("codex_cli_rs/0.156.1 "));
     assert!(runtime.user_agent.contains(&runtime.os_type));
     assert!(runtime.user_agent.contains(&runtime.arch));
     assert!(runtime.user_agent.contains(&runtime.os_version));
@@ -33,7 +33,7 @@ fn http_fingerprint_matches_official_cli_headers() {
     let fp = &identity.http_fingerprint;
     assert_eq!(fp.originator, "codex_cli_rs");
     assert_eq!(fp.installation_id, id);
-    assert!(fp.user_agent.starts_with("codex_cli_rs/0.154.0 "));
+    assert!(fp.user_agent.starts_with("codex_cli_rs/0.156.1 "));
     let json = identity.fingerprint_json().unwrap();
     let loaded = HttpFingerprint::from_json(&json).unwrap();
     assert_eq!(loaded, *fp);

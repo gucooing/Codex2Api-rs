@@ -90,8 +90,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type Session = { authenticated: boolean; username: string; csrf_token: string };
-const signedOut: Session = { authenticated: false, username: "", csrf_token: "" };
+type Session = {
+  authenticated: boolean;
+  username: string;
+  csrf_token: string;
+  app_version: string;
+  codex_cli_version: string;
+};
+const signedOut: Session = {
+  authenticated: false,
+  username: "",
+  csrf_token: "",
+  app_version: "",
+  codex_cli_version: "",
+};
 async function readSession(signal?: AbortSignal): Promise<Session> {
   try {
     const value = await request<Session>("/session", { signal });
@@ -427,6 +439,13 @@ function AdminShell({ children }: { children: ReactNode }) {
             </BreadcrumbList>
           </Breadcrumb>
           <div className="ml-auto flex items-center gap-1">
+            <div
+              aria-label="版本信息"
+              className="mr-2 flex flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground sm:flex-row sm:gap-3"
+            >
+              <span>Codex CLI {session.codex_cli_version || "—"}</span>
+              <span>Codex2API {session.app_version || "—"}</span>
+            </div>
             <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
               <DialogTrigger asChild>
                 <Button variant="ghost" size="icon-sm" aria-label="搜索页面">

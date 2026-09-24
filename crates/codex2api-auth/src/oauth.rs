@@ -164,19 +164,17 @@ pub fn build_authorize_url(
         ("response_type", "code"),
         ("client_id", cfg.client_id.as_str()),
         ("redirect_uri", redirect_uri),
-        ("scope", cfg.scope.as_str()),
         ("code_challenge", pkce.code_challenge.as_str()),
         ("code_challenge_method", "S256"),
+        ("state", state),
+        ("scope", cfg.scope.as_str()),
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
-        ("state", state),
         ("originator", DEFAULT_ORIGINATOR),
     ];
-    let qs = query
-        .into_iter()
-        .map(|(k, v)| format!("{k}={}", urlencoding::encode(v)))
-        .collect::<Vec<_>>()
-        .join("&");
+    let qs = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(query)
+        .finish();
     format!("{}?{qs}", cfg.authorize_url())
 }
 
@@ -195,7 +193,7 @@ pub fn start_pending_login(cfg: &OAuthConfig, port: u16) -> PendingLogin {
 }
 
 /// Authorization-code exchange. Body matches official Codex CLI:
-/// `grant_type=authorization_code&code&redirect_uri&client_id&code_verifier`
+/// `grant_type=authorization_code&client_id&code&redirect_uri&code_verifier`
 pub async fn exchange_code_for_tokens(
     http: &reqwest::Client,
     cfg: &OAuthConfig,
@@ -209,13 +207,15 @@ pub async fn exchange_code_for_tokens(
         redirect_uri = %redirect_uri,
         "starting oauth token exchange"
     );
-    let body = format!(
-        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-        urlencoding::encode(code),
-        urlencoding::encode(redirect_uri),
-        urlencoding::encode(&cfg.client_id),
-        urlencoding::encode(code_verifier)
-    );
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("grant_type", "authorization_code"),
+            ("client_id", cfg.client_id.as_str()),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("code_verifier", code_verifier),
+        ])
+        .finish();
     let resp = http
         .post(&token_endpoint)
         // Official CLI uses create_raw_auth_client: no originator / Codex UA.
@@ -652,25 +652,28 @@ mod tests {
                 "response_type",
                 "client_id",
                 "redirect_uri",
-                "scope",
                 "code_challenge",
                 "code_challenge_method",
+                "state",
+                "scope",
                 "id_token_add_organizations",
                 "codex_cli_simplified_flow",
-                "state",
                 "originator",
             ]
         );
         assert_eq!(pairs[0].1, "code");
         assert_eq!(pairs[1].1, OAUTH_CLIENT_ID);
         assert_eq!(pairs[2].1, "http://localhost:1455/auth/callback");
-        assert_eq!(pairs[3].1, OAUTH_SCOPE);
-        assert_eq!(pairs[4].1, "challenge");
-        assert_eq!(pairs[5].1, "S256");
-        assert_eq!(pairs[6].1, "true");
+        assert_eq!(pairs[3].1, "challenge");
+        assert_eq!(pairs[4].1, "S256");
+        assert_eq!(pairs[5].1, "state123");
+        assert_eq!(pairs[6].1, OAUTH_SCOPE);
         assert_eq!(pairs[7].1, "true");
-        assert_eq!(pairs[8].1, "state123");
+        assert_eq!(pairs[8].1, "true");
         assert_eq!(pairs[9].1, DEFAULT_ORIGINATOR);
+        assert!(url.contains(
+            "scope=openid+profile+email+offline_access+api.connectors.read+api.connectors.invoke"
+        ));
     }
 
     #[test]

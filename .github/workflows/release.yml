@@ -91,6 +91,8 @@ jobs:
         run: npm run build
 
       - name: Build release binary
+        env:
+          CODEX2API_BUILD_TAG: ${{ github.ref_name }}
         run: cargo build --locked --release --package codex2api --target ${{ matrix.target }}
 
       - name: Package Unix binary

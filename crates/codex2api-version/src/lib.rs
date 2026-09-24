@@ -5,35 +5,38 @@
 
 use serde::Serialize;
 
+/// Codex2API release tag captured at build time, independent of the official CLI version.
+pub const APP_VERSION: &str = env!("CODEX2API_BUILD_TAG");
+
 /// Official Codex git repository used as protocol reference.
 pub const CODEX_REPO: &str = "https://github.com/openai/codex";
 
-/// Branch the local snapshot was taken from.
-pub const CODEX_REF_BRANCH: &str = "main";
+/// Official Git ref the local snapshot was taken from.
+pub const CODEX_REF_BRANCH: &str = "rust-v0.156.1";
 
 /// Exact commit the current implementation is aligned with.
-pub const CODEX_REF_COMMIT: &str = "a8964cb1bad67bc26a826fb07d1bef99c6a3f008";
+pub const CODEX_REF_COMMIT: &str = "b412ff32c417f855c2b2d1581b77058eed87c84b";
 
 /// Commit timestamp (UTC).
-pub const CODEX_REF_COMMIT_DATE: &str = "2026-09-15T05:44:41Z";
+pub const CODEX_REF_COMMIT_DATE: &str = "2026-09-23T00:45:44Z";
 
 /// First-line commit message of the reference snapshot.
-pub const CODEX_REF_COMMIT_MESSAGE: &str = "Render standalone display math in the TUI (#45612)";
+pub const CODEX_REF_COMMIT_MESSAGE: &str = "## New Features";
 
 /// Local path of the official source snapshot in this repo.
 pub const CODEX_REF_PATH: &str = "reference/codex";
 
 /// Current official packaged CLI release this proxy pretends to be.
 ///
-/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.154.0
+/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.156.1
 /// (`CARGO_PKG_VERSION` stamped into that binary). Not the source-tree `0.0.0`.
-pub const CODEX_RELEASE_VERSION: &str = "0.154.0";
+pub const CODEX_RELEASE_VERSION: &str = "0.156.1";
 
 /// GitHub release tag for [`CODEX_RELEASE_VERSION`].
-pub const CODEX_RELEASE_TAG: &str = "rust-v0.154.0";
+pub const CODEX_RELEASE_TAG: &str = "rust-v0.156.1";
 
-/// Commit the `rust-v0.154.0` tag points at.
-pub const CODEX_RELEASE_COMMIT: &str = "6b9826e3aa83b1a5947db50f4332cb9c65f1b340";
+/// Commit the `rust-v0.156.1` tag points at.
+pub const CODEX_RELEASE_COMMIT: &str = "b412ff32c417f855c2b2d1581b77058eed87c84b";
 
 /// User-Agent version token. Always the packaged release, never source `0.0.0`.
 pub const CODEX_PACKAGE_VERSION: &str = CODEX_RELEASE_VERSION;
@@ -132,8 +135,8 @@ mod tests {
     #[test]
     fn commit_is_pinned() {
         assert_eq!(CODEX_REF_COMMIT.len(), 40);
-        assert_eq!(CODEX_PACKAGE_VERSION, "0.154.0");
-        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.154.0");
+        assert_eq!(CODEX_PACKAGE_VERSION, "0.156.1");
+        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.156.1");
         assert_eq!(DEFAULT_ORIGINATOR, "codex_cli_rs");
         assert_eq!(OAUTH_CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
     }

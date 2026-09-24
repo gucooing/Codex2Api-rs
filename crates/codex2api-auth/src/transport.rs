@@ -131,8 +131,10 @@ pub struct AccountHttpClients {
     pub raw: reqwest::Client,
     pub authenticated: reqwest::Client,
     pub api: reqwest::Client,
+    pub routed_api: reqwest::Client,
     pub cookies: Arc<AccountCookieStore>,
     pub refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    pub routing_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AccountHttpClients {
@@ -146,6 +148,7 @@ impl AccountHttpClients {
             proxy_url,
             Arc::new(AccountCookieStore::default()),
             Arc::new(tokio::sync::Mutex::new(())),
+            Arc::new(tokio::sync::Mutex::new(())),
         )
     }
 
@@ -154,6 +157,7 @@ impl AccountHttpClients {
         proxy_url: Option<&str>,
         cookies: Arc<AccountCookieStore>,
         refresh_lock: Arc<tokio::sync::Mutex<()>>,
+        routing_lock: Arc<tokio::sync::Mutex<()>>,
     ) -> Result<Self> {
         let builder = || -> Result<reqwest::ClientBuilder> {
             let mut builder = http_builder()?;
@@ -170,14 +174,20 @@ impl AccountHttpClients {
             .build()?;
         // API endpoint builders choose their own header set (e.g. WHAM has no version/originator).
         let api = builder()?.cookie_provider(cookies.clone()).build()?;
+        let routed_api = builder()?
+            .redirect(reqwest::redirect::Policy::none())
+            .cookie_provider(cookies.clone())
+            .build()?;
         Ok(Self {
             identity: identity.clone(),
             proxy_url: proxy_url.map(str::to_owned),
             raw,
             authenticated,
             api,
+            routed_api,
             cookies,
             refresh_lock,
+            routing_lock,
         })
     }
 
@@ -200,6 +210,7 @@ impl AccountHttpClients {
             proxy_url,
             self.cookies.clone(),
             self.refresh_lock.clone(),
+            self.routing_lock.clone(),
         )
     }
 }

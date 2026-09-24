@@ -73,6 +73,52 @@ impl SupplierAccountStore {
         self.storage.as_ref().ok_or(AccountError::StorageRequired)
     }
 
+    /// Update version-derived strings at startup without regenerating any account identity.
+    pub async fn align_user_agents(&self) -> Result<()> {
+        let storage = self.storage()?;
+        for account in storage.list_accounts().await? {
+            if account.provider_id != codex2api_core::CHATGPT {
+                continue;
+            }
+            let identity = AccountIdentity::from_account(&account);
+            let stored = if identity.http_fingerprint.user_agent.is_empty() {
+                &account.user_agent
+            } else {
+                &identity.http_fingerprint.user_agent
+            };
+            if stored
+                .split_once(") ")
+                .is_none_or(|(_, terminal)| terminal.trim().is_empty())
+            {
+                return Err(AccountError::InvalidStoredFingerprint(account.id));
+            }
+            let mut fingerprint: serde_json::Value =
+                serde_json::from_str(&account.http_fingerprint_json)
+                    .map_err(|_| AccountError::InvalidStoredFingerprint(account.id.clone()))?;
+            let object = fingerprint
+                .as_object_mut()
+                .ok_or_else(|| AccountError::InvalidStoredFingerprint(account.id.clone()))?;
+            let user_agent = identity.official_user_agent();
+            if account.user_agent == user_agent
+                && object.get("user_agent").and_then(serde_json::Value::as_str) == Some(&user_agent)
+            {
+                continue;
+            }
+            object.insert("user_agent".into(), user_agent.clone().into());
+            if !storage
+                .align_supplier_user_agent(
+                    &account,
+                    &user_agent,
+                    &serde_json::to_string(&fingerprint)?,
+                )
+                .await?
+            {
+                return Err(AccountError::InvalidStoredFingerprint(account.id));
+            }
+        }
+        Ok(())
+    }
+
     pub fn build_identity(&self, account_id: &str, installation_id: String) -> AccountIdentity {
         AccountIdentity::new(account_id, installation_id, HostRuntime::generate())
     }
