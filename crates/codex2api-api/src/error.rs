@@ -253,9 +253,32 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
                 Some("upstream_refresh_failed"),
             )
         }
-        UpstreamError::Status { status, body } => {
+        UpstreamError::Status {
+            status,
+            body,
+            mut headers,
+        } => {
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-            map_upstream_status_body(status, &body)
+            let mut response = map_upstream_status_body(status, &body);
+            codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
+            // Preserve official error classification/retry evidence, without
+            // exposing supplier cookies, credentials or supplier quota windows.
+            for name in [
+                "x-error-json",
+                "x-openai-authorization-error",
+                "x-request-id",
+                "x-oai-request-id",
+                "cf-ray",
+                "retry-after",
+                "retry-after-ms",
+                "openai-model",
+                "x-openai-model",
+            ] {
+                for value in headers.get_all(name) {
+                    response.headers_mut().append(name, value.clone());
+                }
+            }
+            response
         }
         UpstreamError::WorkspaceChanged => openai_response(
             StatusCode::CONFLICT,
@@ -419,5 +442,56 @@ mod tests {
         let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
         let response = map_upstream_status_body(StatusCode::SERVICE_UNAVAILABLE, body);
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn handshake_errors_preserve_classification_and_retry_headers_without_supplier_state() {
+        use axum::body::to_bytes;
+        use axum::http::{HeaderMap, HeaderValue};
+        let body = json!({"error":{"code":"invalid_prompt", "message":"中文🦀".repeat(700)}});
+        for status in [400, 401, 403, 426, 429, 503] {
+            let mut headers = HeaderMap::new();
+            for (key, value) in [
+                ("x-error-json", r#"{"error":{"code":"invalid_prompt"}}"#),
+                ("x-openai-authorization-error", "access_denied"),
+                ("x-request-id", "request-fixture"),
+                ("retry-after", "7"),
+                ("connection", "x-oai-request-id"),
+                ("x-oai-request-id", "connection-local"),
+                ("set-cookie", "account=private"),
+                ("authorization", "Bearer supplier-fixture"),
+                ("x-codex-primary-used-percent", "65"),
+                ("content-length", "999999"),
+            ] {
+                headers.insert(key, HeaderValue::from_static(value));
+            }
+            let response = upstream_error_response(UpstreamError::status_with_headers(
+                StatusCode::from_u16(status).unwrap(),
+                body.to_string(),
+                headers,
+            ));
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers()["retry-after"], "7");
+            assert_eq!(response.headers()["x-request-id"], "request-fixture");
+            assert_eq!(
+                response.headers()["x-openai-authorization-error"],
+                "access_denied"
+            );
+            assert_eq!(
+                response.headers()["x-error-json"],
+                r#"{"error":{"code":"invalid_prompt"}}"#
+            );
+            for key in [
+                "x-oai-request-id",
+                "set-cookie",
+                "authorization",
+                "x-codex-primary-used-percent",
+                "content-length",
+            ] {
+                assert!(!response.headers().contains_key(key), "{key}");
+            }
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), body);
+        }
     }
 }

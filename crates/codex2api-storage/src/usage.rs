@@ -286,10 +286,10 @@ impl Storage {
     }
     pub async fn insert_usage(&self, record: &UsageRecord) -> Result<()> {
         let snapshot = self.billing_snapshot(&record.provider_id).await?;
-        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?)")
+        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM virtual_accounts WHERE id=?))")
             .bind(&record.provider_id).bind(&record.subject_kind).bind(&record.id).bind(&record.account_id).bind(&record.account_name).bind(&record.subject_id).bind(&record.subject_name)
             .bind(&record.endpoint).bind(&record.transport).bind(&record.model).bind(&record.reasoning_effort).bind(&record.service_tier).bind(&record.image_size).bind(record.requested_at_ms).bind(&record.status)
-            .bind(&record.actual_model).bind(snapshot).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id)
+            .bind(&record.actual_model).bind(snapshot).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.subject_id)
             .execute(self.pool()).await?;
         Ok(())
     }

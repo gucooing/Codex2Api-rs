@@ -38,6 +38,109 @@ pub async fn list(
     }
     Ok(Json(json!({"items":items})))
 }
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct BatchFilters {
+    search: String,
+    status: String,
+    subscription: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchInput {
+    operation: String,
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    all_matching: bool,
+    #[serde(default)]
+    filters: BatchFilters,
+    #[serde(default)]
+    quantity: i64,
+    #[serde(default)]
+    note: String,
+    #[serde(default)]
+    activate_at: Option<String>,
+    #[serde(default = "default_reset_duration_days")]
+    duration_days: i64,
+}
+pub async fn batch(State(s): State<AdminState>, Json(input): Json<BatchInput>) -> ApiResult {
+    if !input.all_matching && input.ids.is_empty() {
+        return Err(ApiError::bad("请选择虚拟账户或当前筛选结果"));
+    }
+    let ids = if input.all_matching {
+        let enabled = match input.filters.status.as_str() {
+            "" => None,
+            "enabled" => Some(true),
+            "disabled" => Some(false),
+            _ => return Err(ApiError::bad("登录状态筛选无效")),
+        };
+        s.storage
+            .virtual_account_ids_matching(
+                &input.filters.search,
+                enabled,
+                Some(&input.filters.subscription),
+            )
+            .await?
+    } else {
+        input.ids
+    };
+    if ids.is_empty() {
+        return Ok(Json(json!({"ok":true,"affected":0})));
+    }
+    match input.operation.as_str() {
+        "delete" => {
+            for id in &ids {
+                s.storage.delete_virtual_account(id).await?;
+            }
+        }
+        "reset" => {
+            for id in &ids {
+                let value = s.storage.admin_reset_virtual_quota(id, "admin").await?;
+                if value["code"] == "nothing_to_reset" {
+                    continue;
+                }
+            }
+        }
+        "grant_reset" => {
+            if !(1..=100).contains(&input.quantity) {
+                return Err(ApiError::bad("每个账户发放数量须为 1 至 100"));
+            }
+            let available_at = input
+                .activate_at
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| {
+                    chrono::DateTime::parse_from_rfc3339(v)
+                        .map(|d| d.timestamp_millis())
+                        .map_err(|_| ApiError::bad("启用时间须为 RFC3339 格式"))
+                })
+                .transpose()?
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            if !(1..=3650).contains(&input.duration_days) {
+                return Err(ApiError::bad("有效时长须为 1 至 3650 天"));
+            }
+            let expires = available_at
+                .checked_add(input.duration_days.saturating_mul(86_400_000))
+                .ok_or_else(|| ApiError::bad("有效时长无效"))?;
+            for id in &ids {
+                s.storage
+                    .grant_virtual_reset_credits_scheduled(
+                        id,
+                        &format!("batch-grant-{}-{}", uuid::Uuid::new_v4(), id),
+                        input.quantity,
+                        input.note.trim(),
+                        available_at,
+                        Some(expires),
+                    )
+                    .await?;
+            }
+        }
+        _ => return Err(ApiError::bad("批量操作类型无效")),
+    }
+    Ok(Json(json!({"ok":true,"affected":ids.len()})))
+}
 pub async fn detail(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     Ok(Json(dto(&s, &require(&s, &id).await?).await?))
 }
@@ -151,6 +254,83 @@ pub async fn usage(State(s): State<AdminState>, Path(id): Path<String>) -> ApiRe
         json!({"summary":s.storage.virtual_usage_summary(&id).await?,"quota":s.storage.virtual_quota(&id).await?}),
     ))
 }
+pub async fn reset_credits(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+    require(&s, &id).await?;
+    Ok(Json(s.storage.virtual_reset_credit_records(&id).await?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetGrant {
+    request_id: String,
+    quantity: i64,
+    #[serde(default)]
+    note: String,
+    #[serde(default)]
+    activate_at: Option<String>,
+    #[serde(default = "default_reset_duration_days")]
+    duration_days: i64,
+}
+fn default_reset_duration_days() -> i64 {
+    30
+}
+pub async fn grant_reset_credits(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Json(input): Json<ResetGrant>,
+) -> ApiResult {
+    require(&s, &id).await?;
+    let available_at = input
+        .activate_at
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| {
+            chrono::DateTime::parse_from_rfc3339(v)
+                .map(|d| d.timestamp_millis())
+                .map_err(|_| ApiError::bad("启用时间须为 RFC3339 格式"))
+        })
+        .transpose()?
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    if !(1..=3650).contains(&input.duration_days) {
+        return Err(ApiError::bad("有效时长须为 1 至 3650 天"));
+    }
+    let expires_at = available_at
+        .checked_add(input.duration_days.saturating_mul(86_400_000))
+        .ok_or_else(|| ApiError::bad("有效时长无效"))?;
+    s.storage
+        .grant_virtual_reset_credits_scheduled(
+            &id,
+            &input.request_id,
+            input.quantity,
+            input.note.trim(),
+            available_at,
+            Some(expires_at),
+        )
+        .await?;
+    Ok(Json(s.storage.virtual_reset_credit_records(&id).await?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetConsume {
+    redeem_request_id: String,
+    credit_id: String,
+}
+pub async fn consume_reset_credit(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Json(input): Json<ResetConsume>,
+) -> ApiResult {
+    require(&s, &id).await?;
+    Ok(Json(
+        s.storage
+            .consume_virtual_reset_credit(
+                &id,
+                &input.redeem_request_id,
+                Some(&input.credit_id),
+                "admin",
+            )
+            .await?,
+    ))
+}
 pub async fn devices(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     require(&s, &id).await?;
     Ok(Json(
@@ -234,6 +414,7 @@ pub async fn records(
     if !matches!(
         q.kind.as_str(),
         "task"
+            | "realtime_call"
             | "conversation"
             | "connector_catalog"
             | "task_turn"

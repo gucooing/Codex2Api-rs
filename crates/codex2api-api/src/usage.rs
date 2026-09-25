@@ -228,8 +228,13 @@ impl RequestLog {
     pub fn upstream_failure(&mut self, error: &codex2api_upstream::UpstreamError) {
         use codex2api_upstream::UpstreamError as E;
         match error {
-            E::Status { status, body } => {
+            E::Status {
+                status,
+                body,
+                headers,
+            } => {
                 self.http_status(*status);
+                self.response_headers(headers);
                 let mut parser = BodyParser::default();
                 parser.feed(body.as_bytes(), false, self);
                 parser.end(false, self);
@@ -1309,6 +1314,7 @@ mod tests {
                     log.upstream_failure(&codex2api_upstream::UpstreamError::Status {
                         status: 400,
                         body: body.into(),
+                        headers: http::HeaderMap::new(),
                     });
                 } else {
                     let chunks = body

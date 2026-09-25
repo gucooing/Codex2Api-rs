@@ -34,6 +34,7 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/suppliers/{id}/credits/consume", post(suppliers::credit))
         .route("/suppliers/{id}/relogin", post(suppliers::relogin))
         .route("/consumers", get(consumers::list).post(consumers::create))
+        .route("/consumers/batch", post(consumers::batch))
         .route(
             "/consumers/{id}",
             get(consumers::detail)
@@ -41,6 +42,14 @@ pub(crate) fn router(state: AdminState) -> Router {
                 .delete(consumers::delete),
         )
         .route("/consumers/{id}/usage", get(consumers::usage))
+        .route(
+            "/consumers/{id}/reset-credits",
+            get(consumers::reset_credits).post(consumers::grant_reset_credits),
+        )
+        .route(
+            "/consumers/{id}/reset-credits/consume",
+            post(consumers::consume_reset_credit),
+        )
         .route("/consumers/{id}/configs", get(consumers::configs))
         .route("/consumers/{id}/plugins", get(consumers::plugins))
         .route("/consumers/{id}/connectors", get(consumers::connectors))

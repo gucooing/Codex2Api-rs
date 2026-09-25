@@ -54,6 +54,20 @@ async fn workspace_details_are_local_readonly_and_show_credential_invalidation()
     );
     assert_eq!(ready["routing"]["constraint"], "us");
     assert!(ready["routing"].get("auth_revision").is_none());
+    let unconstrained = codex2api_storage::QuotaSnapshot {
+        value: json!({"accounts":[{"id":"selected","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"us_cr"}]}),
+        observed_at: chrono::Utc::now(),
+    };
+    assert!(
+        f.storage
+            .store_supplier_routing_snapshot(&account.id, revision, &unconstrained)
+            .await
+            .unwrap()
+    );
+    let ready = f.get(&path).await;
+    assert_eq!(ready["routing"]["status"], "ready");
+    assert_eq!(ready["routing"]["backend_origin"], "https://chatgpt.com");
+    assert_eq!(ready["routing"]["constraint"], "us_cr");
     let credential = codex2api_auth::persist::chatgpt_auth(
         "id".into(),
         "access".into(),

@@ -106,78 +106,106 @@ impl Storage {
         anchor: i64,
         now: i64,
     ) -> Result<Vec<Value>> {
-        let Some(root) = rules.first() else {
-            return Ok(Vec::new());
-        };
-        let root_start = anchor
-            .checked_add(
-                now.saturating_sub(anchor).max(0) / root.duration_seconds * root.duration_seconds,
-            )
-            .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
-        let from_ms = root_start
-            .checked_mul(1000)
-            .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
-        let until_ms = now
-            .checked_add(1)
-            .and_then(|v| v.checked_mul(1000))
-            .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
-        let usage: Vec<(i64, Option<i64>)> = sqlx::query_as(
-            "SELECT requested_at_ms, cost_nano_usd FROM usage_records
-             WHERE subject_id=? AND requested_at_ms>=? AND requested_at_ms<?
-             ORDER BY requested_at_ms,id",
+        let mut connection = self.pool().acquire().await?;
+        windows_on(&mut connection, owner, rules, anchor, now).await
+    }
+}
+
+pub(crate) async fn windows_on(
+    connection: &mut sqlx::SqliteConnection,
+    owner: &str,
+    rules: &[SpendingWindow],
+    anchor: i64,
+    now: i64,
+) -> Result<Vec<Value>> {
+    let Some(root) = rules.first() else {
+        return Ok(Vec::new());
+    };
+    // A card restarts the quota clock, independently of subscription expiration.
+    // Old in-flight requests retain their original timestamp and stay out of the
+    // new windows even if their historical bill settles after redemption.
+    let reset: Option<(String,i64)> = sqlx::query_as(
+            "SELECT c.id,c.redeemed_at_ms FROM virtual_reset_credits c JOIN virtual_accounts a ON a.quota_reset_credit_id=c.id AND a.id=c.virtual_account_id WHERE a.id=? AND c.redeemed_at_ms<?",
         )
         .bind(owner)
-        .bind(from_ms)
-        .bind(until_ms)
-        .fetch_all(self.pool())
+        .bind(now.saturating_add(1).saturating_mul(1000))
+        .fetch_optional(&mut *connection)
         .await?;
-        let mut parent_start = Some(root_start);
-        let mut parent_end = None;
-        let mut parent_remaining: Option<i64> = None;
-        let mut result = Vec::with_capacity(rules.len());
-        for (depth, rule) in rules.iter().enumerate() {
-            let start = if depth == 0 {
-                Some(root_start)
-            } else if let Some(parent_start) = parent_start {
-                let mut start = None;
-                for (at_ms, _) in &usage {
-                    let at = at_ms.div_euclid(1000);
-                    if at < parent_start {
-                        continue;
-                    }
-                    if start.is_none_or(|previous: i64| {
-                        at.saturating_sub(previous) >= rule.duration_seconds
-                    }) {
-                        start = Some(at);
-                    }
+    let reset_at = reset.as_ref().map(|(_, at)| *at);
+    let anchor = reset_at.map_or(anchor, |reset| anchor.max(reset.div_euclid(1000)));
+    let root_start = anchor
+        .checked_add(
+            now.saturating_sub(anchor).max(0) / root.duration_seconds * root.duration_seconds,
+        )
+        .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
+    let from_ms = root_start
+        .checked_mul(1000)
+        .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
+    let from_ms = reset_at.map_or(from_ms, |reset| from_ms.max(reset));
+    let until_ms = now
+        .checked_add(1)
+        .and_then(|v| v.checked_mul(1000))
+        .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
+    let usage: Vec<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT requested_at_ms, cost_nano_usd FROM usage_records
+             WHERE subject_id=? AND requested_at_ms>=? AND requested_at_ms<?
+             AND (? IS NULL OR quota_reset_credit_id=?)
+             ORDER BY requested_at_ms,id",
+    )
+    .bind(owner)
+    .bind(from_ms)
+    .bind(until_ms)
+    .bind(reset.as_ref().map(|(id, _)| id))
+    .bind(reset.as_ref().map(|(id, _)| id))
+    .fetch_all(&mut *connection)
+    .await?;
+    let mut parent_start = Some(root_start);
+    let mut parent_end = None;
+    let mut parent_remaining: Option<i64> = None;
+    let mut result = Vec::with_capacity(rules.len());
+    for (depth, rule) in rules.iter().enumerate() {
+        let start = if depth == 0 {
+            Some(root_start)
+        } else if let Some(parent_start) = parent_start {
+            let mut start = None;
+            for (at_ms, _) in &usage {
+                let at = at_ms.div_euclid(1000);
+                if at < parent_start {
+                    continue;
                 }
-                start.filter(|start| now.saturating_sub(*start) < rule.duration_seconds)
-            } else {
-                None
-            };
-            let end = start
-                .map(|start| {
-                    start
-                        .checked_add(rule.duration_seconds)
-                        .map(|end| parent_end.map_or(end, |parent: i64| parent.min(end)))
-                        .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))
-                })
-                .transpose()?;
-            let used = usage
-                .iter()
-                .filter(|(at, _)| start.is_some_and(|start| at.div_euclid(1000) >= start))
-                .try_fold(0_i64, |sum, (_, cost)| sum.checked_add(cost.unwrap_or(0)))
-                .ok_or_else(|| StorageError::Constraint("额度用量超出金额范围".into()))?;
-            let limit = rule
-                .cost_limit_usd
-                .as_deref()
-                .and_then(|v| crate::decimal_units(v, 9));
-            let remaining = limit.map(|limit| limit.saturating_sub(used).max(0));
-            let effective_remaining = match (parent_remaining, remaining) {
-                (Some(parent), Some(own)) => Some(parent.min(own)),
-                (parent, own) => parent.or(own),
-            };
-            result.push(json!({
+                if start.is_none_or(|previous: i64| {
+                    at.saturating_sub(previous) >= rule.duration_seconds
+                }) {
+                    start = Some(at);
+                }
+            }
+            start.filter(|start| now.saturating_sub(*start) < rule.duration_seconds)
+        } else {
+            None
+        };
+        let end = start
+            .map(|start| {
+                start
+                    .checked_add(rule.duration_seconds)
+                    .map(|end| parent_end.map_or(end, |parent: i64| parent.min(end)))
+                    .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))
+            })
+            .transpose()?;
+        let used = usage
+            .iter()
+            .filter(|(at, _)| start.is_some_and(|start| at.div_euclid(1000) >= start))
+            .try_fold(0_i64, |sum, (_, cost)| sum.checked_add(cost.unwrap_or(0)))
+            .ok_or_else(|| StorageError::Constraint("额度用量超出金额范围".into()))?;
+        let limit = rule
+            .cost_limit_usd
+            .as_deref()
+            .and_then(|v| crate::decimal_units(v, 9));
+        let remaining = limit.map(|limit| limit.saturating_sub(used).max(0));
+        let effective_remaining = match (parent_remaining, remaining) {
+            (Some(parent), Some(own)) => Some(parent.min(own)),
+            (parent, own) => parent.or(own),
+        };
+        result.push(json!({
                 "depth":depth,"limit_window_seconds":rule.duration_seconds,
                 "started_at":start,"reset_at":end,"reset_after_seconds":end.map(|v|v-now),
                 "used_percent":limit.map(|limit|if limit==0 {100_i64} else {(i128::from(used)*100/i128::from(limit)).clamp(0,100) as i64}),
@@ -186,12 +214,11 @@ impl Storage {
                 "remaining_usd":remaining.map(|v|crate::format_units(v,9)),
                 "effective_remaining_usd":effective_remaining.map(|v|crate::format_units(v,9)),
             }));
-            parent_start = start;
-            parent_end = end;
-            parent_remaining = effective_remaining;
-        }
-        Ok(result)
+        parent_start = start;
+        parent_end = end;
+        parent_remaining = effective_remaining;
     }
+    Ok(result)
 }
 
 #[cfg(test)]

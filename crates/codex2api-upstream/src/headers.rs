@@ -231,7 +231,7 @@ mod tests {
         let identity = AccountIdentity::new("a", "installation", HostRuntime::generate());
         let headers = default_headers(&identity, "token", Some("account")).unwrap();
         assert_eq!(headers["originator"], "codex_cli_rs");
-        assert_eq!(headers["version"], "0.156.1");
+        assert_eq!(headers["version"], "0.157.0");
         assert_eq!(headers["authorization"], "Bearer token");
         assert_eq!(headers["chatgpt-account-id"], "account");
         assert_eq!(

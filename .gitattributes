@@ -1,1 +1,3 @@
 /frontend/** text=auto eol=lf
+# SQLx hashes migration bytes. Keep release and local builds identical on Windows.
+/crates/codex2api-storage/migrations/*.sql text eol=lf

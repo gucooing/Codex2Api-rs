@@ -31,7 +31,11 @@ pub async fn call(
         &ctx.account,
         &key.id,
         &key.name,
-        "/v1/realtime/calls",
+        if kind == RealtimeKind::Wham {
+            "/backend-api/wham/realtime/calls"
+        } else {
+            "/v1/realtime/calls"
+        },
         "http",
     );
     if let Some(model) = &models.transcription_model {
@@ -76,44 +80,68 @@ pub async fn call(
             log.wrap(response),
         ));
     }
-    log.finish(if response.status().is_success() {
-        "submitted"
-    } else {
-        "failed"
-    });
-    {
-        crate::providers::chatgpt::identity::quota_headers(
-            &state.storage,
-            &virtual_id,
-            &mut response_headers,
-        )
-        .await?;
-        if response.status().is_success()
-            && let Some(location) = response_headers
-                .get("location")
-                .and_then(|h| h.to_str().ok())
-            && let Some(call_id) = location
-                .split('?')
-                .next()
-                .and_then(|s| s.rsplit('/').next())
-                .filter(|s| !s.is_empty())
-        {
-            state
-                        .storage
-                        .save_virtual_resource(
-                            &virtual_id,
-                            "realtime_call",
-                            call_id,
-                            Some(&ctx.account.id),
-                            &serde_json::json!({"id":call_id,"model":model,"transcription_model":models.transcription_model}),
-                        )
-                        .await?;
+    let call_id = response_headers
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|location| location.split('?').next())
+        .and_then(|path| path.rsplit('/').next())
+        .filter(|id| {
+            kind != RealtimeKind::Wham
+                || id
+                    .strip_prefix("rtc_")
+                    .is_some_and(|suffix| !suffix.is_empty())
+        })
+        .filter(|id| {
+            codex2api_upstream::realtime_url(RealtimeKind::CodexSideband, Some(id), None).is_ok()
+        })
+        .map(str::to_owned);
+    let Some(call_id) = call_id else {
+        log.failure(
+            "invalid_realtime_response",
+            "上游语音响应缺少有效的通话标识",
+        );
+        log.finish("failed");
+        return Err(crate::ApiError::openai(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "api_error",
+            "Upstream realtime response has no valid call ID.",
+            Some("invalid_realtime_response"),
+        ));
+    };
+    let status = response.status();
+    let answer = match response.bytes().await {
+        Ok(answer) => answer,
+        Err(error) => {
+            let error = codex2api_upstream::UpstreamError::from(error);
+            log.upstream_failure(&error);
+            return Err(error.into());
         }
+    };
+    if answer.is_empty() || std::str::from_utf8(&answer).is_err() {
+        log.failure("invalid_realtime_response", "上游语音响应未提供 SDP 文本");
+        log.finish("failed");
+        return Err(crate::ApiError::openai(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "api_error",
+            "Upstream realtime response has no SDP text.",
+            Some("invalid_realtime_response"),
+        ));
     }
+    state.storage.save_virtual_resource(
+        &virtual_id, "realtime_call", &call_id, Some(&ctx.account.id),
+        &serde_json::json!({"id":call_id,"model":model,"transcription_model":models.transcription_model,"status":"created","created_at_ms":chrono::Utc::now().timestamp_millis()}),
+    ).await?;
+    log.finish("submitted");
+    crate::providers::chatgpt::identity::quota_headers(
+        &state.storage,
+        &virtual_id,
+        &mut response_headers,
+    )
+    .await?;
     Ok(crate::response::forward_response(
-        response.status(),
+        status,
         response_headers,
-        Body::from_stream(response.bytes_stream()),
+        Body::from(answer),
     ))
 }
 

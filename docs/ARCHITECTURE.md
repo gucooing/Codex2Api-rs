@@ -3,12 +3,20 @@
 Implementation is aligned with official Codex:
 
 - repo: https://github.com/openai/codex
-- commit: `b412ff32c417f855c2b2d1581b77058eed87c84b`
-- date: 2026-09-23T00:45:44Z
+- commit: `00c972ed5d6ff6499317fd41b7f23605b8e6850d`
+- date: 2026-09-24T18:33:35-07:00
 - snapshot: `reference/codex`
 - constants: `crates/codex2api-version`
 
 Official source is reference only. Do not depend on `codex-rs` crates.
+
+The 0.157.0 implementation and validation record is in [CODEX_UPDATE_PLAN.md](CODEX_UPDATE_PLAN.md).
+The per-request inventory and remaining behavior differences are in
+[CODEX_REQUEST_AUDIT.md](CODEX_REQUEST_AUDIT.md); this baseline does not imply
+that every official product capability has an implemented virtual-account backend.
+Virtual workspace discovery returns `NO_CONSTRAINT` for all client surfaces so
+native routing retains the configured service origin. The native reader requires
+an HTTPS bootstrap address; `CODEX2API_PUBLIC_BASE_URL` does not enable TLS.
 
 ## Process
 
@@ -82,6 +90,11 @@ where the column was already manually removed, while retaining all usage rows an
 If the usage table itself was removed while migration history remains, that migration
 recreates the empty table and its indexes without changing account or credential tables.
 
+Migration SQL is checked out as LF through `.gitattributes`: SQLx hashes the raw
+file bytes, so Windows CRLF conversion otherwise breaks validation against a
+database created by an LF release build. Preserve applied checksums; fixing line
+endings must not rewrite SQL or the database migration history.
+
 Account identity (`installation_id`, originator, User-Agent, OS/arch), official CLI HTTP fingerprint, and tokens are stored on the account SQLite row / `supplier_tokens`. There is no per-account `$CODEX_HOME` directory. Isolation is a database row, not a filesystem tree.
 
 HTTP fingerprint is application-layer only (same headers Codex CLI sends): `originator`, `User-Agent`, `x-codex-installation-id`, plus this account's cookie jar. It is captured once at account creation and reused; it is not a forged TLS/JA3 device fingerprint.
@@ -131,6 +144,8 @@ OAuth 管理分为“账户管理”和“套餐管理”。套餐按业务自�
 迁移 `0027_virtual_plans.sql` 将旧账户实际生效的模型范围和两个额度窗口（原账号额度与套餐额度取较低者）合并为可复用套餐，相同配置共用一条套餐。原免费层规则、账户有效期、身份和消费历史保持不变。旧配置行作为历史保留，运行时和管理端均从套餐表读取，旧账户配置写入入口拒绝写入这些字段。
 
 ### 订阅账户运营规则（用户于 2026-09-21 明确）
+
+虚拟账户重置卡的协议、数据和验证见 [重置卡](RESET_CREDITS.md)。用户于 2026-09-25 确认，用卡同时清零用量和重新开始刷新周期，订阅到期时间不变。
 
 本系统按 ChatGPT 订阅账户的方式运营每个虚拟账户，区别是由管理员手动发放订阅，替代官方的购买订阅流程。订阅发放、续期、套餐变更、有效期和权益属于服务端业务数据，不能仅作为客户端展示资料。网页操作、SQLite 中的有效订阅、客户端身份/权益响应、请求执行限制必须一致；到期后不再享有已到期订阅的权益。到期后的免费层访问按服务策略处理，与停用账户登录分开。
 
@@ -378,7 +393,7 @@ From `reference/codex` at the pinned commit:
 
 - originator: `codex_cli_rs` (constant)
 - User-Agent formula (official `get_codex_user_agent`): `{originator}/{CARGO_PKG_VERSION} ({os_type} {os_version}; {arch}) {terminal_token}`
-- UA version token is the packaged release `0.156.1` (constant)
+- UA version token is the packaged release `0.157.0` (constant)
 - OS / arch / version / terminal are rolled once per account from official `os_info` + terminal-detection value sets, then frozen on that account row. Same account always sends the same UA. Do not read the proxy host.
 - ChatGPT Codex base: `https://chatgpt.com/backend-api/codex`
 - Responses path: `/responses`

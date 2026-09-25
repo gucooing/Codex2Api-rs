@@ -26,27 +26,9 @@ pub async fn forward(
         }
     }
     let local = match endpoint {
-        BackendEndpoint::Accounts => {
-            let mut value = crate::providers::chatgpt::identity::workspace_check(&account);
-            // Actual Desktop net.fetch uses Chromium's UA; some request profiles
-            // use its surface UA. Native OAuth uses the CLI UA with an OS version.
-            let desktop = headers
-                .get("user-agent")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|ua| {
-                    (ua.starts_with("Mozilla/") && ua.contains("Chrome/"))
-                        || (ua.starts_with("Codex Desktop/")
-                            && ua.split_once(" (").is_some_and(|(_, tail)| {
-                                ["Windows; ", "macOS; ", "Linux; "]
-                                    .iter()
-                                    .any(|os| tail.starts_with(os))
-                            }))
-                });
-            if desktop {
-                value["accounts"][0]["workspace_backend_origin"] = "NO_CONSTRAINT".into();
-            }
-            Some(value)
-        }
+        BackendEndpoint::Accounts => Some(crate::providers::chatgpt::identity::workspace_check(
+            &account,
+        )),
         BackendEndpoint::Profile => {
             let stats = state.storage.virtual_usage_summary(&account.id).await?;
             let display = state
@@ -97,7 +79,10 @@ pub async fn forward(
             quota.as_object_mut().unwrap().remove("billing");
             // The installed Desktop reader only accepts the official primary and
             // secondary fields; the full nested summary stays server-side.
-            quota.as_object_mut().unwrap().remove("windows");
+            quota["rate_limit"]
+                .as_object_mut()
+                .unwrap()
+                .remove("windows");
             for key in ["primary_window", "secondary_window"] {
                 if let Some(window) = quota["rate_limit"][key].as_object_mut() {
                     window.retain(|key, _| {
@@ -113,21 +98,32 @@ pub async fn forward(
             }
             Some(quota)
         }
-        BackendEndpoint::Credits => {
-            let credits = state
-                .storage
-                .virtual_resources(&account.id, "reset_credit")
-                .await?;
-            let count = credits
-                .iter()
-                .filter(|v| v["status"] == "available")
-                .count();
-            Some(serde_json::json!({"credits":credits,"available_count":count}))
-        }
+        BackendEndpoint::Credits => Some(state.storage.virtual_reset_credits(&account.id).await?),
         BackendEndpoint::ConsumeCredit => {
-            return Err(crate::ApiError::bad_request(
-                "Virtual Token quotas do not use supplier reset credits.",
-            ));
+            #[derive(serde::Deserialize)]
+            struct Consume {
+                redeem_request_id: String,
+                credit_id: Option<String>,
+            }
+            let input: Consume = serde_json::from_slice(&body)
+                .map_err(|_| crate::ApiError::bad_request("Invalid reset credit request."))?;
+            Some(
+                state
+                    .storage
+                    .consume_virtual_reset_credit(
+                        &account.id,
+                        &input.redeem_request_id,
+                        input.credit_id.as_deref(),
+                        "client",
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        codex2api_storage::StorageError::InvalidAdminUpdate(message) => {
+                            crate::ApiError::bad_request(message)
+                        }
+                        other => other.into(),
+                    })?,
+            )
         }
         BackendEndpoint::Tasks
         | BackendEndpoint::Task

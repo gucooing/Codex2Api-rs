@@ -7,7 +7,10 @@ const targets=readTargets(archive),bytes=fs.readFileSync(archive),offset=8+bytes
 const sources=Object.fromEntries(Object.entries(targets).map(([kind,file])=>{const entry=tree.files['.vite'].files.build.files[file.replaceAll('\\','/').split('/').pop()];const start=offset+Number(entry.offset);return[kind,bytes.subarray(start,start+entry.size).toString('utf8')];}));
 for(const kind of ['main','native'])assert.throws(()=>transform('unrecognized client',kind));
 const originalStart=sources.main.indexOf('isDesktopAuthAllowedUrl(e){'),originalEnd=sources.main.indexOf('isVsCodeFetchRequest(',originalStart);
-const context={URL,a:{_t:()=>proxy},__codex2apiDesktopHook:{policy}};
+const originalGuard=sources.main.slice(originalStart,originalEnd);
+const configRead=originalGuard.match(/return ([\w$]+)\.([\w$]+)\(this\.options,``\),/);
+assert(configRead,'Installed Desktop authorization guard dependency changed');
+const context={URL,[configRead[1]]:{[configRead[2]]:()=>proxy},__codex2apiDesktopHook:{policy}};
 const original=vm.runInNewContext('({'+sources.main.slice(originalStart,originalEnd)+'})',context);
 const hooked=transform(sources.main,'main'),start=hooked.indexOf('isDesktopAuthAllowedUrl(e){'),end=hooked.indexOf('isVsCodeFetchRequest(',start);
 const guard=vm.runInNewContext('({'+hooked.slice(start,end)+'})',context);
@@ -22,9 +25,17 @@ assert(native.includes('bindNative(this,this.messageDelivery)'));
 assert(native.includes('nativeLaunch(await '));
 const launchStart=native.indexOf('async connect(){let e=this.options.hostConfig.kind'),launchEnd=native.indexOf('getIoStatsSnapshot()',launchStart);
 assert(launchStart>=0&&launchEnd>launchStart);
-const launch=vm.runInNewContext('({'+native.slice(launchStart,launchEnd)+'})',{
+const launchSource=native.slice(launchStart,launchEnd);
+const resolveRuntime=launchSource.match(/nativeLaunch\(await ([\w$]+)\(this\.options,e\)/);
+const controlSocket=launchSource.match(/\(0,([\w$]+)\.join\)\(([\w$]+)\(\),`app-server-control`/);
+const stdioTransport=launchSource.match(/this\.kind=`stdio`,new ([\w$]+)\(/);
+assert(resolveRuntime&&controlSocket&&stdioTransport,'Installed native launch dependencies changed');
+const launch=vm.runInNewContext('({'+launchSource+'})',{
   __codex2apiDesktopHook:{nativeLaunch:async options=>({...options,args:[...options.args,'mapped-addresses']})},
-  vQ:async()=>({executablePath:'original-native',args:['app-server']}),s:{join:(...s)=>s.join('/')},gM:()=>'/default-home',process:{platform:'win32',env:{}},mQ:class{constructor(options){this.options=options;}}
+  [resolveRuntime[1]]:async()=>({executablePath:'original-native',args:['app-server']}),
+  [controlSocket[1]]:require('node:path'),[controlSocket[2]]:()=>'/default-home',
+  process:{platform:'win32',env:{}},
+  [stdioTransport[1]]:class{constructor(options){this.options=options;}}
 });
 (async()=>{
   const launched=await launch.connect.call({options:{hostConfig:{kind:'local'}},ioStatsTracker:{}});

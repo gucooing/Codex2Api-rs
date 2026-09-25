@@ -2,7 +2,7 @@
   "session": {
     "authenticated": true,
     "app_version": "v0.0.9",
-    "codex_cli_version": "0.156.1",
+    "codex_cli_version": "0.157.0",
     "username": "admin",
     "csrf_token": "session-csrf-token"
   },
@@ -271,7 +271,7 @@
         "enabled": true,
         "revision": 1,
         "codex_metadata_status": "verified",
-        "codex_metadata_source": "b412ff32c417f855c2b2d1581b77058eed87c84b",
+        "codex_metadata_source": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
         "token_prices": [
           {
             "tier": "fast",
@@ -331,7 +331,7 @@
         "enabled": true,
         "revision": 1,
         "codex_metadata_status": "verified",
-        "codex_metadata_source": "b412ff32c417f855c2b2d1581b77058eed87c84b",
+        "codex_metadata_source": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
         "token_prices": [
           {
             "tier": "fast",
@@ -391,7 +391,7 @@
         "enabled": true,
         "revision": 1,
         "codex_metadata_status": "verified",
-        "codex_metadata_source": "b412ff32c417f855c2b2d1581b77058eed87c84b",
+        "codex_metadata_source": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
         "token_prices": [
           {
             "tier": "fast",
@@ -451,7 +451,7 @@
         "enabled": true,
         "revision": 1,
         "codex_metadata_status": "verified",
-        "codex_metadata_source": "b412ff32c417f855c2b2d1581b77058eed87c84b",
+        "codex_metadata_source": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
         "token_prices": [
           {
             "tier": "fast",
@@ -787,6 +787,9 @@
         "has_credits": false,
         "unlimited": false,
         "balance": null
+      },
+      "rate_limit_reset_credits": {
+        "available_count": 0
       },
       "billing": {
         "currency": "USD",

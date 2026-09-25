@@ -25,6 +25,7 @@ mod password;
 mod proxy;
 mod quota;
 mod remote_servers;
+mod reset_credits;
 mod settings;
 mod spending_windows;
 mod storage;

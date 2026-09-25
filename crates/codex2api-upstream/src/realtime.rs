@@ -11,6 +11,8 @@ pub enum RealtimeKind {
     Realtime,
     Live,
     CodexSideband,
+    /// Desktop renderer-owned call creation, separate from the CLI Codex route.
+    Wham,
 }
 
 pub fn realtime_url(
@@ -18,6 +20,11 @@ pub fn realtime_url(
     call_id: Option<&str>,
     query: Option<&str>,
 ) -> Result<reqwest::Url> {
+    if kind == RealtimeKind::Wham {
+        return Err(UpstreamError::InvalidRequest(
+            "WHAM realtime creates calls; attach using the returned call ID".into(),
+        ));
+    }
     if kind == RealtimeKind::CodexSideband {
         let id = call_id
             .ok_or_else(|| UpstreamError::InvalidRequest("Missing realtime call ID".into()))?;
@@ -202,24 +209,15 @@ impl UpstreamClient {
         body: Bytes,
         inbound: HeaderMap,
     ) -> Result<reqwest::Response> {
-        let mut url =
-            reqwest::Url::parse("https://chatgpt.com/backend-api/codex/realtime/calls").unwrap();
-        append_realtime_query(&mut url, query)?;
-        if kind == RealtimeKind::Live {
-            let pairs: Vec<(String, String)> = url
-                .query_pairs()
-                .filter(|(k, _)| k != "intent" && k != "architecture")
-                .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                .collect();
-            url.set_query(None);
-            url.query_pairs_mut()
-                .extend_pairs(pairs)
-                .append_pair("intent", "quicksilver")
-                .append_pair("architecture", "avas");
-        }
+        let url = realtime_call_url(kind, query)?;
         let prepared = prepare_call(body, &inbound, &self.identity().installation_id).await?;
-        self.send_prepared(Method::POST, url.as_str(), prepared, true)
-            .await
+        self.send_prepared(
+            Method::POST,
+            url.as_str(),
+            prepared,
+            kind != RealtimeKind::Wham,
+        )
+        .await
     }
 
     pub(crate) async fn realtime_auth_headers(
@@ -248,9 +246,197 @@ impl UpstreamClient {
     }
 }
 
+fn realtime_call_url(kind: RealtimeKind, query: Option<&str>) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(if kind == RealtimeKind::Wham {
+        "https://chatgpt.com/backend-api/wham/realtime/calls"
+    } else {
+        "https://chatgpt.com/backend-api/codex/realtime/calls"
+    })
+    .unwrap();
+    append_realtime_query(&mut url, query)?;
+    if kind == RealtimeKind::Live {
+        let pairs: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(k, _)| k != "intent" && k != "architecture")
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        url.set_query(None);
+        url.query_pairs_mut()
+            .extend_pairs(pairs)
+            .append_pair("intent", "quicksilver")
+            .append_pair("architecture", "avas");
+    }
+    Ok(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn desktop_wham_calls_keep_the_actual_request_and_return_sdp_and_call_id() {
+        use codex2api_accounts::{AccountIdentity, HostRuntime};
+        use std::io::Write;
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+
+        let archive = std::env::var("CODEX2API_TEST_DESKTOP_ASAR").ok();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/windows/Test-DesktopRealtimeContract.cjs");
+        let requests = if let Some(archive) = &archive {
+            let output = std::process::Command::new("node")
+                .arg(&script)
+                .arg(archive)
+                .arg("--requests")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()["requests"]
+                .as_array()
+                .unwrap()
+                .clone()
+        } else {
+            ["quicksilver=v1", "quicksilver=v2"].into_iter().map(|alpha| json!({
+                "path":"/wham/realtime/calls?intent=quicksilver&architecture=avas",
+                "headers":{"openai-alpha":alpha,"thread-id":"thread-fixture","session-id":"session-fixture"},
+                "body":{"sdp":"v=0\r\ns=offer\r\n","session":{"model":"gpt-realtime-1.5","audio":{"output":{"voice":"marin"}}}}
+            })).collect()
+        };
+        crate::proxy_fixture::server_tls();
+        let cert = CertificateDer::from_pem_slice(include_bytes!(
+            "../../codex2api-auth/tests/fixtures/proxy-chatgpt-server.pem"
+        ))
+        .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(include_bytes!(
+            "../../codex2api-auth/tests/fixtures/proxy-server-key.pem"
+        ))
+        .unwrap();
+        let tls = tokio_rustls::TlsAcceptor::from(Arc::new(
+            tokio_rustls::rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .unwrap(),
+        ));
+        let (listener, address) = crate::proxy_fixture::listener().await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut tcp, _) = listener.accept().await.unwrap();
+                assert_eq!(
+                    crate::proxy_fixture::http_tunnel(&mut tcp).await,
+                    "chatgpt.com:443"
+                );
+                let mut socket = tls.accept(tcp).await.unwrap();
+                let headers = crate::proxy_fixture::read_headers(&mut socket)
+                    .await
+                    .unwrap()
+                    .to_ascii_lowercase();
+                let size: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                let mut body = vec![0; size];
+                socket.read_exact(&mut body).await.unwrap();
+                tx.send((headers, serde_json::from_slice::<Value>(&body).unwrap()))
+                    .await
+                    .unwrap();
+                let answer = "v=0\r\ns=fixture\r\n";
+                socket.write_all(format!("HTTP/1.1 201 Created\r\nContent-Type: application/sdp\r\nContent-Length: {}\r\nLocation: /backend-api/wham/realtime/calls/rtc_fixture\r\nConnection: close\r\n\r\n{answer}", answer.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let mut client = UpstreamClient::new(
+            AccountIdentity::new("fixture", "installation-fixture", HostRuntime::generate()),
+            "supplier-fixture".into(),
+            Some("workspace-fixture".into()),
+        )
+        .unwrap();
+        let proxy = format!("http://user:pass@{address}");
+        let mut clients = codex2api_auth::transport::AccountHttpClients::with_proxy(
+            client.identity(),
+            Some(&proxy),
+        )
+        .unwrap();
+        // Keep fixture trust local to this client, so parallel tests retain
+        // their own trust roots and transport configuration.
+        clients.api = codex2api_auth::transport::http_builder()
+            .unwrap()
+            .use_rustls_tls()
+            .proxy(reqwest::Proxy::all(proxy).unwrap())
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(include_bytes!(
+                    "../../codex2api-auth/tests/fixtures/proxy-chatgpt-ca.pem"
+                ))
+                .unwrap(),
+            )
+            .cookie_provider(clients.cookies.clone())
+            .build()
+            .unwrap();
+        client.use_account_http(Arc::new(clients));
+        for request in requests {
+            let mut headers = HeaderMap::new();
+            for (key, value) in request["headers"].as_object().unwrap() {
+                headers.insert(
+                    http::HeaderName::from_bytes(key.as_bytes()).unwrap(),
+                    HeaderValue::from_str(value.as_str().unwrap()).unwrap(),
+                );
+            }
+            let response = client
+                .forward_realtime_call(
+                    RealtimeKind::Wham,
+                    request["path"]
+                        .as_str()
+                        .unwrap()
+                        .split_once('?')
+                        .map(|(_, q)| q),
+                    Bytes::from(request["body"].to_string()),
+                    headers.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 201);
+            let location = response.headers()["location"].to_str().unwrap().to_owned();
+            let answer = response.text().await.unwrap();
+            let (wire, body) = rx.recv().await.unwrap();
+            assert!(wire.starts_with(
+                "post /backend-api/wham/realtime/calls?intent=quicksilver&architecture=avas "
+            ));
+            assert!(wire.contains("authorization: bearer supplier-fixture"));
+            assert!(wire.contains("chatgpt-account-id: workspace-fixture"));
+            assert!(!wire.contains("\r\nversion:") && !wire.contains("\r\noriginator:"));
+            assert!(wire.contains(&format!(
+                "openai-alpha: {}",
+                headers["openai-alpha"].to_str().unwrap()
+            )));
+            assert_eq!(body, request["body"]);
+            assert_eq!(answer, "v=0\r\ns=fixture\r\n");
+            if let Some(archive) = &archive {
+                let mut child = std::process::Command::new("node")
+                    .arg(&script)
+                    .arg(archive)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child.stdin.take().unwrap().write_all(json!({"status":201,"body":answer,"location":location,"call_id":"rtc_fixture"}).to_string().as_bytes()).unwrap();
+                let output = child.wait_with_output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        server.await.unwrap();
+    }
     #[tokio::test]
     async fn realtime_call_supports_sdp_json_and_official_multipart() {
         let mut headers = HeaderMap::new();
@@ -327,5 +513,21 @@ mod tests {
                 .path(),
             "/v1/realtime"
         );
+        assert_eq!(
+            realtime_call_url(
+                RealtimeKind::Wham,
+                Some("intent=quicksilver&architecture=avas&authorization=caller")
+            )
+            .unwrap()
+            .as_str(),
+            "https://chatgpt.com/backend-api/wham/realtime/calls?intent=quicksilver&architecture=avas",
+        );
+        assert_eq!(
+            realtime_call_url(RealtimeKind::Realtime, None)
+                .unwrap()
+                .as_str(),
+            "https://chatgpt.com/backend-api/codex/realtime/calls",
+        );
+        assert!(realtime_url(RealtimeKind::Wham, None, None).is_err());
     }
 }

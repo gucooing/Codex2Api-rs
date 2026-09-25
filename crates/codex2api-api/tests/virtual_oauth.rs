@@ -13,6 +13,345 @@ use tower::ServiceExt;
 const ROOT: &str = "/api/oauth/chatgpt";
 
 #[tokio::test]
+async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usage() {
+    use serde_json::json;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("reset-contract.sqlite"))
+        .await
+        .unwrap();
+    let (app, account) = fixture(&storage).await;
+    let mut plan = storage
+        .virtual_plan(&account.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.config["primary_cost_limit_usd"] = json!(1);
+    plan.config["weekly_cost_limit_usd"] = json!(2);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    storage
+        .grant_virtual_reset_credits(&account.id, "grant", 2, "private administration only")
+        .await
+        .unwrap();
+    let login = login(&app).await;
+    let token = login["access_token"].as_str().unwrap();
+    let mut record = UsageRecord {
+        id: "reset-usage".into(),
+        subject_id: account.id.clone(),
+        model: Some("gpt-6-astra".into()),
+        endpoint: "/v1/responses".into(),
+        requested_at_ms: chrono::Utc::now().timestamp_millis(),
+        status: "in_progress".into(),
+        ..Default::default()
+    };
+    storage.insert_usage(&record).await.unwrap();
+    record.input_tokens = Some(100000);
+    record.output_tokens = Some(0);
+    record.status = "completed".into();
+    storage.finish_usage(&record).await.unwrap();
+    let mut sample = json!({"account_id":account.id,"access_token":token,"generation":false,"extra_routes":{},"reset_cases":{}});
+    for (key, path) in [
+        ("workspace", "/backend-api/wham/accounts/check"),
+        ("quota", "/backend-api/wham/usage"),
+        ("models", "/backend-api/codex/models"),
+        ("config", "/backend-api/wham/config/bundle"),
+        ("settings", "/backend-api/wham/settings/user"),
+        (
+            "credits_before_reset",
+            "/backend-api/wham/rate-limit-reset-credits",
+        ),
+    ] {
+        let r = app
+            .clone()
+            .oneshot(client_json("GET", path, token, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK, "{path}");
+        sample[key] = json_body(r).await;
+    }
+    assert_eq!(
+        sample["quota"]["rate_limit_reset_credits"],
+        json!({"available_count":2})
+    );
+    assert_eq!(sample["quota"]["rate_limit"]["allowed"], false);
+    assert!(sample["quota"]["rate_limit"].get("windows").is_none());
+    assert!(sample["quota"].get("billing").is_none());
+    for key in ["primary_window", "secondary_window"] {
+        let window = &sample["quota"]["rate_limit"][key];
+        assert_eq!(window.as_object().unwrap().len(), 4);
+        assert!(window["used_percent"].is_i64());
+    }
+    let cards = sample["credits_before_reset"].clone();
+    assert_eq!(cards.as_object().unwrap().len(), 3);
+    assert_eq!(cards["total_earned_count"], 2);
+    assert!(!cards.to_string().contains("private administration only"));
+    let card = cards["credits"][0]["id"].as_str().unwrap();
+    // All official compatibility mounts return the same data, without a supplier request.
+    for prefix in ["/wham", "/api/codex", "/v1/api/codex", "/v1/wham"] {
+        let r = app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/rate-limit-reset-credits"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(json_body(r).await, cards);
+    }
+    let path = "/backend-api/wham/rate-limit-reset-credits/consume";
+    for bad in [
+        json!({}),
+        json!({"redeem_request_id":""}),
+        json!({"redeem_request_id":42}),
+        json!({"redeem_request_id":"bad","credit_id":" "}),
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(client_json("POST", path, token, bad))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for (label, body) in [
+        (
+            "reset-use",
+            json!({"redeem_request_id":"reset-use","credit_id":card}),
+        ),
+        (
+            "reset-retry",
+            json!({"redeem_request_id":"reset-use","credit_id":card}),
+        ),
+        ("reset-empty", json!({"redeem_request_id":"reset-empty"})),
+        (
+            "reset-missing",
+            json!({"redeem_request_id":"reset-missing","credit_id":"not-this-account"}),
+        ),
+    ] {
+        let r = app
+            .clone()
+            .oneshot(client_json("POST", path, token, body))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        sample["reset_cases"][label] = json_body(r).await;
+    }
+    assert_eq!(sample["reset_cases"]["reset-use"]["code"], "reset");
+    assert_eq!(sample["reset_cases"]["reset-use"]["windows_reset"], 2);
+    assert_eq!(
+        sample["reset_cases"]["reset-retry"]["code"],
+        "already_redeemed"
+    );
+    assert_eq!(
+        sample["reset_cases"]["reset-empty"]["code"],
+        "nothing_to_reset"
+    );
+    assert_eq!(sample["reset_cases"]["reset-missing"]["code"], "no_credit");
+    for (key, path) in [
+        ("quota_after_reset", "/backend-api/wham/usage"),
+        (
+            "credits_after_reset",
+            "/backend-api/wham/rate-limit-reset-credits",
+        ),
+    ] {
+        let r = app
+            .clone()
+            .oneshot(client_json("GET", path, token, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        sample[key] = json_body(r).await;
+    }
+    assert_eq!(
+        sample["quota_after_reset"]["rate_limit"]["primary_window"]["used_percent"],
+        0
+    );
+    assert_eq!(sample["quota_after_reset"]["rate_limit"]["allowed"], true);
+    assert_eq!(sample["credits_after_reset"]["available_count"], 1);
+    assert_eq!(sample["quota_after_reset"]["account_id"], account.id);
+    assert_eq!(
+        storage
+            .virtual_account(&account.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .subscription_expires_at,
+        account.subscription_expires_at
+    );
+    sample["extra_routes"]["/backend-api/wham/rate-limit-reset-credits"] =
+        json!({"status":200,"body":cards});
+    let script_root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/windows");
+    let mut commands = Vec::new();
+    if let Ok(asar) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
+        let mut command = std::process::Command::new("node");
+        command
+            .arg(script_root.join("Test-DesktopResetCredits.cjs"))
+            .arg(asar);
+        commands.push(command);
+    }
+    for variable in [
+        "CODEX2API_TEST_NATIVE_UPDATE",
+        "CODEX2API_TEST_DESKTOP_NATIVE",
+    ] {
+        if let Ok(native) = std::env::var(variable) {
+            let mut command = std::process::Command::new("python");
+            command
+                .arg(script_root.join("Test-NativeUpdateContract.py"))
+                .env("CODEX2API_TEST_NATIVE_UPDATE", native)
+                .env("PYTHONIOENCODING", "utf-8");
+            commands.push(command);
+        }
+    }
+    for mut command in commands {
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(sample.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+}
+
+#[tokio::test]
+async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_client() {
+    use serde_json::json;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("native-update.sqlite"))
+        .await
+        .unwrap();
+    let (app, account) = fixture(&storage).await;
+    let mut plan = storage
+        .virtual_plan(&account.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.config["primary_cost_limit_usd"] = json!(5);
+    plan.config["weekly_cost_limit_usd"] = json!(10);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    let tokens = login(&app).await;
+    let token = tokens["access_token"].as_str().unwrap();
+    let mut sample =
+        json!({"account_id":account.id,"access_token":token,"generation":true,"extra_routes":{}});
+    for (key, path) in [
+        ("workspace", "/backend-api/wham/accounts/check"),
+        ("quota", "/backend-api/wham/usage"),
+        ("models", "/backend-api/codex/models"),
+        ("config", "/backend-api/wham/config/bundle"),
+        ("settings", "/backend-api/wham/settings/user"),
+        ("plugins", "/backend-api/ps/plugins/installed"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(client_json("GET", path, token, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        sample[key] = json_body(response).await;
+    }
+    assert_eq!(
+        sample["workspace"]["accounts"][0]["workspace_backend_origin"],
+        "NO_CONSTRAINT"
+    );
+    assert_eq!(sample["workspace"]["accounts"][0]["id"], account.id);
+    assert!(!sample["models"]["models"].as_array().unwrap().is_empty());
+    assert!(sample["quota"]["rate_limit"]["primary_window"]["used_percent"].is_i64());
+    if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
+        let mut child = std::process::Command::new("node")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-DesktopWorkspaceContract.cjs"),
+            )
+            .arg(archive)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(sample["workspace"].to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    for path in [
+        "/backend-api/wham/rate-limit-reset-credits",
+        "/backend-api/ps/plugins/suggested/codex",
+        "/backend-api/plugins/featured",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(client_json("GET", path, token, Value::Null))
+            .await
+            .unwrap();
+        let status = response.status();
+        assert!(
+            matches!(status, StatusCode::OK | StatusCode::NOT_IMPLEMENTED),
+            "{path}: {status}"
+        );
+        sample["extra_routes"][path] =
+            json!({"status":status.as_u16(),"body":json_body(response).await});
+    }
+    if std::env::var_os("CODEX2API_TEST_NATIVE_UPDATE").is_some() {
+        let mut child = std::process::Command::new("python")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-NativeUpdateContract.py"),
+            )
+            .env("PYTHONIOENCODING", "utf-8")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(sample.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+}
+
+#[tokio::test]
 async fn model_policy_covers_token_inspection_realtime_and_native_preparation_before_forwarding() {
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
@@ -34,6 +373,11 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
     for (path, body, status) in [
+        (
+            "/backend-api/wham/realtime/calls?intent=quicksilver&architecture=avas",
+            json!({"sdp":"v=0","session":{"model":"not-entitled"}}),
+            StatusCode::FORBIDDEN,
+        ),
         (
             "/v1/responses/input_tokens",
             json!({"model":"not-entitled","input":[]}),
@@ -4010,7 +4354,7 @@ async fn desktop_profile_has_virtual_identity_and_persistent_local_statistics() 
     assert_eq!(workspace["accounts"][0]["is_openai_internal"], false);
     assert_eq!(
         workspace["accounts"][0]["workspace_backend_origin"],
-        "https://chatgpt.com"
+        "NO_CONSTRAINT"
     );
 }
 async fn record_usage(

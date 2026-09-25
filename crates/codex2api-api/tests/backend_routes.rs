@@ -34,6 +34,7 @@ async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_offi
         (Method::GET, "/tasks/task-1/turns/turn-1/sibling_turns"),
         (Method::POST, "/usage/thread_usage/query"),
         (Method::POST, "/usage/thread-estimates/query"),
+        (Method::POST, "/realtime/calls"),
     ] {
         for prefix in [
             "/backend-api/wham",

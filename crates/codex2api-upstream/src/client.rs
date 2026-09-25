@@ -773,7 +773,7 @@ mod tests {
             }
             assert_eq!(received_headers["authorization"], "Bearer test-token");
             assert_eq!(received_headers["originator"], "codex_cli_rs");
-            assert_eq!(received_headers["version"], "0.156.1");
+            assert_eq!(received_headers["version"], "0.157.0");
             for name in ["forwarded", "via", "x-forwarded-for", "x-custom"] {
                 assert!(!received_headers.contains_key(name), "{name}");
             }

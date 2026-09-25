@@ -2,7 +2,7 @@
 //!
 //! Talks to official Codex servers with the same application-layer request
 //! identity as a logged-in Codex CLI at commit
-//! `b412ff32c417f855c2b2d1581b77058eed87c84b`.
+//! `00c972ed5d6ff6499317fd41b7f23605b8e6850d`.
 //!
 //! Transport uses stock reqwest and the pinned WebSocket transport dependencies.
 //! This crate does not spoof TLS/JA3.

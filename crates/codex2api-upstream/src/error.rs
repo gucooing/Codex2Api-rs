@@ -22,8 +22,14 @@ pub enum UpstreamError {
     Unauthorized,
     #[error("failed to refresh access token: {0}")]
     Refresh(#[source] AuthError),
-    #[error("upstream returned HTTP {status}: {body}")]
-    Status { status: u16, body: String },
+    // The protocol body is kept intact; Display is deliberately content-free.
+    // Callers record a separate bounded, redacted diagnostic in the usage ledger.
+    #[error("upstream returned HTTP {status}")]
+    Status {
+        status: u16,
+        body: String,
+        headers: http::HeaderMap,
+    },
     #[error("invalid header value: {0}")]
     InvalidHeader(#[from] http::header::InvalidHeaderValue),
     #[error("SSE stream error: {0}")]
@@ -48,30 +54,60 @@ pub enum UpstreamError {
 
 impl UpstreamError {
     pub fn status(status: reqwest::StatusCode, body: impl Into<String>) -> Self {
-        let body = truncate_body(body.into());
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            Self::Unauthorized
-        } else {
-            Self::Status {
-                status: status.as_u16(),
-                body,
-            }
+        Self::status_with_headers(status, body, http::HeaderMap::new())
+    }
+
+    pub fn status_with_headers(
+        status: reqwest::StatusCode,
+        body: impl Into<String>,
+        headers: http::HeaderMap,
+    ) -> Self {
+        Self::Status {
+            status: status.as_u16(),
+            body: body.into(),
+            headers,
         }
     }
 
     pub fn is_unauthorized(&self) -> bool {
-        matches!(self, Self::Unauthorized)
+        matches!(self, Self::Unauthorized | Self::Status { status: 401, .. })
     }
 }
 
-fn truncate_body(body: String) -> String {
-    const MAX: usize = 4096;
-    if body.len() <= MAX {
-        body
-    } else {
-        let mut cut = body;
-        cut.truncate(MAX);
-        cut.push('…');
-        cut
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_preserves_long_unicode_json_and_classifies_unauthorized_without_logging_content() {
+        let body = serde_json::json!({"error":{
+            "code":"invalid_prompt", "message":"中文🦀".repeat(700)
+        }})
+        .to_string();
+        for status in [
+            reqwest::StatusCode::BAD_REQUEST,
+            reqwest::StatusCode::UNAUTHORIZED,
+        ] {
+            let error = UpstreamError::status(status, body.clone());
+            assert_eq!(
+                error.is_unauthorized(),
+                status == reqwest::StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                error.to_string(),
+                format!("upstream returned HTTP {}", status.as_u16())
+            );
+            let UpstreamError::Status {
+                body: preserved, ..
+            } = error
+            else {
+                panic!("missing HTTP error")
+            };
+            assert_eq!(preserved, body);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&preserved).unwrap()["error"]["code"],
+                "invalid_prompt"
+            );
+        }
     }
 }

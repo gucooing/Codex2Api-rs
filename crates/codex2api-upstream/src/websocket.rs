@@ -207,15 +207,23 @@ impl UpstreamClient {
                         &mut response.headers().get_all("set-cookie").iter(),
                         &cookie_url,
                     );
-                    if response.status() == http::StatusCode::UNAUTHORIZED && !retried && sideband {
+                    if response.status() == http::StatusCode::UNAUTHORIZED
+                        && !retried
+                        && sideband
+                        && self.auth_service().is_some()
+                    {
                         retried = true;
-                        self.refresh_access_token(&token).await?;
-                        continue;
+                        if self.refresh_access_token(&token).await.is_ok() {
+                            continue;
+                        }
+                        // Keep the rejected handshake's status, body and headers
+                        // when auth recovery itself cannot repair the request.
                     }
                     self.record_http_status(response.status().as_u16()).await;
-                    return Err(UpstreamError::status(
+                    return Err(UpstreamError::status_with_headers(
                         response.status(),
                         String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()),
+                        response.headers().clone(),
                     ));
                 }
                 Err(error) => {
@@ -282,7 +290,7 @@ mod tests {
                     crate::proxy_fixture::read_headers(&mut tls).await.unwrap();
                     let body =
                         r#"{"error":{"code":"temporary_denial","message":"fixture denial"}}"#;
-                    tls.write_all(format!("HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\nSet-Cookie: __oailb=retry-route; Path=/; Secure\r\nSet-Cookie: chatgpt_session=must-not-store; Path=/; Secure\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    tls.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\nRetry-After: 7\r\nX-Request-Id: request-fixture\r\nX-Error-Json: {{\"error\":{{\"code\":\"temporary_denial\"}}}}\r\nSet-Cookie: __oailb=retry-route; Path=/; Secure\r\nSet-Cookie: chatgpt_session=must-not-store; Path=/; Secure\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                 } else {
                     let mut ws = tokio_tungstenite::accept_hdr_async_with_config(tls, move |request: &tungstenite::handshake::server::Request, response: tungstenite::handshake::server::Response| {
                         if index == 1 {
@@ -324,7 +332,16 @@ mod tests {
                 .await
                 .unwrap();
                 assert!(
-                    matches!(result, Err(UpstreamError::Status { status:403, ref body }) if body.contains("temporary_denial"))
+                    matches!(result, Err(UpstreamError::Status { status:401, ref body, .. }) if body.contains("temporary_denial"))
+                );
+                let Err(UpstreamError::Status { headers, .. }) = &result else {
+                    unreachable!()
+                };
+                assert_eq!(headers["retry-after"], "7");
+                assert_eq!(headers["x-request-id"], "request-fixture");
+                assert_eq!(
+                    headers["x-error-json"],
+                    r#"{"error":{"code":"temporary_denial"}}"#
                 );
                 let cookie = client
                     .cookies
@@ -495,7 +512,7 @@ mod tests {
         .unwrap();
         let request = rx.await.unwrap();
         assert_eq!(request["authorization"], "Bearer upstream-token");
-        assert_eq!(request["version"], "0.156.1");
+        assert_eq!(request["version"], "0.157.0");
         assert_eq!(request["user-agent"], expected_ua);
         assert_eq!(request["thread-id"], "thread");
         assert_eq!(request["x-codex-turn-state"], "state");

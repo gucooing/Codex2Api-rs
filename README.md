@@ -12,11 +12,13 @@
 
 当前实现对齐的官方版本：
 
-- 发布版: `0.156.1`（tag `rust-v0.156.1`，commit `b412ff32c417f855c2b2d1581b77058eed87c84b`）
-- 源码快照: `b412ff32c417f855c2b2d1581b77058eed87c84b`（2026-09-23T00:45:44Z）
-- User-Agent 版本写死为 `0.156.1`，不用源码树的 `0.0.0`
+- 发布版: `0.157.0`（tag `rust-v0.157.0`，commit `00c972ed5d6ff6499317fd41b7f23605b8e6850d`）
+- 源码快照: `00c972ed5d6ff6499317fd41b7f23605b8e6850d`（2026-09-24T18:33:35-07:00）
+- User-Agent 版本写死为 `0.157.0`，不用源码树的 `0.0.0`
 - 常量 crate: `crates/codex2api-version`
 - 架构说明: `docs/ARCHITECTURE.md`
+
+本次更新与验证见[实施记录](docs/CODEX_UPDATE_PLAN.md)，已登记的每条请求及剩余行为差异见[请求审计](docs/CODEX_REQUEST_AUDIT.md)。这是已支持接口的协议基线，不代表文件、云插件等全部官方产品能力已实现。[临时启动测试](docs/LOCAL_TEST.md)使用独立测试库；原生 Codex/ Desktop 连接需要实际 HTTPS 入口。
 
 数据用 SQLite（默认 `data/codex2api.sqlite`）。管理端只有一个管理员，账户密码登录，首次启动默认 `admin` / `admin`。
 

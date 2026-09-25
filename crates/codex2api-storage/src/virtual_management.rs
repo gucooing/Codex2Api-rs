@@ -629,8 +629,9 @@ impl Storage {
         let secondary = active_inner
             .and_then(|_| windows.first().cloned())
             .unwrap_or(Value::Null);
+        let reset_count = self.virtual_reset_credit_count(owner).await?;
         Ok(
-            json!({"account_id":account.id,"user_id":format!("user-{}",account.id),"plan_type":account.effective_plan_at(now),"rate_limit":{"allowed":allowed,"limit_reached":!allowed,"primary_window":primary,"secondary_window":secondary,"windows":windows},"credits":{"has_credits":false,"unlimited":false,"balance":null},"billing":billing}),
+            json!({"account_id":account.id,"user_id":format!("user-{}",account.id),"plan_type":account.effective_plan_at(now),"rate_limit":{"allowed":allowed,"limit_reached":!allowed,"primary_window":primary,"secondary_window":secondary,"windows":windows},"credits":{"has_credits":false,"unlimited":false,"balance":null},"rate_limit_reset_credits":{"available_count":reset_count},"billing":billing}),
         )
     }
     pub async fn virtual_config(&self, owner: &str, key: &str) -> Result<VirtualClientState> {

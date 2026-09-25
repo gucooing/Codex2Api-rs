@@ -88,6 +88,49 @@ impl Storage {
                 .await?,
         )
     }
+
+    /// Resolve a filter in SQLite so administrative bulk operations never need
+    /// to materialize every matching account in the browser.
+    pub async fn virtual_account_ids_matching(
+        &self,
+        search: &str,
+        enabled: Option<bool>,
+        subscription: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let now = Utc::now().timestamp();
+        let mut query = String::from("SELECT id FROM virtual_accounts WHERE 1=1");
+        let mut binds: Vec<String> = Vec::new();
+        if !search.trim().is_empty() {
+            query.push_str(" AND (instr(lower(username),lower(?))>0 OR instr(lower(name),lower(?))>0 OR instr(lower(email),lower(?))>0)");
+            binds.extend([
+                search.trim().to_owned(),
+                search.trim().to_owned(),
+                search.trim().to_owned(),
+            ]);
+        }
+        if let Some(enabled) = enabled {
+            query.push_str(if enabled {
+                " AND enabled=1"
+            } else {
+                " AND enabled=0"
+            });
+        }
+        match subscription {
+            Some("free") => query.push_str(" AND plan_type='free'"),
+            Some("active") => query.push_str(" AND plan_type!='free' AND (subscription_expires_at IS NULL OR unixepoch(subscription_expires_at)>?)"),
+            Some("expired") => query.push_str(" AND plan_type!='free' AND subscription_expires_at IS NOT NULL AND unixepoch(subscription_expires_at)<=?"),
+            Some("") | None => {}
+            Some(_) => return Err(StorageError::Constraint("订阅筛选条件无效".into())),
+        }
+        let mut q = sqlx::query_scalar::<_, String>(&query);
+        for bind in binds {
+            q = q.bind(bind);
+        }
+        if matches!(subscription, Some("active") | Some("expired")) {
+            q = q.bind(now);
+        }
+        Ok(q.fetch_all(self.pool()).await?)
+    }
     pub async fn virtual_account(&self, id: &str) -> Result<Option<VirtualAccount>> {
         Ok(sqlx::query_as("SELECT * FROM virtual_accounts WHERE id=?")
             .bind(id)

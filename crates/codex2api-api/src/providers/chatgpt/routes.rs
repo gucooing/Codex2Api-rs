@@ -484,6 +484,10 @@ fn codex_routes() -> Router<ApiState> {
 fn backend_routes() -> Router<ApiState> {
     Router::new()
         .route(
+            "/realtime/calls",
+            post(realtime::call).layer(Extension(RealtimeKind::Wham)),
+        )
+        .route(
             "/settings/configs/user-preferences",
             get(handlers::virtual_operations::cloud_preferences_schema),
         )

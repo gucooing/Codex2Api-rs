@@ -2,6 +2,38 @@ mod common;
 use axum::http::StatusCode;
 use common::*;
 use serde_json::{Value, json};
+
+#[tokio::test]
+async fn realtime_creation_records_are_readonly_and_scoped_to_the_consumer() {
+    let f = Fixture::new().await;
+    let owner = f.consumer("voice-owner").await;
+    let other = f.consumer("voice-other").await;
+    let id = owner["id"].as_str().unwrap();
+    let call = json!({"id":"rtc_fixture","model":"gpt-live-1-codex","transcription_model":null,"status":"created","created_at_ms":1234});
+    f.storage
+        .save_virtual_resource(id, "realtime_call", "rtc_fixture", None, &call)
+        .await
+        .unwrap();
+    let path = format!("/admin/api/consumers/{id}/records?kind=realtime_call");
+    let response = f.get(&path).await;
+    assert_eq!(response["items"].as_array().unwrap().len(), 1);
+    assert_eq!(response["items"][0]["value"], call);
+    let empty = f
+        .get(&format!(
+            "/admin/api/consumers/{}/records?kind=realtime_call",
+            other["id"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(empty["items"], json!([]));
+    assert_eq!(
+        f.with_auth("GET", &path, Value::Null, None, None)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(!f.request("POST", &path, call).await.status().is_success());
+}
+
 #[tokio::test]
 async fn consumers_are_provider_fixed_and_never_expose_passwords() {
     let f = Fixture::new().await;

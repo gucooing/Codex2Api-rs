@@ -5,6 +5,14 @@ import { atPath } from "./domain";
 
 type Column = readonly [string, readonly string[], "date"?];
 const columns: Record<string, readonly Column[]> = {
+  realtime_call: [
+    ["通话标识", ["id"]],
+    ["模型", ["model"]],
+    ["转录模型", ["transcription_model"]],
+    ["创建结果", ["status"]],
+    ["供应账户", ["source"]],
+    ["创建时间", ["created_at_ms"], "date"],
+  ],
   task_execution: [
     ["任务", ["task_id"]],
     ["模型", ["model"]],
@@ -114,6 +122,7 @@ const operationColumns: readonly Column[] = [
   ["记录时间", ["updated_at_ms", "created_at_ms", "received_at_ms"], "date"],
 ];
 const statusLabels: Record<string, string> = {
+  created: "已创建",
   completed: "已完成",
   finished_successfully: "已完成",
   in_progress: "进行中",

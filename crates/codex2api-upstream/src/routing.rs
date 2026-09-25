@@ -39,15 +39,23 @@ impl WorkspaceRoute {
         let origin = entry["workspace_backend_origin"]
             .as_str()
             .ok_or_else(|| invalid("workspace backend origin is missing"))?;
-        let url = reqwest::Url::parse(origin)
-            .map_err(|_| invalid("workspace backend origin is invalid"))?;
+        // Official discovery uses this sentinel for an unconstrained backend.
+        // It keeps the configured bootstrap origin; it is not a malformed URL.
+        let unconstrained = origin == "NO_CONSTRAINT";
+        let url = reqwest::Url::parse(if unconstrained {
+            codex2api_version::CHATGPT_BACKEND_BASE_URL
+        } else {
+            origin
+        })
+        .map_err(|_| invalid("workspace backend origin is invalid"))?;
         if url.scheme() != "https"
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
-            || url.path() != "/"
+            || (!unconstrained && url.path() != "/")
             || url.query().is_some()
             || url.fragment().is_some()
+            || origin.trim() != origin
         {
             return Err(invalid(
                 "workspace backend must be an HTTPS origin without credentials",
@@ -296,6 +304,10 @@ mod tests {
             }
         }
         for origin in [
+            "",
+            " NO_CONSTRAINT",
+            "https://regional.example ",
+            " https://regional.example",
             "http://regional.example",
             "https://user@regional.example",
             "https://regional.example/path",
@@ -327,6 +339,34 @@ mod tests {
         assert!(WorkspaceRoute::from_accounts(&value, "other").is_err());
     }
 
+    #[test]
+    fn unconstrained_backend_preserves_official_destinations_and_routing_constraints() {
+        for constraint in ["NO_CONSTRAINT", "us", "us_cr"] {
+            let route =
+                WorkspaceRoute::from_accounts(&accounts("NO_CONSTRAINT", constraint), "selected")
+                    .unwrap();
+            assert_eq!(route.backend_origin, "https://chatgpt.com");
+            for endpoint in [
+                crate::Endpoint::Responses,
+                crate::Endpoint::Compact,
+                crate::Endpoint::Guardian,
+                crate::Endpoint::GuardianClassifier,
+            ] {
+                for scheme in ["https", "wss"] {
+                    let url = endpoint.url().replacen("https", scheme, 1);
+                    let mut headers = HeaderMap::new();
+                    assert_eq!(route.apply(&url, &mut headers).unwrap(), url);
+                    assert_eq!(
+                        headers
+                            .get(ROUTING_HEADER)
+                            .map(|value| value.to_str().unwrap()),
+                        (constraint != "NO_CONSTRAINT").then_some(constraint),
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn persisted_routing_rejects_stale_discovery_and_invalidates_existing_connections() {
         let path =
@@ -354,7 +394,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut snapshot = QuotaSnapshot {
-            value: accounts("https://regional.example", "us"),
+            value: accounts("NO_CONSTRAINT", "us"),
             observed_at: Utc::now(),
         };
         assert!(

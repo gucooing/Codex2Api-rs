@@ -31,9 +31,11 @@ pub fn optimized_account_check(account: &VirtualAccount) -> Value {
 
 pub fn workspace_check(account: &VirtualAccount) -> Value {
     // WHAM workspace discovery is an array; ChatGPT account checks are keyed by account ID.
-    // Native OAuth workspace discovery requires a backend origin URL.
+    // Official native and Desktop readers both support this sentinel. It keeps
+    // the client's configured service origin instead of routing virtual tokens
+    // to chatgpt.com. Native workspace discovery requires an HTTPS base URL.
     let mut workspace = identity(account);
-    workspace["workspace_backend_origin"] = "https://chatgpt.com".into();
+    workspace["workspace_backend_origin"] = "NO_CONSTRAINT".into();
     workspace["account_routing_override"] = "NO_CONSTRAINT".into();
     workspace["account_user_id"] = format!("user-{}", account.id).into();
     workspace["account_user_role"] = "account-owner".into();

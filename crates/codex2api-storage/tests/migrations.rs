@@ -49,6 +49,82 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn startup_preserves_release_lf_checksums_and_rejects_changed_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("release-line-endings.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    // Release builds hash LF bytes. A Windows checkout containing CRLF used to
+    // pass fresh-database tests but failed to open this same migration history.
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .map(|migration| {
+                    sqlx::migrate::Migration::new(
+                        migration.version,
+                        migration.description.clone(),
+                        migration.migration_type,
+                        Cow::Owned(migration.sql.replace("\r\n", "\n")),
+                        migration.no_tx,
+                    )
+                })
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO meta(key,value) VALUES('migration_fixture','preserved')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before: Vec<(i64, Vec<u8>)> =
+        sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+
+    let storage = Storage::open(&path)
+        .await
+        .expect("Windows builds must accept unchanged LF release migrations");
+    let after: Vec<(i64, Vec<u8>)> =
+        sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(after, before, "startup must not rewrite applied checksums");
+    let marker: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='migration_fixture'")
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(marker, "preserved");
+
+    // Only corrupt the disposable fixture. Real SQL edits must still be rejected.
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=? WHERE version=1")
+        .bind(vec![0_u8; 48])
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    storage.close().await;
+    assert!(matches!(
+        Storage::open(&path).await,
+        Err(codex2api_storage::StorageError::Migration(
+            sqlx::migrate::MigrateError::VersionMismatch(1)
+        ))
+    ));
+}
+
+#[tokio::test]
 async fn supplier_routing_migration_preserves_credentials_and_marks_legacy_snapshots_unverified() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("routing-v38.sqlite");

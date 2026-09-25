@@ -70,10 +70,11 @@ import {
 } from "@/components/ui/dialog";
 import { useActions, useErrorToast } from "@/lib/actions";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { date } from "@/lib/format";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Plus, Search, RotateCcw, RefreshCw, ArrowRight } from "lucide-react";
 import {
   request,
@@ -107,6 +108,13 @@ export function ConsumersPage() {
   const [filters, setFilters] = useState(empty);
   const [applied, setApplied] = useState(empty);
   const [view, setView] = useState<"table" | "cards">("table");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
+  const [batchDialog, setBatchDialog] = useState<"grant_reset" | "reset" | "delete" | null>(null);
+  const [grantActivateAt, setGrantActivateAt] = useState("");
+  const [grantDuration, setGrantDuration] = useState("30");
+  const [grantQuantity, setGrantQuantity] = useState("1");
+  const [grantNote, setGrantNote] = useState("");
   const all = resource.data?.items ?? [];
   const items = all.filter(
     (account) =>
@@ -117,6 +125,36 @@ export function ConsumersPage() {
       (!applied.subscription || account.subscription_status === applied.subscription),
   );
   const pagination = useTablePagination(items, applied, resource.data !== undefined);
+  const pageIds = pagination.rows.map((account) => account.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const selectionCount = selectAllMatching ? items.length : selected.size;
+  const togglePage = (checked: boolean | "indeterminate") => {
+    const next = new Set(selected);
+    pageIds.forEach((id) => (checked === true ? next.add(id) : next.delete(id)));
+    setSelected(next);
+    setSelectAllMatching(false);
+  };
+  const batchFilters = {
+    search: applied.search,
+    status: applied.status,
+    subscription: applied.subscription,
+  };
+  const runBatch = async (operation: string, values: Record<string, unknown> = {}) => {
+    await request("/consumers/batch", {
+      method: "POST",
+      body: {
+        operation,
+        ids: selectAllMatching ? [] : [...selected],
+        all_matching: selectAllMatching,
+        filters: batchFilters,
+        ...values,
+      },
+    });
+    setSelected(new Set());
+    setSelectAllMatching(false);
+    setBatchDialog(null);
+    resource.reload();
+  };
   const accountActions = (account: Consumer) => (
     <div className="flex flex-wrap items-center gap-2">
       <Button variant="outline" size="sm" asChild>
@@ -131,6 +169,24 @@ export function ConsumersPage() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onSelect={() => {
+              setSelected(new Set([account.id]));
+              setSelectAllMatching(false);
+              setBatchDialog("reset");
+            }}
+          >
+            重置用量
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              setSelected(new Set([account.id]));
+              setSelectAllMatching(false);
+              setBatchDialog("grant_reset");
+            }}
+          >
+            发放重置卡
+          </DropdownMenuItem>
           <DropdownMenuItem
             variant={true ? "destructive" : "default"}
             disabled={false || actions.isBusy("components\\consumers.tsx:action:1")}
@@ -165,6 +221,8 @@ export function ConsumersPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
+              setSelected(new Set());
+              setSelectAllMatching(false);
               resource.reload();
             }}
           >
@@ -311,6 +369,8 @@ export function ConsumersPage() {
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
+                  setSelected(new Set());
+                  setSelectAllMatching(false);
                   resource.reload();
                 }}
               >
@@ -320,6 +380,53 @@ export function ConsumersPage() {
             </div>
           </form>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                aria-label="选择当前页账户"
+                checked={allPageSelected}
+                onCheckedChange={togglePage}
+              />
+              <span className="text-sm text-muted-foreground">选择账户</span>
+            </div>
+            {selectionCount > 0 && (
+              <>
+                <Badge variant="secondary">已选择 {selectionCount} 个</Badge>
+                {!selectAllMatching && items.length > pageIds.length && allPageSelected && (
+                  <Button
+                    size="sm"
+                    variant="link"
+                    type="button"
+                    onClick={() => setSelectAllMatching(true)}
+                  >
+                    选择当前筛选的全部 {items.length} 个
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => setBatchDialog("reset")}
+                >
+                  重置
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => setBatchDialog("grant_reset")}
+                >
+                  发放重置卡
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  type="button"
+                  onClick={() => setBatchDialog("delete")}
+                >
+                  删除
+                </Button>
+              </>
+            )}
             <Button
               type="button"
               variant="ghost"
@@ -364,7 +471,7 @@ export function ConsumersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {["虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "操作"].map(
+                  {["选择", "虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "操作"].map(
                     (label) => (
                       <TableHead key={label} scope="col">
                         {label}
@@ -378,6 +485,18 @@ export function ConsumersPage() {
                   <>
                     {pagination.rows.map((account) => (
                       <TableRow key={account.id}>
+                        <TableCell>
+                          <Checkbox
+                            aria-label={`选择 ${account.name}`}
+                            checked={selected.has(account.id)}
+                            onCheckedChange={(checked) => {
+                              const next = new Set(selected);
+                              if (checked === true) next.add(account.id); else next.delete(account.id);
+                              setSelected(next);
+                              setSelectAllMatching(false);
+                            }}
+                          />
+                        </TableCell>
                         <TableCell>
                           <Link href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}>
                             <strong>{account.name}</strong>
@@ -411,7 +530,8 @@ export function ConsumersPage() {
                   <TableRow>
                     <TableCell
                       colSpan={
-                        ["虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "操作"].length
+                        ["选择", "虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "操作"]
+                          .length
                       }
                     >
                       <Empty>
@@ -427,6 +547,16 @@ export function ConsumersPage() {
               {pagination.rows.map((account) => (
                 <Card key={account.id}>
                   <CardContent className="space-y-4">
+                    <Checkbox
+                      aria-label={`选择 ${account.name}`}
+                      checked={selected.has(account.id)}
+                      onCheckedChange={(checked) => {
+                        const next = new Set(selected);
+                        if (checked === true) next.add(account.id); else next.delete(account.id);
+                        setSelected(next);
+                        setSelectAllMatching(false);
+                      }}
+                    />
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <Link href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}>
@@ -549,6 +679,116 @@ export function ConsumersPage() {
           </PaginationItem>
         </PaginationContent>
       </Pagination>
+      <Dialog
+        open={batchDialog !== null}
+        onOpenChange={(open) => {
+          if (!open && !actions.running.size) setBatchDialog(null);
+        }}
+      >
+        <DialogContent showCloseButton={false} aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>
+              {batchDialog === "grant_reset"
+                ? "发放重置卡"
+                : batchDialog === "reset"
+                  ? "重置用量"
+                  : "删除虚拟账户"}
+            </DialogTitle>
+          </DialogHeader>
+          {batchDialog === "grant_reset" && (
+            <div className="grid gap-3">
+              <Field>
+                <FieldLabel>发放数量（每个账户）</FieldLabel>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={grantQuantity}
+                  onChange={(e) => setGrantQuantity(e.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel>启用时间</FieldLabel>
+                <Input
+                  type="datetime-local"
+                  value={grantActivateAt}
+                  onChange={(e) => setGrantActivateAt(e.target.value)}
+                />
+                <FieldDescription>留空表示立即启用；启用前客户端不会看到重置卡。</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel>有效时长</FieldLabel>
+                <Select value={grantDuration} onValueChange={setGrantDuration}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 天</SelectItem>
+                    <SelectItem value="7">7 天</SelectItem>
+                    <SelectItem value="30">30 天</SelectItem>
+                    <SelectItem value="90">90 天</SelectItem>
+                    <SelectItem value="365">365 天</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>从启用时间开始计算，默认 30 天。</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel>管理备注</FieldLabel>
+                <Input
+                  maxLength={256}
+                  value={grantNote}
+                  onChange={(e) => setGrantNote(e.target.value)}
+                />
+              </Field>
+            </div>
+          )}
+          {batchDialog !== "grant_reset" && (
+            <CardDescription>
+              {batchDialog === "delete"
+                ? `将删除 ${selectionCount} 个账户并撤销登录，历史记录也会随账户删除。`
+                : `将为 ${selectionCount} 个账户清零当前用量并重新开始额度周期，订阅到期时间不变。`}
+            </CardDescription>
+          )}
+          <div className="flex justify-end gap-2">
+            <DialogClose asChild>
+              <Button variant="outline">取消</Button>
+            </DialogClose>
+            <Button
+              variant={batchDialog === "delete" ? "destructive" : "default"}
+              disabled={actions.isBusy("consumer-batch")}
+              onClick={() =>
+                void actions.run(
+                  "consumer-batch",
+                  async () => {
+                    if (batchDialog === "grant_reset") {
+                      const activate_at = grantActivateAt
+                        ? new Date(grantActivateAt).toISOString()
+                        : null;
+                      await runBatch("grant_reset", {
+                        quantity: Number(grantQuantity),
+                        note: grantNote.trim(),
+                        activate_at,
+                        duration_days: Number(grantDuration),
+                      });
+                    } else await runBatch(batchDialog === "delete" ? "delete" : "reset");
+                  },
+                  {
+                    success:
+                      batchDialog === "grant_reset"
+                        ? "重置卡已发放"
+                        : batchDialog === "reset"
+                          ? "用量已重置"
+                          : "账户已删除",
+                    danger: batchDialog === "delete",
+                  },
+                )
+              }
+            >
+              确认
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {create && (
         <Dialog
           open
@@ -834,6 +1074,7 @@ export function ConsumerDetail() {
               {[
                 ["settings", "账户设置"],
                 ["usage", "用量统计"],
+                ["reset-credits", "重置卡"],
                 ["records", "记录查询"],
                 ["devices", "登录设备"],
               ].map(([key, label]) => (
@@ -913,11 +1154,237 @@ export function ConsumerDetail() {
             </>
           )}
           {tab === "usage" && <ConsumerUsage key={id} id={id} />}
+          {tab === "reset-credits" && <ConsumerResetCredits key={id} id={id} />}
           {tab === "records" && <ClientRecords key={id} id={id} />}
           {tab === "devices" && <Devices key={id} id={id} />}
         </TabsContent>
       </Tabs>
     </ResourceRefreshContext>
+  );
+}
+type ResetCreditRecord = {
+  id: string;
+  status: "available" | "redeemed" | "pending" | "expired";
+  granted_at: string;
+  redeemed_at: string | null;
+  redeemed_by: string | null;
+  windows_reset: number;
+  note: string;
+  available_at: string;
+  expires_at: string | null;
+};
+function ConsumerResetCredits({ id }: { id: string }) {
+  const fieldId = useId();
+  const path = `/consumers/${encodeURIComponent(id)}/reset-credits`;
+  const resource = useResource<List<ResetCreditRecord> & { available_count: number }>(path);
+  const actions = useActions();
+  const [quantity, setQuantity] = useState("1");
+  const [note, setNote] = useState("");
+  const [activateAt, setActivateAt] = useState("");
+  const [durationDays, setDurationDays] = useState("30");
+  const grantAttempt = useRef<{ signature: string; id: string } | null>(null);
+  const consumeAttempts = useRef(new Map<string, string>());
+  const busy = actions.isBusy(`reset-credits-${id}`);
+  const rows = useTablePagination(resource.data?.items ?? [], id, resource.data !== undefined);
+  useErrorToast(resource.error);
+  return (
+    <>
+      <form
+        noValidate
+        className="flex flex-wrap items-end gap-3"
+        onSubmit={(event) =>
+          actions.submit(
+            event,
+            `reset-credits-${id}`,
+            async () => {
+              const signature = JSON.stringify([quantity, note.trim(), activateAt, durationDays]);
+              if (grantAttempt.current?.signature !== signature)
+                grantAttempt.current = { signature, id: crypto.randomUUID() };
+              await request(path, {
+                method: "POST",
+                body: {
+                  request_id: grantAttempt.current.id,
+                  quantity: Number(quantity),
+                  note: note.trim(),
+                  activate_at: activateAt ? new Date(activateAt).toISOString() : null,
+                  duration_days: Number(durationDays),
+                },
+              });
+              grantAttempt.current = null;
+              setNote("");
+              resource.reload();
+            },
+            "重置卡已发放",
+          )
+        }
+      >
+        <Field className="w-24">
+          <FieldLabel htmlFor={`${fieldId}-quantity`}>发放数量</FieldLabel>
+          <Input
+            id={`${fieldId}-quantity`}
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            required
+            value={quantity}
+            onChange={(event) => setQuantity(event.target.value)}
+            disabled={!resource.ready || busy}
+          />
+        </Field>
+        <Field className="w-64">
+          <FieldLabel htmlFor={`${fieldId}-note`}>管理备注</FieldLabel>
+          <Input
+            id={`${fieldId}-note`}
+            maxLength={256}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            disabled={!resource.ready || busy}
+          />
+        </Field>
+        <Field className="w-56">
+          <FieldLabel htmlFor={`${fieldId}-activate`}>启用时间</FieldLabel>
+          <Input
+            id={`${fieldId}-activate`}
+            type="datetime-local"
+            value={activateAt}
+            onChange={(event) => setActivateAt(event.target.value)}
+            disabled={!resource.ready || busy}
+          />
+          <FieldDescription>留空立即启用；启用前客户端不可见。</FieldDescription>
+        </Field>
+        <Field className="w-32">
+          <FieldLabel>有效时长</FieldLabel>
+          <Select
+            value={durationDays}
+            onValueChange={setDurationDays}
+            disabled={!resource.ready || busy}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">1 天</SelectItem>
+              <SelectItem value="7">7 天</SelectItem>
+              <SelectItem value="30">30 天</SelectItem>
+              <SelectItem value="90">90 天</SelectItem>
+              <SelectItem value="365">365 天</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Button type="submit" size="sm" disabled={!resource.ready || busy}>
+          {busy && <Spinner />}发放重置卡
+        </Button>
+        <Badge variant="secondary">可用 {resource.data?.available_count ?? "—"} 张</Badge>
+      </form>
+      <CardDescription>
+        每张可使用一次，清零当前两层用量并重新计时：外层从用卡时开始，5
+        小时内层从下次使用开始。订阅到期时间和历史账单保持不变；无当前用量或订阅已到期时不扣卡。
+      </CardDescription>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>发放时间</TableHead>
+            <TableHead>状态</TableHead>
+            <TableHead>使用时间</TableHead>
+            <TableHead>使用方</TableHead>
+            <TableHead>重置窗口数</TableHead>
+            <TableHead>管理备注</TableHead>
+            <TableHead>操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.rows.map((credit) => (
+            <TableRow key={credit.id}>
+              <TableCell>{date(credit.granted_at)}</TableCell>
+              <TableCell>
+                <Badge variant="outline">
+                  {
+                    { available: "可用", redeemed: "已使用", pending: "待启用", expired: "已过期" }[
+                      credit.status
+                    ]
+                  }
+                </Badge>
+              </TableCell>
+              <TableCell>{date(credit.redeemed_at)}</TableCell>
+              <TableCell>
+                {credit.redeemed_by === "admin"
+                  ? "管理员"
+                  : credit.redeemed_by === "client"
+                    ? "客户端"
+                    : "—"}
+              </TableCell>
+              <TableCell>{credit.status === "redeemed" ? credit.windows_reset : "—"}</TableCell>
+              <TableCell className="max-w-64 truncate" title={credit.note}>
+                {credit.note || "—"}
+              </TableCell>
+              <TableCell>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!resource.ready || busy || credit.status !== "available"}
+                  onClick={() =>
+                    actions.run(
+                      `reset-credits-${id}`,
+                      async () => {
+                        let attempt = consumeAttempts.current.get(credit.id);
+                        if (!attempt) {
+                          attempt = crypto.randomUUID();
+                          consumeAttempts.current.set(credit.id, attempt);
+                        }
+                        const result = await request<{ code: string }>(`${path}/consume`, {
+                          method: "POST",
+                          body: {
+                            credit_id: credit.id,
+                            redeem_request_id: attempt,
+                          },
+                        });
+                        consumeAttempts.current.delete(credit.id);
+                        resource.reload();
+                        if (result.code === "nothing_to_reset")
+                          throw new Error("没有可重置的当前用量，或订阅已到期；未扣卡。");
+                        if (result.code === "no_credit")
+                          throw new Error("重置卡不可用，请刷新后重试。");
+                      },
+                      {
+                        confirm:
+                          "使用这张重置卡清零当前用量并重开额度周期？订阅到期时间及历史账单保持不变。",
+                        success: "重置已完成",
+                      },
+                    )
+                  }
+                >
+                  使用
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {rows.rows.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={7} className="text-center text-muted-foreground">
+                {resource.loading
+                  ? "正在加载重置卡"
+                  : resource.data
+                    ? "尚未发放重置卡"
+                    : "重置卡记录暂不可用"}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <div className="flex items-center justify-end gap-2">
+        <CardDescription>{rows.total} 张</CardDescription>
+        <Button size="sm" variant="outline" {...rows.previous}>
+          上一页
+        </Button>
+        <CardDescription>
+          {rows.page} / {rows.pages}
+        </CardDescription>
+        <Button size="sm" variant="outline" {...rows.next}>
+          下一页
+        </Button>
+      </div>
+    </>
   );
 }
 type RoutingResponse = {
@@ -1517,6 +1984,7 @@ function Records({ id, kind, title }: { id: string; kind: string; title: string 
   );
 }
 const recordKinds = [
+  ["realtime_call", "语音通话创建记录"],
   ["task", "任务与执行来源"],
   ["task_execution", "任务执行记录"],
   ["task_operation", "任务操作结果"],
