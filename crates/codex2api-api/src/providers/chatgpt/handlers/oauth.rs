@@ -8,7 +8,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -17,7 +16,7 @@ use crate::{ApiError, ApiState};
 use codex2api_storage::{OAuthDeviceIdentity, hash_token};
 
 pub const PREFIX: &str = "/api/oauth/chatgpt";
-const ACCESS_TTL: i64 = 3600;
+const ACCESS_TTL: i64 = codex2api_version::OAUTH_ACCESS_TOKEN_TTL;
 
 fn reply(status: StatusCode, body: Value) -> Response {
     (
@@ -97,19 +96,6 @@ struct TokenRequest {
     redirect_uri: Option<String>,
     code_verifier: Option<String>,
     scope: Option<String>,
-}
-
-fn sign(claims: &Value, secret: &str) -> String {
-    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-    let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
-    let input = format!("{header}.{payload}");
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
-    mac.update(input.as_bytes());
-    format!(
-        "{input}.{}",
-        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
-    )
 }
 
 pub async fn token(State(state): State<ApiState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -234,54 +220,31 @@ pub async fn token(State(state): State<ApiState>, headers: HeaderMap, body: Byte
         }
         requested.split_whitespace().collect::<Vec<_>>().join(" ")
     } else {
-        device.scopes
+        device.scopes.clone()
     };
-    let account_id = account.id.as_str();
-    let user_id = format!("user-{}", account.id);
-    let secret = match state.storage.oauth_signing_key().await {
-        Ok(v) => v,
+    let (authenticated_at_ms, requested_at_ms, subscription_started_at) = match state
+        .storage
+        .oauth_session_claim_times(&account.id, &device_id)
+        .await
+    {
+        Ok(times) => times,
         Err(e) => return internal(e),
     };
     let now = chrono::Utc::now().timestamp();
-    let auth = json!({
-        "chatgpt_account_id": account_id,
-        "chatgpt_user_id": user_id,
-        "user_id": user_id,
-        "chatgpt_plan_type": account.effective_plan(),
-    });
-    let mut claims = json!({
-        "iss": "codex2api", "aud": codex2api_version::OAUTH_CLIENT_ID,
-        "sub": user_id,
-        "iat": now, "exp": now + ACCESS_TTL, "jti": uuid::Uuid::new_v4().to_string(),
-        "email": account.email,
-        "name": account.name,
-        "https://api.openai.com/auth": auth,
-        "https://api.openai.com/profile": {"email":account.email},
-        "token_use":"access",
-        "scope":granted_scopes,
-        "provider":account.provider_id,
-        "role":"consumer",
-    });
-    if !granted_scopes
-        .split_whitespace()
-        .any(|scope| scope == "email")
+    let claims = super::oauth_jwt::claims(
+        &account,
+        &device_id,
+        &granted_scopes,
+        authenticated_at_ms,
+        requested_at_ms,
+        subscription_started_at.as_deref(),
+        now,
+    );
+    let (access_token, id_token) = match super::oauth_jwt::issue_pair(&state.storage, claims).await
     {
-        claims.as_object_mut().unwrap().remove("email");
-        claims
-            .as_object_mut()
-            .unwrap()
-            .remove("https://api.openai.com/profile");
-    }
-    if !granted_scopes
-        .split_whitespace()
-        .any(|scope| scope == "profile")
-    {
-        claims.as_object_mut().unwrap().remove("name");
-    }
-    let access_token = sign(&claims, &secret);
-    claims["token_use"] = "id".into();
-    claims["jti"] = uuid::Uuid::new_v4().to_string().into();
-    let id_token = sign(&claims, &secret);
+        Ok(pair) => pair,
+        Err(e) => return internal(e),
+    };
     match state
         .storage
         .register_virtual_access_scoped(

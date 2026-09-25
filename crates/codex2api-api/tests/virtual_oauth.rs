@@ -13,6 +13,293 @@ use tower::ServiceExt;
 const ROOT: &str = "/api/oauth/chatgpt";
 
 #[tokio::test]
+async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isolated() {
+    use rsa::{
+        RsaPrivateKey, RsaPublicKey,
+        pkcs1v15::{Signature, VerifyingKey},
+        pkcs8::DecodePrivateKey,
+        signature::Verifier,
+    };
+    use serde_json::json;
+    use std::io::Write;
+    fn decode(token: &str, part: usize) -> Value {
+        serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(token.split('.').nth(part).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    fn shape(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                Value::Object(map.iter().map(|(k, v)| (k.clone(), shape(v))).collect())
+            }
+            Value::Array(items) => json!(items.first().map(shape).into_iter().collect::<Vec<_>>()),
+            Value::String(_) => json!("string"),
+            Value::Bool(_) => json!("boolean"),
+            Value::Number(v) => json!(if v.is_i64() { "integer" } else { "number" }),
+            Value::Null => json!("null"),
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("jwt-contract.sqlite");
+    let storage = Storage::open(&db).await.unwrap();
+    let (app, account) = fixture(&storage).await;
+    let supplier = test_supplier(&storage, &account).await.unwrap();
+    let tokens = login(&app).await;
+    let expected: Value = serde_json::from_str(include_str!("oauth_jwt_shape.json")).unwrap();
+    let pem = storage.oauth_jwt_private_key().await.unwrap().unwrap();
+    let public = RsaPublicKey::from(&RsaPrivateKey::from_pkcs8_pem(&pem).unwrap());
+    let verify = VerifyingKey::<Sha256>::new(public);
+    for key in ["access_token", "id_token"] {
+        let token = tokens[key].as_str().unwrap();
+        let parts: Vec<_> = token.split('.').collect();
+        assert_eq!(shape(&decode(token, 0)), expected[key]["header"]);
+        assert_eq!(shape(&decode(token, 1)), expected[key]["payload"]);
+        assert_eq!(decode(token, 0)["alg"], "RS256");
+        verify
+            .verify(
+                format!("{}.{}", parts[0], parts[1]).as_bytes(),
+                &Signature::try_from(URL_SAFE_NO_PAD.decode(parts[2]).unwrap().as_slice()).unwrap(),
+            )
+            .unwrap();
+    }
+    let access = decode(tokens["access_token"].as_str().unwrap(), 1);
+    let identity = decode(tokens["id_token"].as_str().unwrap(), 1);
+    assert_eq!(access["aud"], json!(["https://api.openai.com/v1"]));
+    assert_eq!(identity["aud"], json!([codex2api_version::OAUTH_CLIENT_ID]));
+    assert_eq!(access["iss"], codex2api_version::OAUTH_ISSUER);
+    assert_eq!(identity["iss"], access["iss"]);
+    assert_eq!(
+        access["exp"].as_i64().unwrap() - access["iat"].as_i64().unwrap(),
+        864000
+    );
+    assert_eq!(
+        identity["exp"].as_i64().unwrap() - identity["iat"].as_i64().unwrap(),
+        3600
+    );
+    assert_eq!(tokens["expires_in"], 864000);
+    assert_eq!(access["nbf"], access["iat"]);
+    assert_eq!(
+        access["scp"],
+        json!(
+            codex2api_version::OAUTH_SCOPE
+                .split_whitespace()
+                .collect::<Vec<_>>()
+        )
+    );
+    assert_eq!(
+        identity["at_hash"],
+        URL_SAFE_NO_PAD
+            .encode(&Sha256::digest(tokens["access_token"].as_str().unwrap().as_bytes())[..16])
+    );
+    assert_eq!(identity["sid"], access["session_id"]);
+    assert_eq!(identity["sub"], access["sub"]);
+    assert_eq!(identity["auth_provider"], "password");
+    assert_eq!(identity["acr"], "0");
+    assert_eq!(identity["amr"], json!(["pwd", "urn:openai:amr:password"]));
+    assert_eq!(access["https://api.openai.com/mfa"]["required"], "no");
+    assert_eq!(identity["email_verified"], false);
+    let owner = "https://api.openai.com/auth";
+    assert_eq!(
+        identity[owner]["chatgpt_subscription_active_until"],
+        account.subscription_expires_at.as_deref().unwrap()
+    );
+    assert_eq!(access[owner]["chatgpt_account_id"], account.id);
+    assert_eq!(
+        identity[owner]["organizations"][0]["id"],
+        access[owner]["poid"]
+    );
+    for forbidden in ["scope", "role", "provider", "token_use"] {
+        assert!(access.get(forbidden).is_none());
+        assert!(identity.get(forbidden).is_none());
+    }
+    // Neither an ID token nor a modified JWT is an access credential.
+    for invalid in [
+        tokens["id_token"].as_str().unwrap().to_owned(),
+        format!("{}x", tokens["access_token"].as_str().unwrap()),
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(client_json(
+                    "GET",
+                    "/backend-api/wham/usage",
+                    &invalid,
+                    Value::Null
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    // Verify true local timestamps, and ensure refreshing does not authenticate again.
+    let device = storage
+        .virtual_devices(&account.id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(access["pwd_auth_time"], device.authenticated_at_ms.unwrap());
+    assert_eq!(
+        identity["auth_time"],
+        device.authenticated_at_ms.unwrap() / 1000
+    );
+    assert_eq!(identity["rat"], device.requested_at_ms.unwrap() / 1000);
+    // An older registered token remains valid until its own expiry/revocation.
+    assert!(
+        storage
+            .register_virtual_access(
+                &device.id,
+                tokens["refresh_token"].as_str().unwrap(),
+                "legacy-access",
+                chrono::Utc::now().timestamp() + 3600
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/wham/usage",
+                "legacy-access",
+                Value::Null
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    storage
+        .update_account(
+            &supplier,
+            SupplierAccountUpdate {
+                plan_type: Some("enterprise".into()),
+                email: Some("foreign-supplier@example.test".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut second = account.clone();
+    second.id = uuid::Uuid::new_v4().to_string();
+    second.username = "bob".into();
+    second.name = "Bob Virtual".into();
+    second.email = "bob@virtual.test".into();
+    second.plan_id = "plus".into();
+    second.plan_type = "plus".into();
+    storage.save_virtual_account(&second).await.unwrap();
+    bind_test_supplier(&storage, &second, Some(supplier)).await;
+    storage
+        .create_virtual_device(&second, "bob-refresh", &Default::default())
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(form(
+            &format!("{ROOT}/oauth/token"),
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", "bob-refresh"),
+            ],
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bob = json_body(response).await;
+    let bob_access = decode(bob["access_token"].as_str().unwrap(), 1);
+    assert_eq!(bob_access[owner]["chatgpt_account_id"], second.id);
+    assert_eq!(bob_access[owner]["chatgpt_plan_type"], "plus");
+    assert_ne!(bob_access["sub"], access["sub"]);
+    assert_ne!(bob_access[owner]["poid"], access[owner]["poid"]);
+    assert!(!bob_access.to_string().contains(&account.email));
+    bind_test_supplier(&storage, &account, None).await;
+    storage.close().await;
+    let storage = Storage::open(&db).await.unwrap();
+    let app = router(&storage);
+    let response = app
+        .clone()
+        .oneshot(form(
+            &format!("{ROOT}/oauth/token"),
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ],
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let refreshed = json_body(response).await;
+    let new_access = decode(refreshed["access_token"].as_str().unwrap(), 1);
+    let new_id = decode(refreshed["id_token"].as_str().unwrap(), 1);
+    assert_eq!(new_access[owner], access[owner]);
+    assert_eq!(new_access["session_id"], access["session_id"]);
+    assert_eq!(new_access["pwd_auth_time"], access["pwd_auth_time"]);
+    assert_eq!(new_id["auth_time"], identity["auth_time"]);
+    assert_eq!(new_id["rat"], identity["rat"]);
+    assert_eq!(
+        new_id["at_hash"],
+        URL_SAFE_NO_PAD
+            .encode(&Sha256::digest(refreshed["access_token"].as_str().unwrap().as_bytes())[..16])
+    );
+    assert_ne!(new_access["jti"], access["jti"]);
+    assert_eq!(new_access[owner]["chatgpt_plan_type"], "pro");
+    assert!(!new_access.to_string().contains("foreign-supplier"));
+    if let Ok(asar) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
+        let sample = json!({"access_token":tokens["access_token"],"refreshed_access_token":refreshed["access_token"],"account_id":account.id,"user_id":format!("user-{}",account.id),"email":account.email,"plan_type":"pro"});
+        let mut child = std::process::Command::new("node")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-DesktopJwtContract.cjs"),
+            )
+            .arg(asar)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(sample.to_string().as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        println!("{}", String::from_utf8_lossy(&result.stdout));
+    }
+    // Disabling one virtual account revokes only its local sessions.
+    let mut disabled = account.clone();
+    disabled.enabled = false;
+    storage.save_virtual_account(&disabled).await.unwrap();
+    assert!(
+        storage
+            .virtual_access(&codex2api_storage::hash_token(
+                refreshed["access_token"].as_str().unwrap()
+            ))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .virtual_access(&codex2api_storage::hash_token(
+                bob["access_token"].as_str().unwrap()
+            ))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usage() {
     use serde_json::json;
     use std::io::Write;
@@ -642,8 +929,14 @@ async fn oauth_grants_are_consumer_only_scope_bounded_and_not_admin_credentials(
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(claims["role"], "consumer");
-    assert_eq!(claims["provider"], "chatgpt");
+    assert!(claims.get("role").is_none());
+    assert!(claims.get("provider").is_none());
+    assert!(claims.get("token_use").is_none());
+    assert!(claims.get("scope").is_none());
+    assert_eq!(
+        claims["scp"],
+        json!(["openid", "profile", "offline_access"])
+    );
     assert!(claims.get("email").is_none());
     assert_eq!(
         claims["https://api.openai.com/auth"]["chatgpt_account_id"],

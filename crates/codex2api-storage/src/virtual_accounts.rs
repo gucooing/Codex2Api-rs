@@ -47,6 +47,8 @@ pub struct VirtualDevice {
     pub created_at: String,
     pub last_login_at: String,
     pub last_used_at: Option<String>,
+    pub authenticated_at_ms: Option<i64>,
+    pub requested_at_ms: Option<i64>,
 }
 #[derive(Clone, FromRow)]
 pub struct VirtualAccess {
@@ -229,7 +231,7 @@ impl Storage {
         Ok(())
     }
     pub async fn virtual_devices(&self, id: &str) -> Result<Vec<VirtualDevice>> {
-        Ok(sqlx::query_as("SELECT provider_id,scopes,id,virtual_account_id,installation_id,user_agent,created_at,last_login_at,last_used_at FROM virtual_devices WHERE virtual_account_id=? ORDER BY created_at DESC")
+        Ok(sqlx::query_as("SELECT provider_id,scopes,id,virtual_account_id,installation_id,user_agent,created_at,last_login_at,last_used_at,authenticated_at_ms,requested_at_ms FROM virtual_devices WHERE virtual_account_id=? ORDER BY created_at DESC")
             .bind(id).fetch_all(self.pool()).await?)
     }
     pub async fn revoke_virtual_device(&self, owner: &str, id: &str) -> Result<()> {
@@ -241,7 +243,7 @@ impl Storage {
         Ok(())
     }
     pub async fn virtual_refresh_device(&self, token: &str) -> Result<Option<VirtualDevice>> {
-        Ok(sqlx::query_as("SELECT d.provider_id,d.scopes,d.id,d.virtual_account_id,d.installation_id,d.user_agent,d.created_at,d.last_login_at,d.last_used_at FROM virtual_devices d JOIN virtual_accounts v ON v.id=d.virtual_account_id WHERE d.refresh_hash=? AND v.enabled=1")
+        Ok(sqlx::query_as("SELECT d.provider_id,d.scopes,d.id,d.virtual_account_id,d.installation_id,d.user_agent,d.created_at,d.last_login_at,d.last_used_at,d.authenticated_at_ms,d.requested_at_ms FROM virtual_devices d JOIN virtual_accounts v ON v.id=d.virtual_account_id WHERE d.refresh_hash=? AND v.enabled=1")
             .bind(hash_token(token)).fetch_optional(self.pool()).await?)
     }
     pub async fn create_virtual_device(

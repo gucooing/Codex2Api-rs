@@ -73,15 +73,15 @@ impl Storage {
         } = request;
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        let removed=sqlx::query("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>?")
-            .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(now).execute(&mut *tx).await?;
-        if removed.rows_affected() != 1 {
+        let expiry:Option<i64>=sqlx::query_scalar("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? RETURNING expires_at")
+            .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(now).fetch_optional(&mut *tx).await?;
+        let Some(expiry) = expiry else {
             return Ok(false);
-        }
-        let inserted=sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes)
-            SELECT ?,v.id,?,?,?,?,v.provider_id,? FROM virtual_accounts v
+        };
+        let inserted=sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms)
+            SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM virtual_accounts v
             WHERE v.id=? AND v.password_hash=? AND v.enabled=1")
-            .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(now+120).bind(scopes).bind(&account.id).bind(&account.password_hash).execute(&mut *tx).await?;
+            .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(now+120).bind(scopes).bind(chrono::Utc::now().timestamp_millis()).bind((expiry-600)*1000).bind(&account.id).bind(&account.password_hash).execute(&mut *tx).await?;
         if inserted.rows_affected() != 1 {
             return Ok(false);
         }
@@ -104,9 +104,9 @@ impl Storage {
             device,
         } = request;
         let mut tx = self.pool().begin().await?;
-        let token: Option<(String,String,String)>=sqlx::query_as("DELETE FROM virtual_authorization_codes WHERE code_hash=? AND client_id=? AND redirect_uri=? AND code_challenge=? AND expires_at>? AND provider_id=? RETURNING virtual_account_id,provider_id,scopes")
+        let token: Option<(String,String,String,i64,i64)>=sqlx::query_as("DELETE FROM virtual_authorization_codes WHERE code_hash=? AND client_id=? AND redirect_uri=? AND code_challenge=? AND expires_at>? AND provider_id=? RETURNING virtual_account_id,provider_id,scopes,COALESCE(authenticated_at_ms,(expires_at-120)*1000),COALESCE(requested_at_ms,(expires_at-120)*1000)")
             .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(chrono::Utc::now().timestamp()).bind(provider).fetch_optional(&mut *tx).await?;
-        let Some((owner, provider, scopes)) = token else {
+        let Some((owner, provider, scopes, authenticated_at_ms, requested_at_ms)) = token else {
             return Ok(None);
         };
         let account: Option<crate::VirtualAccount> =
@@ -120,8 +120,8 @@ impl Storage {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         // Code consumption and session creation must serialize with password changes and disable.
-        sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,installation_id,user_agent,created_at,last_login_at,provider_id,scopes) VALUES(?,?,?,?,?,?,?,?,?)")
-            .bind(&id).bind(&owner).bind(hash_token(refresh)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(provider).bind(scopes).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,installation_id,user_agent,created_at,last_login_at,provider_id,scopes,authenticated_at_ms,requested_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+            .bind(&id).bind(&owner).bind(hash_token(refresh)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(provider).bind(scopes).bind(authenticated_at_ms).bind(requested_at_ms).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(Some((account, id)))
     }

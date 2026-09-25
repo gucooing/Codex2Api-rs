@@ -1,0 +1,96 @@
+{
+  "access_token": {
+    "header": {
+      "alg": "string",
+      "kid": "string",
+      "typ": "string"
+    },
+    "payload": {
+      "aud": [
+        "string"
+      ],
+      "client_id": "string",
+      "https://api.openai.com/auth": {
+        "amr": [
+          "string"
+        ],
+        "chatgpt_account_id": "string",
+        "chatgpt_account_user_id": "string",
+        "chatgpt_compute_residency": "string",
+        "chatgpt_plan_type": "string",
+        "chatgpt_user_id": "string",
+        "localhost": "boolean",
+        "poid": "string",
+        "user_id": "string"
+      },
+      "https://api.openai.com/mfa": {
+        "required": "string"
+      },
+      "https://api.openai.com/profile": {
+        "email": "string",
+        "email_verified": "boolean",
+        "name": "string"
+      },
+      "iss": "string",
+      "pwd_auth_time": "integer",
+      "scp": [
+        "string"
+      ],
+      "session_id": "string",
+      "sl": "boolean",
+      "sub": "string",
+      "iat": "integer",
+      "exp": "integer",
+      "jti": "string",
+      "nbf": "integer"
+    }
+  },
+  "id_token": {
+    "header": {
+      "alg": "string",
+      "kid": "string",
+      "typ": "string"
+    },
+    "payload": {
+      "acr": "string",
+      "amr": [
+        "string"
+      ],
+      "aud": [
+        "string"
+      ],
+      "auth_provider": "string",
+      "auth_time": "integer",
+      "email": "string",
+      "email_verified": "boolean",
+      "https://api.openai.com/auth": {
+        "chatgpt_account_id": "string",
+        "chatgpt_plan_type": "string",
+        "chatgpt_subscription_active_start": "string",
+        "chatgpt_subscription_active_until": "string",
+        "chatgpt_subscription_last_checked": "string",
+        "chatgpt_user_id": "string",
+        "groups": [],
+        "localhost": "boolean",
+        "organizations": [
+          {
+            "id": "string",
+            "is_default": "boolean",
+            "role": "string",
+            "title": "string"
+          }
+        ],
+        "user_id": "string"
+      },
+      "iss": "string",
+      "name": "string",
+      "rat": "integer",
+      "sid": "string",
+      "sub": "string",
+      "iat": "integer",
+      "exp": "integer",
+      "jti": "string",
+      "at_hash": "string"
+    }
+  }
+}

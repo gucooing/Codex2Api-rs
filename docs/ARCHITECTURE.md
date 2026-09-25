@@ -409,6 +409,12 @@ From `reference/codex` at the pinned commit:
 
 ## Public API
 
+2026-09-25 OAuth JWT 修复：以用户提供、经官方 JWKS 验签的 token 对作为字段样本，分别构造 access token 和 ID token。`tests/oauth_jwt_shape.json` 仅保存字段名和类型，不包含凭据或用户值。access token 的 `aud` 为 `https://api.openai.com/v1` 数组、权限为本地授权的 `scp` 数组；ID token 的 `aud` 为 CLI client ID 数组，`at_hash` 为实际 access token 的 SHA-256 左半摘要。两者使用本服务 SQLite 中的独立 RSA 2048 密钥签名，header 为 RS256／kid／JWT。样本中的固定寿命分别为 864000／3600 秒；旧 token 仍按原记录的有效期及设备撤销状态校验。
+
+迁移 `0043_oauth_session_claims.sql` 保存实际密码认证与授权开始时间，refresh 保留 `auth_time`、毫秒 `pwd_auth_time` 和会话身份。管理端首次登录显示同一认证时间。身份、组织、套餐、订阅时间和 scopes 只来自虚拟账户及其设备授权；代码不读取供应 token 或继承其组织、MFA、权限。密码登录输出自身的 password AMR，不声称完成样本里的 OTP／MFA；本地没有邮箱验证流程，email_verified 为 false。没有显式到期日期时保留 null，不编造到期日期。JWT 不再包含内部 role／provider／token_use／scope 字段，授权仍由 SQLite access-token 哈希、账号及设备状态决定。
+
+协议依据：固定 CLI 的 `login/src/token_data.rs`、`login/src/server.rs` 和官方 `https://auth.openai.com/.well-known/openid-configuration`；Desktop 的 `zg`、`cT` 原始读取函数由 `Test-DesktopJwtContract.cjs` 验证。JWT 字段一致不意味着持有官方签名或官方账户权限，供应账户仅提供模型执行。
+
 Codex clients should be able to point `base_url` at this proxy with `wire_api = "responses"`.
 
 `codex2api-api/src/lib.rs` is the authoritative route inventory:

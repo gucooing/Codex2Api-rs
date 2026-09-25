@@ -8,6 +8,7 @@ pub(crate) mod desktop_support;
 pub(crate) mod desktop_usage;
 pub(crate) mod oauth;
 pub(crate) mod oauth_authorize;
+mod oauth_jwt;
 pub(crate) mod realtime;
 pub(crate) mod remote_control;
 pub(crate) mod system;

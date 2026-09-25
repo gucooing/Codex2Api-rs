@@ -172,6 +172,8 @@ export type Device = {
   scopes: string;
   created_at: string;
   last_login_at: string;
+  authenticated_at_ms: number | null;
+  requested_at_ms: number | null;
   last_used_at: string | null;
 };
 export type UsageRecord = {

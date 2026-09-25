@@ -55,6 +55,11 @@ pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 
 /// Official OAuth client id for Codex CLI login.
 pub const OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+/// Official OAuth access-token resource, distinct from the ID-token client audience.
+pub const OAUTH_ACCESS_AUDIENCE: &str = "https://api.openai.com/v1";
+/// Lifetimes observed in a signature-verified official Codex OAuth pair (2026-09-25).
+pub const OAUTH_ACCESS_TOKEN_TTL: i64 = 864000;
+pub const OAUTH_ID_TOKEN_TTL: i64 = 3600;
 
 /// Official OAuth issuer.
 pub const OAUTH_ISSUER: &str = "https://auth.openai.com";

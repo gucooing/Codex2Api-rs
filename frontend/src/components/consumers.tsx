@@ -1893,7 +1893,9 @@ function Devices({ id }: { id: string }) {
                               .map((scope) => scopes[scope] ?? scope)
                               .join("、")}
                           </TableCell>
-                          <TableCell>{date(device.created_at)}</TableCell>
+                          <TableCell>
+                            {date(device.authenticated_at_ms ?? device.created_at)}
+                          </TableCell>
                           <TableCell>
                             {date(device.last_login_at)}
                             <CardDescription>{date(device.last_used_at)}</CardDescription>
