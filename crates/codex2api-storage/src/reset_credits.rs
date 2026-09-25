@@ -416,10 +416,105 @@ mod tests {
             storage.virtual_reset_credit_records("a").await.unwrap()["items"][0]["source"],
             "admin_reset"
         );
+        let records = storage.virtual_reset_credit_records("a").await.unwrap();
+        let internal = records["items"][0]["id"].as_str().unwrap();
+        assert_eq!(
+            storage
+                .consume_virtual_reset_credit("a", "probe-internal", Some(internal), "client")
+                .await
+                .unwrap(),
+            json!({"code":"no_credit","credit":null,"windows_reset":0})
+        );
+        assert_eq!(
+            storage
+                .admin_reset_virtual_quota("a", "admin")
+                .await
+                .unwrap()["code"],
+            "nothing_to_reset"
+        );
+        assert_eq!(
+            storage.virtual_reset_credit_records("a").await.unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_cards_are_hidden_and_unusable_until_activation_and_after_expiration() {
+        let (_dir, storage, now) = fixture().await;
+        usage(&storage, "a", "charge", (now - 1) * 1000).await;
+        let future = Utc::now() + chrono::Duration::days(1);
+        storage
+            .grant_virtual_reset_cards(
+                "a",
+                "scheduled",
+                &crate::ResetCardGrant {
+                    quantity: 1,
+                    note: "private".into(),
+                    activate_at: Some(future),
+                    duration_days: 30,
+                },
+            )
+            .await
+            .unwrap();
+        let records = storage.virtual_reset_credit_records("a").await.unwrap();
+        let id = records["items"][0]["id"].as_str().unwrap();
+        assert_eq!(
+            storage.virtual_reset_credits("a").await.unwrap(),
+            json!({"credits":[],"available_count":0,"total_earned_count":0})
+        );
+        assert_eq!(storage.virtual_reset_credit_count("a").await.unwrap(), 0);
+        assert_eq!(
+            storage
+                .consume_virtual_reset_credit("a", "early", Some(id), "client")
+                .await
+                .unwrap(),
+            json!({"code":"no_credit","credit":null,"windows_reset":0})
+        );
+        // At the exact activation timestamp a card is visible and selectable.
+        sqlx::query("UPDATE virtual_reset_credits SET available_at_ms=? WHERE id=?")
+            .bind(Utc::now().timestamp_millis())
+            .bind(id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        assert_eq!(storage.virtual_reset_credit_count("a").await.unwrap(), 1);
+        assert_eq!(
+            storage.virtual_reset_credits("a").await.unwrap()["credits"][0]["status"],
+            "available"
+        );
+        sqlx::query("UPDATE virtual_reset_credits SET expires_at_ms=? WHERE id=?")
+            .bind(Utc::now().timestamp_millis())
+            .bind(id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        assert_eq!(storage.virtual_reset_credit_count("a").await.unwrap(), 0);
+        assert_eq!(
+            storage.virtual_reset_credits("a").await.unwrap()["credits"],
+            json!([])
+        );
+        assert_eq!(
+            storage
+                .consume_virtual_reset_credit("a", "late", Some(id), "client")
+                .await
+                .unwrap()["code"],
+            "no_credit"
+        );
+        assert_eq!(
+            storage.virtual_reset_credit_records("a").await.unwrap()["items"][0]["status"],
+            "expired"
+        );
+        assert_eq!(
+            storage.virtual_quota("a").await.unwrap()["rate_limit"]["allowed"],
+            false
+        );
     }
 }
 
-fn request_id(value: &str) -> Result<()> {
+pub(crate) fn request_id(value: &str) -> Result<()> {
     // Official clients use UUIDs, but the protocol accepts nonempty opaque keys.
     if value.trim().is_empty() || value.len() > 256 {
         return Err(StorageError::InvalidAdminUpdate(
@@ -456,7 +551,7 @@ impl Storage {
         let now = Utc::now().timestamp_millis();
         Ok(
             json!({"available_count":rows.iter().filter(|r|r.2.is_none() && r.6<=now && r.7.is_none_or(|at|at>now) && r.8=="card").count(),"items":rows.into_iter().map(|(id,granted,redeemed,actor,windows,note,active,expires,source)|json!({
-            "id":id,"status":if redeemed.is_some(){"redeemed"}else if expires.is_some_and(|at|at<=now){"expired"}else if active>now{"pending"}else{"available"},
+            "id":id,"status":if redeemed.is_some(){"redeemed"}else if source=="admin_reset"{"not_applied"}else if expires.is_some_and(|at|at<=now){"expired"}else if active>now{"pending"}else{"available"},
             "granted_at":timestamp(granted),"redeemed_at":redeemed.map(timestamp),"available_at":timestamp(active),"expires_at":expires.map(timestamp),
             "redeemed_by":actor,"windows_reset":windows,"note":note,"source":source
         })).collect::<Vec<_>>() }),
@@ -470,70 +565,66 @@ impl Storage {
         quantity: i64,
         note: &str,
     ) -> Result<()> {
-        let now = Utc::now().timestamp_millis();
-        self.grant_virtual_reset_credits_scheduled(
+        self.grant_virtual_reset_cards(
             owner,
             grant_id,
-            quantity,
-            note,
-            now,
-            Some(now + 30 * 86_400_000),
+            &crate::ResetCardGrant {
+                quantity,
+                note: note.into(),
+                activate_at: None,
+                duration_days: 30,
+            },
         )
         .await
     }
 
-    pub async fn grant_virtual_reset_credits_scheduled(
+    pub async fn grant_virtual_reset_cards(
         &self,
         owner: &str,
         grant_id: &str,
-        quantity: i64,
-        note: &str,
-        available_at_ms: i64,
-        expires_at_ms: Option<i64>,
+        grant: &crate::ResetCardGrant,
     ) -> Result<()> {
-        request_id(grant_id)?;
-        if !(1..=100).contains(&quantity) || note.chars().count() > 256 {
-            return Err(StorageError::InvalidAdminUpdate(
-                "每次发放 1 至 100 张，备注最多 256 字",
-            ));
-        }
-        if available_at_ms < 0 || expires_at_ms.is_some_and(|at| at <= available_at_ms) {
-            return Err(StorageError::InvalidAdminUpdate(
-                "重置卡启用时间和有效时长无效",
-            ));
-        }
+        grant.validate()?;
+        let scope = format!("grant:{owner}");
+        let signature = serde_json::to_string(grant)?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_accounts WHERE id=?)")
-                .bind(owner)
-                .fetch_one(&mut *tx)
-                .await?;
-        if !exists {
-            return Err(StorageError::AccountNotFound(owner.into()));
+        if crate::consumer_management::replay(&mut tx, &scope, grant_id, &signature)
+            .await?
+            .is_some()
+        {
+            tx.commit().await?;
+            return Ok(());
         }
-        let previous: Option<(i64, String)> = sqlx::query_as("SELECT quantity,note FROM virtual_reset_grants WHERE virtual_account_id=? AND request_id=?")
-            .bind(owner).bind(grant_id).fetch_optional(&mut *tx).await?;
-        if let Some(previous) = previous {
-            if previous != (quantity, note.to_owned()) {
-                return Err(StorageError::InvalidAdminUpdate("重试发卡时不能修改原请求"));
-            }
-        } else {
-            let now = Utc::now().timestamp_millis();
-            sqlx::query("INSERT INTO virtual_reset_grants VALUES(?,?,?,?,?,?,?)")
-                .bind(owner)
-                .bind(grant_id)
-                .bind(quantity)
-                .bind(note)
-                .bind(now)
-                .bind(available_at_ms)
-                .bind(expires_at_ms)
-                .execute(&mut *tx)
-                .await?;
-            for _ in 0..quantity {
-                sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?)")
-                    .bind(uuid::Uuid::new_v4().to_string()).bind(owner).bind(grant_id).bind(now).bind(available_at_ms).bind(expires_at_ms).execute(&mut *tx).await?;
-            }
+        let now = Utc::now().timestamp_millis();
+        let (start, end) = grant.times(now)?;
+        // Pre-0041 grants have no request signature. Refuse an ambiguous replay.
+        let exists: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_reset_grants WHERE virtual_account_id=? AND request_id=?)")
+            .bind(owner).bind(grant_id).fetch_one(&mut *tx).await?;
+        if exists {
+            return Err(StorageError::InvalidAdminUpdate(
+                "旧请求已发卡，请刷新记录后使用新的请求标识",
+            ));
         }
+        grant_on(
+            &mut tx,
+            owner,
+            grant_id,
+            grant.quantity,
+            &grant.note,
+            start,
+            Some(end),
+            now,
+        )
+        .await?;
+        crate::consumer_management::remember(
+            &mut tx,
+            &scope,
+            grant_id,
+            &signature,
+            &json!({"ok":true}),
+            now,
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -568,8 +659,8 @@ impl Storage {
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let mut credit: Option<Credit> = if let Some(id) = credit_id {
-            sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=? AND id=?")
-                .bind(owner).bind(id).fetch_optional(&mut *tx).await?
+            sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=? AND id=? AND source='card' AND available_at_ms<=?")
+                .bind(owner).bind(id).bind(now).fetch_optional(&mut *tx).await?
         } else {
             sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=? AND redeemed_at_ms IS NULL AND available_at_ms<=? AND (expires_at_ms IS NULL OR expires_at_ms>?) AND source='card' ORDER BY granted_at_ms,id LIMIT 1")
                 .bind(owner).bind(now).bind(now).fetch_optional(&mut *tx).await?
@@ -585,36 +676,7 @@ impl Storage {
             {
                 response["code"] = json!("no_credit");
             } else {
-                let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")
-                    .bind(&account.plan_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-                let paid = account.effective_plan_at(now / 1000) != "free";
-                let rules = crate::plan_spending_windows(
-                    &plan.config,
-                    !paid && account.plan_type != "free",
-                )?;
-                let anchor: i64 = sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM virtual_accounts WHERE id=?")
-                    .bind(owner).fetch_one(&mut *tx).await?;
-                let windows = crate::spending_windows::windows_on(
-                    &mut tx,
-                    owner,
-                    &rules,
-                    if anchor > now / 1000 { 0 } else { anchor },
-                    now / 1000,
-                )
-                .await?;
-                let used = windows
-                    .iter()
-                    .any(|w| w["used_usd"].as_str().is_some_and(|v| v != "0"));
-                // An expired paid subscription cannot regain its benefits by using a card.
-                if !account.enabled || !paid || !used {
-                    response["code"] = json!("nothing_to_reset");
-                } else {
-                    let count = windows
-                        .iter()
-                        .filter(|w| !w["started_at"].is_null())
-                        .count() as i64;
+                if let Some(count) = resettable_windows(&mut tx, &account, now).await? {
                     sqlx::query("UPDATE virtual_reset_credits SET redeemed_at_ms=?,redeemed_by=?,windows_reset=? WHERE virtual_account_id=? AND id=? AND redeemed_at_ms IS NULL")
                         .bind(now).bind(actor).bind(count).bind(owner).bind(&credit.id).execute(&mut *tx).await?;
                     sqlx::query("UPDATE virtual_accounts SET quota_reset_credit_id=? WHERE id=?")
@@ -625,9 +687,12 @@ impl Storage {
                     credit.redeemed_at_ms = Some(now);
                     response =
                         json!({"code":"reset","windows_reset":count,"credit":credit.protocol(now)});
+                } else {
+                    response["code"] = json!("nothing_to_reset");
                 }
             }
         }
+
         sqlx::query("INSERT INTO virtual_reset_requests VALUES(?,?,?,?)")
             .bind(owner)
             .bind(redeem_id)
@@ -641,32 +706,116 @@ impl Storage {
 
     /// Administrative reset without issuing a client-visible card.
     pub async fn admin_reset_virtual_quota(&self, owner: &str, actor: &str) -> Result<Value> {
-        let request = format!("admin-reset-{}", uuid::Uuid::new_v4());
-        let card = format!("admin-reset-{}", uuid::Uuid::new_v4());
-        let now = Utc::now().timestamp_millis();
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_accounts WHERE id=?)")
-                .bind(owner)
-                .fetch_one(&mut *tx)
-                .await?;
-        if !exists {
-            return Err(StorageError::AccountNotFound(owner.into()));
-        }
-        sqlx::query("INSERT INTO virtual_reset_grants VALUES(?,?,?,?,?,?,?)")
-            .bind(owner)
-            .bind(&request)
-            .bind(1_i64)
-            .bind("admin direct reset")
-            .bind(now)
-            .bind(now)
-            .bind(now + 30 * 86_400_000)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,expires_at_ms,source) VALUES(?,?,?,?,?,?,?)")
-            .bind(&card).bind(owner).bind(&request).bind(now).bind(now).bind(now+30*86_400_000).bind("admin_reset").execute(&mut *tx).await?;
+        let result = admin_reset_on(&mut tx, owner, actor, Utc::now().timestamp_millis()).await?;
         tx.commit().await?;
-        self.consume_virtual_reset_credit(owner, &request, Some(&card), actor)
-            .await
+        Ok(result)
     }
+}
+
+pub(crate) async fn grant_on(
+    connection: &mut sqlx::SqliteConnection,
+    owner: &str,
+    grant_id: &str,
+    quantity: i64,
+    note: &str,
+    start: i64,
+    end: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_accounts WHERE id=?)")
+            .bind(owner)
+            .fetch_one(&mut *connection)
+            .await?;
+    if !exists {
+        return Err(StorageError::AccountNotFound(owner.into()));
+    }
+    sqlx::query("INSERT INTO virtual_reset_grants VALUES(?,?,?,?,?,?,?)")
+        .bind(owner)
+        .bind(grant_id)
+        .bind(quantity)
+        .bind(note)
+        .bind(now)
+        .bind(start)
+        .bind(end)
+        .execute(&mut *connection)
+        .await?;
+    for _ in 0..quantity {
+        sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?)")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(owner).bind(grant_id).bind(now).bind(start).bind(end).execute(&mut *connection).await?;
+    }
+    Ok(())
+}
+
+async fn resettable_windows(
+    connection: &mut sqlx::SqliteConnection,
+    account: &VirtualAccount,
+    now: i64,
+) -> Result<Option<i64>> {
+    if !account.enabled || account.effective_plan_at(now / 1000) == "free" {
+        return Ok(None);
+    }
+    let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")
+        .bind(&account.plan_id)
+        .fetch_one(&mut *connection)
+        .await?;
+    let rules = crate::plan_spending_windows(&plan.config, false)?;
+    let anchor:i64=sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM virtual_accounts WHERE id=?")
+        .bind(&account.id).fetch_one(&mut *connection).await?;
+    let windows = crate::spending_windows::windows_on(
+        connection,
+        &account.id,
+        &rules,
+        if anchor > now / 1000 { 0 } else { anchor },
+        now / 1000,
+    )
+    .await?;
+    let used = windows
+        .iter()
+        .any(|w| w["used_usd"].as_str().is_some_and(|v| v != "0"));
+    Ok(used.then(|| {
+        windows
+            .iter()
+            .filter(|w| !w["started_at"].is_null())
+            .count() as i64
+    }))
+}
+
+pub(crate) async fn admin_reset_on(
+    connection: &mut sqlx::SqliteConnection,
+    owner: &str,
+    actor: &str,
+    now: i64,
+) -> Result<Value> {
+    let account: VirtualAccount = sqlx::query_as("SELECT * FROM virtual_accounts WHERE id=?")
+        .bind(owner)
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+    let Some(count) = resettable_windows(connection, &account, now).await? else {
+        return Ok(json!({"code":"nothing_to_reset","windows_reset":0}));
+    };
+    let request = uuid::Uuid::new_v4().to_string();
+    let reset = uuid::Uuid::new_v4().to_string();
+    // Only record a successful reset. No unredeemed internal card can be left
+    // behind, and consumers can never select this source by ID.
+    sqlx::query("INSERT INTO virtual_reset_grants VALUES(?,?,?,?,?,?,?)")
+        .bind(owner)
+        .bind(&request)
+        .bind(1_i64)
+        .bind("管理员直接重置")
+        .bind(now)
+        .bind(now)
+        .bind(None::<i64>)
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,source,redeemed_at_ms,redeemed_by,windows_reset) VALUES(?,?,?,?,?,'admin_reset',?,?,?)")
+        .bind(&reset).bind(owner).bind(request).bind(now).bind(now).bind(now).bind(actor).bind(count).execute(&mut *connection).await?;
+    sqlx::query("UPDATE virtual_accounts SET quota_reset_credit_id=? WHERE id=?")
+        .bind(reset)
+        .bind(owner)
+        .execute(connection)
+        .await?;
+    Ok(json!({"code":"reset","windows_reset":count}))
 }

@@ -10,7 +10,7 @@
 
 迁移 `0040_virtual_reset_credits.sql` 新建本账户的发卡、卡片与使用请求记录，给账户和请求账本增加重置代次。消费卡片、更新代次和保存防重复请求结果在同一个 SQLite `BEGIN IMMEDIATE` 事务中完成。请求入账时原子记录代次；用卡前已开始的请求即使稍后结算，也只增加历史费用，不重新占用新周期。用卡后同一毫秒开始的新请求仍计入新周期。
 
-发卡请求带 `request_id`，同一请求重试不重复发卡；更改该请求的数量或备注会拒绝。用卡使用官方 `redeem_request_id`，账号之间隔离；成功请求重试返回 `already_redeemed`，不会再扣卡或重开周期。不同请求并发选择同一卡，也只有一次成功。管理页在传输失败后复用原请求标识。
+发卡和批量请求带 `request_id`，迁移 `0041_admin_consumer_operations.sql` 持久化参数与结果。同一请求重试不重复发卡或重置；数量、备注、启用时间、有效时长、操作或范围变更会拒绝。批量目标按相同筛选 SQL 在事务中每次读取 200 个 ID，可排除部分账户；任一账户写入失败则整体回滚。返回实际处理和跳过数量。用卡使用官方 `redeem_request_id`，账号之间隔离；成功请求重试返回 `already_redeemed`，不会再扣卡或重开周期。不同请求并发选择同一卡，也只有一次成功。直接重置无可处理用量时不会留下可用的内部卡片，客户端按 ID 查询也不能获取内部重置记录。
 
 固定参考仍为 `00c972ed5d6ff6499317fd41b7f23605b8e6850d`。官方客户端合同为：GET `/wham/usage` 的 `rate_limit_reset_credits.available_count`；GET `/wham/rate-limit-reset-credits` 的 `credits/available_count/total_earned_count` 和官方卡片字段；POST `/wham/rate-limit-reset-credits/consume` 的 `redeem_request_id`、可选 `credit_id`，以及 `reset/nothing_to_reset/no_credit/already_redeemed`、整数 `windows_reset` 和可选 `credit`。客户端响应不返回管理备注、美元计费、供应账户信息或内部窗口数组。证据来自 pinned `backend-client/src/types.rs`、`client/rate_limit_resets.rs` 及 `rate_limit_resets_tests.rs`。
 

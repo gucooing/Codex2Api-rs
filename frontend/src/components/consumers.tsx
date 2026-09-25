@@ -70,7 +70,12 @@ import {
 } from "@/components/ui/dialog";
 import { useActions, useErrorToast } from "@/lib/actions";
 import { Switch } from "@/components/ui/switch";
+import { Progress } from "@/components/ui/progress";
+import { useQuotaClock } from "@/hooks/use-supplier-quotas";
+import { quotaWindowLabel, quotaResetLabel, percentLabel } from "@/lib/supplier-state";
+import type { SupplierQuotaWindow } from "@/lib/api";
 import { Checkbox } from "@/components/ui/checkbox";
+import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { date } from "@/lib/format";
 import Link from "next/link";
@@ -102,61 +107,141 @@ export function ConsumersPage() {
 
   const fieldId = useId();
   const actions = useActions();
-  const resource = useResource<List<Consumer>>("/consumers");
   const [create, setCreate] = useState(false);
   const empty = { search: "", status: "", subscription: "" };
   const [filters, setFilters] = useState(empty);
   const [applied, setApplied] = useState(empty);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const resource = useResource<
+    List<Consumer & { quota: { windows: SupplierQuotaWindow[] } }> & {
+      total: number;
+      page: number;
+      page_size: number;
+    }
+  >(`/consumers${query({ page, page_size: pageSize, ...applied })}`);
   const [view, setView] = useState<"table" | "cards">("table");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [selectAllMatching, setSelectAllMatching] = useState(false);
-  const [batchDialog, setBatchDialog] = useState<"grant_reset" | "reset" | "delete" | null>(null);
+  type Selection = {
+    ids: string[];
+    all_matching: boolean;
+    filters: typeof empty;
+    excluded_ids: string[];
+  };
+  type Operation = "grant_reset" | "reset" | "delete";
+  const [batchDialog, setBatchDialog] = useState<{
+    operation: Operation;
+    selection: Selection;
+    count: number;
+  } | null>(null);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [grantActivateAt, setGrantActivateAt] = useState("");
+  const [grantStartMode, setGrantStartMode] = useState("now");
   const [grantDuration, setGrantDuration] = useState("30");
   const [grantQuantity, setGrantQuantity] = useState("1");
   const [grantNote, setGrantNote] = useState("");
-  const all = resource.data?.items ?? [];
-  const items = all.filter(
-    (account) =>
-      `${account.name} ${account.username} ${account.email}`
-        .toLowerCase()
-        .includes(applied.search.trim().toLowerCase()) &&
-      (!applied.status || account.enabled === (applied.status === "enabled")) &&
-      (!applied.subscription || account.subscription_status === applied.subscription),
+  const attempt = useRef<{ signature: string; id: string } | null>(null);
+  const batchBusy = actions.isBusy("consumer-batch");
+  const items = resource.data?.items ?? [];
+  const now = useQuotaClock();
+  const pagination = usePageControls(
+    resource.data?.page ?? page,
+    resource.data?.total,
+    setPage,
+    pageSize,
+    resource.refreshing,
+    setPageSize,
   );
-  const pagination = useTablePagination(items, applied, resource.data !== undefined);
-  const pageIds = pagination.rows.map((account) => account.id);
-  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
-  const selectionCount = selectAllMatching ? items.length : selected.size;
-  const togglePage = (checked: boolean | "indeterminate") => {
-    const next = new Set(selected);
-    pageIds.forEach((id) => (checked === true ? next.add(id) : next.delete(id)));
-    setSelected(next);
-    setSelectAllMatching(false);
-  };
-  const batchFilters = {
-    search: applied.search,
-    status: applied.status,
-    subscription: applied.subscription,
-  };
-  const runBatch = async (operation: string, values: Record<string, unknown> = {}) => {
-    await request("/consumers/batch", {
-      method: "POST",
-      body: {
-        operation,
-        ids: selectAllMatching ? [] : [...selected],
-        all_matching: selectAllMatching,
-        filters: batchFilters,
-        ...values,
-      },
-    });
+  const isSelected = (id: string) => (selectAllMatching ? !excluded.has(id) : selected.has(id));
+  const pageIds = items.map((account) => account.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every(isSelected);
+  const somePageSelected = pageIds.some(isSelected);
+  const selectionCount = selectAllMatching
+    ? Math.max(0, (resource.data?.total ?? 0) - excluded.size)
+    : selected.size;
+  const clearSelection = () => {
     setSelected(new Set());
+    setExcluded(new Set());
     setSelectAllMatching(false);
-    setBatchDialog(null);
+  };
+  const toggleIds = (ids: string[], checked: boolean) => {
+    if (selectAllMatching) {
+      const next = new Set(excluded);
+      ids.forEach((id) => {
+        if (checked) next.delete(id);
+        else next.add(id);
+      });
+      setExcluded(next);
+    } else {
+      const next = new Set(selected);
+      ids.forEach((id) => {
+        if (checked) next.add(id);
+        else next.delete(id);
+      });
+      setSelected(next);
+    }
+  };
+  const togglePage = (checked: boolean | "indeterminate") => toggleIds(pageIds, checked === true);
+  const openBatch = (operation: Operation, account?: Consumer) => {
+    if (!resource.ready || batchBusy) return;
+    setBatchOpen(true);
+    setGrantActivateAt("");
+    setGrantStartMode("now");
+    setGrantDuration("30");
+    setGrantQuantity("1");
+    setGrantNote("");
+    setBatchDialog({
+      operation,
+      count: account ? 1 : selectionCount,
+      selection: account
+        ? { ids: [account.id], all_matching: false, filters: empty, excluded_ids: [] }
+        : {
+            ids: selectAllMatching ? [] : [...selected].sort(),
+            all_matching: selectAllMatching,
+            filters: { ...applied },
+            excluded_ids: [...excluded].sort(),
+          },
+    });
+  };
+  const runBatch = async () => {
+    if (!batchDialog || !batchOpen || !resource.ready) return;
+    const body = {
+      operation: batchDialog.operation,
+      ...batchDialog.selection,
+      ...(batchDialog.operation === "grant_reset"
+        ? {
+            quantity: Number(grantQuantity),
+            note: grantNote.trim(),
+            activate_at:
+              grantStartMode === "scheduled" ? new Date(grantActivateAt).toISOString() : null,
+            duration_days: Number(grantDuration),
+          }
+        : {}),
+    };
+    const signature = JSON.stringify(body);
+    if (attempt.current?.signature !== signature)
+      attempt.current = { signature, id: crypto.randomUUID() };
+    const result = await request<{ matched: number; affected: number; skipped: number }>(
+      "/consumers/batch",
+      {
+        method: "POST",
+        body: { ...body, request_id: attempt.current.id },
+      },
+    );
+    attempt.current = null;
+    clearSelection();
+    setBatchOpen(false);
     resource.reload();
+    const verb =
+      body.operation === "delete" ? "删除" : body.operation === "reset" ? "重置" : "发卡";
+    toast.success(
+      `${verb}完成：${result.affected} 个账户${result.skipped ? `；跳过 ${result.skipped} 个账户` : ""}`,
+    );
   };
   const accountActions = (account: Consumer) => (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex items-center gap-2">
       <Button variant="outline" size="sm" asChild>
         <Link href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}>
           管理 <ArrowRight />
@@ -170,40 +255,21 @@ export function ConsumersPage() {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem
-            onSelect={() => {
-              setSelected(new Set([account.id]));
-              setSelectAllMatching(false);
-              setBatchDialog("reset");
-            }}
+            disabled={!resource.ready || batchBusy}
+            onSelect={() => openBatch("reset", account)}
           >
             重置用量
           </DropdownMenuItem>
           <DropdownMenuItem
-            onSelect={() => {
-              setSelected(new Set([account.id]));
-              setSelectAllMatching(false);
-              setBatchDialog("grant_reset");
-            }}
+            disabled={!resource.ready || batchBusy}
+            onSelect={() => openBatch("grant_reset", account)}
           >
             发放重置卡
           </DropdownMenuItem>
           <DropdownMenuItem
-            variant={true ? "destructive" : "default"}
-            disabled={false || actions.isBusy("components\\consumers.tsx:action:1")}
-            onSelect={() =>
-              void actions.run(
-                "components\\consumers.tsx:action:1",
-                async () => {
-                  await request(`/consumers/${account.id}`, { method: "DELETE" });
-                  resource.reload();
-                },
-                {
-                  confirm: `删除虚拟账户 ${account.name} 并撤销其登录？`,
-                  danger: true,
-                  success: "虚拟账户已删除",
-                },
-              )
-            }
+            variant="destructive"
+            disabled={!resource.ready || batchBusy}
+            onSelect={() => openBatch("delete", account)}
           >
             删除账户
           </DropdownMenuItem>
@@ -221,8 +287,8 @@ export function ConsumersPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
-              setSelected(new Set());
-              setSelectAllMatching(false);
+              clearSelection();
+              setPage(1);
               resource.reload();
             }}
           >
@@ -369,8 +435,8 @@ export function ConsumersPage() {
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
-                  setSelected(new Set());
-                  setSelectAllMatching(false);
+                  clearSelection();
+                  setPage(1);
                   resource.reload();
                 }}
               >
@@ -383,29 +449,46 @@ export function ConsumersPage() {
             <div className="flex items-center gap-2">
               <Checkbox
                 aria-label="选择当前页账户"
-                checked={allPageSelected}
+                checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                disabled={!resource.ready || batchBusy}
                 onCheckedChange={togglePage}
               />
               <span className="text-sm text-muted-foreground">选择账户</span>
             </div>
             {selectionCount > 0 && (
               <>
-                <Badge variant="secondary">已选择 {selectionCount} 个</Badge>
-                {!selectAllMatching && items.length > pageIds.length && allPageSelected && (
+                <Badge variant="secondary">
+                  已选择 {selectionCount} 个{selectAllMatching ? "（全部筛选结果）" : ""}
+                </Badge>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  disabled={batchBusy}
+                  onClick={clearSelection}
+                >
+                  取消选择
+                </Button>
+                {!selectAllMatching && (resource.data?.total ?? 0) > pageIds.length && (
                   <Button
                     size="sm"
                     variant="link"
                     type="button"
-                    onClick={() => setSelectAllMatching(true)}
+                    disabled={!resource.ready || batchBusy}
+                    onClick={() => {
+                      setSelectAllMatching(true);
+                      setExcluded(new Set());
+                    }}
                   >
-                    选择当前筛选的全部 {items.length} 个
+                    选择当前筛选的全部 {resource.data?.total ?? "—"} 个
                   </Button>
                 )}
                 <Button
                   size="sm"
                   variant="outline"
                   type="button"
-                  onClick={() => setBatchDialog("reset")}
+                  disabled={!resource.ready || batchBusy || selectionCount === 0}
+                  onClick={() => openBatch("reset")}
                 >
                   重置
                 </Button>
@@ -413,7 +496,8 @@ export function ConsumersPage() {
                   size="sm"
                   variant="outline"
                   type="button"
-                  onClick={() => setBatchDialog("grant_reset")}
+                  disabled={!resource.ready || batchBusy || selectionCount === 0}
+                  onClick={() => openBatch("grant_reset")}
                 >
                   发放重置卡
                 </Button>
@@ -421,7 +505,8 @@ export function ConsumersPage() {
                   size="sm"
                   variant="destructive"
                   type="button"
-                  onClick={() => setBatchDialog("delete")}
+                  disabled={!resource.ready || batchBusy || selectionCount === 0}
+                  onClick={() => openBatch("delete")}
                 >
                   删除
                 </Button>
@@ -471,38 +556,47 @@ export function ConsumersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {["选择", "虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "操作"].map(
-                    (label) => (
-                      <TableHead key={label} scope="col">
-                        {label}
-                      </TableHead>
-                    ),
-                  )}
+                  {[
+                    "选择",
+                    "虚拟账户",
+                    "提供商",
+                    "当前权益",
+                    "订阅到期",
+                    "登录状态",
+                    "额度",
+                    "操作",
+                  ].map((label) => (
+                    <TableHead key={label} scope="col">
+                      {label}
+                    </TableHead>
+                  ))}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {items.length ? (
                   <>
-                    {pagination.rows.map((account) => (
+                    {items.map((account) => (
                       <TableRow key={account.id}>
                         <TableCell>
                           <Checkbox
                             aria-label={`选择 ${account.name}`}
-                            checked={selected.has(account.id)}
-                            onCheckedChange={(checked) => {
-                              const next = new Set(selected);
-                              if (checked === true) next.add(account.id);
-                              else next.delete(account.id);
-                              setSelected(next);
-                              setSelectAllMatching(false);
-                            }}
+                            checked={isSelected(account.id)}
+                            disabled={!resource.ready || batchBusy}
+                            onCheckedChange={(checked) => toggleIds([account.id], checked === true)}
                           />
                         </TableCell>
                         <TableCell>
-                          <Link href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}>
+                          <Link
+                            className="block max-w-56 truncate"
+                            title={account.name}
+                            href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}
+                          >
                             <strong>{account.name}</strong>
                           </Link>
-                          <CardDescription>
+                          <CardDescription
+                            className="max-w-56 truncate"
+                            title={`${account.username} · ${account.email}`}
+                          >
                             {account.username} · {account.email}
                           </CardDescription>
                         </TableCell>
@@ -523,6 +617,49 @@ export function ConsumersPage() {
                             {account.enabled ? "已启用" : "已停用"}
                           </Badge>
                         </TableCell>
+                        <TableCell>
+                          <div className="flex w-64 flex-wrap gap-2" aria-label="账户额度">
+                            {account.quota.windows.map((window) => (
+                              <div
+                                key={window.id}
+                                className="min-w-0 flex-1 basis-28 space-y-1 text-xs"
+                              >
+                                <div
+                                  className="truncate"
+                                  title={
+                                    window.reset_at == null
+                                      ? "首次使用后计时"
+                                      : quotaResetLabel(window.reset_at, now)
+                                  }
+                                >
+                                  {quotaWindowLabel(window)}：
+                                  {window.reset_at == null
+                                    ? "首次使用后计时"
+                                    : quotaResetLabel(window.reset_at, now)}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {window.used_percent != null ? (
+                                    <>
+                                      <Progress
+                                        value={Math.min(100, window.used_percent)}
+                                        className="h-1 flex-1 [&>[data-slot=progress-indicator]]:bg-foreground"
+                                        aria-label={quotaWindowLabel(window) + "额度已用"}
+                                      />
+                                      <span className="shrink-0 whitespace-nowrap tabular-nums">
+                                        {percentLabel(window.used_percent)}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span className="text-muted-foreground">不限额</span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                            {account.quota.windows.length === 0 && (
+                              <span className="text-xs text-muted-foreground">不限额</span>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell>{accountActions(account)}</TableCell>
                       </TableRow>
                     ))}
@@ -531,8 +668,16 @@ export function ConsumersPage() {
                   <TableRow>
                     <TableCell
                       colSpan={
-                        ["选择", "虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "操作"]
-                          .length
+                        [
+                          "选择",
+                          "虚拟账户",
+                          "提供商",
+                          "当前权益",
+                          "订阅到期",
+                          "登录状态",
+                          "额度",
+                          "操作",
+                        ].length
                       }
                     >
                       <Empty>
@@ -545,19 +690,14 @@ export function ConsumersPage() {
             </Table>
           ) : items.length ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {pagination.rows.map((account) => (
+              {items.map((account) => (
                 <Card key={account.id}>
                   <CardContent className="space-y-4">
                     <Checkbox
                       aria-label={`选择 ${account.name}`}
-                      checked={selected.has(account.id)}
-                      onCheckedChange={(checked) => {
-                        const next = new Set(selected);
-                        if (checked === true) next.add(account.id);
-                        else next.delete(account.id);
-                        setSelected(next);
-                        setSelectAllMatching(false);
-                      }}
+                      checked={isSelected(account.id)}
+                      disabled={!resource.ready || batchBusy}
+                      onCheckedChange={(checked) => toggleIds([account.id], checked === true)}
                     />
                     <div className="flex items-start justify-between gap-2">
                       <div>
@@ -595,6 +735,44 @@ export function ConsumersPage() {
                           </Field>
                         ))}
                       </FieldGroup>
+                    </div>
+                    <div className="flex w-64 flex-wrap gap-2" aria-label="账户额度">
+                      {account.quota.windows.map((window) => (
+                        <div key={window.id} className="min-w-0 flex-1 basis-28 space-y-1 text-xs">
+                          <div
+                            className="truncate"
+                            title={
+                              window.reset_at == null
+                                ? "首次使用后计时"
+                                : quotaResetLabel(window.reset_at, now)
+                            }
+                          >
+                            {quotaWindowLabel(window)}：
+                            {window.reset_at == null
+                              ? "首次使用后计时"
+                              : quotaResetLabel(window.reset_at, now)}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {window.used_percent != null ? (
+                              <>
+                                <Progress
+                                  value={Math.min(100, window.used_percent)}
+                                  className="h-1 flex-1 [&>[data-slot=progress-indicator]]:bg-foreground"
+                                  aria-label={quotaWindowLabel(window) + "额度已用"}
+                                />
+                                <span className="shrink-0 whitespace-nowrap tabular-nums">
+                                  {percentLabel(window.used_percent)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground">不限额</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {account.quota.windows.length === 0 && (
+                        <span className="text-xs text-muted-foreground">不限额</span>
+                      )}
                     </div>
                     <div className="border-t pt-3">{accountActions(account)}</div>
                   </CardContent>
@@ -682,113 +860,129 @@ export function ConsumersPage() {
         </PaginationContent>
       </Pagination>
       <Dialog
-        open={batchDialog !== null}
+        open={batchOpen}
         onOpenChange={(open) => {
-          if (!open && !actions.running.size) setBatchDialog(null);
+          if (!open && !batchBusy) setBatchOpen(false);
         }}
       >
-        <DialogContent showCloseButton={false} aria-describedby={undefined}>
+        <DialogContent
+          {...dialogFocus}
+          showCloseButton={false}
+          aria-describedby={undefined}
+          onEscapeKeyDown={(event) => {
+            if (batchBusy) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (batchBusy) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
-              {batchDialog === "grant_reset"
+              {batchDialog?.operation === "grant_reset"
                 ? "发放重置卡"
-                : batchDialog === "reset"
+                : batchDialog?.operation === "reset"
                   ? "重置用量"
                   : "删除虚拟账户"}
             </DialogTitle>
           </DialogHeader>
-          {batchDialog === "grant_reset" && (
-            <div className="grid gap-3">
-              <Field>
-                <FieldLabel>发放数量（每个账户）</FieldLabel>
-                <Input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={grantQuantity}
-                  onChange={(e) => setGrantQuantity(e.target.value)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel>启用时间</FieldLabel>
-                <Input
-                  type="datetime-local"
-                  value={grantActivateAt}
-                  onChange={(e) => setGrantActivateAt(e.target.value)}
-                />
-                <FieldDescription>留空表示立即启用；启用前客户端不会看到重置卡。</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel>有效时长</FieldLabel>
-                <Select value={grantDuration} onValueChange={setGrantDuration}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">1 天</SelectItem>
-                    <SelectItem value="7">7 天</SelectItem>
-                    <SelectItem value="30">30 天</SelectItem>
-                    <SelectItem value="90">90 天</SelectItem>
-                    <SelectItem value="365">365 天</SelectItem>
-                  </SelectContent>
-                </Select>
-                <FieldDescription>从启用时间开始计算，默认 30 天。</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel>管理备注</FieldLabel>
-                <Input
-                  maxLength={256}
-                  value={grantNote}
-                  onChange={(e) => setGrantNote(e.target.value)}
-                />
-              </Field>
-            </div>
-          )}
-          {batchDialog !== "grant_reset" && (
-            <CardDescription>
-              {batchDialog === "delete"
-                ? `将删除 ${selectionCount} 个账户并撤销登录，历史记录也会随账户删除。`
-                : `将为 ${selectionCount} 个账户清零当前用量并重新开始额度周期，订阅到期时间不变。`}
-            </CardDescription>
-          )}
-          <div className="flex justify-end gap-2">
-            <DialogClose asChild>
-              <Button variant="outline">取消</Button>
-            </DialogClose>
-            <Button
-              variant={batchDialog === "delete" ? "destructive" : "default"}
-              disabled={actions.isBusy("consumer-batch")}
-              onClick={() =>
-                void actions.run(
-                  "consumer-batch",
-                  async () => {
-                    if (batchDialog === "grant_reset") {
-                      const activate_at = grantActivateAt
-                        ? new Date(grantActivateAt).toISOString()
-                        : null;
-                      await runBatch("grant_reset", {
-                        quantity: Number(grantQuantity),
-                        note: grantNote.trim(),
-                        activate_at,
-                        duration_days: Number(grantDuration),
-                      });
-                    } else await runBatch(batchDialog === "delete" ? "delete" : "reset");
-                  },
-                  {
-                    success:
-                      batchDialog === "grant_reset"
-                        ? "重置卡已发放"
-                        : batchDialog === "reset"
-                          ? "用量已重置"
-                          : "账户已删除",
-                    danger: batchDialog === "delete",
-                  },
-                )
-              }
-            >
-              确认
-            </Button>
-          </div>
+          <form
+            noValidate
+            onSubmit={(event) => actions.submit(event, "consumer-batch", runBatch, "")}
+          >
+            <FieldSet disabled={batchBusy || !resource.ready || !batchOpen} className="gap-3">
+              <CardDescription>
+                已选择 {batchDialog?.count ?? 0} 个账户
+                {batchDialog?.selection.all_matching ? "（全部筛选结果）" : ""}
+              </CardDescription>
+              {batchDialog?.operation === "grant_reset" ? (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor={`${fieldId}-batch-quantity`}>
+                      发放数量（每个账户）
+                    </FieldLabel>
+                    <Input
+                      id={`${fieldId}-batch-quantity`}
+                      type="number"
+                      min={1}
+                      max={100}
+                      step={1}
+                      required
+                      value={grantQuantity}
+                      onChange={(e) => setGrantQuantity(e.target.value)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${fieldId}-batch-mode`}>启用方式</FieldLabel>
+                    <Select
+                      value={grantStartMode}
+                      onValueChange={setGrantStartMode}
+                      disabled={batchBusy}
+                    >
+                      <SelectTrigger id={`${fieldId}-batch-mode`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="now">立即启用</SelectItem>
+                        <SelectItem value="scheduled">定时启用</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  {grantStartMode === "scheduled" && (
+                    <Field>
+                      <FieldLabel htmlFor={`${fieldId}-batch-start`}>启用时间</FieldLabel>
+                      <Input
+                        id={`${fieldId}-batch-start`}
+                        type="datetime-local"
+                        required
+                        value={grantActivateAt}
+                        onChange={(e) => setGrantActivateAt(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                  <Field>
+                    <FieldLabel htmlFor={`${fieldId}-batch-duration`}>有效时长（天）</FieldLabel>
+                    <Input
+                      id={`${fieldId}-batch-duration`}
+                      type="number"
+                      min={1}
+                      max={3650}
+                      step={1}
+                      required
+                      value={grantDuration}
+                      onChange={(e) => setGrantDuration(e.target.value)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${fieldId}-batch-note`}>管理备注</FieldLabel>
+                    <Input
+                      id={`${fieldId}-batch-note`}
+                      maxLength={256}
+                      value={grantNote}
+                      onChange={(e) => setGrantNote(e.target.value)}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <CardDescription>
+                  {batchDialog?.operation === "delete"
+                    ? "删除所选账户并撤销登录？"
+                    : "重置所选账户用量及周期？订阅到期时间不变。"}
+                </CardDescription>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setBatchOpen(false)}>
+                  取消
+                </Button>
+                <Button
+                  type="submit"
+                  variant={batchDialog?.operation === "delete" ? "destructive" : "default"}
+                  disabled={!batchDialog || batchDialog.count === 0 || !resource.ready || batchBusy}
+                >
+                  {batchBusy && <Spinner />}确认
+                </Button>
+              </div>
+            </FieldSet>
+          </form>
         </DialogContent>
       </Dialog>
       {create && (
@@ -1166,7 +1360,7 @@ export function ConsumerDetail() {
 }
 type ResetCreditRecord = {
   id: string;
-  status: "available" | "redeemed" | "pending" | "expired";
+  status: "available" | "redeemed" | "pending" | "expired" | "not_applied";
   granted_at: string;
   redeemed_at: string | null;
   redeemed_by: string | null;
@@ -1174,9 +1368,13 @@ type ResetCreditRecord = {
   note: string;
   available_at: string;
   expires_at: string | null;
+  source: "card" | "admin_reset";
 };
 function ConsumerResetCredits({ id }: { id: string }) {
   const fieldId = useId();
+  const dialogFocus = useDialogFocus();
+  const [grantOpen, setGrantOpen] = useState(false);
+  const [startMode, setStartMode] = useState("now");
   const path = `/consumers/${encodeURIComponent(id)}/reset-credits`;
   const resource = useResource<List<ResetCreditRecord> & { available_count: number }>(path);
   const actions = useActions();
@@ -1191,102 +1389,172 @@ function ConsumerResetCredits({ id }: { id: string }) {
   useErrorToast(resource.error);
   return (
     <>
-      <form
-        noValidate
-        className="flex flex-wrap items-end gap-3"
-        onSubmit={(event) =>
-          actions.submit(
-            event,
-            `reset-credits-${id}`,
-            async () => {
-              const signature = JSON.stringify([quantity, note.trim(), activateAt, durationDays]);
-              if (grantAttempt.current?.signature !== signature)
-                grantAttempt.current = { signature, id: crypto.randomUUID() };
-              await request(path, {
-                method: "POST",
-                body: {
-                  request_id: grantAttempt.current.id,
-                  quantity: Number(quantity),
-                  note: note.trim(),
-                  activate_at: activateAt ? new Date(activateAt).toISOString() : null,
-                  duration_days: Number(durationDays),
-                },
-              });
-              grantAttempt.current = null;
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          disabled={!resource.ready || busy}
+          onClick={() => {
+            if (!grantAttempt.current) {
+              setStartMode("now");
+              setActivateAt("");
+              setDurationDays("30");
+              setQuantity("1");
               setNote("");
-              resource.reload();
-            },
-            "重置卡已发放",
-          )
-        }
-      >
-        <Field className="w-24">
-          <FieldLabel htmlFor={`${fieldId}-quantity`}>发放数量</FieldLabel>
-          <Input
-            id={`${fieldId}-quantity`}
-            type="number"
-            min={1}
-            max={100}
-            step={1}
-            required
-            value={quantity}
-            onChange={(event) => setQuantity(event.target.value)}
-            disabled={!resource.ready || busy}
-          />
-        </Field>
-        <Field className="w-64">
-          <FieldLabel htmlFor={`${fieldId}-note`}>管理备注</FieldLabel>
-          <Input
-            id={`${fieldId}-note`}
-            maxLength={256}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            disabled={!resource.ready || busy}
-          />
-        </Field>
-        <Field className="w-56">
-          <FieldLabel htmlFor={`${fieldId}-activate`}>启用时间</FieldLabel>
-          <Input
-            id={`${fieldId}-activate`}
-            type="datetime-local"
-            value={activateAt}
-            onChange={(event) => setActivateAt(event.target.value)}
-            disabled={!resource.ready || busy}
-          />
-          <FieldDescription>留空立即启用；启用前客户端不可见。</FieldDescription>
-        </Field>
-        <Field className="w-32">
-          <FieldLabel>有效时长</FieldLabel>
-          <Select
-            value={durationDays}
-            onValueChange={setDurationDays}
-            disabled={!resource.ready || busy}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1">1 天</SelectItem>
-              <SelectItem value="7">7 天</SelectItem>
-              <SelectItem value="30">30 天</SelectItem>
-              <SelectItem value="90">90 天</SelectItem>
-              <SelectItem value="365">365 天</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-        <Button type="submit" size="sm" disabled={!resource.ready || busy}>
-          {busy && <Spinner />}发放重置卡
+            }
+            setGrantOpen(true);
+          }}
+        >
+          发放重置卡
         </Button>
         <Badge variant="secondary">可用 {resource.data?.available_count ?? "—"} 张</Badge>
-      </form>
-      <CardDescription>
-        每张可使用一次，清零当前两层用量并重新计时：外层从用卡时开始，5
-        小时内层从下次使用开始。订阅到期时间和历史账单保持不变；无当前用量或订阅已到期时不扣卡。
-      </CardDescription>
+      </div>
+      <Dialog
+        open={grantOpen}
+        onOpenChange={(open) => {
+          if (!busy) setGrantOpen(open);
+        }}
+      >
+        <DialogContent
+          {...dialogFocus}
+          showCloseButton={false}
+          aria-describedby={undefined}
+          onEscapeKeyDown={(e) => {
+            if (busy) e.preventDefault();
+          }}
+          onInteractOutside={(e) => {
+            if (busy) e.preventDefault();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>发放重置卡</DialogTitle>
+          </DialogHeader>
+          <form
+            noValidate
+            className="grid gap-3"
+            onSubmit={(event) =>
+              actions.submit(
+                event,
+                `reset-credits-${id}`,
+                async () => {
+                  const signature = JSON.stringify([
+                    quantity,
+                    note.trim(),
+                    startMode,
+                    activateAt,
+                    durationDays,
+                  ]);
+                  if (grantAttempt.current?.signature !== signature)
+                    grantAttempt.current = { signature, id: crypto.randomUUID() };
+                  await request(path, {
+                    method: "POST",
+                    body: {
+                      request_id: grantAttempt.current.id,
+                      quantity: Number(quantity),
+                      note: note.trim(),
+                      activate_at:
+                        startMode === "scheduled" ? new Date(activateAt).toISOString() : null,
+                      duration_days: Number(durationDays),
+                    },
+                  });
+                  grantAttempt.current = null;
+                  setNote("");
+                  setGrantOpen(false);
+                  resource.reload();
+                },
+                "重置卡已发放",
+              )
+            }
+          >
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-quantity`}>发放数量</FieldLabel>
+              <Input
+                id={`${fieldId}-quantity`}
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                required
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+                disabled={!resource.ready || busy}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-note`}>管理备注</FieldLabel>
+              <Input
+                id={`${fieldId}-note`}
+                maxLength={256}
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!resource.ready || busy}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-start-mode`}>启用方式</FieldLabel>
+              <Select
+                value={startMode}
+                onValueChange={setStartMode}
+                disabled={!resource.ready || busy}
+              >
+                <SelectTrigger id={`${fieldId}-start-mode`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="now">立即启用</SelectItem>
+                  <SelectItem value="scheduled">定时启用</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            {startMode === "scheduled" && (
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-activate`}>启用时间</FieldLabel>
+                <Input
+                  id={`${fieldId}-activate`}
+                  type="datetime-local"
+                  required
+                  value={activateAt}
+                  onChange={(event) => setActivateAt(event.target.value)}
+                  disabled={!resource.ready || busy}
+                />
+              </Field>
+            )}
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-duration`}>有效时长（天）</FieldLabel>
+              <Input
+                id={`${fieldId}-duration`}
+                type="number"
+                min={1}
+                max={3650}
+                step={1}
+                required
+                value={durationDays}
+                onChange={(e) => setDurationDays(e.target.value)}
+                disabled={!resource.ready || busy}
+              />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setGrantOpen(false)}
+              >
+                取消
+              </Button>
+              <Button type="submit" disabled={!resource.ready || busy}>
+                {busy && <Spinner />}确认发放
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead>类型</TableHead>
             <TableHead>发放时间</TableHead>
+            <TableHead>启用时间</TableHead>
+            <TableHead>到期时间</TableHead>
             <TableHead>状态</TableHead>
             <TableHead>使用时间</TableHead>
             <TableHead>使用方</TableHead>
@@ -1298,13 +1566,20 @@ function ConsumerResetCredits({ id }: { id: string }) {
         <TableBody>
           {rows.rows.map((credit) => (
             <TableRow key={credit.id}>
+              <TableCell>{credit.source === "admin_reset" ? "管理员直接重置" : "重置卡"}</TableCell>
               <TableCell>{date(credit.granted_at)}</TableCell>
+              <TableCell>{date(credit.available_at)}</TableCell>
+              <TableCell>{date(credit.expires_at)}</TableCell>
               <TableCell>
                 <Badge variant="outline">
                   {
-                    { available: "可用", redeemed: "已使用", pending: "待启用", expired: "已过期" }[
-                      credit.status
-                    ]
+                    {
+                      available: "可用",
+                      redeemed: "已使用",
+                      pending: "待启用",
+                      expired: "已过期",
+                      not_applied: "未执行",
+                    }[credit.status]
                   }
                 </Badge>
               </TableCell>
@@ -1324,7 +1599,12 @@ function ConsumerResetCredits({ id }: { id: string }) {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={!resource.ready || busy || credit.status !== "available"}
+                  disabled={
+                    !resource.ready ||
+                    busy ||
+                    credit.status !== "available" ||
+                    credit.source !== "card"
+                  }
                   onClick={() =>
                     actions.run(
                       `reset-credits-${id}`,
@@ -1363,7 +1643,7 @@ function ConsumerResetCredits({ id }: { id: string }) {
           ))}
           {rows.rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={7} className="text-center text-muted-foreground">
+              <TableCell colSpan={10} className="text-center text-muted-foreground">
                 {resource.loading
                   ? "正在加载重置卡"
                   : resource.data

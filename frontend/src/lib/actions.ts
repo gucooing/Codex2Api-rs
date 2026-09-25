@@ -36,6 +36,34 @@ export function toastError(error: unknown) {
           : "操作失败，请重试。";
   toast.error(message, { id: `error-${message}`, duration: 5000 });
 }
+
+export async function copyElementText(element: HTMLElement | null) {
+  if (!element) throw new Error("授权地址不可用");
+  const text = element.textContent ?? "";
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      /* HTTP origins and denied permissions use selection copying below. */
+    }
+  }
+  const selection = window.getSelection();
+  if (!selection) throw new Error("复制失败，请手动复制授权地址");
+  const previous = Array.from({ length: selection.rangeCount }, (_, index) =>
+    selection.getRangeAt(index).cloneRange(),
+  );
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  try {
+    if (!document.execCommand("copy")) throw new Error("复制失败，请手动复制授权地址");
+  } finally {
+    selection.removeAllRanges();
+    previous.forEach((range) => selection.addRange(range));
+  }
+}
 export function useErrorToast(message: string | undefined | null) {
   useEffect(() => {
     if (message) toastError(message);

@@ -10,7 +10,7 @@
     "supplier_count": 1,
     "consumer_count": 1,
     "enabled_consumers": 1,
-    "models_count": 5
+    "models_count": 7
   },
   "plans": {
     "items": [
@@ -500,6 +500,126 @@
             "cached_rate": "2",
             "cache_write_rate": "25",
             "output_rate": "75"
+          }
+        ],
+        "image_prices": []
+      },
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-6-luna",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "verified",
+        "codex_metadata_source": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "0.2",
+            "cached_rate": "0.02",
+            "cache_write_rate": "0.25",
+            "output_rate": "1"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "0.4",
+            "cached_rate": "0.04",
+            "cache_write_rate": "0.5",
+            "output_rate": "1.5"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "0.05",
+            "cached_rate": "0.005",
+            "cache_write_rate": "0.0625",
+            "output_rate": "0.25"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "0.1",
+            "cached_rate": "0.01",
+            "cache_write_rate": "0.125",
+            "output_rate": "0.375"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "0.1",
+            "cached_rate": "0.01",
+            "cache_write_rate": "0.125",
+            "output_rate": "0.5"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "0.2",
+            "cached_rate": "0.02",
+            "cache_write_rate": "0.25",
+            "output_rate": "0.75"
+          }
+        ],
+        "image_prices": []
+      },
+      {
+        "provider_id": "chatgpt",
+        "model": "gpt-6-sol",
+        "kind": "text",
+        "enabled": true,
+        "revision": 1,
+        "codex_metadata_status": "verified",
+        "codex_metadata_source": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
+        "token_prices": [
+          {
+            "tier": "fast",
+            "min_input_tokens": 0,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "20"
+          },
+          {
+            "tier": "fast",
+            "min_input_tokens": 272001,
+            "input_rate": "8",
+            "cached_rate": "0.8",
+            "cache_write_rate": "10",
+            "output_rate": "30"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 0,
+            "input_rate": "1",
+            "cached_rate": "0.1",
+            "cache_write_rate": "1.25",
+            "output_rate": "5"
+          },
+          {
+            "tier": "flex",
+            "min_input_tokens": 272001,
+            "input_rate": "2",
+            "cached_rate": "0.2",
+            "cache_write_rate": "2.5",
+            "output_rate": "7.5"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 0,
+            "input_rate": "2",
+            "cached_rate": "0.2",
+            "cache_write_rate": "2.5",
+            "output_rate": "10"
+          },
+          {
+            "tier": "standard",
+            "min_input_tokens": 272001,
+            "input_rate": "4",
+            "cached_rate": "0.4",
+            "cache_write_rate": "5",
+            "output_rate": "15"
           }
         ],
         "image_prices": []

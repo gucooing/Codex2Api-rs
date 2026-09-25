@@ -24,11 +24,50 @@ async fn require(state: &AdminState, id: &str) -> Result<VirtualAccount, ApiErro
         .await?
         .ok_or_else(ApiError::missing)
 }
-pub async fn list(
-    State(s): State<AdminState>,
-    Query(q): Query<super::dto::AccountListQuery>,
-) -> ApiResult {
-    let accounts = match q.search_params()? {
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConsumerListQuery {
+    page: Option<u32>,
+    page_size: Option<u32>,
+    search: Option<String>,
+    status: String,
+    subscription: String,
+    limit: Option<u32>,
+    provider_id: Option<String>,
+    for_routing: bool,
+}
+pub async fn list(State(s): State<AdminState>, Query(q): Query<ConsumerListQuery>) -> ApiResult {
+    if q.page.is_some()
+        || q.page_size.is_some()
+        || !q.status.is_empty()
+        || !q.subscription.is_empty()
+    {
+        let filters = codex2api_storage::ConsumerFilters {
+            search: q.search.unwrap_or_default(),
+            status: q.status,
+            subscription: q.subscription,
+        };
+        let (accounts, total, page) = s
+            .storage
+            .virtual_account_page(&filters, q.page.unwrap_or(1), q.page_size)
+            .await?;
+        let mut items = Vec::new();
+        for account in accounts {
+            let mut row = dto(&s, &account).await?;
+            row["quota"] = s.storage.virtual_list_quota(&account).await?;
+            items.push(row);
+        }
+        return Ok(Json(
+            json!({"items":items,"total":total,"page":page,"page_size":q.page_size.unwrap_or(20)}),
+        ));
+    }
+    let legacy = super::dto::AccountListQuery {
+        search: q.search,
+        limit: q.limit,
+        provider_id: q.provider_id,
+        for_routing: q.for_routing,
+    };
+    let accounts = match legacy.search_params()? {
         Some((search, limit)) => s.storage.search_virtual_accounts(search, limit).await?,
         None => s.storage.virtual_accounts().await?,
     };
@@ -39,107 +78,53 @@ pub async fn list(
     Ok(Json(json!({"items":items})))
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct BatchFilters {
-    search: String,
-    status: String,
-    subscription: String,
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BatchInput {
+    request_id: String,
     operation: String,
     #[serde(default)]
     ids: Vec<String>,
     #[serde(default)]
     all_matching: bool,
     #[serde(default)]
-    filters: BatchFilters,
+    filters: codex2api_storage::ConsumerFilters,
     #[serde(default)]
-    quantity: i64,
-    #[serde(default)]
-    note: String,
-    #[serde(default)]
-    activate_at: Option<String>,
-    #[serde(default = "default_reset_duration_days")]
-    duration_days: i64,
+    excluded_ids: Vec<String>,
+    quantity: Option<i64>,
+    note: Option<String>,
+    activate_at: Option<chrono::DateTime<chrono::Utc>>,
+    duration_days: Option<i64>,
 }
 pub async fn batch(State(s): State<AdminState>, Json(input): Json<BatchInput>) -> ApiResult {
-    if !input.all_matching && input.ids.is_empty() {
-        return Err(ApiError::bad("请选择虚拟账户或当前筛选结果"));
-    }
-    let ids = if input.all_matching {
-        let enabled = match input.filters.status.as_str() {
-            "" => None,
-            "enabled" => Some(true),
-            "disabled" => Some(false),
-            _ => return Err(ApiError::bad("登录状态筛选无效")),
-        };
-        s.storage
-            .virtual_account_ids_matching(
-                &input.filters.search,
-                enabled,
-                Some(&input.filters.subscription),
-            )
-            .await?
+    let grant = if input.operation == "grant_reset" {
+        Some(codex2api_storage::ResetCardGrant {
+            quantity: input.quantity.unwrap_or(0),
+            note: input.note.unwrap_or_default().trim().into(),
+            activate_at: input.activate_at,
+            duration_days: input.duration_days.unwrap_or(30),
+        })
     } else {
-        input.ids
+        if input.quantity.is_some()
+            || input.note.is_some()
+            || input.activate_at.is_some()
+            || input.duration_days.is_some()
+        {
+            return Err(ApiError::bad("只有发卡操作可提交发卡参数"));
+        }
+        None
     };
-    if ids.is_empty() {
-        return Ok(Json(json!({"ok":true,"affected":0})));
-    }
-    match input.operation.as_str() {
-        "delete" => {
-            for id in &ids {
-                s.storage.delete_virtual_account(id).await?;
-            }
-        }
-        "reset" => {
-            for id in &ids {
-                let value = s.storage.admin_reset_virtual_quota(id, "admin").await?;
-                if value["code"] == "nothing_to_reset" {
-                    continue;
-                }
-            }
-        }
-        "grant_reset" => {
-            if !(1..=100).contains(&input.quantity) {
-                return Err(ApiError::bad("每个账户发放数量须为 1 至 100"));
-            }
-            let available_at = input
-                .activate_at
-                .as_deref()
-                .filter(|v| !v.trim().is_empty())
-                .map(|v| {
-                    chrono::DateTime::parse_from_rfc3339(v)
-                        .map(|d| d.timestamp_millis())
-                        .map_err(|_| ApiError::bad("启用时间须为 RFC3339 格式"))
-                })
-                .transpose()?
-                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-            if !(1..=3650).contains(&input.duration_days) {
-                return Err(ApiError::bad("有效时长须为 1 至 3650 天"));
-            }
-            let expires = available_at
-                .checked_add(input.duration_days.saturating_mul(86_400_000))
-                .ok_or_else(|| ApiError::bad("有效时长无效"))?;
-            for id in &ids {
-                s.storage
-                    .grant_virtual_reset_credits_scheduled(
-                        id,
-                        &format!("batch-grant-{}-{}", uuid::Uuid::new_v4(), id),
-                        input.quantity,
-                        input.note.trim(),
-                        available_at,
-                        Some(expires),
-                    )
-                    .await?;
-            }
-        }
-        _ => return Err(ApiError::bad("批量操作类型无效")),
-    }
-    Ok(Json(json!({"ok":true,"affected":ids.len()})))
+    let selection = codex2api_storage::ConsumerSelection {
+        ids: input.ids,
+        all_matching: input.all_matching,
+        filters: input.filters,
+        excluded_ids: input.excluded_ids,
+    };
+    Ok(Json(
+        s.storage
+            .consumer_batch(&input.request_id, &input.operation, selection, grant)
+            .await?,
+    ))
 }
 pub async fn detail(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     Ok(Json(dto(&s, &require(&s, &id).await?).await?))
@@ -266,7 +251,7 @@ pub struct ResetGrant {
     #[serde(default)]
     note: String,
     #[serde(default)]
-    activate_at: Option<String>,
+    activate_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default = "default_reset_duration_days")]
     duration_days: i64,
 }
@@ -279,32 +264,14 @@ pub async fn grant_reset_credits(
     Json(input): Json<ResetGrant>,
 ) -> ApiResult {
     require(&s, &id).await?;
-    let available_at = input
-        .activate_at
-        .as_deref()
-        .filter(|v| !v.trim().is_empty())
-        .map(|v| {
-            chrono::DateTime::parse_from_rfc3339(v)
-                .map(|d| d.timestamp_millis())
-                .map_err(|_| ApiError::bad("启用时间须为 RFC3339 格式"))
-        })
-        .transpose()?
-        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-    if !(1..=3650).contains(&input.duration_days) {
-        return Err(ApiError::bad("有效时长须为 1 至 3650 天"));
-    }
-    let expires_at = available_at
-        .checked_add(input.duration_days.saturating_mul(86_400_000))
-        .ok_or_else(|| ApiError::bad("有效时长无效"))?;
+    let grant = codex2api_storage::ResetCardGrant {
+        quantity: input.quantity,
+        note: input.note.trim().into(),
+        activate_at: input.activate_at,
+        duration_days: input.duration_days,
+    };
     s.storage
-        .grant_virtual_reset_credits_scheduled(
-            &id,
-            &input.request_id,
-            input.quantity,
-            input.note.trim(),
-            available_at,
-            Some(expires_at),
-        )
+        .grant_virtual_reset_cards(&id, &input.request_id, &grant)
         .await?;
     Ok(Json(s.storage.virtual_reset_credit_records(&id).await?))
 }

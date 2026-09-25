@@ -15,7 +15,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Table2, LayoutGrid, Inbox, X } from "lucide-react";
+import { MoreHorizontal, Table2, LayoutGrid, Inbox, X, Copy } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import {
   Field,
@@ -47,7 +47,7 @@ import {
 } from "@/components/ui/table";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
 import { Badge } from "@/components/ui/badge";
-import { useActions, useErrorToast } from "@/lib/actions";
+import { useActions, useErrorToast, copyElementText } from "@/lib/actions";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -1300,11 +1300,40 @@ export function OAuthWizard({
                   ) : pending ? (
                     <>
                       {pending.authorize_url && (
-                        <Button asChild className="w-fit">
-                          <a href={pending.authorize_url} target="_blank" rel="noreferrer">
-                            打开官方授权页面
-                          </a>
-                        </Button>
+                        <Field>
+                          <FieldTitle>授权地址</FieldTitle>
+                          <div className="flex min-w-0 items-start gap-2">
+                            <a
+                              id={`${fieldId}-authorize-url`}
+                              className="min-w-0 flex-1 break-all text-sm underline underline-offset-4"
+                              href={pending.authorize_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {pending.authorize_url}
+                            </a>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={busy || actions.isBusy("copy-supplier-authorize")}
+                              onClick={() =>
+                                actions.run(
+                                  "copy-supplier-authorize",
+                                  async () => {
+                                    await copyElementText(
+                                      document.getElementById(`${fieldId}-authorize-url`),
+                                    );
+                                  },
+                                  { success: "授权地址已复制" },
+                                )
+                              }
+                            >
+                              <Copy />
+                              复制
+                            </Button>
+                          </div>
+                        </Field>
                       )}
                       {pending.verification_url && (
                         <Button asChild className="w-fit">

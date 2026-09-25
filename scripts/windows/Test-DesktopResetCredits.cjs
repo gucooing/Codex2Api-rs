@@ -26,7 +26,8 @@ const api = new Function('kg',
   for (const card of list.credits) {
     assert.equal(card.reset_type,'codex_rate_limits');
     assert(Number.isFinite(Date.parse(card.granted_at)));
-    assert.equal(card.expires_at,null);
+    assert(Number.isFinite(Date.parse(card.expires_at)));
+    assert(Date.parse(card.expires_at)>Date.parse(card.granted_at));
     assert(!('note' in card));
   }
   const selected = list.credits[0].id;

@@ -108,6 +108,14 @@ struct Event {
     data: Option<Vec<ImageOutput>>,
 }
 
+impl Event {
+    fn generation_message(&self) -> bool {
+        self.kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("response.") || kind == "error")
+    }
+}
+
 fn reported_model(headers: &serde_json::Value) -> Option<String> {
     fn string(value: &serde_json::Value) -> Option<&str> {
         match value {
@@ -260,11 +268,20 @@ impl RequestLog {
         }
         self.finish("failed");
     }
+    #[cfg(test)]
     fn first_byte(&mut self) {
+        self.first_message_at(Instant::now());
+    }
+    fn first_message_at(&mut self, received_at: Instant) {
         if let Some(record) = &mut self.record
             && record.first_byte_ms.is_none()
         {
-            record.first_byte_ms = Some(elapsed(self.start));
+            record.first_byte_ms = Some(
+                received_at
+                    .saturating_duration_since(self.start)
+                    .as_millis()
+                    .min(i64::MAX as u128) as i64,
+            );
         }
     }
     pub fn http_status(&mut self, status: u16) {
@@ -460,7 +477,11 @@ impl RequestLog {
             self.terminal = true;
         }
     }
+    #[cfg(test)]
     fn parse(&mut self, bytes: &[u8]) {
+        self.parse_at(bytes, Instant::now());
+    }
+    fn parse_at(&mut self, bytes: &[u8], received_at: Instant) {
         if bytes.trim_ascii() == b"[DONE]"
             && self
                 .record
@@ -476,6 +497,9 @@ impl RequestLog {
             return;
         }
         if let Ok(event) = serde_json::from_slice::<Event>(bytes) {
+            if event.generation_message() {
+                self.first_message_at(received_at);
+            }
             self.observe(&event);
         }
     }
@@ -593,9 +617,13 @@ struct BodyParser {
     skipped: bool,
     after_cr: bool,
     detected_sse: bool,
+    received_at: Option<Instant>,
 }
 impl BodyParser {
     fn feed(&mut self, bytes: &[u8], sse: bool, log: &mut RequestLog) {
+        if !bytes.is_empty() {
+            self.received_at = Some(Instant::now());
+        }
         if !sse && !self.detected_sse {
             if !self.skipped && self.data.len().saturating_add(bytes.len()) <= MAX_CAPTURE {
                 self.data.extend_from_slice(bytes);
@@ -642,7 +670,7 @@ impl BodyParser {
     fn line(&mut self, log: &mut RequestLog) {
         if self.line.is_empty() {
             if !self.skipped && !self.data.is_empty() {
-                log.parse(&self.data);
+                log.parse_at(&self.data, self.received_at.unwrap_or_else(Instant::now));
             }
             self.data.clear();
             self.skipped = false;
@@ -664,7 +692,12 @@ impl BodyParser {
             }
             self.line(log);
         } else if !self.skipped {
-            log.parse(&self.data);
+            // Non-streaming JSON has one message. SSE timing is set only by a
+            // complete generation event, never by comments or transport chunks.
+            if serde_json::from_slice::<serde::de::IgnoredAny>(&self.data).is_ok() {
+                log.first_message_at(self.received_at.unwrap_or_else(Instant::now));
+            }
+            log.parse_at(&self.data, self.received_at.unwrap_or_else(Instant::now));
         }
     }
 }
@@ -700,7 +733,6 @@ impl Stream for ObservedStream {
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(bytes))) => {
                 if !bytes.is_empty() {
-                    this.log.first_byte();
                     this.parser.feed(&bytes, this.sse, &mut this.log);
                 }
                 this.received_bytes = this.received_bytes.saturating_add(bytes.len() as u64);
@@ -846,17 +878,26 @@ impl WsLedger {
             log,
         });
     }
+    #[cfg(test)]
     pub async fn observe(&mut self, bytes: &[u8]) -> crate::Result<()> {
         self.observe_authorized(bytes, true).await
     }
-    /// Settle already-started work even when its credential was revoked in flight.
-    pub async fn observe_existing(&mut self, bytes: &[u8]) -> crate::Result<()> {
-        self.observe_authorized(bytes, false).await
-    }
+    #[cfg(test)]
     async fn observe_authorized(&mut self, bytes: &[u8], allow_new: bool) -> crate::Result<()> {
+        self.observe_at(bytes, allow_new, Instant::now()).await
+    }
+    pub(crate) async fn observe_at(
+        &mut self,
+        bytes: &[u8],
+        allow_new: bool,
+        received_at: Instant,
+    ) -> crate::Result<()> {
         let Ok(event) = serde_json::from_slice::<Event>(bytes) else {
             return Ok(());
         };
+        if !event.generation_message() {
+            return Ok(());
+        }
         // VAD may create a Realtime response without a client response.create.
         if allow_new
             && self.context.endpoint == "/v1/realtime"
@@ -906,7 +947,7 @@ impl WsLedger {
             slot.response_id = response_id.map(str::to_string);
         }
         if let Some(log) = &mut slot.log {
-            log.first_byte();
+            log.first_message_at(received_at);
             log.observe(&event);
         }
         if matches!(
@@ -1839,6 +1880,104 @@ mod tests {
             assert_eq!(row.reasoning_tokens, Some(0));
         }
         storage.close().await;
+    }
+
+    #[tokio::test]
+    async fn first_message_ignores_sse_heartbeats_fragments_invalid_json_and_quota_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("timing.sqlite"))
+            .await
+            .unwrap();
+        let start = Instant::now() - std::time::Duration::from_secs(1);
+        let mut log = context(storage.clone(), "/v1/responses", "http")
+            .start(RequestMetadata::default(), start, 1000)
+            .await
+            .unwrap();
+        let mut parser = BodyParser::default();
+        for frame in [
+            b": heartbeat\r\n\r\n".as_slice(),
+            b"data: {bad}\n\n",
+            b"data: {\"type\":\"codex.rate_limits\"}\n\n",
+            b"data: {\"type\":\"response.cre",
+        ] {
+            parser.feed(frame, true, &mut log);
+            assert_eq!(log.record.as_ref().unwrap().first_byte_ms, None);
+        }
+        parser.feed(b"ated\",\"response\":{\"id\":\"r\"}}\n\n", true, &mut log);
+        let first = log.record.as_ref().unwrap().first_byte_ms.unwrap();
+        assert!(first >= 1000);
+        parser.feed(
+            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"text\"}\n\n",
+            true,
+            &mut log,
+        );
+        assert_eq!(log.record.as_ref().unwrap().first_byte_ms, Some(first));
+        log.finish("completed");
+        finalized(&storage, 1).await;
+        let mut ledger =
+            WsLedger::new(execution_context(storage.clone(), "/v1/responses", "websocket").await);
+        let log = context(storage.clone(), "/v1/responses", "websocket")
+            .start(RequestMetadata::default(), start, 1000)
+            .await
+            .unwrap();
+        ledger.push(Some(log));
+        for frame in [
+            br#"{"type":"codex.rate_limits"}"#.as_slice(),
+            br#"{"type":"session.updated","response_id":"unrelated"}"#,
+            b"not JSON",
+        ] {
+            ledger
+                .observe_at(frame, true, start + std::time::Duration::from_millis(10))
+                .await
+                .unwrap();
+            assert_eq!(
+                ledger.slots[0]
+                    .log
+                    .as_ref()
+                    .unwrap()
+                    .record
+                    .as_ref()
+                    .unwrap()
+                    .first_byte_ms,
+                None
+            );
+            assert!(ledger.slots[0].response_id.is_none());
+        }
+        ledger
+            .observe_at(
+                br#"{"type":"response.created","response":{"id":"r"}}"#,
+                true,
+                start + std::time::Duration::from_millis(73),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ledger.slots[0]
+                .log
+                .as_ref()
+                .unwrap()
+                .record
+                .as_ref()
+                .unwrap()
+                .first_byte_ms,
+            Some(73)
+        );
+        ledger
+            .observe_at(
+                br#"{"type":"response.completed","response":{"id":"r"}}"#,
+                true,
+                Instant::now(),
+            )
+            .await
+            .unwrap();
+        let rows = finalized(&storage, 2).await;
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.transport == "websocket")
+                .unwrap()
+                .first_byte_ms,
+            Some(73)
+        );
     }
 
     // Accounting unit tests start directly at the ledger boundary. Authorization

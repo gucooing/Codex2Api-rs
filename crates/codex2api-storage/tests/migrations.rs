@@ -29,7 +29,7 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
     assert_eq!(quota["rate_limit"]["allowed"], true);
     assert_eq!(quota["billing"]["used_usd"], "7");
     assert!(quota["billing"].get("limit_usd").is_none());
-    assert_eq!(storage.model_prices("chatgpt").await.unwrap().len(), 30);
+    assert_eq!(storage.model_prices("chatgpt").await.unwrap().len(), 42);
     storage.close().await;
     let reopened = Storage::open(&path).await.unwrap();
     assert_eq!(
@@ -47,6 +47,138 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 }
 
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
+
+#[tokio::test]
+async fn gpt6_prices_seed_missing_models_without_overwriting_custom_or_deleted_catalog_entries() {
+    for state in ["absent", "custom", "deleted"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prices.sqlite");
+        let pool = SqlitePoolOptions::new()
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        Migrator {
+            migrations: Cow::Owned(
+                MIGRATIONS
+                    .iter()
+                    .filter(|m| m.version <= 41)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        }
+        .run(&pool)
+        .await
+        .unwrap();
+        if state != "absent" {
+            sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled,deleted,revision) VALUES('chatgpt','gpt-6-sol','text',0,?,3)")
+                .bind(i64::from(state=="deleted")).execute(&pool).await.unwrap();
+        }
+        if state == "custom" {
+            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source) VALUES('chatgpt','gpt-6-sol','standard',0,111,22,33,444,'custom')").execute(&pool).await.unwrap();
+        }
+        let before:Vec<(String,i64)>=sqlx::query_as("SELECT model,input_rate FROM model_prices WHERE model NOT IN ('gpt-6-sol','gpt-6-luna') ORDER BY model,tier,min_input_tokens").fetch_all(&pool).await.unwrap();
+        pool.close().await;
+        let storage = Storage::open(&path).await.unwrap();
+        let prices = storage.model_prices("chatgpt").await.unwrap();
+        let luna: Vec<_> = prices.iter().filter(|p| p.model == "gpt-6-luna").collect();
+        assert_eq!(luna.len(), 6);
+        assert_eq!(
+            luna.iter()
+                .find(|p| p.tier == "flex" && p.min_input_tokens == 0)
+                .unwrap()
+                .cache_write_rate,
+            62500
+        );
+        let sol: Vec<_> = prices.iter().filter(|p| p.model == "gpt-6-sol").collect();
+        match state {
+            "absent" => assert_eq!(sol.len(), 6),
+            "custom" => {
+                assert_eq!(sol.len(), 1);
+                assert_eq!(sol[0].input_rate, 111);
+            }
+            _ => assert!(sol.is_empty()),
+        }
+        let after:Vec<(String,i64)>=sqlx::query_as("SELECT model,input_rate FROM model_prices WHERE model NOT IN ('gpt-6-sol','gpt-6-luna') ORDER BY model,tier,min_input_tokens").fetch_all(storage.pool()).await.unwrap();
+        assert_eq!(before, after);
+        if state != "absent" {
+            assert!(
+                !storage
+                    .model_config("chatgpt", "gpt-6-sol")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .enabled
+            );
+        }
+        storage.close().await;
+        let storage = Storage::open(&path).await.unwrap();
+        assert_eq!(
+            storage.model_prices("chatgpt").await.unwrap().len(),
+            prices.len()
+        );
+    }
+}
+
+#[tokio::test]
+async fn gpt6_model_usage_bills_all_tiers_and_contexts_once_with_snapshot_prices() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("billing.sqlite"))
+        .await
+        .unwrap();
+    let prices = storage.model_prices("chatgpt").await.unwrap();
+    let mut expected = std::collections::BTreeMap::new();
+    for price in prices
+        .iter()
+        .filter(|p| matches!(p.model.as_str(), "gpt-6-sol" | "gpt-6-luna"))
+    {
+        let input = if price.min_input_tokens == 0 {
+            272000
+        } else {
+            272001
+        };
+        let id = format!("{}-{}-{}", price.model, price.tier, price.min_input_tokens);
+        let mut row = codex2api_storage::UsageRecord {
+            id: id.clone(),
+            subject_id: "consumer".into(),
+            model: Some(price.model.clone()),
+            service_tier: Some(price.tier.clone()),
+            endpoint: "/v1/responses".into(),
+            status: "in_progress".into(),
+            requested_at_ms: chrono::Utc::now().timestamp_millis(),
+            ..Default::default()
+        };
+        storage.insert_usage(&row).await.unwrap();
+        row.input_tokens = Some(input);
+        row.output_tokens = Some(20000);
+        row.cached_tokens = Some(50000);
+        row.cache_write_tokens = Some(10000);
+        row.reasoning_tokens = Some(5000);
+        row.status = "completed".into();
+        let nano = ((input - 60000) * price.input_rate
+            + 50000 * price.cached_rate
+            + 10000 * price.cache_write_rate
+            + 20000 * price.output_rate
+            + 500)
+            / 1000;
+        expected.insert(id, nano);
+        // Editing prices after the request starts cannot alter this request.
+        sqlx::query("UPDATE model_prices SET input_rate=input_rate+1 WHERE provider_id='chatgpt' AND model=? AND tier=? AND min_input_tokens=?")
+            .bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).execute(storage.pool()).await.unwrap();
+        storage.finish_usage(&row).await.unwrap();
+        storage.finish_usage(&row).await.unwrap();
+    }
+    let rows = storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(rows.total, 12);
+    for row in rows.records {
+        assert_eq!(row.cost_nano_usd, Some(expected[&row.id]));
+        assert_eq!(row.billing_status, "priced");
+    }
+}
 
 #[tokio::test]
 async fn startup_preserves_release_lf_checksums_and_rejects_changed_history() {
@@ -460,7 +592,7 @@ async fn billing_migration_keeps_token_history_without_converting_tokens_to_doll
     );
     let history:(i64,i64,String,Option<i64>)=sqlx::query_as("SELECT input_tokens,output_tokens,billing_status,cost_nano_usd FROM usage_records WHERE id='test'").fetch_one(storage.pool()).await.unwrap();
     assert_eq!(history, (123, 45, "legacy".into(), None));
-    assert_eq!(storage.model_prices("chatgpt").await.unwrap().len(), 30);
+    assert_eq!(storage.model_prices("chatgpt").await.unwrap().len(), 42);
     storage.close().await;
 }
 

@@ -237,6 +237,7 @@ pub(crate) async fn bridge_recorded(
     };
     let to_client = async {
         while let Some(message) = upstream_rx.next().await {
+            let received_at = std::time::Instant::now();
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
@@ -265,11 +266,7 @@ pub(crate) async fn bridge_recorded(
             };
             if let Some(bytes) = bytes {
                 let mut ledger = ledger.lock().await;
-                if allowed {
-                    ledger.observe(bytes).await?;
-                } else {
-                    ledger.observe_existing(bytes).await?;
-                }
+                ledger.observe_at(bytes, allowed, received_at).await?;
             }
             if !allowed {
                 return Err(crate::ApiError::invalid_token());

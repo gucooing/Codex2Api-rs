@@ -123,6 +123,10 @@ Do not share those across accounts.
 
 ### 模型配置和图像计费（2026-09-22）
 
+2026-09-25 管理表单将标准档价格按基础区间与自定义上下文起点组织，Fast／Flex 使用倍率。倍率通过十进制定点数展开为原有绝对价格规则，保存仍使用现有版本校验、价格快照和结算链路。无法无损表示为统一倍率的旧档位显示其原有自定义价格，不自动重算。图像价格规则不变。
+
+迁移 `0042_gpt6_sol_luna_prices.sql` 按 2026-09-25 实际读取的[官方定价页](https://developers.openai.com/api/docs/pricing)补齐 GPT-6 Sol／Luna 的目录与 Standard、Fast、Flex 短／长上下文价格。超过 272000 输入 Token 时选择长上下文价格；已有自定义、删除或不同计费类型的配置保留，不追加管理员可能有意省略的档位，不重算历史。具体倍率也由 [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol)／[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)页面交叉核实。
+
 顶部“模型配置”入口为 `/admin/models`，每行一个模型，添加和编辑均使用弹窗。文本模型在弹窗内管理服务档位、上下文阶梯和四类 Token 单价；图像模型管理分辨率档位及美元/张单价。弹窗使用分组表单，正文独立纵向滚动，标题和保存按钮保持可见。整张表单通过模型版本号校验后事务保存。旧 `/admin/settings/pricing` 页面重定向至该入口。
 
 图像价格按用户要求改为屏幕分辨率方式划档。实际宽高取长边，按上限归入 0.5K（512px）、1K（1024px）、2K（2560px）、4K（4096px）、8K（8192px）；横竖图和同档动态宽高使用同一单价。2560×1440 属于 2K，3840×2160 属于 4K。上限在表单选项中明确显示，不按固定宽高组合配置价格。旧尺寸规则在管理员保存后转为档位规则，同档不同价需要管理员确认；旧请求的固定尺寸快照仍按原价结算。
@@ -432,6 +436,8 @@ has been removed.
 - default credentials: `admin` / `admin`
 
 ## Client usage ledger
+
+`first_byte_ms` 在新请求中记录首条有效响应消息到达代理的延迟。SSE 等待完整 generation 事件，忽略注释心跳、半条 JSON 和额度通知；WebSocket 只将匹配当前 generation 的响应／错误事件计入，接收时立即取时间戳，避免计入后续鉴权和账本锁等待。`response.created` 会计入，因此此数值不代表首个输出文字 Token 的时间。非流式 JSON 按单条响应消息记录。历史记录不回写。
 
 - `codex2api-api/src/usage.rs` observes incoming billable Codex HTTP requests and each
   Responses WebSocket `response.create`. WebSocket `generate=false` warmups are excluded.

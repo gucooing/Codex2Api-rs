@@ -65,9 +65,13 @@ test("reset cards clear real fixture usage without changing subscription or bill
   await page.goto("/admin/consumers/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "重置卡", exact: true }).click();
   await expect(page.getByRole("button", { name: "发放重置卡", exact: true })).toBeEnabled();
-  await page.getByLabel("发放数量", { exact: true }).fill("2");
-  await page.getByLabel("管理备注", { exact: true }).fill("本地验收发卡");
+  await expect(page.getByLabel("发放数量", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "发放重置卡", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "发放重置卡", exact: true });
+  await expect(dialog.getByLabel("有效时长（天）", { exact: true })).toHaveValue("30");
+  await dialog.getByLabel("发放数量", { exact: true }).fill("2");
+  await dialog.getByLabel("管理备注", { exact: true }).fill("本地验收发卡");
+  await dialog.getByRole("button", { name: "确认发放", exact: true }).click();
   await expect(page.getByText("可用 2 张", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "使用", exact: true }).first().click();
   await page.getByRole("alertdialog").getByRole("button", { name: "确认", exact: true }).click();
@@ -86,14 +90,15 @@ test("reset cards clear real fixture usage without changing subscription or bill
   // No-op feedback stays in a toast and preserves the remaining card.
   await page
     .getByRole("button", { name: "使用", exact: true })
-    .filter({ visible: true })
-    .last()
+    .and(page.locator(":enabled"))
+    .first()
     .click();
   await page.getByRole("alertdialog").getByRole("button", { name: "确认", exact: true }).click();
   await expect(
     page.locator("[data-sonner-toast]").filter({ hasText: "没有可重置的当前用量" }),
   ).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.locator('[data-slot="alert-dialog-overlay"]')).toHaveCount(0);
   await expect(page.getByText("可用 1 张", { exact: true })).toBeVisible();
   const output = resolve(
     process.env.CODEX2API_TEST_OUTPUT_DIR ?? "../target/review-next-reset-credits",

@@ -52,6 +52,14 @@ import { Plus, Pencil, Search, RotateCcw, Trash2 } from "lucide-react";
 import { request, type List, type Model, type TokenPrice } from "@/lib/api";
 import { modelWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
+import {
+  pricingDraft,
+  pricingRows,
+  emptyBasePrice,
+  priceFields,
+  type PricingDraft,
+  type BasePrice,
+} from "@/lib/model-pricing";
 
 const tokenRule = (): TokenPrice => ({
   tier: "standard",
@@ -526,11 +534,17 @@ function ModelEditor({
   const [value, setValue] = useState(model);
   const update = <K extends keyof Model>(key: K, next: Model[K]) =>
     setValue((current) => ({ ...current, [key]: next }));
-  const updateToken = (index: number, patch: Partial<TokenPrice>) =>
-    update(
-      "token_prices",
-      value.token_prices.map((row, i) => (i === index ? { ...row, ...patch } : row)),
-    );
+  const [pricing, setPricing] = useState(() => pricingDraft(model.token_prices));
+  const [pricingChanged, setPricingChanged] = useState(false);
+  const changePricing = (next: PricingDraft) => {
+    setPricing(next);
+    setPricingChanged(true);
+  };
+  const updateRange = (index: number, patch: Partial<BasePrice>) =>
+    changePricing({
+      ...pricing,
+      ranges: pricing.ranges.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    });
   return (
     <Dialog
       open
@@ -575,7 +589,16 @@ function ModelEditor({
               event,
               "app\\models\\page.tsx:form:6",
               async () => {
-                await request("/models", { method: "POST", body: modelWrite(value) });
+                await request("/models", {
+                  method: "POST",
+                  body: modelWrite({
+                    ...value,
+                    token_prices:
+                      value.kind === "text" && pricingChanged
+                        ? pricingRows(pricing)
+                        : value.token_prices,
+                  }),
+                });
                 onSaved();
               },
               "已保存",
@@ -751,202 +774,207 @@ function ModelEditor({
                   </Field>
                 </section>
                 {value.kind === "text" ? (
-                  <FieldSet className="space-y-3">
-                    <FieldLegend>Token 价格（美元 / 百万 Token）</FieldLegend>
-                    <div className="space-y-4">
-                      {value.token_prices.map((row, index) => (
-                        <section className="space-y-3" key={index}>
-                          <div className="flex items-center justify-between gap-2">
-                            <strong>计费规则 {index + 1}</strong>
+                  <FieldSet className="gap-4">
+                    <FieldLegend>基础价格（美元 / 百万 Token）</FieldLegend>
+                    {pricing.ranges.map((row, index) => (
+                      <section className="space-y-3" key={index}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <strong>
+                            {index === 0 ? "基础区间" : `上下文区间 ${index}`} ·{" "}
+                            {row.min_input_tokens.toLocaleString()} —{" "}
+                            {pricing.ranges[index + 1]
+                              ? (pricing.ranges[index + 1].min_input_tokens - 1).toLocaleString()
+                              : "不限"}{" "}
+                            Token
+                          </strong>
+                          {index > 0 && (
                             <Button
                               type="button"
+                              size="sm"
                               variant="outline"
                               onClick={() =>
-                                update(
-                                  "token_prices",
-                                  value.token_prices.filter((_, i) => i !== index),
-                                )
+                                changePricing({
+                                  ...pricing,
+                                  ranges: pricing.ranges.filter((_, i) => i !== index),
+                                })
                               }
                             >
                               <Trash2 />
-                              移除规则
+                              移除区间
                             </Button>
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          )}
+                        </div>
+                        {index > 0 && (
+                          <Field className="max-w-64">
+                            <FieldLabel htmlFor={`${fieldId}-range-${index}`}>
+                              上下文起点（Token）
+                            </FieldLabel>
+                            <Input
+                              id={`${fieldId}-range-${index}`}
+                              type="number"
+                              min={1}
+                              max={10000000}
+                              step={1}
+                              required
+                              value={row.min_input_tokens}
+                              onChange={(e) =>
+                                updateRange(index, { min_input_tokens: Number(e.target.value) })
+                              }
+                            />
+                          </Field>
+                        )}
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          {priceFields.map(([key, label]) => (
+                            <Field key={key}>
+                              <FieldLabel htmlFor={`${fieldId}-range-${index}-${key}`}>
+                                {label}
+                              </FieldLabel>
+                              <Input
+                                id={`${fieldId}-range-${index}-${key}`}
+                                type="number"
+                                min={0}
+                                step="0.000001"
+                                required
+                                value={row[key]}
+                                onChange={(e) => updateRange(index, { [key]: e.target.value })}
+                              />
+                            </Field>
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-fit"
+                      onClick={() =>
+                        changePricing({
+                          ...pricing,
+                          ranges: [
+                            ...pricing.ranges,
+                            emptyBasePrice(
+                              pricing.ranges.length
+                                ? pricing.ranges.at(-1)!.min_input_tokens + 1
+                                : 0,
+                            ),
+                          ],
+                        })
+                      }
+                    >
+                      <Plus />
+                      {pricing.ranges.length ? "添加上下文区间" : "添加基础价格"}
+                    </Button>
+                    <FieldSet className="gap-3">
+                      <FieldLegend>服务档位倍率</FieldLegend>
+                      {(["fast", "flex"] as const).map((tier) => (
+                        <section className="space-y-3" key={tier}>
+                          <div className="grid gap-3 sm:grid-cols-2">
                             <Field>
-                              <FieldLabel
-                                htmlFor={
-                                  fieldId +
-                                  "-field-11" +
-                                  "-" +
-                                  String(index) +
-                                  "-" +
-                                  encodeURIComponent(String("服务档位"))
-                                }
-                              >
-                                {"服务档位"}
+                              <FieldLabel htmlFor={`${fieldId}-${tier}-mode`}>
+                                {tier === "fast" ? "Fast" : "Flex"}
                               </FieldLabel>
                               <Select
-                                value={row.tier}
-                                onValueChange={(next) =>
-                                  ((tier) =>
-                                    updateToken(index, { tier: tier as TokenPrice["tier"] }))(
-                                    next ===
-                                      fieldId +
-                                        "-field-11" +
-                                        "-" +
-                                        String(index) +
-                                        "-" +
-                                        encodeURIComponent(String("服务档位")) +
-                                        "-empty"
-                                      ? ""
-                                      : next,
-                                  )
+                                value={pricing[tier].mode}
+                                onValueChange={(mode) =>
+                                  changePricing({ ...pricing, [tier]: { ...pricing[tier], mode } })
                                 }
+                                disabled={actions.isBusy("app\\models\\page.tsx:form:6")}
                               >
-                                <SelectTrigger
-                                  id={
-                                    fieldId +
-                                    "-field-11" +
-                                    "-" +
-                                    String(index) +
-                                    "-" +
-                                    encodeURIComponent(String("服务档位"))
-                                  }
-                                  aria-label={"服务档位"}
-                                  data-required={false ? "true" : undefined}
-                                  data-empty={String(row.tier) === "" ? "true" : undefined}
-                                  className="w-full"
-                                >
-                                  <SelectValue
-                                    placeholder={
-                                      [
-                                        { value: "standard", label: "标准" },
-                                        { value: "fast", label: "快速" },
-                                        { value: "flex", label: "Flex" },
-                                      ].find((option) => option.value === "")?.label ?? "请选择"
-                                    }
-                                  />
+                                <SelectTrigger id={`${fieldId}-${tier}-mode`}>
+                                  <SelectValue />
                                 </SelectTrigger>
-                                <SelectContent position="popper">
-                                  {[
-                                    { value: "standard", label: "标准" },
-                                    { value: "fast", label: "快速" },
-                                    { value: "flex", label: "Flex" },
-                                  ].map((option) => (
-                                    <SelectItem
-                                      key={option.value}
-                                      value={
-                                        option.value ||
-                                        fieldId +
-                                          "-field-11" +
-                                          "-" +
-                                          String(index) +
-                                          "-" +
-                                          encodeURIComponent(String("服务档位")) +
-                                          "-empty"
-                                      }
-                                      disabled={"disabled" in option && Boolean(option.disabled)}
-                                    >
-                                      {option.label}
-                                    </SelectItem>
-                                  ))}
+                                <SelectContent>
+                                  <SelectItem value="off">未定价</SelectItem>
+                                  <SelectItem value="multiplier">按倍率计价</SelectItem>
+                                  {pricing[tier].rows.length > 0 && (
+                                    <SelectItem value="custom">原有自定义价格</SelectItem>
+                                  )}
                                 </SelectContent>
                               </Select>
                             </Field>
-                            <Field>
-                              <FieldLabel
-                                htmlFor={
-                                  fieldId +
-                                  "-field-12" +
-                                  "-" +
-                                  String(index) +
-                                  "-" +
-                                  encodeURIComponent(String("Token 起点"))
-                                }
-                              >
-                                {"Token 起点"}
-                              </FieldLabel>
-                              <Input
-                                id={
-                                  fieldId +
-                                  "-field-12" +
-                                  "-" +
-                                  String(index) +
-                                  "-" +
-                                  encodeURIComponent(String("Token 起点"))
-                                }
-                                aria-label={"Token 起点"}
-                                required
-                                type="number"
-                                min="0"
-                                max="10000000"
-                                step="1"
-                                value={row.min_input_tokens}
-                                onChange={(e) =>
-                                  updateToken(index, { min_input_tokens: Number(e.target.value) })
-                                }
-                              />
-                            </Field>
-                            {(
-                              [
-                                ["input_rate", "普通输入"],
-                                ["cached_rate", "缓存读取"],
-                                ["cache_write_rate", "缓存写入"],
-                                ["output_rate", "输出"],
-                              ] as const
-                            ).map(([key, label], fieldIndex14) => (
-                              <Field key={key}>
-                                <FieldLabel
-                                  htmlFor={
-                                    fieldId +
-                                    "-field-15" +
-                                    "-" +
-                                    String(fieldIndex14) +
-                                    "-" +
-                                    String(index) +
-                                    "-" +
-                                    encodeURIComponent(String(label))
-                                  }
-                                >
-                                  {label}
+                            {pricing[tier].mode === "multiplier" && (
+                              <Field>
+                                <FieldLabel htmlFor={`${fieldId}-${tier}-multiplier`}>
+                                  {tier === "fast" ? "Fast" : "Flex"} 倍率
                                 </FieldLabel>
                                 <Input
-                                  id={
-                                    fieldId +
-                                    "-field-15" +
-                                    "-" +
-                                    String(fieldIndex14) +
-                                    "-" +
-                                    String(index) +
-                                    "-" +
-                                    encodeURIComponent(String(label))
-                                  }
-                                  aria-label={label}
-                                  required
+                                  id={`${fieldId}-${tier}-multiplier`}
                                   type="number"
-                                  min="0"
+                                  min={0}
                                   step="0.000001"
-                                  value={row[key]}
-                                  onChange={(e) => updateToken(index, { [key]: e.target.value })}
+                                  required
+                                  value={pricing[tier].multiplier}
+                                  onChange={(e) =>
+                                    changePricing({
+                                      ...pricing,
+                                      [tier]: { ...pricing[tier], multiplier: e.target.value },
+                                    })
+                                  }
                                 />
                               </Field>
-                            ))}
+                            )}
                           </div>
+                          {pricing[tier].mode === "custom" &&
+                            pricing[tier].rows.map((row, index) => (
+                              <div key={index} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                                <Field>
+                                  <FieldLabel htmlFor={`${fieldId}-${tier}-${index}-start`}>
+                                    上下文起点
+                                  </FieldLabel>
+                                  <Input
+                                    id={`${fieldId}-${tier}-${index}-start`}
+                                    type="number"
+                                    min={0}
+                                    max={10000000}
+                                    step={1}
+                                    required
+                                    value={row.min_input_tokens}
+                                    onChange={(e) =>
+                                      changePricing({
+                                        ...pricing,
+                                        [tier]: {
+                                          ...pricing[tier],
+                                          rows: pricing[tier].rows.map((old, i) =>
+                                            i === index
+                                              ? { ...old, min_input_tokens: Number(e.target.value) }
+                                              : old,
+                                          ),
+                                        },
+                                      })
+                                    }
+                                  />
+                                </Field>
+                                {priceFields.map(([key, label]) => (
+                                  <Field key={key}>
+                                    <FieldLabel htmlFor={`${fieldId}-${tier}-${index}-${key}`}>
+                                      {label}
+                                    </FieldLabel>
+                                    <Input
+                                      id={`${fieldId}-${tier}-${index}-${key}`}
+                                      type="number"
+                                      min={0}
+                                      step="0.000001"
+                                      required
+                                      value={row[key]}
+                                      onChange={(e) =>
+                                        changePricing({
+                                          ...pricing,
+                                          [tier]: {
+                                            ...pricing[tier],
+                                            rows: pricing[tier].rows.map((old, i) =>
+                                              i === index ? { ...old, [key]: e.target.value } : old,
+                                            ),
+                                          },
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                ))}
+                              </div>
+                            ))}
                         </section>
                       ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => update("token_prices", [...value.token_prices, tokenRule()])}
-                      >
-                        <Plus />
-                        添加计费规则
-                      </Button>
-                      <CardDescription className="text-sm text-muted-foreground">
-                        每个服务档位需有起点为 0 的基础价格。思考 Token 已包含在输出中。
-                      </CardDescription>
-                    </div>
+                    </FieldSet>
                   </FieldSet>
                 ) : (
                   <FieldSet className="space-y-3">
