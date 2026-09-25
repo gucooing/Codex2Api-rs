@@ -24,7 +24,10 @@ async fn administrators_issue_and_inspect_account_owned_reset_cards_with_csrf() 
         StatusCode::FORBIDDEN
     );
     for _ in 0..2 {
-        assert_eq!(f.request("POST", &path, input.clone()).await.status(),StatusCode::OK);
+        assert_eq!(
+            f.request("POST", &path, input.clone()).await.status(),
+            StatusCode::OK
+        );
     }
     let records = f.get(&path).await;
     assert_eq!(records["items"].as_array().unwrap().len(), 2);
@@ -84,7 +87,12 @@ async fn batch_operations_resolve_all_matching_accounts_in_sqlite_and_use_same_c
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await["affected"], 2);
     for account in [first, second] {
-        let cards = f.get(&format!("/admin/api/consumers/{}/reset-credits", account["id"].as_str().unwrap())).await;
+        let cards = f
+            .get(&format!(
+                "/admin/api/consumers/{}/reset-credits",
+                account["id"].as_str().unwrap()
+            ))
+            .await;
         assert_eq!(cards["available_count"], 2);
     }
     let response = f.request("POST", "/admin/api/consumers/batch", json!({
@@ -92,5 +100,16 @@ async fn batch_operations_resolve_all_matching_accounts_in_sqlite_and_use_same_c
     })).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await["affected"], 2);
-    assert_eq!(f.get("/admin/api/consumers").await["items"].as_array().unwrap().iter().filter(|item| item["username"].as_str().unwrap().starts_with("batch-owner")).count(), 0);
+    assert_eq!(
+        f.get("/admin/api/consumers").await["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["username"]
+                .as_str()
+                .unwrap()
+                .starts_with("batch-owner"))
+            .count(),
+        0
+    );
 }

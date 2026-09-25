@@ -491,7 +491,8 @@ export function ConsumersPage() {
                             checked={selected.has(account.id)}
                             onCheckedChange={(checked) => {
                               const next = new Set(selected);
-                              if (checked === true) next.add(account.id); else next.delete(account.id);
+                              if (checked === true) next.add(account.id);
+                              else next.delete(account.id);
                               setSelected(next);
                               setSelectAllMatching(false);
                             }}
@@ -552,7 +553,8 @@ export function ConsumersPage() {
                       checked={selected.has(account.id)}
                       onCheckedChange={(checked) => {
                         const next = new Set(selected);
-                        if (checked === true) next.add(account.id); else next.delete(account.id);
+                        if (checked === true) next.add(account.id);
+                        else next.delete(account.id);
                         setSelected(next);
                         setSelectAllMatching(false);
                       }}
