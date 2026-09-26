@@ -121,6 +121,10 @@ Do not share those across accounts.
 
 ## Virtual-account data and management
 
+### WebSocket 上下文压缩（2026-09-26）
+
+配置供应账户时区后，环境信息插入必须保留 `compaction_trigger` 为最终输入项，兼容只有该标记的 WS 增量请求。修复、管理入口及原版 Desktop app-server / 代理 socket 的独立验证见 [WS 压缩修复](WS_COMPACTION_FIX_2026-09-26.md)。
+
 ### 模型配置和图像计费（2026-09-22）
 
 2026-09-25 管理表单将标准档价格按基础区间与自定义上下文起点组织，Fast／Flex 使用倍率。倍率通过十进制定点数展开为原有绝对价格规则，保存仍使用现有版本校验、价格快照和结算链路。无法无损表示为统一倍率的旧档位显示其原有自定义价格，不自动重算。图像价格规则不变。

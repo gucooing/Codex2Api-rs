@@ -408,12 +408,19 @@ mod tests {
         recorded_connection_fixture("upstream_closed").await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compaction_with_timezone_crosses_text_and_binary_websocket_frames() {
+        recorded_connection_fixture("compaction_text").await;
+        recorded_connection_fixture("compaction_binary").await;
+    }
+
     async fn recorded_connection_fixture(ending: &'static str) {
         use axum::{Router, routing::get};
         use codex2api_storage::{
             OAuthDeviceIdentity, SupplierAccountUpdate, SupplierStatus, VirtualAccount,
         };
         use serde_json::{Value, json};
+        let compaction = ending.starts_with("compaction_");
         let dir = tempfile::tempdir().unwrap();
         let storage =
             codex2api_storage::Storage::open(dir.path().join("revoked-completion.sqlite"))
@@ -486,6 +493,17 @@ mod tests {
             let mut upstream = tokio_tungstenite::accept_async(stream).await.unwrap();
             let frame = upstream.next().await.unwrap().unwrap();
             assert!(frame.is_text());
+            if compaction {
+                let request: Value = serde_json::from_slice(&frame.into_data()).unwrap();
+                assert_eq!(request["previous_response_id"], "previous");
+                assert_eq!(request["input"].as_array().unwrap().len(), 2);
+                assert_eq!(request["input"][1]["type"], "compaction_trigger");
+                assert!(
+                    request["input"][0]
+                        .to_string()
+                        .contains("<timezone>Asia/Taipei</timezone>")
+                );
+            }
             upstream.send(UpstreamMessage::Text(json!({"type":"response.created","response":{"id":"response-1","model":"gpt-6-astra","usage":{"input_tokens":10,"output_tokens":2}}}).to_string().into())).await.unwrap();
             ready.await.unwrap();
             if ending == "client_closed" {
@@ -498,6 +516,9 @@ mod tests {
             if ending == "upstream_closed" {
                 upstream.close(None).await.unwrap();
                 return;
+            }
+            if compaction {
+                upstream.send(UpstreamMessage::Text(json!({"type":"response.output_item.done","response_id":"response-1","output_index":0,"item":{"type":"compaction","encrypted_content":"fixture-compacted-history"}}).to_string().into())).await.unwrap();
             }
             upstream.send(UpstreamMessage::Text(json!({"type":"response.completed","response":{"id":"response-1","model":"gpt-6-astra","status":"completed","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}).to_string().into())).await.unwrap();
             let _ = upstream.next().await;
@@ -534,7 +555,7 @@ mod tests {
                             upstream,
                             "installation".into(),
                             false,
-                            None,
+                            compaction.then(|| "Asia/Taipei".into()),
                             ledger,
                             (
                                 storage,
@@ -557,18 +578,37 @@ mod tests {
                 tokio_tungstenite::connect_async(format!("ws://{addr}/responses"))
                     .await
                     .unwrap();
-            client
-                .send(UpstreamMessage::Text(
-                    json!({"type":"response.create","model":"gpt-6-astra","input":[]})
-                        .to_string()
-                        .into(),
-                ))
-                .await
-                .unwrap();
+            let mut request = json!({"type":"response.create","model":"gpt-6-astra","input":[]});
+            if compaction {
+                request["input"] = json!([{"type":"compaction_trigger"}]);
+                request["previous_response_id"] = json!("previous");
+            }
+            let frame = if ending == "compaction_binary" {
+                UpstreamMessage::Binary(serde_json::to_vec(&request).unwrap().into())
+            } else {
+                UpstreamMessage::Text(request.to_string().into())
+            };
+            client.send(frame).await.unwrap();
             let created: Value =
                 serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data()).unwrap();
             assert_eq!(created["type"], "response.created");
             let expected = match ending {
+                "compaction_text" | "compaction_binary" => {
+                    complete.send(()).unwrap();
+                    let item: Value =
+                        serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
+                            .unwrap();
+                    assert_eq!(item["item"]["type"], "compaction");
+                    assert_eq!(
+                        item["item"]["encrypted_content"],
+                        "fixture-compacted-history"
+                    );
+                    let completed: Value =
+                        serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
+                            .unwrap();
+                    assert_eq!(completed["type"], "response.completed");
+                    "completed"
+                }
                 "client_closed" => {
                     client.close(None).await.unwrap();
                     complete.send(()).unwrap();
@@ -1014,6 +1054,38 @@ mod tests {
         server.await.unwrap();
         proxy.abort();
         storage.close().await;
+    }
+
+    #[test]
+    fn timezone_keeps_incremental_compaction_last_and_preserves_session_metadata() {
+        let original = serde_json::json!({
+            "type":"response.create", "model":"gpt-6-astra", "previous_response_id":"previous",
+            "input":[{"type":"compaction_trigger"}],
+            "client_metadata":{"x-codex-installation-id":"caller","turn_id":"turn","session_id":"session"}
+        });
+        let prepared: serde_json::Value = serde_json::from_str(
+            &prepare_message(
+                &original.to_string(),
+                "supplier-installation",
+                Some("Asia/Taipei"),
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prepared["input"][1], original["input"][0]);
+        assert!(
+            prepared["input"][0]
+                .to_string()
+                .contains("<timezone>Asia/Taipei</timezone>")
+        );
+        assert_eq!(prepared["previous_response_id"], "previous");
+        assert_eq!(prepared["client_metadata"]["session_id"], "session");
+        assert_eq!(prepared["client_metadata"]["turn_id"], "turn");
+        assert_eq!(
+            prepared["client_metadata"]["x-codex-installation-id"],
+            "supplier-installation"
+        );
     }
 
     #[test]

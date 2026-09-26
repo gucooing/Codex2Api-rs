@@ -79,6 +79,8 @@ async fn fingerprint_validation_persistence_and_transport_are_account_isolated()
         StatusCode::OK
     );
     let saved = f.storage.require_account(&a.id).await.unwrap();
+    let detail = f.get(&format!("/admin/api/suppliers/{}", a.id)).await;
+    assert_eq!(detail["fingerprint"]["timezone"], "Asia/Taipei");
     assert_eq!(saved.installation_id, a.installation_id);
     assert_eq!(saved.originator, codex2api_version::DEFAULT_ORIGINATOR);
     assert_eq!(saved.os_type, "Windows");

@@ -45,7 +45,38 @@ import {
   quotaResetLabel,
   supplierStatusLabel,
   percentLabel,
+  cycleUsageLabel,
+  cycleUsageTitle,
 } from "../src/lib/supplier-state.ts";
+
+test("supplier cycle usage displays dollars and millions without hiding unknown amounts", () => {
+  const window = {
+    local_usage: {
+      from_ms: 0,
+      until_ms: 18000000,
+      request_count: 2,
+      cost_nano_usd: 5050000000,
+      tokens: 2400000,
+      unpriced_requests: 0,
+      missing_token_requests: 0,
+    },
+  };
+  assert.equal(cycleUsageLabel(window), "$5.05 / 2.40M");
+  window.local_usage.cost_nano_usd = 1000;
+  window.local_usage.tokens = 100;
+  assert.equal(cycleUsageLabel(window), "<$0.01 / <0.01M");
+  window.local_usage.cost_nano_usd = 5050000000;
+  window.local_usage.tokens = 2400170;
+  window.local_usage.unpriced_requests = 3;
+  window.local_usage.missing_token_requests = 2;
+  assert.equal(cycleUsageLabel(window), "$5.05+? / 2.40M+?");
+  assert.match(cycleUsageTitle(window), /3 次请求金额未确定/);
+  assert.match(cycleUsageTitle(window), /2 次请求 Token 不完整/);
+  window.local_usage.cost_nano_usd = null;
+  window.local_usage.tokens = null;
+  assert.equal(cycleUsageLabel(window), "$未知 / Token 未知");
+  assert.equal(cycleUsageLabel({ local_usage: null }), "用量待确认");
+});
 
 test("supplier quota labels use the reported duration instead of assuming fixed windows", () => {
   for (const [seconds, label] of [

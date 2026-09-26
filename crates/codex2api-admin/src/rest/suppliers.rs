@@ -50,7 +50,7 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     value["error_message"] = json!(health.error_message);
     value["error_at"] = json!(health.error_at);
     value["quota"] = match s.storage.get_account_quota(&a.id).await? {
-        Some(snapshot) => crate::quota::summary(&snapshot),
+        Some(snapshot) => crate::quota::summary(&s.storage, &a.id, &snapshot).await?,
         None => Value::Null,
     };
     Ok(value)
@@ -374,7 +374,7 @@ pub async fn official(
     };
     let mut value = json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":refresh_error});
     if section == SupplierInfoSection::Quota {
-        value["quota"] = crate::quota::summary(&snapshot);
+        value["quota"] = crate::quota::summary(&s.storage, &id, &snapshot).await?;
     }
     Ok(Json(value))
 }

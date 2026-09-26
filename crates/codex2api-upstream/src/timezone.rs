@@ -55,6 +55,13 @@ fn apply_at(body: &mut Value, timezone: Option<&str>, now: DateTime<Utc>) -> Res
     let index = items
         .iter()
         .rposition(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+        // A WebSocket continuation may contain only compaction_trigger (or tool
+        // outputs followed by it). The trigger must remain the final input item.
+        .or_else(|| {
+            items.iter().position(|item| {
+                item.get("type").and_then(Value::as_str) == Some("compaction_trigger")
+            })
+        })
         .unwrap_or(items.len());
     items.insert(index, json!({"type":"message", "role":"user", "content":[{"type":"input_text", "text":fragment}]}));
     Ok(())
@@ -128,6 +135,42 @@ mod tests {
         let once = body.clone();
         apply_at(&mut body, Some("America/Los_Angeles"), now).unwrap();
         assert_eq!(body, once);
+    }
+
+    #[test]
+    fn keeps_compaction_trigger_last_for_full_and_incremental_input() {
+        let now = DateTime::parse_from_rfc3339("2026-09-17T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for input in [
+            json!([{"type":"compaction_trigger"}]),
+            json!([{"type":"function_call_output","call_id":"call-1","output":"keep"}, {"type":"compaction_trigger"}]),
+            json!([{"type":"compaction","encrypted_content":"opaque"}, {"type":"compaction_trigger"}]),
+            json!([{"role":"user","content":"question"}, {"type":"compaction_trigger"}]),
+        ] {
+            let mut body = json!({"input":input, "previous_response_id":"previous"});
+            let original = body.clone();
+            apply_at(&mut body, None, now).unwrap();
+            assert_eq!(body, original);
+            apply_at(&mut body, Some("America/Los_Angeles"), now).unwrap();
+            let items = body["input"].as_array().unwrap();
+            assert_eq!(items.last().unwrap(), &json!({"type":"compaction_trigger"}));
+            // Removing only the injected context recovers the exact original input.
+            let preserved: Vec<_> = items
+                .iter()
+                .filter(|item| !item.to_string().contains("<environment_context>"))
+                .cloned()
+                .collect();
+            assert_eq!(json!(preserved), input);
+            assert_eq!(body["previous_response_id"], "previous");
+            assert!(
+                body.to_string()
+                    .contains("<current_date>2026-09-16</current_date>")
+            );
+            let once = body.clone();
+            apply_at(&mut body, Some("America/Los_Angeles"), now).unwrap();
+            assert_eq!(body, once);
+        }
     }
 
     #[test]

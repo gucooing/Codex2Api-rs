@@ -129,6 +129,19 @@ pub struct AccountDailyUsage {
     pub longest_running_turn_ms: Option<i64>,
 }
 
+/// Local ledger totals in one reported supplier quota cycle. Missing amounts
+/// remain explicit, and cached/reasoning tokens are already in input/output.
+#[derive(Debug, FromRow, serde::Serialize)]
+pub struct SupplierCycleUsage {
+    pub from_ms: i64,
+    pub until_ms: i64,
+    pub request_count: i64,
+    pub cost_nano_usd: Option<i64>,
+    pub tokens: Option<i64>,
+    pub unpriced_requests: i64,
+    pub missing_token_requests: i64,
+}
+
 #[derive(FromRow)]
 pub struct VirtualDailyModelTokens {
     pub date: chrono::NaiveDate,
@@ -228,6 +241,31 @@ fn account_usage_summary(
 }
 
 impl Storage {
+    pub async fn supplier_cycle_usage(
+        &self,
+        account_id: &str,
+        from_ms: i64,
+        until_ms: i64,
+    ) -> Result<SupplierCycleUsage> {
+        Ok(sqlx::query_as(
+            "SELECT ? AS from_ms, ? AS until_ms, COUNT(*) AS request_count,
+             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cost_nano_usd) END AS cost_nano_usd,
+             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(
+                 CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+                 THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) END AS tokens,
+             COALESCE(SUM(cost_nano_usd IS NULL),0) AS unpriced_requests,
+             COALESCE(SUM(input_tokens IS NULL OR output_tokens IS NULL),0) AS missing_token_requests
+             FROM usage_records WHERE account_id=? AND requested_at_ms>=? AND requested_at_ms<?",
+        )
+        .bind(from_ms)
+        .bind(until_ms)
+        .bind(account_id)
+        .bind(from_ms)
+        .bind(until_ms)
+        .fetch_one(self.pool())
+        .await?)
+    }
+
     /// Profile statistics from reported consumption belonging to a virtual identity.
     pub async fn virtual_usage_summary(&self, id: &str) -> Result<AccountUsageSummary> {
         let days: Vec<AccountDailyUsage> = sqlx::query_as(

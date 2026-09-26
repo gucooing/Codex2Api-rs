@@ -145,10 +145,197 @@ async fn supplier_quota_preserves_monthly_and_other_durations_without_absent_win
                 account.id
             ))
             .await;
-        assert_eq!(supplier["quota"]["windows"], expected);
+        let mut windows = supplier["quota"]["windows"].clone();
+        for window in windows.as_array_mut().unwrap() {
+            let usage = window
+                .as_object_mut()
+                .unwrap()
+                .remove("local_usage")
+                .unwrap();
+            if window["reset_at"].is_number() && window["limit_window_seconds"].is_number() {
+                assert_eq!(usage["request_count"], 0);
+                assert_eq!(usage["cost_nano_usd"], 0);
+                assert_eq!(usage["tokens"], 0);
+            } else {
+                assert!(usage.is_null());
+            }
+        }
+        assert_eq!(windows, expected);
         assert_eq!(detail["quota"], supplier["quota"]);
         assert_eq!(detail["value"]["rate_limit"], limits);
     }
+}
+
+#[tokio::test]
+async fn supplier_cycles_sum_settled_prices_with_exact_boundaries_and_account_isolation() {
+    use codex2api_storage::{ModelPrice, QuotaSnapshot, UsageRecord};
+    let f = Fixture::new().await;
+    let account = f.state.accounts.create_pending().await.unwrap().account;
+    let other = f.state.accounts.create_pending().await.unwrap().account;
+    let observed = chrono::Utc::now();
+    let until = (observed.timestamp() + 3600) * 1000;
+    let inner_from = until - 18_000_000;
+    let outer_from = until - 2_592_000_000;
+    let mut price = ModelPrice {
+        provider_id: "chatgpt".into(),
+        model: "cycle-test".into(),
+        tier: "standard".into(),
+        min_input_tokens: 0,
+        input_rate: 2_000_000,
+        cached_rate: 500_000,
+        cache_write_rate: 3_000_000,
+        output_rate: 4_000_000,
+        source: "custom".into(),
+        revision: 0,
+    };
+    assert!(f.storage.save_model_price(&price).await.unwrap());
+    let snapshot = QuotaSnapshot {
+        observed_at: observed,
+        value: json!({"rate_limit": {
+            "primary_window": {"limit_window_seconds":18000,"reset_at":until/1000,"used_percent":10},
+            "secondary_window": {"limit_window_seconds":2592000,"reset_at":until/1000,"used_percent":20}
+        }}),
+    };
+    f.storage
+        .store_account_quota(&account.id, &snapshot)
+        .await
+        .unwrap();
+    for (id, account_id, time) in [
+        ("before", &account.id, outer_from - 1),
+        ("outer-start", &account.id, outer_from),
+        ("before-inner", &account.id, inner_from - 1),
+        ("inner-start", &account.id, inner_from),
+        ("last", &account.id, until - 1),
+        ("next", &account.id, until),
+        ("other", &other.id, inner_from),
+    ] {
+        let mut record = UsageRecord {
+            id: id.into(),
+            account_id: account_id.clone(),
+            subject_id: format!("consumer-{id}"),
+            endpoint: "/v1/responses".into(),
+            model: Some(price.model.clone()),
+            requested_at_ms: time,
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        f.storage.insert_usage(&record).await.unwrap();
+        record.status = if id == "last" {
+            "client_stopped"
+        } else {
+            "completed"
+        }
+        .into();
+        record.input_tokens = Some(1_000_000);
+        record.cached_tokens = Some(250_000);
+        record.cache_write_tokens = Some(100_000);
+        record.output_tokens = Some(200_000);
+        record.reasoning_tokens = Some(50_000);
+        f.storage.finish_usage(&record).await.unwrap();
+        f.storage.finish_usage(&record).await.unwrap();
+    }
+    // Prices now change, but all displayed amounts must retain their settled values.
+    price.revision = 1;
+    price.input_rate *= 10;
+    assert!(f.storage.save_model_price(&price).await.unwrap());
+    let path = format!("/admin/api/suppliers/{}", account.id);
+    let detail = f.get(&path).await;
+    let windows = &detail["quota"]["windows"];
+    assert_eq!(
+        windows[0]["local_usage"],
+        json!({
+            "from_ms":inner_from,"until_ms":until,"request_count":2,
+            "cost_nano_usd":5_050_000_000_i64,"tokens":2_400_000,
+            "unpriced_requests":0,"missing_token_requests":0
+        })
+    );
+    assert_eq!(
+        windows[1]["local_usage"]["cost_nano_usd"],
+        10_100_000_000_i64
+    );
+    assert_eq!(windows[1]["local_usage"]["tokens"], 4_800_000);
+    for suffix in ["/quota", "/official?section=quota"] {
+        assert_eq!(
+            f.get(&format!("{path}{suffix}")).await["quota"],
+            detail["quota"]
+        );
+    }
+    let list = f.get("/admin/api/suppliers").await;
+    let listed = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == account.id)
+        .unwrap();
+    assert_eq!(listed["quota"], detail["quota"]);
+    // Missing prices/usage are visible alongside known subtotals, never free requests.
+    for (id, input, output) in [
+        ("unpriced", Some(100), Some(20)),
+        ("missing", Some(50), None),
+        ("pending", None, None),
+    ] {
+        let mut record = UsageRecord {
+            id: id.into(),
+            account_id: account.id.clone(),
+            endpoint: "/v1/responses".into(),
+            model: Some("unpriced-cycle-model".into()),
+            requested_at_ms: inner_from + if id == "pending" { 2 } else { 1 },
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        f.storage.insert_usage(&record).await.unwrap();
+        if id != "pending" {
+            record.input_tokens = input;
+            record.output_tokens = output;
+            record.status = "failed".into();
+            f.storage.finish_usage(&record).await.unwrap();
+        }
+    }
+    let mixed = f.get(&path).await;
+    let usage = &mixed["quota"]["windows"][0]["local_usage"];
+    assert_eq!(usage["cost_nano_usd"], 5_050_000_000_i64);
+    assert_eq!(usage["tokens"], 2_400_170);
+    assert_eq!(usage["unpriced_requests"], 3);
+    assert_eq!(usage["missing_token_requests"], 2);
+    let unknown = f
+        .storage
+        .supplier_cycle_usage(&account.id, inner_from + 1, inner_from + 2)
+        .await
+        .unwrap();
+    assert_eq!(unknown.cost_nano_usd, None);
+    assert_eq!(unknown.tokens, Some(170));
+    let pending = f
+        .storage
+        .supplier_cycle_usage(&account.id, inner_from + 2, inner_from + 3)
+        .await
+        .unwrap();
+    assert_eq!(pending.cost_nano_usd, None);
+    assert_eq!(pending.tokens, None);
+    // A new official cycle picks up only the request at the former reset boundary.
+    let mut next = snapshot;
+    next.value["rate_limit"]["primary_window"]["reset_at"] = json!(until / 1000 + 18000);
+    f.storage
+        .store_account_quota(&account.id, &next)
+        .await
+        .unwrap();
+    let renewed = f.get(&path).await;
+    assert_eq!(
+        renewed["quota"]["windows"][0]["local_usage"]["request_count"],
+        1
+    );
+    assert_eq!(
+        renewed["quota"]["windows"][0]["local_usage"]["cost_nano_usd"],
+        2_525_000_000_i64
+    );
+    // An expired cached window retains its actual boundaries and totals.
+    next.observed_at = observed - chrono::TimeDelta::days(40);
+    f.storage
+        .store_account_quota(&account.id, &next)
+        .await
+        .unwrap();
+    let stale = f.get(&path).await;
+    assert_eq!(stale["quota"]["stale"], true);
+    assert_eq!(stale["quota"]["windows"], renewed["quota"]["windows"]);
 }
 
 #[tokio::test]

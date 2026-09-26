@@ -98,6 +98,44 @@ async fn main() -> anyhow::Result<()> {
     storage
         .save_virtual_account_operation(&account, "admin")
         .await?;
+    // One priced day exercises monthly cycle totals and sparse chart bar widths.
+    let cycle_price = codex2api_storage::ModelPrice {
+        provider_id: "chatgpt".into(),
+        model: "review-cycle-model".into(),
+        tier: "standard".into(),
+        min_input_tokens: 0,
+        input_rate: 2_000_000,
+        cached_rate: 500_000,
+        cache_write_rate: 2_000_000,
+        output_rate: 4_000_000,
+        source: "custom".into(),
+        revision: 0,
+    };
+    storage.save_model_price(&cycle_price).await?;
+    let mut cycle_record = codex2api_storage::UsageRecord {
+        id: "review-cycle-usage".into(),
+        account_id: "review-supplier-disabled".into(),
+        account_name: "本地验收停用账户".into(),
+        subject_id: account.id.clone(),
+        subject_name: "本地周期用量验收".into(),
+        model: Some(cycle_price.model.clone()),
+        endpoint: "/v1/responses".into(),
+        transport: "http".into(),
+        requested_at_ms: chrono::Utc::now().timestamp_millis(),
+        status: "in_progress".into(),
+        ..Default::default()
+    };
+    sqlx::query("DELETE FROM usage_records WHERE id=?")
+        .bind(&cycle_record.id)
+        .execute(storage.pool())
+        .await?;
+    storage.insert_usage(&cycle_record).await?;
+    cycle_record.status = "completed".into();
+    cycle_record.input_tokens = Some(3_000_000);
+    cycle_record.cached_tokens = Some(1_000_000);
+    cycle_record.output_tokens = Some(800_000);
+    cycle_record.reasoning_tokens = Some(200_000);
+    storage.finish_usage(&cycle_record).await?;
     for (key, value) in [
         (
             "cloud_preferences",

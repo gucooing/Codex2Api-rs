@@ -62,6 +62,8 @@ import {
   supplierStatusLabel,
   quotaWindowLabel,
   quotaResetLabel,
+  cycleUsageLabel,
+  cycleUsageTitle,
   percentLabel,
 } from "@/lib/supplier-state";
 import { duration, tokenCount } from "@/lib/usage-display";
@@ -366,7 +368,7 @@ export function SuppliersPage() {
                         </TableCell>
                         <TableCell>
                           <div
-                            className="flex w-64 flex-wrap gap-2"
+                            className="flex w-80 flex-wrap gap-2"
                             aria-label="官方额度"
                             title={
                               item.quota ? "缓存于 " + date(item.quota.observed_at) : "暂无额度缓存"
@@ -375,14 +377,22 @@ export function SuppliersPage() {
                             {item.quota?.windows?.map((window) => (
                               <div
                                 key={window.id}
-                                className="min-w-0 flex-1 basis-28 space-y-1 text-xs"
+                                className="min-w-0 flex-1 basis-64 space-y-1 text-xs"
                               >
-                                <div
-                                  className="truncate"
-                                  title={quotaResetLabel(window?.reset_at, now)}
-                                >
-                                  {quotaWindowLabel(window)}：
-                                  {quotaResetLabel(window.reset_at, now)}
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    className="truncate"
+                                    title={quotaResetLabel(window.reset_at, now)}
+                                  >
+                                    {quotaWindowLabel(window)}：
+                                    {quotaResetLabel(window.reset_at, now)}
+                                  </span>
+                                  <span
+                                    className="shrink-0 tabular-nums"
+                                    title={cycleUsageTitle(window)}
+                                  >
+                                    {cycleUsageLabel(window)}
+                                  </span>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   {window?.used_percent != null ? (
@@ -485,9 +495,14 @@ export function SuppliersPage() {
                   title={item.quota ? "缓存于 " + date(item.quota.observed_at) : "暂无额度缓存"}
                 >
                   {item.quota?.windows?.map((window) => (
-                    <div key={window.id} className="min-w-0 flex-1 basis-28 space-y-1 text-xs">
-                      <div className="truncate" title={quotaResetLabel(window?.reset_at, now)}>
-                        {quotaWindowLabel(window)}：{quotaResetLabel(window.reset_at, now)}
+                    <div key={window.id} className="min-w-0 flex-1 basis-64 space-y-1 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate" title={quotaResetLabel(window.reset_at, now)}>
+                          {quotaWindowLabel(window)}：{quotaResetLabel(window.reset_at, now)}
+                        </span>
+                        <span className="shrink-0 tabular-nums" title={cycleUsageTitle(window)}>
+                          {cycleUsageLabel(window)}
+                        </span>
                       </div>
                       <div className="flex items-center gap-2">
                         {window?.used_percent != null ? (
@@ -778,15 +793,32 @@ export function SupplierDetail() {
 }
 function LocalUsage({ account }: { account?: Supplier }) {
   const value = account?.usage ? ({ stats: account.usage } as unknown as Json) : null;
+  const now = useQuotaClock();
   return (
     <Card>
       <CardHeader>
         <CardTitle role="heading" aria-level={2}>
           本地用量
         </CardTitle>
-        <CardDescription>按本系统账本统计，计量维度与官方用量一致。</CardDescription>
+        <CardDescription>
+          按本系统账本统计；周期金额使用请求时的计费价格，Token 包含输入与输出。
+        </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <FieldGroup className="grid gap-3 sm:grid-cols-2" aria-label="周期使用额度">
+          {account?.quota?.windows.map((window) => (
+            <Field key={window.id}>
+              <FieldTitle>{quotaWindowLabel(window)}周期已用</FieldTitle>
+              <FieldDescription className="tabular-nums" title={cycleUsageTitle(window)}>
+                {cycleUsageLabel(window)}
+              </FieldDescription>
+              <FieldDescription>{quotaResetLabel(window.reset_at, now)}</FieldDescription>
+            </Field>
+          ))}
+          {!account?.quota?.windows.length && (
+            <FieldDescription>暂无官方额度周期，暂不能统计周期用量。</FieldDescription>
+          )}
+        </FieldGroup>
         <OfficialFields section="usage" value={value} />
       </CardContent>
     </Card>
@@ -942,7 +974,7 @@ export function FingerprintFields({
           <FieldDescription
             id={fieldId + "-field-10" + "-" + encodeURIComponent(String("时区")) + "-hint"}
           >
-            {"留空保留请求中的时区。"}
+            {"用于对话和上下文压缩的日期与环境信息；留空保留请求中的时区。"}
           </FieldDescription>
         )}
       </Field>
@@ -1645,6 +1677,7 @@ function OfficialFields({ value, section }: { value: Json; section: string }) {
               tickFormatter={(value: number) => tokenCount(value)}
             />
             <ChartTooltip
+              cursor={false}
               content={
                 <ChartTooltipContent
                   formatter={(value) => (
@@ -1660,6 +1693,7 @@ function OfficialFields({ value, section }: { value: Json; section: string }) {
             />
             <Bar
               dataKey="tokens"
+              maxBarSize={48}
               fill="var(--color-tokens)"
               radius={[4, 4, 0, 0]}
               isAnimationActive={false}

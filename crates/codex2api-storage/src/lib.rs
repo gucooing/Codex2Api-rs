@@ -69,8 +69,8 @@ pub use types::{
     SupplierAccountUpdate, SupplierRuntime, SupplierStatus, SupplierTokens,
 };
 pub use usage::{
-    AccountDailyUsage, AccountUsageSummary, USAGE_PAGE_SIZE, UsageFilter, UsagePage, UsageRecord,
-    VirtualDailyModelTokens, table_page_size,
+    AccountDailyUsage, AccountUsageSummary, SupplierCycleUsage, USAGE_PAGE_SIZE, UsageFilter,
+    UsagePage, UsageRecord, VirtualDailyModelTokens, table_page_size,
 };
 pub use virtual_accounts::{MissingEndpoint, VirtualAccess, VirtualAccount, VirtualDevice};
 pub use virtual_client_state::VirtualClientState;

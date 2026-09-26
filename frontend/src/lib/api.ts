@@ -51,6 +51,16 @@ export type SupplierQuotaWindow = {
   limit_window_seconds: number | null;
   used_percent: number | null;
   reset_at: number | null;
+  local_usage: SupplierCycleUsage | null;
+};
+export type SupplierCycleUsage = {
+  from_ms: number;
+  until_ms: number;
+  request_count: number;
+  cost_nano_usd: number | null;
+  tokens: number | null;
+  unpriced_requests: number;
+  missing_token_requests: number;
 };
 export type Consumer = {
   id: string;

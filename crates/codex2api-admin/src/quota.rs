@@ -8,9 +8,13 @@ use tokio::sync::Mutex;
 pub(crate) const CACHE_TTL: TimeDelta = TimeDelta::minutes(10);
 
 /// Keep every reported window and its duration; primary is not always five hours.
-pub(crate) fn summary(snapshot: &QuotaSnapshot) -> Value {
+pub(crate) async fn summary(
+    storage: &Storage,
+    account_id: &str,
+    snapshot: &QuotaSnapshot,
+) -> codex2api_storage::Result<Value> {
     let limits = snapshot.value.get("rate_limit");
-    let windows: Vec<Value> = ["primary_window", "secondary_window"]
+    let mut windows: Vec<Value> = ["primary_window", "secondary_window"]
         .into_iter()
         .filter_map(|key| {
             let v = limits?.get(key).filter(|v| v.is_object())?;
@@ -40,8 +44,29 @@ pub(crate) fn summary(snapshot: &QuotaSnapshot) -> Value {
             }))
         })
         .collect();
-    json!({"observed_at":snapshot.observed_at,"stale":Utc::now()-snapshot.observed_at>=CACHE_TTL,
-        "windows":windows})
+    for window in &mut windows {
+        // Use the persisted official cycle boundaries, never a rolling lookback
+        // or an invented reset when a cached snapshot expires.
+        let bounds = window["reset_at"].as_i64().and_then(|reset| {
+            let seconds = window["limit_window_seconds"].as_i64()?;
+            Some((
+                reset.checked_sub(seconds)?.checked_mul(1000)?,
+                reset.checked_mul(1000)?,
+            ))
+        });
+        window["local_usage"] = match bounds {
+            Some((from, until)) => json!(
+                storage
+                    .supplier_cycle_usage(account_id, from, until)
+                    .await?
+            ),
+            None => Value::Null,
+        };
+    }
+    Ok(
+        json!({"observed_at":snapshot.observed_at,"stale":Utc::now()-snapshot.observed_at>=CACHE_TTL,
+        "windows":windows}),
+    )
 }
 
 pub(crate) struct SupplierCache {

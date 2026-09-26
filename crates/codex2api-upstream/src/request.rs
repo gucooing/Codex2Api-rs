@@ -362,6 +362,35 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn timezone_preserves_compaction_order_in_plain_and_zstd_requests() {
+        let original = json!({"model":"gpt-6-astra","previous_response_id":"previous",
+            "input":[{"type":"compaction_trigger"}]});
+        for compressed in [false, true] {
+            let mut headers = HeaderMap::new();
+            let mut body = serde_json::to_vec(&original).unwrap();
+            if compressed {
+                headers.insert("content-encoding", HeaderValue::from_static("zstd"));
+                body = zstd::stream::encode_all(body.as_slice(), 3).unwrap();
+            }
+            let prepared = prepare_responses(
+                &body,
+                &headers,
+                "supplier-installation",
+                Some("Asia/Taipei"),
+            )
+            .unwrap();
+            let out = decode_body(&prepared.body, &prepared.headers).unwrap();
+            assert_eq!(out["input"][1], original["input"][0]);
+            assert!(
+                out["input"][0]
+                    .to_string()
+                    .contains("<timezone>Asia/Taipei</timezone>")
+            );
+            assert_eq!(out["previous_response_id"], "previous");
+        }
+    }
+
+    #[test]
     fn usage_metadata_extracts_reasoning_from_compressed_requests() {
         let body=br#"{"model":"gpt-test","reasoning":{"effort":"xhigh"},"service_tier":"priority","size":"1024x1024","input":[{"content":"private"}]}"#;
         let compressed = zstd::stream::encode_all(body.as_slice(), 3).unwrap();
