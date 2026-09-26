@@ -1137,6 +1137,7 @@ pub(crate) async fn ws_start(
                         service_tier: value.service_tier.map(|s| s.chars().take(64).collect()),
                         image_size: value.size.map(|s| s.chars().take(64).collect()),
                         generate: value.generate,
+                        ..Default::default()
                     },
                     start,
                     now,
@@ -2015,6 +2016,18 @@ mod tests {
                     reasoning_effort: metadata.reasoning_effort,
                     service_tier: metadata.service_tier,
                     image_size: metadata.image_size,
+                    image_input_usage_json: metadata.image_input_sizes.map(|sizes| {
+                        serde_json::to_string(
+                            &sizes
+                                .into_iter()
+                                .map(|resolution| codex2api_storage::ImageUsage {
+                                    resolution: Some(resolution),
+                                    count: 1,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap_or_default()
+                    }),
                     requested_at_ms,
                     status: "in_progress".into(),
                     ..Default::default()

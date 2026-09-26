@@ -676,6 +676,7 @@
         "image_size": null,
         "image_count": null,
         "image_usage_json": null,
+        "image_input_usage_json": null,
         "first_byte_ms": null,
         "total_ms": null,
         "requested_at_ms": 1,
@@ -685,7 +686,8 @@
         "error_message": null,
         "cost_nano_usd": 14100000,
         "billing_status": "priced",
-        "billing_model": "gpt-6-astra"
+        "billing_model": "gpt-6-astra",
+        "billing_tier": "standard"
       }
     ],
     "total": 1,

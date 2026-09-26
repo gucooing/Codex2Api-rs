@@ -1382,8 +1382,6 @@ function ConsumerResetCredits({ id }: { id: string }) {
   const [note, setNote] = useState("");
   const [activateAt, setActivateAt] = useState("");
   const [durationDays, setDurationDays] = useState("30");
-  const grantAttempt = useRef<{ signature: string; id: string } | null>(null);
-  const consumeAttempts = useRef(new Map<string, string>());
   const busy = actions.isBusy(`reset-credits-${id}`);
   const rows = useTablePagination(resource.data?.items ?? [], id, resource.data !== undefined);
   useErrorToast(resource.error);
@@ -1394,13 +1392,11 @@ function ConsumerResetCredits({ id }: { id: string }) {
           size="sm"
           disabled={!resource.ready || busy}
           onClick={() => {
-            if (!grantAttempt.current) {
-              setStartMode("now");
-              setActivateAt("");
-              setDurationDays("30");
-              setQuantity("1");
-              setNote("");
-            }
+            setStartMode("now");
+            setActivateAt("");
+            setDurationDays("30");
+            setQuantity("1");
+            setNote("");
             setGrantOpen(true);
           }}
         >
@@ -1436,19 +1432,9 @@ function ConsumerResetCredits({ id }: { id: string }) {
                 event,
                 `reset-credits-${id}`,
                 async () => {
-                  const signature = JSON.stringify([
-                    quantity,
-                    note.trim(),
-                    startMode,
-                    activateAt,
-                    durationDays,
-                  ]);
-                  if (grantAttempt.current?.signature !== signature)
-                    grantAttempt.current = { signature, id: crypto.randomUUID() };
                   await request(path, {
                     method: "POST",
                     body: {
-                      request_id: grantAttempt.current.id,
                       quantity: Number(quantity),
                       note: note.trim(),
                       activate_at:
@@ -1456,7 +1442,6 @@ function ConsumerResetCredits({ id }: { id: string }) {
                       duration_days: Number(durationDays),
                     },
                   });
-                  grantAttempt.current = null;
                   setNote("");
                   setGrantOpen(false);
                   resource.reload();
@@ -1609,19 +1594,12 @@ function ConsumerResetCredits({ id }: { id: string }) {
                     actions.run(
                       `reset-credits-${id}`,
                       async () => {
-                        let attempt = consumeAttempts.current.get(credit.id);
-                        if (!attempt) {
-                          attempt = crypto.randomUUID();
-                          consumeAttempts.current.set(credit.id, attempt);
-                        }
                         const result = await request<{ code: string }>(`${path}/consume`, {
                           method: "POST",
                           body: {
                             credit_id: credit.id,
-                            redeem_request_id: attempt,
                           },
                         });
-                        consumeAttempts.current.delete(credit.id);
                         resource.reload();
                         if (result.code === "nothing_to_reset")
                           throw new Error("没有可重置的当前用量，或订阅已到期；未扣卡。");

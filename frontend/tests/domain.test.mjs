@@ -64,7 +64,7 @@ test("supplier quota labels use the reported duration instead of assuming fixed 
 
 test("quota countdown keeps missing and expired cache explicit without inventing usage", () => {
   const now = 2000000000000;
-  assert.equal(quotaResetLabel(now / 1000 + 266400, now), "3天 2小时 后重置");
+  assert.equal(quotaResetLabel(now / 1000 + 266400, now), "3天 2小时");
   assert.equal(quotaResetLabel(now / 1000 - 1, now), "已到重置时间，待更新");
   assert.equal(quotaResetLabel(null, now), "重置时间未提供");
   assert.equal(percentLabel(18), "18%");

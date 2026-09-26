@@ -25,6 +25,7 @@ pub struct UsageRecord {
     pub image_size: Option<String>,
     pub image_count: Option<i64>,
     pub image_usage_json: Option<String>,
+    pub image_input_usage_json: Option<String>,
     pub first_byte_ms: Option<i64>,
     pub total_ms: Option<i64>,
     pub requested_at_ms: i64,
@@ -35,6 +36,7 @@ pub struct UsageRecord {
     pub cost_nano_usd: Option<i64>,
     pub billing_status: String,
     pub billing_model: Option<String>,
+    pub billing_tier: Option<String>,
 }
 impl Default for UsageRecord {
     fn default() -> Self {
@@ -61,6 +63,7 @@ impl Default for UsageRecord {
             image_size: Default::default(),
             image_count: Default::default(),
             image_usage_json: Default::default(),
+            image_input_usage_json: Default::default(),
             first_byte_ms: Default::default(),
             total_ms: Default::default(),
             requested_at_ms: Default::default(),
@@ -71,6 +74,7 @@ impl Default for UsageRecord {
             cost_nano_usd: Default::default(),
             billing_status: Default::default(),
             billing_model: Default::default(),
+            billing_tier: Default::default(),
         }
     }
 }
@@ -286,9 +290,9 @@ impl Storage {
     }
     pub async fn insert_usage(&self, record: &UsageRecord) -> Result<()> {
         let snapshot = self.billing_snapshot(&record.provider_id).await?;
-        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM virtual_accounts WHERE id=?))")
+        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,image_input_usage_json,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM virtual_accounts WHERE id=?))")
             .bind(&record.provider_id).bind(&record.subject_kind).bind(&record.id).bind(&record.account_id).bind(&record.account_name).bind(&record.subject_id).bind(&record.subject_name)
-            .bind(&record.endpoint).bind(&record.transport).bind(&record.model).bind(&record.reasoning_effort).bind(&record.service_tier).bind(&record.image_size).bind(record.requested_at_ms).bind(&record.status)
+            .bind(&record.endpoint).bind(&record.transport).bind(&record.model).bind(&record.reasoning_effort).bind(&record.service_tier).bind(&record.image_size).bind(&record.image_input_usage_json).bind(record.requested_at_ms).bind(&record.status)
             .bind(&record.actual_model).bind(snapshot).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.subject_id)
             .execute(self.pool()).await?;
         Ok(())
@@ -304,13 +308,13 @@ impl Storage {
             .flatten()
             .map(|s| serde_json::from_str::<crate::billing::BillingSnapshot>(&s))
             .transpose()?;
-        let (cost, billing_status, billing_model) = match prices {
+        let (cost, billing_status, billing_model, billing_tier) = match prices {
             Some(prices) => prices.charge(record),
-            None => (None, "legacy", None),
+            None => (None, "legacy", None, None),
         };
-        sqlx::query("UPDATE usage_records SET cost_nano_usd=?,billing_status=?,billing_model=?,service_tier=?,actual_model=?, input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,image_count=?,image_usage_json=?,error_code=?,error_message=?,upstream_request_id=? WHERE id=? AND status='in_progress'")
-            .bind(cost).bind(billing_status).bind(billing_model).bind(&record.service_tier).bind(&record.actual_model).bind(record.input_tokens).bind(record.output_tokens).bind(record.cached_tokens).bind(record.cache_write_tokens)
-            .bind(record.reasoning_tokens).bind(&record.image_size).bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(record.image_count).bind(&record.image_usage_json).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.id)
+        sqlx::query("UPDATE usage_records SET cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?, input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,error_code=?,error_message=?,upstream_request_id=? WHERE id=? AND status='in_progress'")
+            .bind(cost).bind(billing_status).bind(billing_model).bind(billing_tier).bind(&record.service_tier).bind(&record.actual_model).bind(record.input_tokens).bind(record.output_tokens).bind(record.cached_tokens).bind(record.cache_write_tokens)
+            .bind(record.reasoning_tokens).bind(&record.image_size).bind(record.image_count).bind(&record.image_usage_json).bind(&record.image_input_usage_json).bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.id)
             .execute(self.pool()).await?;
         Ok(())
     }

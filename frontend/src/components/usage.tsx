@@ -60,6 +60,7 @@ import {
   duration,
   usageStatus,
   usageStatuses,
+  imageUsageLabel,
 } from "@/lib/usage-display";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -543,13 +544,14 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
                     </CardDescription>
                   </TableCell>
                   <TableCell className="text-xs">
-                    {record.reasoning_effort ?? "默认"} / {record.service_tier ?? "标准"}
+                    {record.reasoning_effort ?? "默认"} /{" "}
+                    {record.billing_tier ?? record.service_tier ?? "标准"}
                   </TableCell>
                   <TableCell>
                     {failed ? (
                       "-"
                     ) : record.image_count !== null ? (
-                      <span>{record.image_count} 张</span>
+                      <span>{imageUsageLabel(record)}</span>
                     ) : (
                       <div className="grid grid-cols-[repeat(3,max-content)] gap-x-3 gap-y-0.5 text-xs tabular-nums">
                         {metrics.map(({ label, description, value, exact }) => (
@@ -680,6 +682,10 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
           {selected && (
             <FieldGroup className="grid gap-3 border-t pt-3 sm:grid-cols-3">
               {[
+                ...(selected.image_count !== null
+                  ? [["图片用量", imageUsageLabel(selected)] as const]
+                  : []),
+
                 ["输入", selected.input_tokens],
                 ["输出", selected.output_tokens],
                 ["思考（输出内）", selected.reasoning_tokens],
@@ -691,6 +697,8 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
                   selected.cost_nano_usd == null ? "-" : money(selected.cost_nano_usd / 1e9),
                 ],
                 ["计费状态", billingLabel(selected.billing_status)],
+
+                ["命中计费挡位", selected.billing_tier ?? selected.service_tier ?? "标准"],
               ].map(([label, value]) => (
                 <Field key={String(label)}>
                   <FieldTitle>{label}</FieldTitle>
@@ -808,9 +816,22 @@ export function ConsumerUsage({ id }: { id: string }) {
                           tickLine={false}
                           axisLine={false}
                           width={56}
-                          tickFormatter={(value: number) => value.toLocaleString()}
+                          tickFormatter={(value: number) => tokenCount(value)}
                         />
-                        <ChartTooltip content={<ChartTooltipContent />} />
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value) => (
+                                <div className="flex flex-1 justify-between gap-3 leading-none">
+                                  <span>Token</span>
+                                  <span className="font-mono font-medium tabular-nums">
+                                    {tokenCount(typeof value === "number" ? value : Number(value))}
+                                  </span>
+                                </div>
+                              )}
+                            />
+                          }
+                        />
                         <Bar
                           dataKey="tokens"
                           fill="var(--color-tokens)"

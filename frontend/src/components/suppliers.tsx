@@ -657,6 +657,7 @@ export function SupplierDetail() {
               ["info", "账户资料"],
               ["fingerprint", "指纹与网络"],
               ["quota", "官方额度"],
+              ["local-usage", "本地用量"],
               ["usage", "官方用量"],
               ["details", "官方资料"],
               ["credits", "重置额度"],
@@ -751,6 +752,7 @@ export function SupplierDetail() {
               onSaved={resource.reload}
             />
           )}
+          {tab === "local-usage" && <LocalUsage account={account} />}
           {["quota", "usage", "details", "credits"].includes(tab) && (
             <OfficialData
               key={tab}
@@ -772,6 +774,22 @@ export function SupplierDetail() {
         />
       )}
     </>
+  );
+}
+function LocalUsage({ account }: { account?: Supplier }) {
+  const value = account?.usage ? ({ stats: account.usage } as unknown as Json) : null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle role="heading" aria-level={2}>
+          本地用量
+        </CardTitle>
+        <CardDescription>按本系统账本统计，计量维度与官方用量一致。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <OfficialFields section="usage" value={value} />
+      </CardContent>
+    </Card>
   );
 }
 export function FingerprintFields({

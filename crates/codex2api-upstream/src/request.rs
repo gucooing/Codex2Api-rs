@@ -21,11 +21,28 @@ pub struct RequestMetadata {
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
     pub image_size: Option<String>,
+    pub image_input_sizes: Option<Vec<String>>,
     pub generate: Option<bool>,
 }
 
 pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetadata> {
     let value = decode_body(body, headers)?;
+    let image_input_sizes = value
+        .get("images")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(image_input_resolution)
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| {
+            value
+                .get("image")
+                .and_then(image_input_resolution)
+                .map(|size| vec![size])
+        })
+        .filter(|items| !items.is_empty());
     Ok(RequestMetadata {
         model: value
             .get("model")
@@ -43,8 +60,105 @@ pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetad
             .get("size")
             .and_then(Value::as_str)
             .map(|s| s.chars().take(64).collect()),
+        image_input_sizes,
         generate: value.get("generate").and_then(Value::as_bool),
     })
+}
+
+fn image_input_resolution(value: &Value) -> Option<String> {
+    if let Some(encoded) = value.as_str() {
+        return data_url_resolution(encoded);
+    }
+    let object = value.as_object()?;
+    if let Some(size) = object.get("size").and_then(Value::as_str)
+        && let Some(size) = codex2api_storage::image_resolution(size)
+    {
+        return Some(size);
+    }
+    if let (Some(width), Some(height)) = (
+        object.get("width").and_then(Value::as_u64),
+        object.get("height").and_then(Value::as_u64),
+    ) {
+        return codex2api_storage::image_resolution(&format!("{width}x{height}"));
+    }
+    let nested_url = object
+        .get("image_url")
+        .and_then(|value| value.get("url"))
+        .and_then(Value::as_str);
+    let encoded = ["image_url", "image", "url"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .chain(nested_url)
+        .find_map(|value| {
+            value
+                .strip_prefix("data:")?
+                .split_once(",")
+                .map(|(_, data)| data)
+        });
+    data_url_resolution(encoded?)
+}
+
+fn data_url_resolution(encoded: &str) -> Option<String> {
+    let encoded = encoded
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(",").map(|(_, data)| data))
+        .unwrap_or(encoded);
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()?;
+    image_dimensions(&bytes)
+        .map(|(width, height)| format!("{width}x{height}"))
+        .and_then(|size| codex2api_storage::image_resolution(&size))
+}
+
+fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
+        return Some((
+            u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+            u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+        ));
+    }
+    if (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) && bytes.len() >= 10 {
+        return Some((
+            u16::from_le_bytes(bytes[6..8].try_into().ok()?) as u32,
+            u16::from_le_bytes(bytes[8..10].try_into().ok()?) as u32,
+        ));
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        if bytes.get(12..16) == Some(b"VP8X") && bytes.len() >= 30 {
+            let width =
+                1 + (u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]) & 0x00ff_ffff);
+            let height =
+                1 + (u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]) & 0x00ff_ffff);
+            return Some((width, height));
+        }
+    }
+    if bytes.first() == Some(&0xff) && bytes.get(1) == Some(&0xd8) {
+        let mut index = 2;
+        while index + 9 < bytes.len() {
+            if bytes[index] != 0xff {
+                index += 1;
+                continue;
+            }
+            while index < bytes.len() && bytes[index] == 0xff {
+                index += 1;
+            }
+            let marker = *bytes.get(index)?;
+            index += 1;
+            if matches!(marker, 0xd8 | 0xd9) {
+                continue;
+            }
+            let length = u16::from_be_bytes(bytes.get(index..index + 2)?.try_into().ok()?) as usize;
+            if length < 2 || index + length > bytes.len() {
+                return None;
+            }
+            if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+                let height = u16::from_be_bytes(bytes.get(index + 3..index + 5)?.try_into().ok()?);
+                let width = u16::from_be_bytes(bytes.get(index + 5..index + 7)?.try_into().ok()?);
+                return Some((width as u32, height as u32));
+            }
+            index += length;
+        }
+    }
+    None
 }
 
 pub fn decode_body(body: &[u8], inbound: &HeaderMap) -> Result<Value> {
@@ -258,6 +372,22 @@ mod tests {
         assert_eq!(metadata.reasoning_effort.as_deref(), Some("xhigh"));
         assert_eq!(metadata.service_tier.as_deref(), Some("priority"));
         assert_eq!(metadata.image_size.as_deref(), Some("1024x1024"));
+    }
+
+    #[test]
+    fn usage_metadata_extracts_image_edit_input_dimensions_without_retaining_bytes() {
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        png.extend_from_slice(&[0, 0, 0, 13, b'I', b'H', b'D', b'R']);
+        png.extend_from_slice(&1024_u32.to_be_bytes());
+        png.extend_from_slice(&768_u32.to_be_bytes());
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png);
+        let body = serde_json::json!({
+            "model":"image-edit",
+            "image":{"image_url":format!("data:image/png;base64,{encoded}")}
+        });
+        let metadata =
+            request_metadata(&serde_json::to_vec(&body).unwrap(), &HeaderMap::new()).unwrap();
+        assert_eq!(metadata.image_input_sizes, Some(vec!["1024x768".into()]));
     }
 
     #[test]

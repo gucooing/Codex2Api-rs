@@ -31,6 +31,15 @@ export type Supplier = {
   created_at: string;
   last_used_at: string | null;
   fingerprint: Fingerprint;
+  usage?: AccountUsageSummary;
+};
+export type AccountUsageSummary = {
+  lifetime_tokens: number | null;
+  peak_daily_tokens: number | null;
+  current_streak_days?: number;
+  longest_streak_days?: number;
+  longest_running_turn_sec?: number | null;
+  daily_usage_buckets: { start_date: string; tokens: number | null }[];
 };
 export type SupplierQuota = {
   observed_at: string;
@@ -198,6 +207,8 @@ export type UsageRecord = {
   reasoning_tokens: number | null;
   image_size: string | null;
   image_count: number | null;
+  image_usage_json: string | null;
+  image_input_usage_json: string | null;
   first_byte_ms: number | null;
   total_ms: number | null;
   requested_at_ms: number;
@@ -207,6 +218,7 @@ export type UsageRecord = {
   error_message: string | null;
   cost_nano_usd: number | null;
   billing_status: string;
+  billing_tier: string | null;
 };
 export type UsagePage = {
   records: UsageRecord[];
@@ -223,11 +235,7 @@ export type QuotaWindow = {
   remaining_usd: string;
 };
 export type AccountUsage = {
-  summary: {
-    lifetime_tokens: number | null;
-    peak_daily_tokens: number | null;
-    daily_usage_buckets: { start_date: string; tokens: number | null }[];
-  };
+  summary: AccountUsageSummary;
   quota: {
     plan_type: string;
     rate_limit: {

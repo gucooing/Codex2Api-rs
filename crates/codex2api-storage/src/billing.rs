@@ -31,7 +31,7 @@ impl BillingSnapshot {
     pub(crate) fn charge(
         &self,
         record: &UsageRecord,
-    ) -> (Option<i64>, &'static str, Option<String>) {
+    ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
         let (tokens, images) = match self {
             Self::Legacy(tokens) => (tokens.as_slice(), None),
             Self::Current { tokens, images } => (tokens.as_slice(), Some(images)),
@@ -41,58 +41,71 @@ impl BillingSnapshot {
         }
         let model = record.actual_model.clone().or(record.model.clone());
         let Some(images) = images else {
-            return (None, "unsupported", model);
+            return (None, "unsupported", model, None);
         };
         let Some(usage) = record
             .image_usage_json
             .as_deref()
             .and_then(|s| serde_json::from_str::<Vec<crate::ImageUsage>>(s).ok())
         else {
-            return (None, "missing_usage", model);
+            return (None, "missing_usage", model, None);
         };
         let mut total = 0_i64;
         let mut count = 0_i64;
+        let mut billing_tiers = std::collections::BTreeSet::new();
         for item in usage {
             if item.count <= 0 {
-                return (None, "invalid_usage", model);
+                return (None, "invalid_usage", model, None);
             }
             let Some(next) = count.checked_add(item.count) else {
-                return (None, "overflow", model);
+                return (None, "overflow", model, None);
             };
             count = next;
             let Some(size) = item.resolution else {
-                return (None, "missing_resolution", model);
+                return (None, "missing_resolution", model, None);
             };
             let tier = crate::image_resolution_tier(&size);
             // Existing fixed-size snapshots keep their original exact prices.
+            let same_model = |p: &&crate::ImagePrice| {
+                p.provider_id == record.provider_id && Some(&p.model) == model.as_ref()
+            };
             let price = images
                 .iter()
-                .find(|p| {
-                    p.provider_id == record.provider_id
-                        && Some(&p.model) == model.as_ref()
-                        && p.resolution == size
+                .find(|p| same_model(p) && p.resolution == size)
+                .or_else(|| {
+                    images
+                        .iter()
+                        .find(|p| same_model(p) && Some(p.resolution.as_str()) == tier.as_deref())
                 })
                 .or_else(|| {
-                    images.iter().find(|p| {
-                        p.provider_id == record.provider_id
-                            && Some(&p.model) == model.as_ref()
-                            && Some(p.resolution.as_str()) == tier.as_deref()
+                    // A partial image price table still charges using the closest
+                    // configured resolution tier. Only a model with no image
+                    // prices remains explicitly unpriced.
+                    let requested = tier.as_deref().and_then(image_tier_rank);
+                    images.iter().filter(|p| same_model(p)).min_by_key(|p| {
+                        let rank = image_tier_rank(&p.resolution).unwrap_or(usize::MAX);
+                        requested
+                            .map(|wanted| rank.abs_diff(wanted))
+                            .unwrap_or(usize::MAX)
                     })
                 });
             let Some(price) = price else {
-                return (None, "unpriced", model);
+                return (None, "unpriced", model, None);
             };
+            if let Some(hit_tier) = crate::image_resolution_tier(&price.resolution) {
+                billing_tiers.insert(hit_tier);
+            }
             let Some(value) = price
                 .price_nano_usd
                 .checked_mul(item.count)
                 .and_then(|v| total.checked_add(v))
             else {
-                return (None, "overflow", model);
+                return (None, "overflow", model, None);
             };
             total = value;
         }
         if record.image_count != Some(count) {
-            return (None, "invalid_usage", model);
+            return (None, "invalid_usage", model, None);
         }
         (
             Some(total),
@@ -102,6 +115,8 @@ impl BillingSnapshot {
                 "priced"
             },
             model,
+            (!billing_tiers.is_empty())
+                .then(|| billing_tiers.into_iter().collect::<Vec<_>>().join(", ")),
         )
     }
 }
@@ -184,7 +199,7 @@ pub fn price_tier(tier: Option<&str>) -> Option<&'static str> {
 pub(crate) fn charge(
     record: &UsageRecord,
     prices: &[ModelPrice],
-) -> (Option<i64>, &'static str, Option<String>) {
+) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
     let model = record
         .actual_model
         .as_ref()
@@ -192,10 +207,10 @@ pub(crate) fn charge(
         .cloned();
     if !record.endpoint.ends_with("/responses") && !record.endpoint.ends_with("/responses/compact")
     {
-        return (None, "unsupported", model);
+        return (None, "unsupported", model, None);
     }
     let (Some(input), Some(output)) = (record.input_tokens, record.output_tokens) else {
-        return (None, "missing_usage", model);
+        return (None, "missing_usage", model, None);
     };
     let cached = record.cached_tokens.unwrap_or(0);
     let writes = record.cache_write_tokens.unwrap_or(0);
@@ -205,7 +220,7 @@ pub(crate) fn charge(
         || writes < 0
         || i128::from(cached) + i128::from(writes) > i128::from(input)
     {
-        return (None, "invalid_usage", model);
+        return (None, "invalid_usage", model, None);
     }
     let tier = price_tier(record.service_tier.as_deref());
     let price = prices
@@ -218,7 +233,7 @@ pub(crate) fn charge(
         })
         .max_by_key(|p| p.min_input_tokens);
     let Some(price) = price else {
-        return (None, "unpriced", model);
+        return (None, "unpriced", model, tier.map(str::to_owned));
     };
     let units = i128::from(input - cached - writes) * i128::from(price.input_rate)
         + i128::from(cached) * i128::from(price.cached_rate)
@@ -226,9 +241,15 @@ pub(crate) fn charge(
         + i128::from(output) * i128::from(price.output_rate);
     // Round once to nano-USD; reasoning tokens are already included in output.
     match i64::try_from((units + 500) / 1000) {
-        Ok(value) => (Some(value), "priced", model),
-        Err(_) => (None, "overflow", model),
+        Ok(value) => (Some(value), "priced", model, Some(price.tier.clone())),
+        Err(_) => (None, "overflow", model, Some(price.tier.clone())),
     }
+}
+
+fn image_tier_rank(tier: &str) -> Option<usize> {
+    crate::IMAGE_RESOLUTION_TIERS
+        .iter()
+        .position(|(name, _)| *name == tier)
 }
 
 impl Storage {
@@ -318,6 +339,33 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_billing_falls_back_to_the_nearest_configured_tier() {
+        let record = UsageRecord {
+            provider_id: "chatgpt".into(),
+            model: Some("image-test".into()),
+            endpoint: "/v1/images/generations".into(),
+            image_count: Some(1),
+            image_usage_json: Some(r#"[{"resolution":"3840x2160","count":1}]"#.into()),
+            status: "completed".into(),
+            ..Default::default()
+        };
+        let snapshot = BillingSnapshot::Current {
+            tokens: vec![],
+            images: vec![crate::ImagePrice {
+                provider_id: "chatgpt".into(),
+                model: "image-test".into(),
+                resolution: "1K".into(),
+                price_nano_usd: 42,
+            }],
+        };
+        let charged = snapshot.charge(&record);
+        assert_eq!(charged.0, Some(42));
+        assert_eq!(charged.1, "priced");
+        assert_eq!(charged.3.as_deref(), Some("1K"));
+    }
+
     async fn set_test_quota(
         storage: &crate::Storage,
         value: &serde_json::Value,

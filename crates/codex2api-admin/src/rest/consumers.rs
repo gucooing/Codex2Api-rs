@@ -81,7 +81,7 @@ pub async fn list(State(s): State<AdminState>, Query(q): Query<ConsumerListQuery
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BatchInput {
-    request_id: String,
+    request_id: Option<String>,
     operation: String,
     #[serde(default)]
     ids: Vec<String>,
@@ -120,9 +120,13 @@ pub async fn batch(State(s): State<AdminState>, Json(input): Json<BatchInput>) -
         filters: input.filters,
         excluded_ids: input.excluded_ids,
     };
+    let request_id = input
+        .request_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     Ok(Json(
         s.storage
-            .consumer_batch(&input.request_id, &input.operation, selection, grant)
+            .consumer_batch(&request_id, &input.operation, selection, grant)
             .await?,
     ))
 }
@@ -246,7 +250,7 @@ pub async fn reset_credits(State(s): State<AdminState>, Path(id): Path<String>) 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResetGrant {
-    request_id: String,
+    request_id: Option<String>,
     quantity: i64,
     #[serde(default)]
     note: String,
@@ -270,15 +274,19 @@ pub async fn grant_reset_credits(
         activate_at: input.activate_at,
         duration_days: input.duration_days,
     };
+    let request_id = input
+        .request_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     s.storage
-        .grant_virtual_reset_cards(&id, &input.request_id, &grant)
+        .grant_virtual_reset_cards(&id, &request_id, &grant)
         .await?;
     Ok(Json(s.storage.virtual_reset_credit_records(&id).await?))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResetConsume {
-    redeem_request_id: String,
+    redeem_request_id: Option<String>,
     credit_id: String,
 }
 pub async fn consume_reset_credit(
@@ -287,14 +295,13 @@ pub async fn consume_reset_credit(
     Json(input): Json<ResetConsume>,
 ) -> ApiResult {
     require(&s, &id).await?;
+    let redeem_request_id = input
+        .redeem_request_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     Ok(Json(
         s.storage
-            .consume_virtual_reset_credit(
-                &id,
-                &input.redeem_request_id,
-                Some(&input.credit_id),
-                "admin",
-            )
+            .consume_virtual_reset_credit(&id, &redeem_request_id, Some(&input.credit_id), "admin")
             .await?,
     ))
 }

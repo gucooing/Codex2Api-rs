@@ -21,6 +21,6 @@ export function quotaResetLabel(resetAt: number | null | undefined, now: number)
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
   const rest = minutes % 60;
-  return `${days ? `${days}天 ` : ""}${hours ? `${hours}小时 ` : ""}${!days && rest ? `${rest}分钟 ` : ""}后重置`;
+  return `${days ? `${days}天 ` : ""}${hours ? `${hours}小时 ` : ""}${!days && rest ? `${rest}分钟` : ""}`.trim();
 }
 export const percentLabel = (used: number) => `${Number(used.toFixed(1))}%`;

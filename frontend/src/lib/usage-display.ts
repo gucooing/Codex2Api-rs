@@ -10,6 +10,42 @@ export function tokenCount(value: number | null | undefined) {
     value,
   );
 }
+
+type ImageUsage = { resolution: string | null; count: number };
+function parseImageUsage(value: string | null | undefined): ImageUsage[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is ImageUsage =>
+        Boolean(item) &&
+        typeof item === "object" &&
+        typeof (item as { count?: unknown }).count === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+export function imageUsageLabel(record: {
+  image_count: number | null;
+  image_usage_json: string | null;
+  image_input_usage_json: string | null;
+  endpoint: string;
+  image_size: string | null;
+}) {
+  const output = parseImageUsage(record.image_usage_json);
+  const input = parseImageUsage(record.image_input_usage_json);
+  const format = (items: ImageUsage[]) =>
+    items.length
+      ? items.map((item) => `${item.count}张 ${item.resolution ?? "分辨率未知"}`).join("、")
+      : record.image_size || "分辨率未知";
+  const outputText = format(output);
+  if (record.endpoint.endsWith("/images/edits") && input.length) {
+    return `上传 ${format(input)}；回复 ${outputText}`;
+  }
+  return `${record.image_count ?? 0}张（${outputText}）`;
+}
 export function cacheRate(record: Pick<UsageRecord, "input_tokens" | "cached_tokens">) {
   if (record.input_tokens == null || record.input_tokens <= 0 || record.cached_tokens == null)
     return "-";
