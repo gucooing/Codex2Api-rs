@@ -8,8 +8,8 @@ import re
 import subprocess
 import sys
 import threading
-import socket
 import time
+import tomllib
 import urllib.parse
 import urllib.request
 
@@ -39,11 +39,20 @@ class Client:
             "-c", 'openai_base_url=' + json.dumps(proxy + "/backend-api/codex"),
         ]
         if os.environ.get("CODEX2API_TEST_CUSTOM_PROVIDER"):
-            hook=str(Path(__file__).resolve().parents[2]/"tools/desktop-proxy/AddressHook.cjs")
-            resolved=subprocess.run(["node","-e","const fs=require('node:fs'),h=require(process.argv[1]),input=JSON.parse(fs.readFileSync(0,'utf8'));h.routeNativeLaunch({...input,env:process.env},'local',h.proxyPolicy(process.argv[2]),require).then(v=>console.log(JSON.stringify(v.args))).catch(e=>{console.error(e.message);process.exit(1)});",hook,proxy],input=json.dumps({"executablePath":cli,"args":arguments[1:]}),env=client_env,capture_output=True,text=True,timeout=18)
+            source = Path(client_home, 'native-config-input.json')
+            result = Path(client_home, 'native-config-output.json')
+            source.write_text(json.dumps(tomllib.loads(Path(client_home, 'config.toml').read_text(encoding='utf-8'))), encoding='utf-8')
+            resolved=subprocess.run([os.environ['CODEX2API_TEST_NATIVE_PREPARE'], '--route-config', proxy, str(source), str(result)],capture_output=True,text=True,timeout=18)
             assert resolved.returncode==0,resolved.stderr
-            arguments=[cli,*json.loads(resolved.stdout)]
-        self.process = subprocess.Popen(arguments, env=client_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            for key, value in json.loads(result.read_text(encoding='utf-8')).items(): arguments += ['-c', key + '=' + json.dumps(value)]
+        prepare = os.environ.get('CODEX2API_TEST_NATIVE_PREPARE')
+        self.process = subprocess.Popen(arguments, env=client_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=4 if prepare else 0)
+        if prepare:
+            try:
+                subprocess.run([prepare, '--prepare', str(self.process.pid), cli], check=True, capture_output=True, timeout=20)
+            except BaseException:
+                self.process.kill()
+                raise
         threading.Thread(target=self.read, daemon=True).start()
         self.call("initialize", {"clientInfo": {"name": "codex2api_test", "version": "0.1.0"}, "capabilities": {"experimentalApi": True}})
         self.send({"method": "initialized"})
@@ -82,14 +91,9 @@ if os.environ.get("CODEX2API_TEST_CUSTOM_PROVIDER"):
 
 client = Client()
 try:
-    hook = str(Path(__file__).resolve().parents[2] / "tools/desktop-proxy/AddressHook.cjs")
-    request = subprocess.run(["node","-e","const {proxyPolicy}=require(process.argv[1]);process.stdout.write(JSON.stringify(proxyPolicy(process.argv[2]).loginRequest('account/login/start',{type:'chatgpt',codexStreamlinedLogin:true,useHostedLoginSuccessPage:true})));",hook,proxy],text=True,capture_output=True,timeout=10)
-    assert request.returncode==0,request.stderr
-    login = client.call("account/login/start",json.loads(request.stdout))
-    rewrite = subprocess.run(["node", "-e", "const fs=require('node:fs');const {proxyPolicy}=require(process.argv[1]);const input=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(proxyPolicy(process.argv[2]).loginResponse('account/login/start',input)));", hook, proxy], input=json.dumps(login),text=True,capture_output=True,timeout=10)
-    assert rewrite.returncode == 0, rewrite.stderr
-    login=json.loads(rewrite.stdout)
-    authorization=urllib.parse.parse_qs(urllib.parse.urlsplit(login["authUrl"]).query)["authorize_url"][0]
+    login = client.call("account/login/start", {"type":"chatgpt", "codexStreamlinedLogin":True, "useHostedLoginSuccessPage":False})
+    authorization=urllib.parse.parse_qs(urllib.parse.urlsplit(login["authUrl"]).query).get("authorize_url", [login["authUrl"]])[0]
+    assert urllib.parse.urlsplit(authorization).netloc == urllib.parse.urlsplit(proxy).netloc, 'Native login escaped the configured service'
     callback=urllib.parse.parse_qs(urllib.parse.urlsplit(authorization).query)["redirect_uri"][0]
     allowed_origins={(urllib.parse.urlsplit(value).scheme,urllib.parse.urlsplit(value).netloc) for value in [proxy,callback]}
     class LocalLoginRedirect(urllib.request.HTTPRedirectHandler):
@@ -176,35 +180,39 @@ if desktop:
     # Only used by the ignored test's temporary router, database and fake credentials.
     launcher=os.environ["CODEX2API_TEST_GUI"]
     options={"executable":desktop,"proxyRoot":proxy,"clientHome":client_home,"appData":str(Path(client_home)/"desktop-app")}
-    if os.environ.get("CODEX2API_TEST_DESKTOP_UI"):
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1",0))
-            renderer_port=listener.getsockname()[1]
-        options["rendererPort"]=renderer_port
     fixture_path=Path(client_home)/"gui-fixture.json"
     report_path=Path(client_home)/"gui-result.json"
     fixture_path.write_text(json.dumps(options))
     result=subprocess.run([launcher,"--test-launch",str(fixture_path),str(report_path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=70)
     assert result.returncode==0,report_path.read_text() if report_path.exists() else result.stderr
     launched=json.loads(report_path.read_text())
+    print('Desktop fixture PID:', launched['processId'], flush=True)
     try:
-        assert launched["inspectorClosed"]
+        assert launched["nativeHookInstalled"]
         time.sleep(12)
-        logs = Path(os.environ["LOCALAPPDATA"]) / "Packages/OpenAI.Codex_2p2nqsd0c76g0/LocalCache/Local/Codex/Logs"
-        account_lookup_succeeded = False
-        for logfile in logs.glob(f"*/*/*/*-{launched['processId']}-t0-*.log"):
-            lines = logfile.read_text(encoding="utf-8", errors="replace").splitlines()
-            assert not any("error boundary" in line for line in lines), "Temporary desktop reported a renderer error boundary"
-            lookups = [line for line in lines if "[chatgpt-account-lookup] completed" in line]
-            assert not any("result=failed" in line for line in lookups), "Desktop account schema rejected the response"
-            account_lookup_succeeded |= any("result=succeeded" in line for line in lookups)
-        assert account_lookup_succeeded, "No successful desktop account lookup was observed"
-        print("Native desktop GUI: runtime hooks installed and debugger closed.")
-        if os.environ.get("CODEX2API_TEST_DESKTOP_UI"):
-            script=Path(__file__).with_name("Test-DesktopProfileUI.cjs")
-            check=subprocess.run(["node",str(script),str(renderer_port)],capture_output=True,text=True,encoding="utf-8",timeout=60)
-            assert check.returncode==0,check.stdout+check.stderr
-            print(check.stdout)
+        import ctypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        process_handle = kernel.OpenProcess(0x1000, False, launched['processId'])
+        assert process_handle, 'Desktop exited after startup'
+        try:
+            exit_code = ctypes.c_ulong()
+            assert kernel.GetExitCodeProcess(ctypes.c_void_p(process_handle), ctypes.byref(exit_code)) and exit_code.value == 259, 'Desktop exited after startup'
+        finally:
+            kernel.CloseHandle(ctypes.c_void_p(process_handle))
+        if os.environ.get('CODEX2API_TEST_NATIVE_PREPARE'):
+            rows = json.loads(subprocess.check_output(['powershell', '-NoProfile', '-Command', "@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,@{Name='Mode';Expression={if($_.CommandLine -match 'app-server-daemon'){'daemon'}elseif($_.CommandLine -match 'app-server'){'server'}else{'other'}}}) | ConvertTo-Json -Compress"], text=True))
+            owned = {launched['processId']}
+            for _ in range(12):
+                owned.update(row['ProcessId'] for row in rows if row['ParentProcessId'] in owned)
+            cores = [row['ProcessId'] for row in rows if row['ProcessId'] in owned and row['Name'].lower() == 'codex.exe']
+            print('Desktop native process tree:', [(row['ProcessId'], row['ParentProcessId'], row['Mode']) for row in rows if row['ProcessId'] in cores], flush=True)
+            assert cores, 'Desktop did not start its native runtime'
+            for core in cores:
+                actual_runtime = next(row['ExecutablePath'] for row in rows if row['ProcessId'] == core)
+                verified = subprocess.run([os.environ['CODEX2API_TEST_NATIVE_PREPARE'], '--verify', str(core), actual_runtime], capture_output=True, text=True, timeout=20)
+                assert verified.returncode == 0, verified.stderr
+        print("Native desktop GUI: compiled launcher completed startup; the Rust fixture separately checks real workspace, quota and settings requests.")
     finally:
         subprocess.run(["taskkill", "/PID", str(launched["processId"]), "/T", "/F"], capture_output=True)
         time.sleep(0.5)

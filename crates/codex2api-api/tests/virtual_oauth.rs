@@ -3567,7 +3567,7 @@ async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh()
     plan.config["model_access"] = serde_json::json!("selected");
     plan.config["models"] = serde_json::json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"},{"provider_id":"chatgpt","model":"gpt-6-astra"},{"provider_id":"chatgpt","model":"gpt-6-sol"},{"provider_id":"chatgpt","model":"gpt-6-luna"}]);
     for model in ["gpt-6-sol", "gpt-6-luna"] {
-        sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')")
+        sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')")
             .bind(model)
             .execute(storage.pool())
             .await

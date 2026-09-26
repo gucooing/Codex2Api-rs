@@ -11,6 +11,16 @@
     <PublishSingleFile>true</PublishSingleFile>
     <DebugType>none</DebugType>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <HookRuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</HookRuntimeIdentifier>
+    <HookRuntimeIdentifier Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</HookRuntimeIdentifier>
+    <NativeHookOutput>$(MSBuildThisFileDirectory)../../target/desktop-proxy/native-publish/$(HookRuntimeIdentifier)/</NativeHookOutput>
   </PropertyGroup>
-  <ItemGroup><EmbeddedResource Include="AddressHook.cjs" LogicalName="AddressHook" /></ItemGroup>
+  <ItemGroup>
+    <Compile Remove="NativeHook/**/*.cs" />
+    <Compile Include="NativeHook/AddressPolicy.cs" />
+    <EmbeddedResource Include="$(NativeHookOutput)Codex2API.NativeHook.dll" LogicalName="NativeHook" />
+  </ItemGroup>
+  <Target Name="BuildNativeHook" BeforeTargets="PrepareResourceNames">
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)NativeHook/NativeHook.csproj&quot; -c $(Configuration) -r $(HookRuntimeIdentifier) -o &quot;$(NativeHookOutput)&quot;" StdOutEncoding="utf-8" StdErrEncoding="utf-8" />
+  </Target>
 </Project>

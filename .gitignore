@@ -14,3 +14,4 @@
 /frontend/.next/
 /frontend/out/
 /frontend/*.tsbuildinfo
+__pycache__/

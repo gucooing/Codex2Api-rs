@@ -162,7 +162,7 @@ Responses 子路径和同级模型、图片、搜索、实时接口按该客户�
 
 未实现的路径和 HTTP 方法返回 `501 / endpoint_not_implemented`，在 **系统设置 → 端点诊断** 中记录方法、路径、次数、首次和最近时间，不保存查询参数、请求正文、密码或令牌。诊断只覆盖到达代理此前缀的请求，无法捕获应用绕过代理的直连流量。
 
-Windows **ChatGPT** 桌面应用使用 [C# 图形启动器](tools/desktop-proxy/README.md)：界面配置服务器地址、自动发现客户端或手动选路径，支持设置导入导出。单个 EXE 内嵌地址 hook，沿用原版默认凭证、数据和运行时，不创建隔离 profile、不复制客户端、不包裹 app-server。登录使用自定义域名入口 `GET /codex/desktop-auth`，反向代理也需转发该路径；登录成功使用本地回调页，不跳转到 ChatGPT。当前服务端不包含 PAT 或 Agent Identity 登录。
+Windows **ChatGPT** 桌面应用使用 [C# 图形启动器](tools/desktop-proxy/README.md)：界面配置服务器地址、自动发现客户端或手动选路径，支持设置导入导出。单个 EXE 内嵌编译后的地址处理组件，按服务地址保存独立的 `auth.json`、`config.toml` 和客户端数据；继续使用客户端实际选择的原生运行时，不复制客户端或包裹 app-server。启动器直接支持 HTTP 服务，不使用脚本或调试通道加载。登录使用自定义域名入口 `GET /codex/desktop-auth`，反向代理也需转发该路径；登录成功使用本地回调页，不跳转到 ChatGPT。当前服务端不包含 PAT 或 Agent Identity 登录。
 
 ## 跟进官方 Codex 更新
 

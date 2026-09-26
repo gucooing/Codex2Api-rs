@@ -141,14 +141,22 @@ Before changing virtual-account endpoints, read
   JSON to make the client work.
 - This project emulates the server for virtual accounts. Fix server contracts;
   do not patch Desktop business logic or bypass its readiness/permission checks.
-  Our launcher must clean up its own temporary debugging environment, including
-  Worker inheritance of its `--inspect-brk` flag. Report server, launcher and
+  Launcher loading and routing must be implemented in C#, with no JavaScript/CJS
+  payloads, script evaluation, debugger protocol, inspector ports or breakpoints.
+  HTTP scheme compatibility in workspace discovery and subsequent native routing
+  is explicitly authorized by the user on 2026-09-26; keep identity, credentials,
+  account ownership and permission checks. Do not substitute an HTTPS bridge.
+  Report server, launcher and
   actual Desktop execution evidence separately; parser tests alone do not prove
   that a task was created or that an inference request was sent.
-- Desktop launcher policy (user-confirmed 2026-09-21): use the original client's
-  default credentials, data directory and native runtime. Keep only address
-  routing hooks; do not create isolated profiles, copy runtime executables, wrap
-  app-server with a shim, or force credential storage. The only login option
+- Desktop launcher policy (user-updated 2026-09-26): launcher starts use persistent
+  per-service profiles owned by the launcher, including separate `auth.json`,
+  `config.toml`, SQLite and Desktop data directories. Initialize file credential
+  storage and service addresses without copying default credentials or overwriting
+  existing client preferences/tokens. Let the original client perform login and
+  token refresh in that profile. Keep the installed native runtime and address
+  routing hooks; do not copy runtime executables or wrap app-server with a shim.
+  The only login option
   override is disabling the official hosted success-page redirect so login stays
   on the custom service/local callback. Preserve other login options.
   Login/authorization, token refresh and revoke must stay on the configured proxy;

@@ -7,19 +7,19 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--native-launch") { Launcher.StartNativeHost(args[1], args[2]); return; }
         ApplicationConfiguration.Initialize();
         if (args.Length == 3 && args[0] == "--test-launch")
         {
             try
             {
                 using var doc=JsonDocument.Parse(File.ReadAllText(args[1]));var input=doc.RootElement;
-                var client=ClientInstallation.FromPath(input.GetProperty("executable").GetString()!);
+                var client=ClientInstallation.ResolvePath(input.GetProperty("executable").GetString()!, CancellationToken.None).GetAwaiter().GetResult();
                 var server=Launcher.NormalizeServer(input.GetProperty("proxyRoot").GetString()!);
                 var environment=new Dictionary<string,string>{["CODEX_HOME"]=input.GetProperty("clientHome").GetString()!,["CODEX_SQLITE_HOME"]=Path.Combine(input.GetProperty("clientHome").GetString()!,"sqlite"),["CODEX_ELECTRON_USER_DATA_PATH"]=input.GetProperty("appData").GetString()!};
-                if(input.TryGetProperty("rendererPort",out var rendererPort)) environment["CODEX2API_TEST_RENDERER_PORT"]=rendererPort.GetInt32().ToString();
                 using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
                 var pid=Launcher.Start(client,server,new Progress<string>(),timeout.Token,environment).GetAwaiter().GetResult();
-                File.WriteAllText(args[2],JsonSerializer.Serialize(new {processId=pid,inspectorClosed=true}));
+                File.WriteAllText(args[2],JsonSerializer.Serialize(new {processId=pid,nativeHookInstalled=true}));
             }
             catch(Exception e) {File.WriteAllText(args[2],e.ToString());Environment.ExitCode=1;}
             return;

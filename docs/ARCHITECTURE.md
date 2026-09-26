@@ -288,11 +288,11 @@ Desktop 接口以已安装桌面端的请求构造、响应读取和后续分支
 
 04:31 的实际日志中，普通轮次和后台标题生成均直连 `https://chatgpt.com/backend-api/codex/responses` 并收到 `unauthorized_unknown`。用户当时选择 `model_provider="custom"`，该 provider 没有 `base_url`；原生客户端会按认证模式回退官方地址，原启动参数的 `openai_base_url` 只覆盖内置 provider。之前只验证登录、个人页和额度，没有验证这一推理分支，不能据此认定全部请求已接管。
 
-地址规则现集中在 `tools/desktop-proxy/AddressHook.cjs` 的 `proxyPolicy`，由 Electron 会话、net Fetch/request、Node Fetch/HTTP/HTTPS/HTTP2、WebSocket 和 Worker 传输出口共用，重定向同样重新经过映射。保留方法、正文、查询及认证，不枚举业务接口；域名范围来自安装包实际服务地址。其他站点和本地 OAuth 回调不变。旧登录响应、浏览器业务函数和 bootstrap 工作区路由补丁已移除，只保留自定义服务的认证地址检查适配和原生传输边界适配。
+2026-09-26 已将这一层替换为 `tools/desktop-proxy/NativeHook` 中的 C# 实现，地址规则集中在 `AddressPolicy.cs`，由各传输出口共用。保留方法、正文、查询及认证，不枚举业务接口；其他站点和本地 OAuth 回调不变。生产启动器不再生成或执行脚本，不再通过调试通道加载。当前结构见 [Desktop 启动器](../tools/desktop-proxy/README.md)。
 
 Rust app-server 不经过 JavaScript 网络层。启动前用客户端自己发现的原版运行时短暂读取有效配置，向正常原生进程传入地址覆盖；共享 JSON-RPC 发送边界处理运行时追加的配置。未设置端点的自定义 provider 也会映射到本服务，保留 provider ID、模型、凭证、权限和其他设置，不写用户配置、不使用 shim。普通会话、恢复和后台生成使用相同规则。当前 Windows 本地原生传输已验证；WSL 包装启动明确报不兼容，不静默遗漏地址覆盖。
 
-`Test-DesktopProxyHook.cjs` 执行安装包原生启动方法并检查共享发送边界；`Test-DesktopRequestRouting.cjs` 用实际本地 HTTP/WebSocket 服务验证方法、正文、认证头、307/303 重定向和 Worker 出口，检查原有取消规则及 Worker 显式参数保留。Worker 使用临时地址预加载文件，正常退出时删除；预加载仍排除启动器的 inspector 断点。新版自包含 EXE 已重新发布至 `target/desktop-proxy/publish`。
+旧脚本实现及其专项验证已移除。当前开发验证使用 `tools/desktop-proxy-tests`、启动器自检和原生登录集成测试；Worker 直接加载编译组件，不生成预加载脚本。旧版本的历史验证不作为当前实现已验证的证据。
 
 原生集成测试使用 `custom` 且缺少 `base_url` 的配置，实际推理到达本地测试服务并收到其未绑定账户的明确错误，登录、刷新、主机注册和原版 GUI 资料/语言回归同时通过。另用默认凭证和已绑定账号执行两次实际原生请求：`gpt-5.6-sol` 返回 `OK`，`gpt-5.6-luna` 标题请求成功，SQLite 中两条 HTTP Responses 记录均为 `completed`，provider 仍为 `custom`。这些是实际推理证据；GUI 回归验证的是启动和页面，不把直接原生请求描述成 GUI 已发送任务。随后新版 GUI 启动默认资料的原版 Desktop，05:05 日志显示原生进程启动、账号读取成功。
 
@@ -304,7 +304,7 @@ Rust app-server 不经过 JavaScript 网络层。启动前用客户端自己发�
 
 语言设置的根因是 renderer `Wal` 即使读到 `localeOverride`，仍要求 Statsig layer `72216192` 中 `enable_i18n=true` 才加载翻译。新增持久化“桌面显示设置”，为管理员提供多语言界面和个人页开关；bootstrap 用安装包实际 SDK 的哈希格式生成语言 layer、个人页 gate 和菜单 layer。语言选择本身继续走原版客户端设置流程，不修改 renderer、app-server 业务逻辑或生产启动配置。
 
-`Test-DesktopProfileContract.cjs` 执行安装包请求构造及新版资料读取函数；`Test-DesktopBootstrapContract.cjs` 使用内置 Statsig SDK 验证真实 layer/gate 读取。`Test-DesktopProfileUI.cjs` 在临时测试账号中通过原版 GUI 控件打开个人资料，核对名称、用户名、数据库用量与活动图，并验证英文切换到简体中文、重新加载后仍选中简体中文。测试专用 renderer 调试参数仅存在于 `--test-launch` 路径，测试退出时终止该实例；生产启动器保持原有默认凭证、数据目录和运行时策略。
+历史资料、语言及 bootstrap 验证见对应客户端合约脚本。这些脚本不属于生产启动器。生产启动器现采用独立配置和 C# 加载，不再提供 renderer 调试启动参数；当前规则见启动器 README。
 
 验证：22 项虚拟 OAuth/API 回归、3 项管理回归、5 项迁移回归、1 项独立原生 Desktop 集成测试通过；`cargo check -p codex2api` 通过。本地运行服务已更新至迁移 24，更新前完成 SQLite 一致性备份并确认没有进行中的推理；更新前后账号、设备、用量记录数量一致。随后用现有生产 GUI 启动默认资料的原版 Desktop：04:24 日志账号读取成功，实际 enroll 返回 200、主机在线，个人资料请求返回 200。
 
@@ -314,11 +314,11 @@ Rust app-server 不经过 JavaScript 网络层。启动前用客户端自己发�
 
 用户已明确选择不隔离客户端凭证，并要求可编译的 GUI：使用 `tools/desktop-proxy` 中的 C# / WinForms 程序，单 EXE 内嵌地址 hook。原 `Start-ChatGPTProxy.ps1`、独立 Node 启动器、`CodexProxyShim` 和复制/profile/shim 测试均已删除。GUI 可更换服务器、保存/导入/导出设置，自动读取当前安装包清单定位主程序，也支持手动选路径；不绑定本机用户名、固定版本目录或服务器地址。原版 Desktop 的默认凭证、界面数据与 Windows 运行时定位机制继续工作；本项目不复制和接管它。历史隔离目录中的登录资料不自动复制进默认目录。
 
-仅对启动进程指定 Desktop 已提供的后端、推理、授权发行方、刷新和撤销地址覆盖入口。以自定义域名的 `/codex/desktop-auth?authorize_url=...` 返回授权链接，实际 renderer 在所有包装选项下保留该域名。实际登录验证发现 native 回调服务的官方托管成功页仍会跳回 ChatGPT，因此仅关闭 `useHostedLoginSuccessPage` 这个官方跳转选项；保留 `codexStreamlinedLogin`、PKCE、state、回调和凭证存储。刷新和撤销使用同一自定义服务。临时调试端口在 hook 安装后关闭，并清理启动器自己添加的断点继承。未知版本若不匹配 hook 结构，GUI 报告兼容性错误并结束本次新进程，不静默跳过。
+对启动进程指定 Desktop 已提供的后端、推理、授权发行方、刷新和撤销地址覆盖入口。登录只关闭 `useHostedLoginSuccessPage`，保留简化登录、PKCE、state 和回调。地址处理通过编译后的 C# 组件接入，未知结构会结束本次新进程。
 
-删除了客户端账户数据改写 hook。实际 native OAuth 登录要求 `/wham/accounts/check` 返回后端 URL，Desktop 的账户页解析器接受 `NO_CONSTRAINT`；由服务端根据实际客户端 UA 格式输出对应结构，不在客户端替换数据规避校验。这不改变服务端虚拟账户与供应账户的数据隔离。
+工作区发现统一返回协议规定的 `NO_CONSTRAINT`，身份来自虚拟账户。用户明确授权的 HTTP 兼容仅扩展客户端工作区发现和后续原生路由的协议判断，不改账号归属、认证数据和权限；不通过伪造账户响应或建立 HTTPS 转发来绕过问题。
 
-实际验证已用新的 C# EXE 启动安装包原版 Desktop：原生登录完成，窗口账户读取成功，账户/设置/额度请求到达本地测试代理，临时调试端口关闭，进程重启后身份保留且令牌刷新成功。测试使用临时账号和测试目录，没有切换或注销用户的日常登录。编译输出 0 警告、0 错误；图形界面实际渲染及设置保存、更换地址、安装发现测试通过。正式发布产物为自包含单 EXE，运行不依赖 Node.js 或独立脚本。源码合约测试仍可由 Node/Python 开发工具执行。
+2026-09-21 的旧实现曾完成原生登录、窗口账号读取、账户/设置/额度请求、重启与令牌刷新验证。该历史结果不作为 2026-09-26 C# 重写的验证证据；当前实现分别验证组件加载、真实桌面启动、原生登录及实际请求。测试使用独立账号和目录。
 
 补充登录地址出口修复：不能仅依赖某一路登录 RPC 改写 `authUrl`。hook 同时在实际打开链接的 Desktop browser bridge 和 Electron `shell.openExternal` 处检查授权 URL，把 renderer 再次产生的 ChatGPT 包装地址改为当前配置服务器。合约测试直接执行安装包原始登录包装和 browser bridge，在内置、外部浏览器两条分支验证最终目标；更换域名、端口和代理路径后仍使用新配置，并保留 state/PKCE/回调参数。原生登录集成测试禁止跟随自定义服务及本地回调以外的重定向。
 
@@ -356,7 +356,7 @@ Rust app-server 不经过 JavaScript 网络层。启动前用客户端自己发�
 
 之前仅凭启动身份校验通过，不能断言整个创建流程已恢复。后续实际 Desktop 复现确认身份和执行配置已经就绪，阻塞发生在本地 `worktree-shell-environment` 请求等待 Git 工作线程返回。页面的“Waiting for worktree setup”也是无会话 ID 时的占位文字，不能单凭文字认定服务端会话接口出错。
 
-根因在本项目 `DesktopProxyHook.cjs` 的启动环境：`--inspect-brk` 被工作线程从 Node 原生参数继承；关闭主进程 inspector、仅修改 JS 的 `process.execArgv` 都不能解除这种继承，且 Electron 的该数组可能不显示调试开关。启动器现在为默认 Worker 参数显式排除自己添加的断点，保留客户端显式选项，不修改 Desktop 的业务函数、不绕过工作区准备、不修改安装包。`Test-DesktopWorkerStartup.cjs` 使用真实 Worker 复现旧启动断点和修正后的消息返回。
+该历史故障源于旧启动器的暂停参数被 Worker 继承。2026-09-26 已整体移除这套调试加载、脚本及专项测试，当前启动器不设置暂停参数；保留客户端显式的 Worker 选项。
 
 原版 Desktop 运行验证：独立测试实例日志 `2026-09-20T06:19:02.138Z` 的 `thread/start` 成功（368 ms），`06:19:02.753Z` 的 `turn/start` 成功（15 ms）；服务端 `06:19:04` 实际记录 WebSocket Responses 调用，其中一条已完成。测试使用临时 Desktop 数据目录，未结束用户正在使用的实例。这才是“不再卡在创建前且实际发出请求”的证据。
 

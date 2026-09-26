@@ -28,7 +28,7 @@ internal sealed class MainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(layout);
         layout.Controls.Add(new Label { Text = "原版客户端 · 自定义服务", Font = new Font(Font.FontFamily, 19F, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 8) });
-        layout.Controls.Add(new Label { Text = "共用原版客户端的登录状态与数据，仅切换请求地址。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 20) });
+        layout.Controls.Add(new Label { Text = "按服务地址保存独立配置与登录状态，使用已安装的原版客户端。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 20) });
         layout.Controls.Add(new Label { Text = "服务器地址", AutoSize = true }); layout.Controls.Add(server);
         layout.Controls.Add(automatic);
         var paths = new TableLayoutPanel { ColumnCount = 3, Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
@@ -36,9 +36,10 @@ internal sealed class MainForm : Form
         paths.Controls.Add(clientPath);paths.Controls.Add(browse);paths.Controls.Add(detect);layout.Controls.Add(paths);
         layout.Controls.Add(version);
         var hint = new Label { Text = "登录、授权及令牌刷新均使用上述自定义服务。启动前请完全退出当前 Desktop。", AutoSize = true, MaximumSize = new Size(770, 0), Margin = new Padding(0, 12, 0, 12) }; layout.Controls.Add(hint);
-        AddAction("保存配置", () => { var settings = ReadForm(); settings.Server = Launcher.NormalizeServer(settings.Server); settings.Save(Settings.FilePath); Report("配置已保存。"); return Task.CompletedTask; });
+        AddAction("保存配置", () => { var settings = ReadForm(); settings.Server = Launcher.NormalizeServer(settings.Server); ClientProfile.ForServer(settings.Server).Prepare(); settings.Save(Settings.FilePath); Report("配置已保存，独立登录将在客户端内完成。"); return Task.CompletedTask; });
         AddAction("检查连接", Check);
         AddAction("启动客户端", Launch, true);
+        AddAction("配置目录", () => { var profile = ClientProfile.ForServer(server.Text); profile.Prepare(); System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(profile.CodexHome) { UseShellExecute = true }); return Task.CompletedTask; });
         AddAction("导出配置…", Export);
         AddAction("导入配置…", Import);
         layout.Controls.Add(actions); layout.Controls.Add(status);
@@ -72,7 +73,7 @@ internal sealed class MainForm : Form
     private void Display(ClientInstallation value) { clientPath.Text = value.Executable; version.Text = "客户端版本：" + value.Version; Report("已找到客户端。更新后会重新检测安装位置。"); }
     private async Task<ClientInstallation> Resolve(CancellationToken cancel)
     {
-        var found = automatic.Checked ? await ClientInstallation.Detect(cancel) : ClientInstallation.FromPath(clientPath.Text);
+        var found = automatic.Checked ? await ClientInstallation.Detect(cancel) : await ClientInstallation.ResolvePath(clientPath.Text, cancel);
         Display(found); return found;
     }
     private async Task Check()
@@ -83,7 +84,7 @@ internal sealed class MainForm : Form
         using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
         using var response = await http.GetAsync(root + "/backend-api/me", timeout.Token);
         if (response.StatusCode != HttpStatusCode.Unauthorized) throw new InvalidOperationException($"服务检查返回 HTTP {(int)response.StatusCode}，请核对代理基础地址。");
-        Report("服务可达，客户端地址入口检查通过。启动时将验证并安装 hook。");
+        Report("连接正常，可以启动客户端。");
     }
     private async Task Launch()
     {
@@ -92,7 +93,7 @@ internal sealed class MainForm : Form
         var client = await Resolve(timeout.Token);
         var settings = ReadForm();settings.Server = root;settings.Save(Settings.FilePath);
         var pid = await Launcher.Start(client, root, new Progress<string>(s => Report(s)), timeout.Token);
-        Report($"客户端已启动（PID {pid}）。可以关闭本启动器。");
+        Report("客户端已启动，可以关闭本启动器。");
     }
     private Task Export()
     {

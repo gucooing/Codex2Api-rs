@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><BaseOutputPath>../../target/desktop-proxy/tests-bin/</BaseOutputPath></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../desktop-proxy/PackagedApplication.cs" Link="PackagedApplication.cs" />
+    <Compile Include="../desktop-proxy/NativeHook/HttpCompatibility.cs" Link="HttpCompatibility.cs" />
+    <Compile Include="../desktop-proxy/NativeHook/AddressPolicy.cs" Link="AddressPolicy.cs" />
+  </ItemGroup>
+</Project>
