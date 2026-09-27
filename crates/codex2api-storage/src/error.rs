@@ -14,8 +14,8 @@ pub enum StorageError {
     SessionNotFound,
     #[error("account `{0}` not found")]
     AccountNotFound(String),
-    #[error("chatgpt_account_id already bound")]
-    DuplicateChatgptAccountId,
+    #[error("ChatGPT user and workspace already bound")]
+    DuplicateChatgptIdentity,
     #[error("oauth pending state not found or expired")]
     OAuthPendingNotFound,
     #[error("OAuth 凭据或绑定账户不可用，请选择已启用且完成授权的账户")]
@@ -53,7 +53,7 @@ impl From<sqlx::Error> for StorageError {
         {
             let msg = db.message().to_string();
             if msg.contains("chatgpt_account_id") {
-                return StorageError::DuplicateChatgptAccountId;
+                return StorageError::DuplicateChatgptIdentity;
             }
             return StorageError::Constraint(msg);
         }

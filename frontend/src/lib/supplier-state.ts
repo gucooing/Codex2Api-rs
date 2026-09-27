@@ -35,14 +35,8 @@ export function cycleUsageLabel(window: SupplierQuotaWindow): string {
       ? `<${prefix}0.01${suffix}`
       : `${prefix}${scaled.toFixed(2)}${suffix}`;
   };
-  const cost =
-    usage.cost_nano_usd == null
-      ? "$未知"
-      : `${amount(usage.cost_nano_usd, 1e9, "$", "")}${usage.unpriced_requests ? "+?" : ""}`;
-  const tokens =
-    usage.tokens == null
-      ? "Token 未知"
-      : `${amount(usage.tokens, 1e6, "", "M")}${usage.missing_token_requests ? "+?" : ""}`;
+  const cost = usage.cost_nano_usd == null ? "$未知" : amount(usage.cost_nano_usd, 1e9, "$", "");
+  const tokens = usage.tokens == null ? "Token 未知" : amount(usage.tokens, 1e6, "", "M");
   return `${cost} / ${tokens}`;
 }
 

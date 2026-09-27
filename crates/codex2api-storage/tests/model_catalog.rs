@@ -312,7 +312,13 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         let mut r = UsageRecord {
             id: id.into(),
             subject_id: "owner".into(),
-            model: Some(model.model.clone()),
+            // A missing size tier already falls back to the nearest priced tier.
+            // Unknown pricing requires a model with no configured prices at all.
+            model: Some(if id == "unknown-price" {
+                "image-without-prices".into()
+            } else {
+                model.model.clone()
+            }),
             endpoint: "/v1/images/edits".into(),
             status: "in_progress".into(),
             ..Default::default()

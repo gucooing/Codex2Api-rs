@@ -117,7 +117,14 @@ impl Storage {
     }
 
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::migrate!("./migrations").run(&self.pool).await?;
+        let mut connection = self.pool.acquire().await?;
+        // Table rebuilds must not cascade into their children. Never return this
+        // connection to the application pool, including after failed migrations.
+        connection.close_on_drop();
+        sqlx::query("PRAGMA foreign_keys=OFF")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::migrate!("./migrations").run(&mut *connection).await?;
         Ok(())
     }
 
@@ -423,6 +430,19 @@ impl Storage {
                 "ChatGPT supplier adapter cannot persist another provider".into(),
             ));
         }
+        if new
+            .chatgpt_account_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty())
+            || new
+                .chatgpt_user_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty())
+        {
+            return Err(StorageError::Constraint(
+                "授权结果缺少用户或空间编号，无法确认供应账户身份".into(),
+            ));
+        }
         let mut tx = self.pool.begin().await?;
         let now = now_rfc3339();
         let sql = format!(
@@ -431,7 +451,7 @@ impl Storage {
                 installation_id, originator, user_agent, os_type, os_version, arch, home_dir,
                 http_fingerprint_json, proxy_id, created_at, updated_at
              ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(chatgpt_account_id) DO UPDATE SET
+             ON CONFLICT(provider_id,chatgpt_account_id,chatgpt_user_id) DO UPDATE SET
                 status = 'active',
                 display_name = COALESCE(excluded.display_name, supplier_accounts.display_name),
                 chatgpt_user_id = COALESCE(excluded.chatgpt_user_id, supplier_accounts.chatgpt_user_id),
@@ -502,14 +522,17 @@ impl Storage {
             .ok_or_else(|| StorageError::AccountNotFound(id.to_string()))
     }
 
-    pub async fn get_account_by_chatgpt_account_id(
+    pub async fn get_account_by_chatgpt_identity(
         &self,
         chatgpt_account_id: &str,
+        chatgpt_user_id: &str,
     ) -> Result<Option<SupplierAccount>> {
-        let sql =
-            format!("SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE chatgpt_account_id = ?");
+        let sql = format!(
+            "SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE provider_id='chatgpt' AND chatgpt_account_id = ? AND chatgpt_user_id = ?"
+        );
         let row = sqlx::query_as::<_, AccountRow>(&sql)
             .bind(chatgpt_account_id)
+            .bind(chatgpt_user_id)
             .fetch_optional(&self.pool)
             .await?;
         row.map(SupplierAccount::try_from).transpose()

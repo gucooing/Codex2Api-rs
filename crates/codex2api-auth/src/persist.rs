@@ -55,6 +55,23 @@ pub async fn bind_completed_login(
             Some(_) => return Err(AuthError::AccountMismatch),
             None => return Err(AuthError::MissingChatgptAccountId),
         }
+        let ctx = accounts.load_context(&pending.account.id).await?;
+        let existing_user = ctx
+            .account
+            .chatgpt_user_id
+            .clone()
+            .or_else(|| {
+                ctx.auth.as_ref()?.tokens.as_ref().and_then(|tokens| {
+                    parse_chatgpt_jwt_claims(&tokens.id_token)
+                        .ok()?
+                        .chatgpt_user_id
+                })
+            })
+            .filter(|id| !id.trim().is_empty())
+            .ok_or(AuthError::MissingChatgptUserId)?;
+        if claims.chatgpt_user_id.as_deref() != Some(existing_user.as_str()) {
+            return Err(AuthError::AccountMismatch);
+        }
         persist_auth(accounts, &pending.account.id, auth).await?;
         let ctx = accounts.load_context(&pending.account.id).await?;
         return Ok(BoundAccount {
@@ -127,7 +144,24 @@ pub async fn refresh_account(
         .as_ref()
         .and_then(|t| t.account_id.clone())
         .or_else(|| account.chatgpt_account_id.clone());
+    let previous_user_id = account.chatgpt_user_id.clone().or_else(|| {
+        parse_chatgpt_jwt_claims(&auth.tokens.as_ref()?.id_token)
+            .ok()?
+            .chatgpt_user_id
+    });
     let refresh: RefreshResponse = refresh_tokens(http, cfg, &refresh_token).await?;
+    if let Some(id_token) = &refresh.id_token {
+        let claims = parse_chatgpt_jwt_claims(id_token)?;
+        let expected_user = previous_user_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .ok_or(AuthError::MissingChatgptUserId)?;
+        if claims.chatgpt_user_id.as_deref() != Some(expected_user)
+            || claims.chatgpt_account_id != previous_account_id
+        {
+            return Err(AuthError::AccountMismatch);
+        }
+    }
     apply_refresh(&mut auth, &refresh)?;
     if let Some(expected) = previous_account_id.as_deref()
         && let Some(new_id) = auth.tokens.as_ref().and_then(|t| t.account_id.as_deref())

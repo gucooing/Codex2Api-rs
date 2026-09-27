@@ -24,6 +24,7 @@ export type Supplier = {
   email: string | null;
   plan_type: string | null;
   chatgpt_account_id: string | null;
+  chatgpt_user_id: string | null;
   installation_id: string;
   originator: string;
   user_agent: string;

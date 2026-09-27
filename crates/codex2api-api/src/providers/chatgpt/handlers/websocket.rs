@@ -137,6 +137,7 @@ pub(crate) async fn bridge_recorded(
     consumer_access: (codex2api_storage::Storage, AccessCheck),
     response_session: Option<ResponseSession>,
 ) {
+    let connected_at = std::time::Instant::now();
     let ledger = tokio::sync::Mutex::new(ledger);
     let (storage, access) = consumer_access;
     let (mut client_tx, mut client_rx) = client.split();
@@ -220,15 +221,15 @@ pub(crate) async fn bridge_recorded(
                 crate::usage::ws_start(&ledger, text.as_str()).await?;
             }
             if let Err(error) = upstream_tx.send(message).await {
+                let message = upstream_failure_message("发送", &error);
+                tracing::warn!(account_id=%access.account_id, reason=%message, "upstream WebSocket write failed");
                 ledger
                     .lock()
                     .await
-                    .fail_inflight("upstream_websocket_write_error", "上游 WebSocket 发送失败")
+                    .fail_inflight("upstream_websocket_write_error", &message)
                     .await?;
-                storage
-                    .record_supplier_error(&access.account_id, "ChatGPT 官方 WebSocket 发送失败")
-                    .await?;
-                return Err(relay_error(error));
+                // A broken established connection does not establish an account outage.
+                return Err(relay_error(message));
             }
         }
         ledger.lock().await.client_stopped().await?;
@@ -236,28 +237,29 @@ pub(crate) async fn bridge_recorded(
         Ok(())
     };
     let to_client = async {
+        let mut last_message_at = connected_at;
         while let Some(message) = upstream_rx.next().await {
             let received_at = std::time::Instant::now();
             let message = match message {
                 Ok(message) => message,
                 Err(error) => {
+                    let message = upstream_failure_message("响应读取", &error);
+                    tracing::warn!(
+                        account_id=%access.account_id,
+                        reason=%message,
+                        connection_ms=connected_at.elapsed().as_millis() as u64,
+                        since_last_message_ms=last_message_at.elapsed().as_millis() as u64,
+                        "upstream WebSocket read failed"
+                    );
                     ledger
                         .lock()
                         .await
-                        .fail_inflight(
-                            "upstream_websocket_read_error",
-                            "上游 WebSocket 响应读取失败",
-                        )
+                        .fail_inflight("upstream_websocket_read_error", &message)
                         .await?;
-                    storage
-                        .record_supplier_error(
-                            &access.account_id,
-                            "ChatGPT 官方 WebSocket 响应读取失败",
-                        )
-                        .await?;
-                    return Err(relay_error(error));
+                    return Err(relay_error(message));
                 }
             };
+            last_message_at = received_at;
             let allowed = access.allowed(&storage).await?;
             let bytes = match &message {
                 UpstreamMessage::Text(text) => Some(text.as_bytes()),
@@ -369,6 +371,25 @@ pub(crate) async fn bridge_recorded(
     }
 }
 
+fn upstream_failure_message(
+    operation: &str,
+    error: &tokio_tungstenite::tungstenite::Error,
+) -> String {
+    use tokio_tungstenite::tungstenite::{Error, error::ProtocolError};
+    // Display preserves transport/protocol causes without dumping frames or HTTP bodies.
+    // Omit variants that can contain arbitrary peer text or a credential-bearing URL.
+    let detail = match error {
+        Error::Io(error) => format!("I/O {:?}: {error}", error.kind()),
+        Error::Utf8(_) => "UTF-8 encoding error".into(),
+        Error::Url(_) => "WebSocket URL error".into(),
+        Error::Protocol(ProtocolError::InvalidExtensionsHeader(_)) => {
+            "Invalid WebSocket extensions header".into()
+        }
+        _ => error.to_string(),
+    };
+    crate::usage::error_text(&format!("上游 WebSocket {operation}失败：{detail}"), 512)
+}
+
 fn relay_error(error: impl std::fmt::Display) -> crate::ApiError {
     tracing::debug!(%error, "WebSocket transport or frame error");
     crate::ApiError::openai(
@@ -406,6 +427,44 @@ mod tests {
     async fn client_and_upstream_close_frames_have_distinct_results_and_keep_usage() {
         recorded_connection_fixture("client_closed").await;
         recorded_connection_fixture("upstream_closed").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upstream_read_failure_preserves_supplier_health_and_records_the_cause() {
+        recorded_connection_fixture("upstream_read_error").await;
+        recorded_connection_fixture("upstream_protocol_error").await;
+        recorded_connection_fixture("idle_read_error").await;
+        recorded_connection_fixture("read_error_with_supplier_failure").await;
+    }
+
+    #[test]
+    fn websocket_failure_details_are_bounded_and_do_not_dump_credentials_or_frames() {
+        use tokio_tungstenite::tungstenite::{Error, error::UrlError};
+        let message = upstream_failure_message(
+            "响应读取",
+            &Error::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                format!("reset Bearer private-token {}", "x".repeat(1000)),
+            )),
+        );
+        assert!(message.contains("ConnectionReset"));
+        assert!(message.contains("[REDACTED]"));
+        assert!(!message.contains("private-token"));
+        assert_eq!(message.chars().count(), 512);
+        for error in [
+            Error::WriteBufferFull(Box::new(UpstreamMessage::Text("private-payload".into()))),
+            Error::Utf8("private-payload".into()),
+            Error::Url(UrlError::UnableToConnect(
+                "wss://user:private-payload@example.test/".into(),
+            )),
+        ] {
+            assert!(!upstream_failure_message("发送", &error).contains("private-payload"));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upstream_ping_is_answered_while_the_client_waits_for_completion() {
+        recorded_connection_fixture("upstream_ping").await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -487,6 +546,8 @@ mod tests {
             .unwrap();
         let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream_listener.local_addr().unwrap();
+        let supplier_id = supplier.id.clone();
+        let read_error = ending.contains("read_error") || ending == "upstream_protocol_error";
         let (complete, ready) = tokio::sync::oneshot::channel();
         let upstream_task = tokio::spawn(async move {
             let (stream, _) = upstream_listener.accept().await.unwrap();
@@ -517,10 +578,34 @@ mod tests {
                 upstream.close(None).await.unwrap();
                 return;
             }
+            if ending == "upstream_protocol_error" {
+                use tokio::io::AsyncWriteExt;
+                // A frame with an unnegotiated reserved bit is a protocol error,
+                // distinct from a network reset, and must remain diagnosable.
+                upstream.get_mut().write_all(&[0xc1, 0x00]).await.unwrap();
+                return;
+            }
+            if read_error && ending != "idle_read_error" {
+                // Drop TCP without a WebSocket close handshake.
+                return;
+            }
+            if ending == "upstream_ping" {
+                upstream
+                    .send(UpstreamMessage::Ping(b"heartbeat".to_vec().into()))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    upstream.next().await.unwrap().unwrap(),
+                    UpstreamMessage::Pong(b"heartbeat".to_vec().into())
+                );
+            }
             if compaction {
                 upstream.send(UpstreamMessage::Text(json!({"type":"response.output_item.done","response_id":"response-1","output_index":0,"item":{"type":"compaction","encrypted_content":"fixture-compacted-history"}}).to_string().into())).await.unwrap();
             }
             upstream.send(UpstreamMessage::Text(json!({"type":"response.completed","response":{"id":"response-1","model":"gpt-6-astra","status":"completed","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}).to_string().into())).await.unwrap();
+            if ending == "idle_read_error" {
+                return;
+            }
             let _ = upstream.next().await;
         });
         let fixture_storage = storage.clone();
@@ -592,7 +677,66 @@ mod tests {
             let created: Value =
                 serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data()).unwrap();
             assert_eq!(created["type"], "response.created");
+            if ending == "read_error_with_supplier_failure" {
+                storage
+                    .record_supplier_error(&supplier_id, "ChatGPT 官方通信失败（HTTP 401）")
+                    .await
+                    .unwrap();
+            }
+            let health_before = storage.supplier_health(&supplier_id).await.unwrap();
             let expected = match ending {
+                "upstream_read_error"
+                | "upstream_protocol_error"
+                | "idle_read_error"
+                | "read_error_with_supplier_failure" => {
+                    complete.send(()).unwrap();
+                    if ending == "idle_read_error" {
+                        let completed: Value = serde_json::from_slice(
+                            &client.next().await.unwrap().unwrap().into_data(),
+                        )
+                        .unwrap();
+                        assert_eq!(completed["type"], "response.completed");
+                    }
+                    let rejected: Value =
+                        serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
+                            .unwrap();
+                    assert_eq!(rejected["type"], "error");
+                    assert_eq!(rejected["status"], 502);
+                    assert_eq!(rejected["error"]["code"], "stream_error");
+                    match client.next().await.unwrap().unwrap() {
+                        UpstreamMessage::Close(Some(frame)) => {
+                            assert_eq!(u16::from(frame.code), 1011)
+                        }
+                        frame => panic!("expected a WebSocket close frame, got {frame:?}"),
+                    }
+                    let health_after = storage.supplier_health(&supplier_id).await.unwrap();
+                    assert_eq!(health_after.error_message, health_before.error_message);
+                    assert_eq!(health_after.error_at, health_before.error_at);
+                    assert_eq!(health_after.revision, health_before.revision);
+                    assert_eq!(
+                        AccessCheck {
+                            hash: codex2api_storage::hash_token("access"),
+                            account_id: supplier_id.clone(),
+                        }
+                        .allowed(&storage)
+                        .await
+                        .unwrap(),
+                        ending != "read_error_with_supplier_failure"
+                    );
+                    if ending == "idle_read_error" {
+                        "completed"
+                    } else {
+                        "failed"
+                    }
+                }
+                "upstream_ping" => {
+                    complete.send(()).unwrap();
+                    let completed: Value =
+                        serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
+                            .unwrap();
+                    assert_eq!(completed["type"], "response.completed");
+                    "completed"
+                }
                 "compaction_text" | "compaction_binary" => {
                     complete.send(()).unwrap();
                     let item: Value =
@@ -658,6 +802,22 @@ mod tests {
                     Some("upstream_websocket_closed")
                 );
                 assert!(records.records[0].error_message.is_some());
+            } else if read_error && ending != "idle_read_error" {
+                assert_eq!(
+                    records.records[0].error_code.as_deref(),
+                    Some("upstream_websocket_read_error")
+                );
+                assert!(
+                    records.records[0]
+                        .error_message
+                        .as_deref()
+                        .unwrap()
+                        .contains(if ending == "upstream_protocol_error" {
+                            "Reserved bits are non-zero"
+                        } else {
+                            "Connection reset without closing handshake"
+                        })
+                );
             } else {
                 assert!(records.records[0].error_message.is_none());
             }
@@ -671,8 +831,74 @@ mod tests {
         })
         .await
         .unwrap();
+        if ending == "upstream_read_error" {
+            use axum::{body::Body, http::Request};
+            use tower::ServiceExt;
+            let admin =
+                codex2api_admin::router(codex2api_admin::AdminState::new(storage.clone()).unwrap());
+            let login = admin
+                .clone()
+                .oneshot(
+                    Request::post("/admin/api/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"username":"admin","password":"admin"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(login.status(), axum::http::StatusCode::OK);
+            let cookie = login.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_owned();
+            for path in [
+                format!("/admin/api/suppliers/{supplier_id}"),
+                format!("/admin/api/usage?supplier_id={supplier_id}"),
+            ] {
+                let response = admin
+                    .clone()
+                    .oneshot(
+                        Request::get(&path)
+                            .header("cookie", &cookie)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                let value: Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                if path.contains("/suppliers/") {
+                    assert_eq!(value["status"], "active");
+                    assert!(value["error_message"].is_null());
+                } else {
+                    assert_eq!(value["total"], 1);
+                    assert_eq!(
+                        value["records"][0]["error_code"],
+                        "upstream_websocket_read_error"
+                    );
+                    assert!(
+                        value["records"][0]["error_message"]
+                            .as_str()
+                            .unwrap()
+                            .contains("Connection reset without closing handshake")
+                    );
+                }
+            }
+        }
         proxy.abort();
-        upstream_task.abort();
+        if read_error {
+            upstream_task.await.unwrap();
+        } else {
+            upstream_task.abort();
+        }
         storage.close().await;
     }
 

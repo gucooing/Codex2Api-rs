@@ -189,6 +189,8 @@ async fn startup_preserves_release_lf_checksums_and_rejects_changed_history() {
         .connect_with(
             SqliteConnectOptions::new()
                 .filename(&path)
+                // Match the dedicated startup migration connection for parent rebuilds.
+                .foreign_keys(false)
                 .create_if_missing(true),
         )
         .await

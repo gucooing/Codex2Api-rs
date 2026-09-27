@@ -132,6 +132,7 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
         "{}",
     );
     supplier.chatgpt_account_id = Some("official".into());
+    supplier.chatgpt_user_id = Some("official-user".into());
     let supplier = storage
         .save_authorized_account(
             supplier,
@@ -236,7 +237,7 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
             .is_err()
     );
     // A corrupt legacy foreign identity still cannot be selected by ChatGPT login.
-    sqlx::query("UPDATE supplier_accounts SET chatgpt_account_id='official' WHERE id=?")
+    sqlx::query("UPDATE supplier_accounts SET chatgpt_account_id='official',chatgpt_user_id='official-user' WHERE id=?")
         .bind(&supplier.id)
         .execute(storage.pool())
         .await
@@ -252,19 +253,21 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
         "{}",
     );
     official.chatgpt_account_id = Some("official".into());
-    assert!(
-        storage
-            .save_authorized_account(
-                official,
-                codex2api_storage::SupplierTokens {
-                    access_token: Some("new-secret".into()),
-                    ..Default::default()
-                },
-                None
-            )
-            .await
-            .is_err()
-    );
+    official.chatgpt_user_id = Some("official-user".into());
+    let saved = storage
+        .save_authorized_account(
+            official,
+            codex2api_storage::SupplierTokens {
+                access_token: Some("new-secret".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert_ne!(saved.id, supplier.id);
+    assert_eq!(saved.provider_id, "chatgpt");
+    assert_eq!(saved.installation_id, "official-installation");
     assert!(
         storage
             .load_supplier_tokens(&supplier.id)

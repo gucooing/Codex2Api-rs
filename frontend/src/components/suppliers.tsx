@@ -712,7 +712,8 @@ export function SupplierDetail() {
                       ),
                     },
                     { label: "上游订阅", value: account?.plan_type },
-                    { label: "上游账户编号", value: account?.chatgpt_account_id },
+                    { label: "上游空间编号", value: account?.chatgpt_account_id },
+                    { label: "上游用户编号", value: account?.chatgpt_user_id },
                     { label: "创建时间", value: date(account?.created_at) },
                     { label: "最近使用", value: date(account?.last_used_at) },
                   ].map(({ label, value }) => (

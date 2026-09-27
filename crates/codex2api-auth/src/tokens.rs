@@ -85,7 +85,12 @@ impl IdTokenInfo {
             .ok_or(AuthError::MissingChatgptAccountId)?;
         Ok(codex2api_accounts::OauthIdentity {
             chatgpt_account_id,
-            chatgpt_user_id: self.chatgpt_user_id.clone(),
+            chatgpt_user_id: Some(
+                self.chatgpt_user_id
+                    .clone()
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or(AuthError::MissingChatgptUserId)?,
+            ),
             email: self.email.clone(),
             plan_type: self.chatgpt_plan_type.clone(),
             display_name: self.email.clone(),

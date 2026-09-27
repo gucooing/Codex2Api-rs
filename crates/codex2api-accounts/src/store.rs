@@ -31,7 +31,7 @@ pub struct PendingAccount {
 pub struct BoundAccount {
     pub account: SupplierAccount,
     pub identity: AccountIdentity,
-    /// True when an existing row for the same `chatgpt_account_id` was reused.
+    /// True when the same user in the same ChatGPT workspace was reused.
     pub reused_existing: bool,
 }
 
@@ -199,7 +199,7 @@ impl SupplierAccountStore {
 
     /// Bind OAuth identity onto a pending context.
     ///
-    /// If `chatgpt_account_id` already has an account, that account is reused and
+    /// If the user/workspace pair already has an account, that account is reused and
     /// its `installation_id` is never rotated. The pending row is deleted.
     pub async fn bind(
         &self,
@@ -217,21 +217,27 @@ impl SupplierAccountStore {
             return Err(AccountError::MissingChatgptAccountId);
         }
         oauth.chatgpt_account_id = chatgpt_account_id.clone();
+        let chatgpt_user_id = oauth
+            .chatgpt_user_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .ok_or(AccountError::MissingChatgptUserId)?
+            .to_owned();
 
         let storage = self.storage()?;
         match storage
-            .get_account_by_chatgpt_account_id(&chatgpt_account_id)
+            .get_account_by_chatgpt_identity(&chatgpt_account_id, &chatgpt_user_id)
             .await?
         {
             Some(existing) => self.reuse_existing(pending, existing, oauth, auth).await,
             None => match self.finalize_pending(pending, oauth.clone(), auth).await {
                 Ok(bound) => Ok(bound),
-                Err(AccountError::Storage(StorageError::DuplicateChatgptAccountId)) => {
+                Err(AccountError::Storage(StorageError::DuplicateChatgptIdentity)) => {
                     let existing = storage
-                        .get_account_by_chatgpt_account_id(&chatgpt_account_id)
+                        .get_account_by_chatgpt_identity(&chatgpt_account_id, &chatgpt_user_id)
                         .await?
                         .ok_or(AccountError::Storage(
-                            StorageError::DuplicateChatgptAccountId,
+                            StorageError::DuplicateChatgptIdentity,
                         ))?;
                     self.reuse_existing(pending, existing, oauth, auth).await
                 }

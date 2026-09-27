@@ -161,7 +161,7 @@ fn response_request_id(headers: &http::HeaderMap) -> Option<String> {
         .and_then(request_id)
 }
 
-fn error_text(value: &str, limit: usize) -> String {
+pub(crate) fn error_text(value: &str, limit: usize) -> String {
     let mut hide_next = false;
     value
         .split_whitespace()

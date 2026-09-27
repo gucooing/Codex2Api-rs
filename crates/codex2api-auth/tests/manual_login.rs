@@ -43,7 +43,7 @@ async fn mock_issuer() -> (String, Requests, tokio::task::JoinHandle<()>) {
                 capture.lock().unwrap().push(("refresh".into(), headers, request.clone()));
                 if request["refresh_token"] == "invalid-refresh" { return Json(json!({})); }
                 let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
-                    "email":"refresh@example.com", "https://api.openai.com/auth":{"chatgpt_account_id":"refresh-account","chatgpt_plan_type":"plus"}
+                    "email":"refresh@example.com", "https://api.openai.com/auth":{"chatgpt_user_id":"refresh-user","chatgpt_account_id":"refresh-account","chatgpt_plan_type":"plus"}
                 })).unwrap());
                 return Json(json!({"id_token":format!("header.{payload}.signature"),"access_token":"refreshed-access","refresh_token":"rotated-refresh"}));
             }
@@ -53,7 +53,7 @@ async fn mock_issuer() -> (String, Requests, tokio::task::JoinHandle<()>) {
                     return Json(json!({"access_token":"api-key-fixture"}));
                 }
                 let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
-                    "email":"fixture@example.com", "https://api.openai.com/auth":{"chatgpt_account_id":"account-fixture","chatgpt_plan_type":"pro"}
+                    "email":"fixture@example.com", "https://api.openai.com/auth":{"chatgpt_user_id":"fixture-user","chatgpt_account_id":"account-fixture","chatgpt_plan_type":"pro"}
                 })).unwrap());
                 Json(json!({"id_token":format!("header.{payload}.signature"),"access_token":"access-fixture","refresh_token":"refresh-fixture"}))
         }}}));

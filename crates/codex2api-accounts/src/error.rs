@@ -20,6 +20,8 @@ pub enum AccountError {
     InvalidStoredFingerprint(String),
     #[error("chatgpt_account_id is required to bind an account")]
     MissingChatgptAccountId,
+    #[error("授权结果缺少 ChatGPT 用户编号，无法确认供应账户身份")]
+    MissingChatgptUserId,
     #[error("account `{0}` is not in pending status")]
     NotPending(String),
     #[error("account store has no storage backend")]

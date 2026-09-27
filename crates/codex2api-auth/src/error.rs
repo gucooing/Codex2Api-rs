@@ -31,12 +31,14 @@ pub enum AuthError {
     InvalidIdToken,
     #[error("account `{0}` not found")]
     AccountNotFound(String),
-    #[error("refreshed token belongs to a different ChatGPT account")]
+    #[error("授权身份与原供应账户的用户或空间不一致")]
     AccountMismatch,
     #[error("no tokens stored for account `{0}`")]
     TokensNotFound(String),
     #[error("chatgpt_account_id is required to bind an account")]
     MissingChatgptAccountId,
+    #[error("授权结果缺少 ChatGPT 用户编号，无法确认供应账户身份")]
+    MissingChatgptUserId,
     #[error(transparent)]
     SupplierAccount(AccountError),
     #[error(transparent)]
@@ -65,6 +67,7 @@ impl From<AccountError> for AuthError {
         match err {
             AccountError::NotFound(id) => Self::AccountNotFound(id),
             AccountError::MissingChatgptAccountId => Self::MissingChatgptAccountId,
+            AccountError::MissingChatgptUserId => Self::MissingChatgptUserId,
             AccountError::Storage(storage) => Self::Storage(storage),
             AccountError::Json(json) => Self::Json(json),
             other => Self::SupplierAccount(other),

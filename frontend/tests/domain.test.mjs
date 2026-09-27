@@ -69,7 +69,7 @@ test("supplier cycle usage displays dollars and millions without hiding unknown 
   window.local_usage.tokens = 2400170;
   window.local_usage.unpriced_requests = 3;
   window.local_usage.missing_token_requests = 2;
-  assert.equal(cycleUsageLabel(window), "$5.05+? / 2.40M+?");
+  assert.equal(cycleUsageLabel(window), "$5.05 / 2.40M");
   assert.match(cycleUsageTitle(window), /3 次请求金额未确定/);
   assert.match(cycleUsageTitle(window), /2 次请求 Token 不完整/);
   window.local_usage.cost_nano_usd = null;
