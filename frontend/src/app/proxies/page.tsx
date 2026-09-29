@@ -1,13 +1,14 @@
 "use client";
+import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 import { useDialogFocus } from "@/lib/actions";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 import { Card, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel, FieldSet, FieldGroup } from "@/components/ui/field";
+import { Field, FieldLabel, FieldSet, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { useId } from "react";
 import { Input } from "@/components/ui/input";
 import {
@@ -33,6 +34,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal, X, Info } from "lucide-react";
 import { useActions, useErrorToast } from "@/lib/actions";
@@ -43,6 +47,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogClose,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { date } from "@/lib/format";
@@ -50,15 +55,21 @@ import { useState } from "react";
 import { Plus, Pencil, Search, RotateCcw } from "lucide-react";
 import { request, type List, type Proxy, type ProxyWrite } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
+import { useSavedFilters } from "@/lib/preferences";
 
 export default function ProxiesPage() {
+  const tableColumns0 = useColumnVisibility(
+    "app/proxies/page.tsx:0",
+    ["代理", "绑定账户", "出口 / 时区", "连接检查", "质量检查", "操作"],
+    ["代理", "连接检查", "操作"],
+  );
+
   const fieldId = useId();
   const actions = useActions();
   const resource = useResource<List<Proxy>>("/proxies");
   const [editing, setEditing] = useState<Proxy | "new">();
   const empty = { search: "", protocol: "", result: "" };
-  const [filters, setFilters] = useState(empty);
-  const [applied, setApplied] = useState(empty);
+  const { filters, setFilters, applied, setApplied } = useSavedFilters("proxies.filters", empty);
   const items =
     resource.data?.items.filter(
       (proxy) =>
@@ -245,6 +256,33 @@ export default function ProxiesPage() {
                 重置
               </Button>
             </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {tableColumns0.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={tableColumns0.isVisible(label)}
+                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </form>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
             {
@@ -260,12 +298,32 @@ export default function ProxiesPage() {
       <Card>
         <CardContent className="space-y-4">
           {
-            <Table>
+            <Table
+              className={
+                tableColumns0.count > 4
+                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              }
+              role="table"
+            >
               <TableHeader>
-                <TableRow>
+                <TableRow role="row">
                   {["代理", "绑定账户", "出口 / 时区", "连接检查", "质量检查", "操作"].map(
                     (label) => (
-                      <TableHead key={label} scope="col">
+                      <TableHead
+                        hidden={!tableColumns0.isVisible(label)}
+                        className={
+                          ["代理", "连接检查", "操作"].includes(label)
+                            ? label === "操作"
+                              ? "max-md:w-28"
+                              : label === "代理"
+                                ? ""
+                                : "max-md:w-16"
+                            : ""
+                        }
+                        key={label}
+                        scope="col"
+                      >
                         {label}
                       </TableHead>
                     ),
@@ -276,37 +334,176 @@ export default function ProxiesPage() {
                 {items.length ? (
                   <>
                     {pagination.rows.map((proxy) => (
-                      <TableRow key={proxy.id}>
-                        <TableCell>
-                          <strong>{proxy.name}</strong>
-                          <CardDescription>{proxy.display_url}</CardDescription>
+                      <TableRow role="row" key={proxy.id}>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("代理")}
+                          className=" max-md:overflow-hidden"
+                          data-label="代理"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            <strong>{proxy.name}</strong>
+                            <CardDescription>{proxy.display_url}</CardDescription>
+                          </div>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                aria-label={"查看详情：" + String(proxy.name)}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">{proxy.name}</span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {proxy.host + ":" + proxy.port}
+                                  </span>
+                                </span>
+                                <ChevronRight className="size-3 shrink-0" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>记录详情</DialogTitle>
+                                <DialogDescription>当前记录的完整字段</DialogDescription>
+                              </DialogHeader>
+                              <FieldGroup className="gap-3">
+                                <Field>
+                                  <FieldTitle>代理</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <strong>{proxy.name}</strong>
+                                    <CardDescription>{proxy.display_url}</CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>绑定账户</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {proxy.account_count}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>出口 / 时区</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {[proxy.exit_ip, proxy.country, proxy.region, proxy.city]
+                                      .filter(Boolean)
+                                      .join(" · ") || "未检查"}
+                                    <CardDescription>
+                                      {proxy.timezone ?? "时区未获取"}
+                                    </CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>连接检查</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {proxy.connection_ok === null ? (
+                                      <span className="text-sm text-muted-foreground">未检查</span>
+                                    ) : (
+                                      <Badge
+                                        variant={proxy.connection_ok ? "secondary" : "outline"}
+                                      >
+                                        {proxy.connection_ok ? "检查成功" : "连接失败"}
+                                      </Badge>
+                                    )}
+                                    <CardDescription>
+                                      {proxy.connection_latency_ms === null
+                                        ? ""
+                                        : `${proxy.connection_latency_ms} ms`}
+                                    </CardDescription>
+                                    <CardDescription className="max-w-80 whitespace-normal break-words">
+                                      {proxy.connection_error}
+                                    </CardDescription>
+                                    <CardDescription>
+                                      {date(proxy.connection_checked_at)}
+                                    </CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>质量检查</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {proxy.quality_ok === null ? (
+                                      <span className="text-sm text-muted-foreground">未检查</span>
+                                    ) : (
+                                      <Badge variant={proxy.quality_ok ? "secondary" : "outline"}>
+                                        {proxy.quality_ok ? "检查通过" : "检查失败"}
+                                      </Badge>
+                                    )}
+                                    <CardDescription>
+                                      {proxy.quality_latency_ms === null
+                                        ? ""
+                                        : `${proxy.quality_latency_ms} ms`}
+                                    </CardDescription>
+                                    <CardDescription className="max-w-80 whitespace-normal break-words">
+                                      {proxy.quality_error}
+                                    </CardDescription>
+                                    <CardDescription>
+                                      {date(proxy.quality_checked_at)}
+                                    </CardDescription>
+                                  </div>
+                                </Field>
+                              </FieldGroup>
+                            </DialogContent>
+                          </Dialog>
                         </TableCell>
-                        <TableCell>{proxy.account_count}</TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("绑定账户")}
+                          className=" "
+                          data-label="绑定账户"
+                          data-compact="true"
+                          role="cell"
+                        >
+                          {proxy.account_count}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("出口 / 时区")}
+                          className=" "
+                          data-label="出口 / 时区"
+                          role="cell"
+                        >
                           {[proxy.exit_ip, proxy.country, proxy.region, proxy.city]
                             .filter(Boolean)
                             .join(" · ") || "未检查"}
                           <CardDescription>{proxy.timezone ?? "时区未获取"}</CardDescription>
                         </TableCell>
-                        <TableCell>
-                          {proxy.connection_ok === null ? (
-                            <span className="text-sm text-muted-foreground">未检查</span>
-                          ) : (
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("连接检查")}
+                          className=" max-md:overflow-hidden"
+                          data-label="连接检查"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            {proxy.connection_ok === null ? (
+                              <span className="text-sm text-muted-foreground">未检查</span>
+                            ) : (
+                              <Badge variant={proxy.connection_ok ? "secondary" : "outline"}>
+                                {proxy.connection_ok ? "检查成功" : "连接失败"}
+                              </Badge>
+                            )}
+                            <CardDescription>
+                              {proxy.connection_latency_ms === null
+                                ? ""
+                                : `${proxy.connection_latency_ms} ms`}
+                            </CardDescription>
+                            <CardDescription className="max-w-80 whitespace-normal break-words">
+                              {proxy.connection_error}
+                            </CardDescription>
+                            <CardDescription>{date(proxy.connection_checked_at)}</CardDescription>
+                          </div>
+                          <div className="md:hidden">
                             <Badge variant={proxy.connection_ok ? "secondary" : "outline"}>
-                              {proxy.connection_ok ? "检查成功" : "连接失败"}
+                              {proxy.connection_ok === null
+                                ? "未检查"
+                                : proxy.connection_ok
+                                  ? "成功"
+                                  : "失败"}
                             </Badge>
-                          )}
-                          <CardDescription>
-                            {proxy.connection_latency_ms === null
-                              ? ""
-                              : `${proxy.connection_latency_ms} ms`}
-                          </CardDescription>
-                          <CardDescription className="max-w-80 whitespace-normal break-words">
-                            {proxy.connection_error}
-                          </CardDescription>
-                          <CardDescription>{date(proxy.connection_checked_at)}</CardDescription>
+                          </div>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("质量检查")}
+                          className=" "
+                          data-label="质量检查"
+                          role="cell"
+                        >
                           {proxy.quality_ok === null ? (
                             <span className="text-sm text-muted-foreground">未检查</span>
                           ) : (
@@ -324,13 +521,19 @@ export default function ProxiesPage() {
                           </CardDescription>
                           <CardDescription>{date(proxy.quality_checked_at)}</CardDescription>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("操作")}
+                          className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                          data-label="操作"
+                          role="cell"
+                        >
                           <div className="flex flex-wrap items-center gap-2">
                             <Button variant="outline" size="sm" onClick={() => setEditing(proxy)}>
                               <Pencil />
                               编辑
                             </Button>
                             <Button
+                              className="max-md:hidden"
                               type="button"
                               variant={false ? "destructive" : "outline"}
                               disabled={false || actions.isBusy("app\\proxies\\page.tsx:action:4")}
@@ -356,6 +559,17 @@ export default function ProxiesPage() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  className="md:hidden"
+                                  disabled={actions.isBusy("app\\proxies\\page.tsx:action:4")}
+                                  onSelect={() =>
+                                    void actions.run("app\\proxies\\page.tsx:action:4", () =>
+                                      check(proxy, "test"),
+                                    )
+                                  }
+                                >
+                                  检查连接
+                                </DropdownMenuItem>
                                 <DropdownMenuItem
                                   variant={false ? "destructive" : "default"}
                                   disabled={
@@ -421,12 +635,8 @@ export default function ProxiesPage() {
                     ))}
                   </>
                 ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={
-                        ["代理", "绑定账户", "出口 / 时区", "连接检查", "质量检查", "操作"].length
-                      }
-                    >
+                  <TableRow role="row">
+                    <TableCell role="cell" colSpan={tableColumns0.count}>
                       <Empty>
                         <EmptyDescription>{"暂无符合条件的代理"}</EmptyDescription>
                       </Empty>

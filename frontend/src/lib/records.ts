@@ -4,6 +4,23 @@ import { taskRecord, subscriptionRecord } from "./record-selectors";
 import { atPath } from "./domain";
 
 type Column = readonly [string, readonly string[], "date"?];
+
+/** Compact columns are frontend business choices; full fields remain in record details. */
+export function mobileRecordColumns(kind: string): string[] {
+  const preferred: Record<string, string[]> = {
+    logs: ["接口", "状态"],
+    analytics: ["活动", "接收时间"],
+    site_status: ["网站", "代理访问限制"],
+    remote_servers: ["主机", "系统"],
+    task: ["任务", "状态"],
+    conversation: ["会话", "状态"],
+    task_operation: ["任务", "状态"],
+    subscription_operation: ["操作", "套餐"],
+    connector_catalog: ["连接器", "状态"],
+    family_notices: ["成员", "状态"],
+  };
+  return preferred[kind] ?? recordColumns(kind).slice(0, 2);
+}
 export function diagnosticSummary(value: unknown): string {
   if (!Array.isArray(value)) return "—";
   return (

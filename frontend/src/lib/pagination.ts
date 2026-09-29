@@ -2,6 +2,8 @@
 
 import { useState, type InputHTMLAttributes } from "react";
 import { toastError } from "./actions";
+import { usePathname } from "next/navigation";
+import { usePreference, validPageSize } from "./preferences";
 
 export const TABLE_PAGE_SIZE = 20;
 
@@ -84,7 +86,12 @@ export function usePageControls(
 
 export function useTablePagination<T>(rows: T[], scope: unknown = "", ready = true) {
   const [position, setPosition] = useState({ scope, page: 1 });
-  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
+  const pathname = usePathname();
+  const [pageSize, setPageSize] = usePreference<number>(
+    `page-size:${pathname}`,
+    TABLE_PAGE_SIZE,
+    validPageSize,
+  );
   const page =
     position.scope === scope ? Math.min(position.page, pageCount(rows.length, pageSize)) : 1;
   const controls = usePageControls(

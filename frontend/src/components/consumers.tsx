@@ -1,7 +1,8 @@
 "use client";
+import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination, usePageControls } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { useDialogFocus } from "@/lib/actions";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -12,6 +13,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal, Table2, LayoutGrid, Inbox, X } from "lucide-react";
 import {
@@ -67,6 +71,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogClose,
+  DialogTrigger,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { useActions, useErrorToast } from "@/lib/actions";
 import { Switch } from "@/components/ui/switch";
@@ -98,29 +104,43 @@ import { ResourceRefreshContext, useQueryId, useResource } from "@/lib/hooks";
 import { ConsumerUsage } from "./usage";
 import { ConfigPanel, ClientStatePanel } from "./config";
 import { accountConfigGroups } from "@/lib/account-fields";
-import { recordColumns, recordRows } from "@/lib/records";
+import { recordColumns, recordRows, mobileRecordColumns } from "@/lib/records";
+import { usePreference, useSavedFilters, validView, validPageSize } from "@/lib/preferences";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 const subscriptionLabel = (status: Consumer["subscription_status"]) =>
   ({ active: "订阅有效", expired: "订阅已到期", free: "免费层" })[status];
 export function ConsumersPage() {
+  const tableColumns0 = useColumnVisibility(
+    "components/consumers.tsx:0",
+    ["选择", "虚拟账户", "提供商", "当前权益", "订阅到期", "登录状态", "额度", "操作"],
+    ["选择", "虚拟账户", "登录状态", "操作"],
+  );
+
+  const mobile = useIsMobile();
   const dialogFocus = useDialogFocus();
 
   const fieldId = useId();
   const actions = useActions();
   const [create, setCreate] = useState(false);
   const empty = { search: "", status: "", subscription: "" };
-  const [filters, setFilters] = useState(empty);
-  const [applied, setApplied] = useState(empty);
+  const {
+    filters,
+    setFilters,
+    applied,
+    setApplied,
+    ready: preferencesReady,
+  } = useSavedFilters("consumers.filters", empty);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = usePreference<number>("page-size:/consumers", 20, validPageSize);
   const resource = useResource<
     List<Consumer & { quota: { windows: SupplierQuotaWindow[] } }> & {
       total: number;
       page: number;
       page_size: number;
     }
-  >(`/consumers${query({ page, page_size: pageSize, ...applied })}`);
-  const [view, setView] = useState<"table" | "cards">("table");
+  >(preferencesReady ? `/consumers${query({ page, page_size: pageSize, ...applied })}` : null);
+  const [view, setView] = usePreference<"table" | "cards">("consumers.view", "table", validView);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [selectAllMatching, setSelectAllMatching] = useState(false);
@@ -522,7 +542,35 @@ export function ConsumersPage() {
               <RefreshCw />
               刷新
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {tableColumns0.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={tableColumns0.isVisible(label)}
+                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <ToggleGroup
+              className="hidden md:flex"
               type="single"
               variant="outline"
               size="sm"
@@ -552,10 +600,17 @@ export function ConsumersPage() {
       </Card>
       <Card>
         <CardContent className="space-y-4">
-          {view === "table" ? (
-            <Table>
+          {mobile || view === "table" ? (
+            <Table
+              className={
+                tableColumns0.count > 4
+                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              }
+              role="table"
+            >
               <TableHeader>
-                <TableRow>
+                <TableRow role="row">
                   {[
                     "选择",
                     "虚拟账户",
@@ -566,7 +621,22 @@ export function ConsumersPage() {
                     "额度",
                     "操作",
                   ].map((label) => (
-                    <TableHead key={label} scope="col">
+                    <TableHead
+                      hidden={!tableColumns0.isVisible(label)}
+                      className={
+                        ["选择", "虚拟账户", "登录状态", "操作"].includes(label)
+                          ? label === "操作"
+                            ? "max-md:w-28"
+                            : label === "选择"
+                              ? "max-md:w-7"
+                              : label === "虚拟账户"
+                                ? ""
+                                : "max-md:w-16"
+                          : ""
+                      }
+                      key={label}
+                      scope="col"
+                    >
                       {label}
                     </TableHead>
                   ))}
@@ -576,8 +646,13 @@ export function ConsumersPage() {
                 {items.length ? (
                   <>
                     {items.map((account) => (
-                      <TableRow key={account.id}>
-                        <TableCell>
+                      <TableRow role="row" key={account.id}>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("选择")}
+                          className=" max-md:overflow-hidden"
+                          data-label="选择"
+                          role="cell"
+                        >
                           <Checkbox
                             aria-label={`选择 ${account.name}`}
                             checked={isSelected(account.id)}
@@ -585,39 +660,201 @@ export function ConsumersPage() {
                             onCheckedChange={(checked) => toggleIds([account.id], checked === true)}
                           />
                         </TableCell>
-                        <TableCell>
-                          <Link
-                            className="block max-w-56 truncate"
-                            title={account.name}
-                            href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}
-                          >
-                            <strong>{account.name}</strong>
-                          </Link>
-                          <CardDescription
-                            className="max-w-56 truncate"
-                            title={`${account.username} · ${account.email}`}
-                          >
-                            {account.username} · {account.email}
-                          </CardDescription>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("虚拟账户")}
+                          className=" max-md:overflow-hidden"
+                          data-label="虚拟账户"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            <Link
+                              className="block max-w-56 truncate"
+                              title={account.name}
+                              href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}
+                            >
+                              <strong>{account.name}</strong>
+                            </Link>
+                            <CardDescription
+                              className="max-w-56 truncate"
+                              title={`${account.username} · ${account.email}`}
+                            >
+                              {account.username} · {account.email}
+                            </CardDescription>
+                          </div>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                aria-label={"查看详情：" + String(account.name)}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">{account.name}</span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {account.username}
+                                  </span>
+                                </span>
+                                <ChevronRight className="size-3 shrink-0" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>记录详情</DialogTitle>
+                                <DialogDescription>当前记录的完整字段</DialogDescription>
+                              </DialogHeader>
+                              <FieldGroup className="gap-3">
+                                <Field>
+                                  <FieldTitle>虚拟账户</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <Link
+                                      className="block max-w-56 truncate"
+                                      title={account.name}
+                                      href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}
+                                    >
+                                      <strong>{account.name}</strong>
+                                    </Link>
+                                    <CardDescription
+                                      className="max-w-56 truncate"
+                                      title={`${account.username} · ${account.email}`}
+                                    >
+                                      {account.username} · {account.email}
+                                    </CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>提供商</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {account.provider_id}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>当前权益</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {account.plan_name}
+                                    <CardDescription>
+                                      {subscriptionLabel(account.subscription_status)}
+                                    </CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>订阅到期</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {account.subscription_expires_at
+                                      ? date(account.subscription_expires_at)
+                                      : "未设置到期时间"}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>登录状态</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <Badge variant={account.enabled ? "secondary" : "outline"}>
+                                      {account.enabled ? "已启用" : "已停用"}
+                                    </Badge>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>额度</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <div
+                                      className="flex w-64 flex-wrap gap-2"
+                                      aria-label="账户额度"
+                                    >
+                                      {account.quota.windows.map((window) => (
+                                        <div
+                                          key={window.id}
+                                          className="min-w-0 flex-1 basis-28 space-y-1 text-xs"
+                                        >
+                                          <div
+                                            className="truncate"
+                                            title={
+                                              window.reset_at == null
+                                                ? "首次使用后计时"
+                                                : quotaResetLabel(window.reset_at, now)
+                                            }
+                                          >
+                                            {quotaWindowLabel(window)}：
+                                            {window.reset_at == null
+                                              ? "首次使用后计时"
+                                              : quotaResetLabel(window.reset_at, now)}
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            {window.used_percent != null ? (
+                                              <>
+                                                <Progress
+                                                  value={Math.min(100, window.used_percent)}
+                                                  className="h-1 flex-1 [&>[data-slot=progress-indicator]]:bg-foreground"
+                                                  aria-label={quotaWindowLabel(window) + "额度已用"}
+                                                />
+                                                <span className="shrink-0 whitespace-nowrap tabular-nums">
+                                                  {percentLabel(window.used_percent)}
+                                                </span>
+                                              </>
+                                            ) : (
+                                              <span className="text-muted-foreground">不限额</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))}
+                                      {account.quota.windows.length === 0 && (
+                                        <span className="text-xs text-muted-foreground">
+                                          不限额
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </Field>
+                              </FieldGroup>
+                            </DialogContent>
+                          </Dialog>
                         </TableCell>
-                        <TableCell>{account.provider_id}</TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("提供商")}
+                          className=" "
+                          data-label="提供商"
+                          data-compact="true"
+                          role="cell"
+                        >
+                          {account.provider_id}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("当前权益")}
+                          className=" "
+                          data-label="当前权益"
+                          role="cell"
+                        >
                           {account.plan_name}
                           <CardDescription>
                             {subscriptionLabel(account.subscription_status)}
                           </CardDescription>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("订阅到期")}
+                          className=" "
+                          data-label="订阅到期"
+                          role="cell"
+                        >
                           {account.subscription_expires_at
                             ? date(account.subscription_expires_at)
                             : "未设置到期时间"}
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("登录状态")}
+                          className=" max-md:overflow-hidden"
+                          data-label="登录状态"
+                          data-compact="true"
+                          role="cell"
+                        >
                           <Badge variant={account.enabled ? "secondary" : "outline"}>
                             {account.enabled ? "已启用" : "已停用"}
                           </Badge>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("额度")}
+                          className=" "
+                          data-label="额度"
+                          role="cell"
+                        >
                           <div className="flex w-64 flex-wrap gap-2" aria-label="账户额度">
                             {account.quota.windows.map((window) => (
                               <div
@@ -660,26 +897,20 @@ export function ConsumersPage() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell>{accountActions(account)}</TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("操作")}
+                          className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                          data-label="操作"
+                          role="cell"
+                        >
+                          {accountActions(account)}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </>
                 ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={
-                        [
-                          "选择",
-                          "虚拟账户",
-                          "提供商",
-                          "当前权益",
-                          "订阅到期",
-                          "登录状态",
-                          "额度",
-                          "操作",
-                        ].length
-                      }
-                    >
+                  <TableRow role="row">
+                    <TableCell role="cell" colSpan={tableColumns0.count}>
                       <Empty>
                         <EmptyDescription>{"暂无符合条件的虚拟账户"}</EmptyDescription>
                       </Empty>
@@ -1371,6 +1602,23 @@ type ResetCreditRecord = {
   source: "card" | "admin_reset";
 };
 function ConsumerResetCredits({ id }: { id: string }) {
+  const tableColumns1 = useColumnVisibility(
+    "components/consumers.tsx:1",
+    [
+      "类型",
+      "发放时间",
+      "启用时间",
+      "到期时间",
+      "状态",
+      "使用时间",
+      "使用方",
+      "重置窗口数",
+      "管理备注",
+      "操作",
+    ],
+    ["类型", "状态", "操作"],
+  );
+
   const fieldId = useId();
   const dialogFocus = useDialogFocus();
   const [grantOpen, setGrantOpen] = useState(false);
@@ -1533,105 +1781,332 @@ function ConsumerResetCredits({ id }: { id: string }) {
           </form>
         </DialogContent>
       </Dialog>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>类型</TableHead>
-            <TableHead>发放时间</TableHead>
-            <TableHead>启用时间</TableHead>
-            <TableHead>到期时间</TableHead>
-            <TableHead>状态</TableHead>
-            <TableHead>使用时间</TableHead>
-            <TableHead>使用方</TableHead>
-            <TableHead>重置窗口数</TableHead>
-            <TableHead>管理备注</TableHead>
-            <TableHead>操作</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.rows.map((credit) => (
-            <TableRow key={credit.id}>
-              <TableCell>{credit.source === "admin_reset" ? "管理员直接重置" : "重置卡"}</TableCell>
-              <TableCell>{date(credit.granted_at)}</TableCell>
-              <TableCell>{date(credit.available_at)}</TableCell>
-              <TableCell>{date(credit.expires_at)}</TableCell>
-              <TableCell>
-                <Badge variant="outline">
-                  {
-                    {
-                      available: "可用",
-                      redeemed: "已使用",
-                      pending: "待启用",
-                      expired: "已过期",
-                      not_applied: "未执行",
-                    }[credit.status]
-                  }
-                </Badge>
-              </TableCell>
-              <TableCell>{date(credit.redeemed_at)}</TableCell>
-              <TableCell>
-                {credit.redeemed_by === "admin"
-                  ? "管理员"
-                  : credit.redeemed_by === "client"
-                    ? "客户端"
-                    : "—"}
-              </TableCell>
-              <TableCell>{credit.status === "redeemed" ? credit.windows_reset : "—"}</TableCell>
-              <TableCell className="max-w-64 truncate" title={credit.note}>
-                {credit.note || "—"}
-              </TableCell>
-              <TableCell>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={
-                    !resource.ready ||
-                    busy ||
-                    credit.status !== "available" ||
-                    credit.source !== "card"
-                  }
-                  onClick={() =>
-                    actions.run(
-                      `reset-credits-${id}`,
-                      async () => {
-                        const result = await request<{ code: string }>(`${path}/consume`, {
-                          method: "POST",
-                          body: {
-                            credit_id: credit.id,
-                          },
-                        });
-                        resource.reload();
-                        if (result.code === "nothing_to_reset")
-                          throw new Error("没有可重置的当前用量，或订阅已到期；未扣卡。");
-                        if (result.code === "no_credit")
-                          throw new Error("重置卡不可用，请刷新后重试。");
-                      },
-                      {
-                        confirm:
-                          "使用这张重置卡清零当前用量并重开额度周期？订阅到期时间及历史账单保持不变。",
-                        success: "重置已完成",
-                      },
-                    )
-                  }
+      <>
+        <div className="mb-2 flex justify-end">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                <Columns3 />
+                显示列
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>
+                {tableColumns1.mobile ? "手机显示列" : "桌面显示列"}
+              </DropdownMenuLabel>
+              {tableColumns1.labels.map((label) => (
+                <DropdownMenuCheckboxItem
+                  key={label}
+                  checked={tableColumns1.isVisible(label)}
+                  disabled={tableColumns1.count === 1 && tableColumns1.isVisible(label)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => tableColumns1.setVisible(label, checked === true)}
                 >
-                  使用
-                </Button>
-              </TableCell>
+                  {label}
+                </DropdownMenuCheckboxItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={tableColumns1.showAll}>显示全部列</DropdownMenuItem>
+              <DropdownMenuItem onSelect={tableColumns1.reset}>恢复默认列</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <Table
+          className={
+            tableColumns1.count > 4
+              ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+          }
+          role="table"
+        >
+          <TableHeader>
+            <TableRow role="row">
+              <TableHead hidden={!tableColumns1.isVisible("类型")} className="">
+                类型
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("发放时间")} className="">
+                发放时间
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("启用时间")} className="">
+                启用时间
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("到期时间")} className="">
+                到期时间
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("状态")} className="max-md:w-20">
+                状态
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("使用时间")} className="">
+                使用时间
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("使用方")} className="">
+                使用方
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("重置窗口数")} className="">
+                重置窗口数
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("管理备注")} className="">
+                管理备注
+              </TableHead>
+              <TableHead hidden={!tableColumns1.isVisible("操作")} className="max-md:w-20">
+                操作
+              </TableHead>
             </TableRow>
-          ))}
-          {rows.rows.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={10} className="text-center text-muted-foreground">
-                {resource.loading
-                  ? "正在加载重置卡"
-                  : resource.data
-                    ? "尚未发放重置卡"
-                    : "重置卡记录暂不可用"}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {rows.rows.map((credit) => (
+              <TableRow role="row" key={credit.id}>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("类型")}
+                  className=" max-md:overflow-hidden"
+                  data-label="类型"
+                  data-compact="true"
+                  role="cell"
+                >
+                  <div className="max-md:hidden">
+                    {credit.source === "admin_reset" ? "管理员直接重置" : "重置卡"}
+                  </div>
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                        aria-label={
+                          "查看详情：" +
+                          String(credit.source === "admin_reset" ? "管理员直接重置" : "重置卡")
+                        }
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">
+                            {credit.source === "admin_reset" ? "管理员直接重置" : "重置卡"}
+                          </span>
+                        </span>
+                        <ChevronRight className="size-3 shrink-0" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                      <DialogHeader>
+                        <DialogTitle>记录详情</DialogTitle>
+                        <DialogDescription>当前记录的完整字段</DialogDescription>
+                      </DialogHeader>
+                      <FieldGroup className="gap-3">
+                        <Field>
+                          <FieldTitle>类型</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {credit.source === "admin_reset" ? "管理员直接重置" : "重置卡"}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>发放时间</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {date(credit.granted_at)}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>启用时间</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {date(credit.available_at)}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>到期时间</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {date(credit.expires_at)}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>状态</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            <Badge variant="outline">
+                              {
+                                {
+                                  available: "可用",
+                                  redeemed: "已使用",
+                                  pending: "待启用",
+                                  expired: "已过期",
+                                  not_applied: "未执行",
+                                }[credit.status]
+                              }
+                            </Badge>
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>使用时间</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {date(credit.redeemed_at)}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>使用方</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {credit.redeemed_by === "admin"
+                              ? "管理员"
+                              : credit.redeemed_by === "client"
+                                ? "客户端"
+                                : "—"}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>重置窗口数</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {credit.status === "redeemed" ? credit.windows_reset : "—"}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldTitle>管理备注</FieldTitle>
+                          <div className="min-w-0 break-words [&_*]:max-w-full">
+                            {credit.note || "—"}
+                          </div>
+                        </Field>
+                      </FieldGroup>
+                    </DialogContent>
+                  </Dialog>
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("发放时间")}
+                  className=" "
+                  data-label="发放时间"
+                  role="cell"
+                >
+                  {date(credit.granted_at)}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("启用时间")}
+                  className=" "
+                  data-label="启用时间"
+                  role="cell"
+                >
+                  {date(credit.available_at)}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("到期时间")}
+                  className=" "
+                  data-label="到期时间"
+                  role="cell"
+                >
+                  {date(credit.expires_at)}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("状态")}
+                  className=" max-md:overflow-hidden"
+                  data-label="状态"
+                  data-compact="true"
+                  role="cell"
+                >
+                  <Badge variant="outline">
+                    {
+                      {
+                        available: "可用",
+                        redeemed: "已使用",
+                        pending: "待启用",
+                        expired: "已过期",
+                        not_applied: "未执行",
+                      }[credit.status]
+                    }
+                  </Badge>
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("使用时间")}
+                  className=" "
+                  data-label="使用时间"
+                  role="cell"
+                >
+                  {date(credit.redeemed_at)}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("使用方")}
+                  className=" "
+                  data-label="使用方"
+                  data-compact="true"
+                  role="cell"
+                >
+                  {credit.redeemed_by === "admin"
+                    ? "管理员"
+                    : credit.redeemed_by === "client"
+                      ? "客户端"
+                      : "—"}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("重置窗口数")}
+                  className=" "
+                  data-label="重置窗口数"
+                  data-compact="true"
+                  role="cell"
+                >
+                  {credit.status === "redeemed" ? credit.windows_reset : "—"}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("管理备注")}
+                  data-label="管理备注"
+                  role="cell"
+                  className="max-w-64 truncate "
+                  title={credit.note}
+                >
+                  {credit.note || "—"}
+                </TableCell>
+                <TableCell
+                  hidden={!tableColumns1.isVisible("操作")}
+                  className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                  data-label="操作"
+                  role="cell"
+                >
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      !resource.ready ||
+                      busy ||
+                      credit.status !== "available" ||
+                      credit.source !== "card"
+                    }
+                    onClick={() =>
+                      actions.run(
+                        `reset-credits-${id}`,
+                        async () => {
+                          const result = await request<{ code: string }>(`${path}/consume`, {
+                            method: "POST",
+                            body: {
+                              credit_id: credit.id,
+                            },
+                          });
+                          resource.reload();
+                          if (result.code === "nothing_to_reset")
+                            throw new Error("没有可重置的当前用量，或订阅已到期；未扣卡。");
+                          if (result.code === "no_credit")
+                            throw new Error("重置卡不可用，请刷新后重试。");
+                        },
+                        {
+                          confirm:
+                            "使用这张重置卡清零当前用量并重开额度周期？订阅到期时间及历史账单保持不变。",
+                          success: "重置已完成",
+                        },
+                      )
+                    }
+                  >
+                    使用
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {rows.rows.length === 0 && (
+              <TableRow role="row">
+                <TableCell
+                  role="cell"
+                  colSpan={tableColumns1.count}
+                  className="text-center text-muted-foreground"
+                >
+                  {resource.loading
+                    ? "正在加载重置卡"
+                    : resource.data
+                      ? "尚未发放重置卡"
+                      : "重置卡记录暂不可用"}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </>
       <div className="flex items-center justify-end gap-2">
         <CardDescription>{rows.total} 张</CardDescription>
         <Button size="sm" variant="outline" {...rows.previous}>
@@ -1817,6 +2292,17 @@ function RoutingForm({
   );
 }
 function Devices({ id }: { id: string }) {
+  const tableColumns2 = useColumnVisibility(
+    "components/consumers.tsx:2",
+    ["客户端 / 安装标识", "授权范围", "首次登录", "最近续期 / 使用", "操作"],
+    ["客户端 / 安装标识", "最近续期 / 使用", "操作"],
+  );
+  const tableColumns3 = useColumnVisibility(
+    "components/consumers.tsx:3:" + "remote_servers",
+    recordColumns("remote_servers"),
+    mobileRecordColumns("remote_servers"),
+  );
+
   const actions = useActions();
   const resource = useResource<List<Device> & { remote_servers: Json[] }>(
     `/consumers/${id}/devices`,
@@ -1842,89 +2328,232 @@ function Devices({ id }: { id: string }) {
               <CardDescription className="text-sm text-muted-foreground">
                 授权只用于当前账户的消费操作。撤销后该设备需要重新登录。
               </CardDescription>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {["客户端 / 安装标识", "授权范围", "首次登录", "最近续期 / 使用", "操作"].map(
-                      (label) => (
-                        <TableHead key={label} scope="col">
+              <>
+                <div className="mb-2 flex justify-end">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                        <Columns3 />
+                        显示列
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>
+                        {tableColumns2.mobile ? "手机显示列" : "桌面显示列"}
+                      </DropdownMenuLabel>
+                      {tableColumns2.labels.map((label) => (
+                        <DropdownMenuCheckboxItem
+                          key={label}
+                          checked={tableColumns2.isVisible(label)}
+                          disabled={tableColumns2.count === 1 && tableColumns2.isVisible(label)}
+                          onSelect={(event) => event.preventDefault()}
+                          onCheckedChange={(checked) =>
+                            tableColumns2.setVisible(label, checked === true)
+                          }
+                        >
                           {label}
-                        </TableHead>
-                      ),
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(resource.data?.items ?? []).length ? (
-                    <>
-                      {devices.rows.map((device) => (
-                        <TableRow key={device.id}>
-                          <TableCell className="max-w-80 whitespace-normal break-words">
-                            {device.user_agent || "未知客户端"}
-                            <CardDescription className="break-all font-mono text-xs">
-                              {device.installation_id ?? "未提供安装标识"}
-                            </CardDescription>
-                          </TableCell>
-                          <TableCell>
-                            {device.scopes
-                              .split(/\s+/)
-                              .map((scope) => scopes[scope] ?? scope)
-                              .join("、")}
-                          </TableCell>
-                          <TableCell>
-                            {date(device.authenticated_at_ms ?? device.created_at)}
-                          </TableCell>
-                          <TableCell>
-                            {date(device.last_login_at)}
-                            <CardDescription>{date(device.last_used_at)}</CardDescription>
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              type="button"
-                              variant={true ? "destructive" : "outline"}
-                              disabled={
-                                false || actions.isBusy("components\\consumers.tsx:action:17")
-                              }
-                              onClick={() =>
-                                void actions.run(
-                                  "components\\consumers.tsx:action:17",
-                                  async () => {
-                                    await request(`/consumers/${id}/devices/${device.id}/revoke`, {
-                                      method: "POST",
-                                      body: {},
-                                    });
-                                    resource.reload();
-                                  },
-                                  {
-                                    confirm: "撤销此设备授权并使其下线？",
-                                    danger: true,
-                                    success: undefined,
-                                  },
-                                )
-                              }
-                            >
-                              撤销授权
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+                        </DropdownMenuCheckboxItem>
                       ))}
-                    </>
-                  ) : (
-                    <TableRow>
-                      <TableCell
-                        colSpan={
-                          ["客户端 / 安装标识", "授权范围", "首次登录", "最近续期 / 使用", "操作"]
-                            .length
-                        }
-                      >
-                        <Empty>
-                          <EmptyDescription>{"暂无记录"}</EmptyDescription>
-                        </Empty>
-                      </TableCell>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={tableColumns2.showAll}>
+                        显示全部列
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={tableColumns2.reset}>恢复默认列</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <Table
+                  className={
+                    tableColumns2.count > 4
+                      ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                      : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  }
+                  role="table"
+                >
+                  <TableHeader>
+                    <TableRow role="row">
+                      {["客户端 / 安装标识", "授权范围", "首次登录", "最近续期 / 使用", "操作"].map(
+                        (label) => (
+                          <TableHead
+                            hidden={!tableColumns2.isVisible(label)}
+                            className={
+                              ["客户端 / 安装标识", "最近续期 / 使用", "操作"].includes(label)
+                                ? label === "操作"
+                                  ? "max-md:w-28"
+                                  : label === "客户端 / 安装标识"
+                                    ? ""
+                                    : "max-md:w-16"
+                                : ""
+                            }
+                            key={label}
+                            scope="col"
+                          >
+                            {label}
+                          </TableHead>
+                        ),
+                      )}
                     </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {(resource.data?.items ?? []).length ? (
+                      <>
+                        {devices.rows.map((device) => (
+                          <TableRow role="row" key={device.id}>
+                            <TableCell
+                              hidden={!tableColumns2.isVisible("客户端 / 安装标识")}
+                              data-label="客户端 / 安装标识"
+                              role="cell"
+                              className="max-w-80 whitespace-normal break-words max-md:overflow-hidden"
+                            >
+                              <div className="max-md:hidden">
+                                {device.user_agent || "未知客户端"}
+                                <CardDescription className="break-all font-mono text-xs">
+                                  {device.installation_id ?? "未提供安装标识"}
+                                </CardDescription>
+                              </div>
+                              <Dialog>
+                                <DialogTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                    aria-label={
+                                      "查看详情：" + String(device.user_agent || "未知客户端")
+                                    }
+                                  >
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block truncate font-medium">
+                                        {device.user_agent || "未知客户端"}
+                                      </span>
+                                      <span className="block truncate text-xs text-muted-foreground">
+                                        {device.installation_id ?? "未提供安装标识"}
+                                      </span>
+                                    </span>
+                                    <ChevronRight className="size-3 shrink-0" />
+                                  </Button>
+                                </DialogTrigger>
+                                <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                  <DialogHeader>
+                                    <DialogTitle>记录详情</DialogTitle>
+                                    <DialogDescription>当前记录的完整字段</DialogDescription>
+                                  </DialogHeader>
+                                  <FieldGroup className="gap-3">
+                                    <Field>
+                                      <FieldTitle>客户端 / 安装标识</FieldTitle>
+                                      <div className="min-w-0 break-words [&_*]:max-w-full">
+                                        {device.user_agent || "未知客户端"}
+                                        <CardDescription className="break-all font-mono text-xs">
+                                          {device.installation_id ?? "未提供安装标识"}
+                                        </CardDescription>
+                                      </div>
+                                    </Field>
+                                    <Field>
+                                      <FieldTitle>授权范围</FieldTitle>
+                                      <div className="min-w-0 break-words [&_*]:max-w-full">
+                                        {device.scopes
+                                          .split(/\s+/)
+                                          .map((scope) => scopes[scope] ?? scope)
+                                          .join("、")}
+                                      </div>
+                                    </Field>
+                                    <Field>
+                                      <FieldTitle>首次登录</FieldTitle>
+                                      <div className="min-w-0 break-words [&_*]:max-w-full">
+                                        {date(device.authenticated_at_ms ?? device.created_at)}
+                                      </div>
+                                    </Field>
+                                    <Field>
+                                      <FieldTitle>最近续期 / 使用</FieldTitle>
+                                      <div className="min-w-0 break-words [&_*]:max-w-full">
+                                        {date(device.last_login_at)}
+                                        <CardDescription>
+                                          {date(device.last_used_at)}
+                                        </CardDescription>
+                                      </div>
+                                    </Field>
+                                  </FieldGroup>
+                                </DialogContent>
+                              </Dialog>
+                            </TableCell>
+                            <TableCell
+                              hidden={!tableColumns2.isVisible("授权范围")}
+                              className=" "
+                              data-label="授权范围"
+                              role="cell"
+                            >
+                              {device.scopes
+                                .split(/\s+/)
+                                .map((scope) => scopes[scope] ?? scope)
+                                .join("、")}
+                            </TableCell>
+                            <TableCell
+                              hidden={!tableColumns2.isVisible("首次登录")}
+                              className=" "
+                              data-label="首次登录"
+                              role="cell"
+                            >
+                              {date(device.authenticated_at_ms ?? device.created_at)}
+                            </TableCell>
+                            <TableCell
+                              hidden={!tableColumns2.isVisible("最近续期 / 使用")}
+                              className=" max-md:overflow-hidden"
+                              data-label="最近续期 / 使用"
+                              role="cell"
+                            >
+                              {date(device.last_login_at)}
+                              <CardDescription>{date(device.last_used_at)}</CardDescription>
+                            </TableCell>
+                            <TableCell
+                              hidden={!tableColumns2.isVisible("操作")}
+                              className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                              data-label="操作"
+                              role="cell"
+                            >
+                              <Button
+                                type="button"
+                                variant={true ? "destructive" : "outline"}
+                                disabled={
+                                  false || actions.isBusy("components\\consumers.tsx:action:17")
+                                }
+                                onClick={() =>
+                                  void actions.run(
+                                    "components\\consumers.tsx:action:17",
+                                    async () => {
+                                      await request(
+                                        `/consumers/${id}/devices/${device.id}/revoke`,
+                                        {
+                                          method: "POST",
+                                          body: {},
+                                        },
+                                      );
+                                      resource.reload();
+                                    },
+                                    {
+                                      confirm: "撤销此设备授权并使其下线？",
+                                      danger: true,
+                                      success: undefined,
+                                    },
+                                  )
+                                }
+                              >
+                                撤销授权
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </>
+                    ) : (
+                      <TableRow role="row">
+                        <TableCell role="cell" colSpan={tableColumns2.count}>
+                          <Empty>
+                            <EmptyDescription>{"暂无记录"}</EmptyDescription>
+                          </Empty>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </>
               <Pagination aria-label="登录设备分页" className="mt-3 justify-end">
                 <PaginationContent className="flex-wrap justify-end gap-1">
                   <PaginationItem>
@@ -2002,45 +2631,159 @@ function Devices({ id }: { id: string }) {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {recordColumns("remote_servers").map((label) => (
-                      <TableHead key={label}>{label}</TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(resource.data?.remote_servers ?? []).length ? (
-                    recordRows("remote_servers", servers.rows).map((row) => (
-                      <TableRow key={row.key}>
-                        {row.cells.map((cell) => (
-                          <TableCell
-                            key={cell.label}
-                            className="max-w-80 whitespace-normal break-words"
-                          >
-                            {cell.status ? (
-                              <Badge variant={cell.failed ? "destructive" : "secondary"}>
-                                {cell.text}
-                              </Badge>
-                            ) : (
-                              cell.text
-                            )}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={recordColumns("remote_servers").length}>
-                        <Empty>
-                          <EmptyDescription>暂无记录</EmptyDescription>
-                        </Empty>
-                      </TableCell>
+              <>
+                <div className="mb-2 flex justify-end">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                        <Columns3 />
+                        显示列
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>
+                        {tableColumns3.mobile ? "手机显示列" : "桌面显示列"}
+                      </DropdownMenuLabel>
+                      {tableColumns3.labels.map((label) => (
+                        <DropdownMenuCheckboxItem
+                          key={label}
+                          checked={tableColumns3.isVisible(label)}
+                          disabled={tableColumns3.count === 1 && tableColumns3.isVisible(label)}
+                          onSelect={(event) => event.preventDefault()}
+                          onCheckedChange={(checked) =>
+                            tableColumns3.setVisible(label, checked === true)
+                          }
+                        >
+                          {label}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={tableColumns3.showAll}>
+                        显示全部列
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={tableColumns3.reset}>恢复默认列</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <Table
+                  className={
+                    tableColumns3.count > 4
+                      ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                      : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  }
+                  role="table"
+                >
+                  <TableHeader>
+                    <TableRow role="row">
+                      {recordColumns("remote_servers").map((label) => (
+                        <TableHead
+                          hidden={!tableColumns3.isVisible(label)}
+                          className={
+                            mobileRecordColumns("remote_servers").includes(label)
+                              ? "max-md:w-1/2"
+                              : ""
+                          }
+                          key={label}
+                        >
+                          {label}
+                        </TableHead>
+                      ))}
                     </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {(resource.data?.remote_servers ?? []).length ? (
+                      recordRows("remote_servers", servers.rows).map((row) => (
+                        <TableRow role="row" key={row.key}>
+                          {row.cells.map((cell) => (
+                            <TableCell
+                              hidden={!tableColumns3.isVisible(cell.label)}
+                              data-label={cell.label}
+                              role="cell"
+                              key={cell.label}
+                              className={
+                                mobileRecordColumns("remote_servers").includes(cell.label)
+                                  ? "max-w-80 whitespace-normal break-words"
+                                  : " max-w-80 whitespace-normal break-words"
+                              }
+                            >
+                              <div className="max-md:hidden">
+                                {cell.status ? (
+                                  <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                    {cell.text}
+                                  </Badge>
+                                ) : (
+                                  cell.text
+                                )}
+                              </div>
+                              {cell.label === mobileRecordColumns("remote_servers")[0] ? (
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                      aria-label={"查看详情：" + String(cell.text)}
+                                    >
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate font-medium">
+                                          {cell.text}
+                                        </span>
+                                      </span>
+                                      <ChevronRight className="size-3 shrink-0" />
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                    <DialogHeader>
+                                      <DialogTitle>记录详情</DialogTitle>
+                                      <DialogDescription>当前记录的完整字段</DialogDescription>
+                                    </DialogHeader>
+                                    <FieldGroup className="gap-3">
+                                      {row.cells.map((cell) => (
+                                        <Field key={cell.label}>
+                                          <FieldTitle>{cell.label}</FieldTitle>
+                                          <div className="min-w-0 break-words">
+                                            {cell.status ? (
+                                              <Badge
+                                                variant={cell.failed ? "destructive" : "secondary"}
+                                              >
+                                                {cell.text}
+                                              </Badge>
+                                            ) : (
+                                              cell.text
+                                            )}
+                                          </div>
+                                        </Field>
+                                      ))}
+                                    </FieldGroup>
+                                  </DialogContent>
+                                </Dialog>
+                              ) : (
+                                <div className="truncate md:hidden">
+                                  {cell.status ? (
+                                    <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                      {cell.text}
+                                    </Badge>
+                                  ) : (
+                                    cell.text
+                                  )}
+                                </div>
+                              )}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow role="row">
+                        <TableCell role="cell" colSpan={tableColumns3.count}>
+                          <Empty>
+                            <EmptyDescription>暂无记录</EmptyDescription>
+                          </Empty>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </>
               <Pagination aria-label="远程主机分页" className="mt-3 justify-end">
                 <PaginationContent className="flex-wrap justify-end gap-1">
                   <PaginationItem>
@@ -2117,6 +2860,12 @@ function Devices({ id }: { id: string }) {
   );
 }
 function Records({ id, kind, title }: { id: string; kind: string; title: string }) {
+  const tableColumns4 = useColumnVisibility(
+    "components/consumers.tsx:4:" + kind,
+    recordColumns(kind),
+    mobileRecordColumns(kind),
+  );
+
   const resource = useResource<List<Json>>(`/consumers/${id}/records${query({ kind })}`);
   const pagination = useTablePagination(
     resource.data?.items ?? [],
@@ -2133,45 +2882,151 @@ function Records({ id, kind, title }: { id: string; kind: string; title: string 
       </CardHeader>
       <CardContent className="space-y-4">
         {
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {recordColumns(kind).map((label) => (
-                  <TableHead key={label}>{label}</TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(resource.data?.items ?? []).length ? (
-                recordRows(kind, pagination.rows).map((row) => (
-                  <TableRow key={row.key}>
-                    {row.cells.map((cell) => (
-                      <TableCell
-                        key={cell.label}
-                        className="max-w-80 whitespace-normal break-words"
-                      >
-                        {cell.status ? (
-                          <Badge variant={cell.failed ? "destructive" : "secondary"}>
-                            {cell.text}
-                          </Badge>
-                        ) : (
-                          cell.text
-                        )}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={recordColumns(kind).length}>
-                    <Empty>
-                      <EmptyDescription>暂无记录</EmptyDescription>
-                    </Empty>
-                  </TableCell>
+          <>
+            <div className="mb-2 flex justify-end">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                    <Columns3 />
+                    显示列
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>
+                    {tableColumns4.mobile ? "手机显示列" : "桌面显示列"}
+                  </DropdownMenuLabel>
+                  {tableColumns4.labels.map((label) => (
+                    <DropdownMenuCheckboxItem
+                      key={label}
+                      checked={tableColumns4.isVisible(label)}
+                      disabled={tableColumns4.count === 1 && tableColumns4.isVisible(label)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) =>
+                        tableColumns4.setVisible(label, checked === true)
+                      }
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={tableColumns4.showAll}>显示全部列</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={tableColumns4.reset}>恢复默认列</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <Table
+              className={
+                tableColumns4.count > 4
+                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              }
+              role="table"
+            >
+              <TableHeader>
+                <TableRow role="row">
+                  {recordColumns(kind).map((label) => (
+                    <TableHead
+                      hidden={!tableColumns4.isVisible(label)}
+                      className={mobileRecordColumns(kind).includes(label) ? "max-md:w-1/2" : ""}
+                      key={label}
+                    >
+                      {label}
+                    </TableHead>
+                  ))}
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {(resource.data?.items ?? []).length ? (
+                  recordRows(kind, pagination.rows).map((row) => (
+                    <TableRow role="row" key={row.key}>
+                      {row.cells.map((cell) => (
+                        <TableCell
+                          hidden={!tableColumns4.isVisible(cell.label)}
+                          data-label={cell.label}
+                          role="cell"
+                          key={cell.label}
+                          className={
+                            mobileRecordColumns(kind).includes(cell.label)
+                              ? "max-w-80 whitespace-normal break-words"
+                              : " max-w-80 whitespace-normal break-words"
+                          }
+                        >
+                          <div className="max-md:hidden">
+                            {cell.status ? (
+                              <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                {cell.text}
+                              </Badge>
+                            ) : (
+                              cell.text
+                            )}
+                          </div>
+                          {cell.label === mobileRecordColumns(kind)[0] ? (
+                            <Dialog>
+                              <DialogTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                  aria-label={"查看详情：" + String(cell.text)}
+                                >
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate font-medium">{cell.text}</span>
+                                  </span>
+                                  <ChevronRight className="size-3 shrink-0" />
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                <DialogHeader>
+                                  <DialogTitle>记录详情</DialogTitle>
+                                  <DialogDescription>当前记录的完整字段</DialogDescription>
+                                </DialogHeader>
+                                <FieldGroup className="gap-3">
+                                  {row.cells.map((cell) => (
+                                    <Field key={cell.label}>
+                                      <FieldTitle>{cell.label}</FieldTitle>
+                                      <div className="min-w-0 break-words">
+                                        {cell.status ? (
+                                          <Badge
+                                            variant={cell.failed ? "destructive" : "secondary"}
+                                          >
+                                            {cell.text}
+                                          </Badge>
+                                        ) : (
+                                          cell.text
+                                        )}
+                                      </div>
+                                    </Field>
+                                  ))}
+                                </FieldGroup>
+                              </DialogContent>
+                            </Dialog>
+                          ) : (
+                            <div className="truncate md:hidden">
+                              {cell.status ? (
+                                <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                  {cell.text}
+                                </Badge>
+                              ) : (
+                                cell.text
+                              )}
+                            </div>
+                          )}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow role="row">
+                    <TableCell role="cell" colSpan={tableColumns4.count}>
+                      <Empty>
+                        <EmptyDescription>暂无记录</EmptyDescription>
+                      </Empty>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </>
         }
         <Pagination aria-label="记录分页" className="mt-3 justify-end">
           <PaginationContent className="flex-wrap justify-end gap-1">
@@ -2305,12 +3160,33 @@ function ClientRecords({ id }: { id: string }) {
   );
 }
 function Logs({ id }: { id: string }) {
+  const tableColumns5 = useColumnVisibility(
+    "components/consumers.tsx:5:" + "logs",
+    recordColumns("logs"),
+    mobileRecordColumns("logs"),
+  );
+  const tableColumns6 = useColumnVisibility(
+    "components/consumers.tsx:6:" + "analytics",
+    recordColumns("analytics"),
+    mobileRecordColumns("analytics"),
+  );
+  const tableColumns7 = useColumnVisibility(
+    "components/consumers.tsx:7:" + "site_status",
+    recordColumns("site_status"),
+    mobileRecordColumns("site_status"),
+  );
+
   const fieldId = useId();
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = usePreference<number>("logs.page-size", 20, validPageSize);
   const empty = { path: "", method: "", result: "" };
-  const [filters, setFilters] = useState(empty);
-  const [applied, setApplied] = useState(empty);
+  const {
+    filters,
+    setFilters,
+    applied,
+    setApplied,
+    ready: preferencesReady,
+  } = useSavedFilters(`consumer:${id}:logs.filters`, empty);
   const resource = useResource<
     List<Json> & {
       total: number;
@@ -2319,7 +3195,11 @@ function Logs({ id }: { id: string }) {
       analytics: Json[];
       site_status: Json[];
     }
-  >(`/consumers/${id}/logs${query({ page, page_size: pageSize, ...applied })}`);
+  >(
+    preferencesReady
+      ? `/consumers/${id}/logs${query({ page, page_size: pageSize, ...applied })}`
+      : null,
+  );
   const rows = resource.data?.items ?? [];
   const pagination = usePageControls(
     resource.data?.page ?? page,
@@ -2527,45 +3407,157 @@ function Logs({ id }: { id: string }) {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {recordColumns("logs").map((label) => (
-                      <TableHead key={label}>{label}</TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.length ? (
-                    recordRows("logs", rows).map((row) => (
-                      <TableRow key={row.key}>
-                        {row.cells.map((cell) => (
-                          <TableCell
-                            key={cell.label}
-                            className="max-w-80 whitespace-normal break-words"
-                          >
-                            {cell.status ? (
-                              <Badge variant={cell.failed ? "destructive" : "secondary"}>
-                                {cell.text}
-                              </Badge>
-                            ) : (
-                              cell.text
-                            )}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={recordColumns("logs").length}>
-                        <Empty>
-                          <EmptyDescription>暂无记录</EmptyDescription>
-                        </Empty>
-                      </TableCell>
+              <>
+                <div className="mb-2 flex justify-end">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                        <Columns3 />
+                        显示列
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>
+                        {tableColumns5.mobile ? "手机显示列" : "桌面显示列"}
+                      </DropdownMenuLabel>
+                      {tableColumns5.labels.map((label) => (
+                        <DropdownMenuCheckboxItem
+                          key={label}
+                          checked={tableColumns5.isVisible(label)}
+                          disabled={tableColumns5.count === 1 && tableColumns5.isVisible(label)}
+                          onSelect={(event) => event.preventDefault()}
+                          onCheckedChange={(checked) =>
+                            tableColumns5.setVisible(label, checked === true)
+                          }
+                        >
+                          {label}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={tableColumns5.showAll}>
+                        显示全部列
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={tableColumns5.reset}>恢复默认列</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <Table
+                  className={
+                    tableColumns5.count > 4
+                      ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                      : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  }
+                  role="table"
+                >
+                  <TableHeader>
+                    <TableRow role="row">
+                      {recordColumns("logs").map((label) => (
+                        <TableHead
+                          hidden={!tableColumns5.isVisible(label)}
+                          className={
+                            mobileRecordColumns("logs").includes(label) ? "max-md:w-1/2" : ""
+                          }
+                          key={label}
+                        >
+                          {label}
+                        </TableHead>
+                      ))}
                     </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {rows.length ? (
+                      recordRows("logs", rows).map((row) => (
+                        <TableRow role="row" key={row.key}>
+                          {row.cells.map((cell) => (
+                            <TableCell
+                              hidden={!tableColumns5.isVisible(cell.label)}
+                              data-label={cell.label}
+                              role="cell"
+                              key={cell.label}
+                              className={
+                                mobileRecordColumns("logs").includes(cell.label)
+                                  ? "max-w-80 whitespace-normal break-words"
+                                  : " max-w-80 whitespace-normal break-words"
+                              }
+                            >
+                              <div className="max-md:hidden">
+                                {cell.status ? (
+                                  <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                    {cell.text}
+                                  </Badge>
+                                ) : (
+                                  cell.text
+                                )}
+                              </div>
+                              {cell.label === mobileRecordColumns("logs")[0] ? (
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                      aria-label={"查看详情：" + String(cell.text)}
+                                    >
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate font-medium">
+                                          {cell.text}
+                                        </span>
+                                      </span>
+                                      <ChevronRight className="size-3 shrink-0" />
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                    <DialogHeader>
+                                      <DialogTitle>记录详情</DialogTitle>
+                                      <DialogDescription>当前记录的完整字段</DialogDescription>
+                                    </DialogHeader>
+                                    <FieldGroup className="gap-3">
+                                      {row.cells.map((cell) => (
+                                        <Field key={cell.label}>
+                                          <FieldTitle>{cell.label}</FieldTitle>
+                                          <div className="min-w-0 break-words">
+                                            {cell.status ? (
+                                              <Badge
+                                                variant={cell.failed ? "destructive" : "secondary"}
+                                              >
+                                                {cell.text}
+                                              </Badge>
+                                            ) : (
+                                              cell.text
+                                            )}
+                                          </div>
+                                        </Field>
+                                      ))}
+                                    </FieldGroup>
+                                  </DialogContent>
+                                </Dialog>
+                              ) : (
+                                <div className="truncate md:hidden">
+                                  {cell.status ? (
+                                    <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                      {cell.text}
+                                    </Badge>
+                                  ) : (
+                                    cell.text
+                                  )}
+                                </div>
+                              )}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow role="row">
+                        <TableCell role="cell" colSpan={tableColumns5.count}>
+                          <Empty>
+                            <EmptyDescription>暂无记录</EmptyDescription>
+                          </Empty>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </>
               <Pagination aria-label="记录分页" className="mt-3 justify-end">
                 <PaginationContent className="flex-wrap justify-end gap-1">
                   <PaginationItem>
@@ -2644,45 +3636,161 @@ function Logs({ id }: { id: string }) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {recordColumns("analytics").map((label) => (
-                        <TableHead key={label}>{label}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(resource.data?.analytics ?? []).length ? (
-                      recordRows("analytics", analytics.rows).map((row) => (
-                        <TableRow key={row.key}>
-                          {row.cells.map((cell) => (
-                            <TableCell
-                              key={cell.label}
-                              className="max-w-80 whitespace-normal break-words"
-                            >
-                              {cell.status ? (
-                                <Badge variant={cell.failed ? "destructive" : "secondary"}>
-                                  {cell.text}
-                                </Badge>
-                              ) : (
-                                cell.text
-                              )}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={recordColumns("analytics").length}>
-                          <Empty>
-                            <EmptyDescription>暂无记录</EmptyDescription>
-                          </Empty>
-                        </TableCell>
+                <>
+                  <div className="mb-2 flex justify-end">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                          <Columns3 />
+                          显示列
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuLabel>
+                          {tableColumns6.mobile ? "手机显示列" : "桌面显示列"}
+                        </DropdownMenuLabel>
+                        {tableColumns6.labels.map((label) => (
+                          <DropdownMenuCheckboxItem
+                            key={label}
+                            checked={tableColumns6.isVisible(label)}
+                            disabled={tableColumns6.count === 1 && tableColumns6.isVisible(label)}
+                            onSelect={(event) => event.preventDefault()}
+                            onCheckedChange={(checked) =>
+                              tableColumns6.setVisible(label, checked === true)
+                            }
+                          >
+                            {label}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={tableColumns6.showAll}>
+                          显示全部列
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={tableColumns6.reset}>
+                          恢复默认列
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <Table
+                    className={
+                      tableColumns6.count > 4
+                        ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                        : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                    }
+                    role="table"
+                  >
+                    <TableHeader>
+                      <TableRow role="row">
+                        {recordColumns("analytics").map((label) => (
+                          <TableHead
+                            hidden={!tableColumns6.isVisible(label)}
+                            className={
+                              mobileRecordColumns("analytics").includes(label) ? "max-md:w-1/2" : ""
+                            }
+                            key={label}
+                          >
+                            {label}
+                          </TableHead>
+                        ))}
                       </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {(resource.data?.analytics ?? []).length ? (
+                        recordRows("analytics", analytics.rows).map((row) => (
+                          <TableRow role="row" key={row.key}>
+                            {row.cells.map((cell) => (
+                              <TableCell
+                                hidden={!tableColumns6.isVisible(cell.label)}
+                                data-label={cell.label}
+                                role="cell"
+                                key={cell.label}
+                                className={
+                                  mobileRecordColumns("analytics").includes(cell.label)
+                                    ? "max-w-80 whitespace-normal break-words"
+                                    : " max-w-80 whitespace-normal break-words"
+                                }
+                              >
+                                <div className="max-md:hidden">
+                                  {cell.status ? (
+                                    <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                      {cell.text}
+                                    </Badge>
+                                  ) : (
+                                    cell.text
+                                  )}
+                                </div>
+                                {cell.label === mobileRecordColumns("analytics")[0] ? (
+                                  <Dialog>
+                                    <DialogTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                        aria-label={"查看详情：" + String(cell.text)}
+                                      >
+                                        <span className="min-w-0 flex-1">
+                                          <span className="block truncate font-medium">
+                                            {cell.text}
+                                          </span>
+                                        </span>
+                                        <ChevronRight className="size-3 shrink-0" />
+                                      </Button>
+                                    </DialogTrigger>
+                                    <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                      <DialogHeader>
+                                        <DialogTitle>记录详情</DialogTitle>
+                                        <DialogDescription>当前记录的完整字段</DialogDescription>
+                                      </DialogHeader>
+                                      <FieldGroup className="gap-3">
+                                        {row.cells.map((cell) => (
+                                          <Field key={cell.label}>
+                                            <FieldTitle>{cell.label}</FieldTitle>
+                                            <div className="min-w-0 break-words">
+                                              {cell.status ? (
+                                                <Badge
+                                                  variant={
+                                                    cell.failed ? "destructive" : "secondary"
+                                                  }
+                                                >
+                                                  {cell.text}
+                                                </Badge>
+                                              ) : (
+                                                cell.text
+                                              )}
+                                            </div>
+                                          </Field>
+                                        ))}
+                                      </FieldGroup>
+                                    </DialogContent>
+                                  </Dialog>
+                                ) : (
+                                  <div className="truncate md:hidden">
+                                    {cell.status ? (
+                                      <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                        {cell.text}
+                                      </Badge>
+                                    ) : (
+                                      cell.text
+                                    )}
+                                  </div>
+                                )}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow role="row">
+                          <TableCell role="cell" colSpan={tableColumns6.count}>
+                            <Empty>
+                              <EmptyDescription>暂无记录</EmptyDescription>
+                            </Empty>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </>
                 <Pagination aria-label="活动分页" className="mt-3 justify-end">
                   <PaginationContent className="flex-wrap justify-end gap-1">
                     <PaginationItem>
@@ -2760,45 +3868,163 @@ function Logs({ id }: { id: string }) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {recordColumns("site_status").map((label) => (
-                        <TableHead key={label}>{label}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(resource.data?.site_status ?? []).length ? (
-                      recordRows("site_status", sites.rows).map((row) => (
-                        <TableRow key={row.key}>
-                          {row.cells.map((cell) => (
-                            <TableCell
-                              key={cell.label}
-                              className="max-w-80 whitespace-normal break-words"
-                            >
-                              {cell.status ? (
-                                <Badge variant={cell.failed ? "destructive" : "secondary"}>
-                                  {cell.text}
-                                </Badge>
-                              ) : (
-                                cell.text
-                              )}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={recordColumns("site_status").length}>
-                          <Empty>
-                            <EmptyDescription>暂无记录</EmptyDescription>
-                          </Empty>
-                        </TableCell>
+                <>
+                  <div className="mb-2 flex justify-end">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                          <Columns3 />
+                          显示列
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuLabel>
+                          {tableColumns7.mobile ? "手机显示列" : "桌面显示列"}
+                        </DropdownMenuLabel>
+                        {tableColumns7.labels.map((label) => (
+                          <DropdownMenuCheckboxItem
+                            key={label}
+                            checked={tableColumns7.isVisible(label)}
+                            disabled={tableColumns7.count === 1 && tableColumns7.isVisible(label)}
+                            onSelect={(event) => event.preventDefault()}
+                            onCheckedChange={(checked) =>
+                              tableColumns7.setVisible(label, checked === true)
+                            }
+                          >
+                            {label}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={tableColumns7.showAll}>
+                          显示全部列
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={tableColumns7.reset}>
+                          恢复默认列
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <Table
+                    className={
+                      tableColumns7.count > 4
+                        ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                        : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                    }
+                    role="table"
+                  >
+                    <TableHeader>
+                      <TableRow role="row">
+                        {recordColumns("site_status").map((label) => (
+                          <TableHead
+                            hidden={!tableColumns7.isVisible(label)}
+                            className={
+                              mobileRecordColumns("site_status").includes(label)
+                                ? "max-md:w-1/2"
+                                : ""
+                            }
+                            key={label}
+                          >
+                            {label}
+                          </TableHead>
+                        ))}
                       </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {(resource.data?.site_status ?? []).length ? (
+                        recordRows("site_status", sites.rows).map((row) => (
+                          <TableRow role="row" key={row.key}>
+                            {row.cells.map((cell) => (
+                              <TableCell
+                                hidden={!tableColumns7.isVisible(cell.label)}
+                                data-label={cell.label}
+                                role="cell"
+                                key={cell.label}
+                                className={
+                                  mobileRecordColumns("site_status").includes(cell.label)
+                                    ? "max-w-80 whitespace-normal break-words"
+                                    : " max-w-80 whitespace-normal break-words"
+                                }
+                              >
+                                <div className="max-md:hidden">
+                                  {cell.status ? (
+                                    <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                      {cell.text}
+                                    </Badge>
+                                  ) : (
+                                    cell.text
+                                  )}
+                                </div>
+                                {cell.label === mobileRecordColumns("site_status")[0] ? (
+                                  <Dialog>
+                                    <DialogTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                        aria-label={"查看详情：" + String(cell.text)}
+                                      >
+                                        <span className="min-w-0 flex-1">
+                                          <span className="block truncate font-medium">
+                                            {cell.text}
+                                          </span>
+                                        </span>
+                                        <ChevronRight className="size-3 shrink-0" />
+                                      </Button>
+                                    </DialogTrigger>
+                                    <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                      <DialogHeader>
+                                        <DialogTitle>记录详情</DialogTitle>
+                                        <DialogDescription>当前记录的完整字段</DialogDescription>
+                                      </DialogHeader>
+                                      <FieldGroup className="gap-3">
+                                        {row.cells.map((cell) => (
+                                          <Field key={cell.label}>
+                                            <FieldTitle>{cell.label}</FieldTitle>
+                                            <div className="min-w-0 break-words">
+                                              {cell.status ? (
+                                                <Badge
+                                                  variant={
+                                                    cell.failed ? "destructive" : "secondary"
+                                                  }
+                                                >
+                                                  {cell.text}
+                                                </Badge>
+                                              ) : (
+                                                cell.text
+                                              )}
+                                            </div>
+                                          </Field>
+                                        ))}
+                                      </FieldGroup>
+                                    </DialogContent>
+                                  </Dialog>
+                                ) : (
+                                  <div className="truncate md:hidden">
+                                    {cell.status ? (
+                                      <Badge variant={cell.failed ? "destructive" : "secondary"}>
+                                        {cell.text}
+                                      </Badge>
+                                    ) : (
+                                      cell.text
+                                    )}
+                                  </div>
+                                )}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow role="row">
+                          <TableCell role="cell" colSpan={tableColumns7.count}>
+                            <Empty>
+                              <EmptyDescription>暂无记录</EmptyDescription>
+                            </Empty>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </>
                 <Pagination aria-label="网站策略分页" className="mt-3 justify-end">
                   <PaginationContent className="flex-wrap justify-end gap-1">
                     <PaginationItem>

@@ -1,7 +1,25 @@
 "use client";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import { useColumnVisibility } from "@/lib/columns";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { CardDescription } from "@/components/ui/card";
 
@@ -1520,6 +1538,12 @@ const clientLabels: Record<string, string> = {
   can_resend: "可重新发送",
 };
 function BrowserClientState({ value }: { value: Json }) {
+  const tableColumns0 = useColumnVisibility(
+    "components/config.tsx:0",
+    ["站点匹配规则", "审批策略"],
+    ["站点匹配规则", "审批策略"],
+  );
+
   const root = obj(value);
   const preferences = obj(root.preferences);
   const rules = obj(root.rules);
@@ -1559,39 +1583,137 @@ function BrowserClientState({ value }: { value: Json }) {
             <CardTitle role="heading" aria-level={3}>
               {title}规则
             </CardTitle>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {["站点匹配规则", "审批策略"].map((label) => (
-                    <TableHead key={label} scope="col">
-                      {label}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.length ? (
-                  <>
-                    {rows.map(([site, policy]) => (
-                      <TableRow key={site}>
-                        <TableCell className="max-w-80 whitespace-normal break-words">
-                          {site}
-                        </TableCell>
-                        <TableCell>{clientScalar(policy)}</TableCell>
-                      </TableRow>
+            <>
+              <div className="mb-2 flex justify-end">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                      <Columns3 />
+                      显示列
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>
+                      {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                    </DropdownMenuLabel>
+                    {tableColumns0.labels.map((label) => (
+                      <DropdownMenuCheckboxItem
+                        key={label}
+                        checked={tableColumns0.isVisible(label)}
+                        disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                        onSelect={(event) => event.preventDefault()}
+                        onCheckedChange={(checked) =>
+                          tableColumns0.setVisible(label, checked === true)
+                        }
+                      >
+                        {label}
+                      </DropdownMenuCheckboxItem>
                     ))}
-                  </>
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={["站点匹配规则", "审批策略"].length}>
-                      <Empty>
-                        <EmptyDescription>{"暂无记录"}</EmptyDescription>
-                      </Empty>
-                    </TableCell>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <Table
+                className={
+                  tableColumns0.count > 4
+                    ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                    : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                }
+                role="table"
+              >
+                <TableHeader>
+                  <TableRow role="row">
+                    {["站点匹配规则", "审批策略"].map((label) => (
+                      <TableHead
+                        hidden={!tableColumns0.isVisible(label)}
+                        className={
+                          ["站点匹配规则", "审批策略"].includes(label)
+                            ? label === "站点匹配规则"
+                              ? ""
+                              : "max-md:w-20"
+                            : ""
+                        }
+                        key={label}
+                        scope="col"
+                      >
+                        {label}
+                      </TableHead>
+                    ))}
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {rows.length ? (
+                    <>
+                      {rows.map(([site, policy]) => (
+                        <TableRow role="row" key={site}>
+                          <TableCell
+                            hidden={!tableColumns0.isVisible("站点匹配规则")}
+                            data-label="站点匹配规则"
+                            role="cell"
+                            className="max-w-80 whitespace-normal break-words max-md:overflow-hidden"
+                          >
+                            <div className="max-md:hidden">{site}</div>
+                            <Dialog>
+                              <DialogTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                  aria-label={"查看详情：" + String(site)}
+                                >
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate font-medium">{site}</span>
+                                  </span>
+                                  <ChevronRight className="size-3 shrink-0" />
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                <DialogHeader>
+                                  <DialogTitle>记录详情</DialogTitle>
+                                  <DialogDescription>当前记录的完整字段</DialogDescription>
+                                </DialogHeader>
+                                <FieldGroup className="gap-3">
+                                  <Field>
+                                    <FieldTitle>站点匹配规则</FieldTitle>
+                                    <div className="min-w-0 break-words [&_*]:max-w-full">
+                                      {site}
+                                    </div>
+                                  </Field>
+                                  <Field>
+                                    <FieldTitle>审批策略</FieldTitle>
+                                    <div className="min-w-0 break-words [&_*]:max-w-full">
+                                      {clientScalar(policy)}
+                                    </div>
+                                  </Field>
+                                </FieldGroup>
+                              </DialogContent>
+                            </Dialog>
+                          </TableCell>
+                          <TableCell
+                            hidden={!tableColumns0.isVisible("审批策略")}
+                            className=" max-md:overflow-hidden"
+                            data-label="审批策略"
+                            role="cell"
+                          >
+                            {clientScalar(policy)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </>
+                  ) : (
+                    <TableRow role="row">
+                      <TableCell role="cell" colSpan={tableColumns0.count}>
+                        <Empty>
+                          <EmptyDescription>{"暂无记录"}</EmptyDescription>
+                        </Empty>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </>
             <Pagination aria-label="记录分页" className="mt-3 justify-end">
               <PaginationContent className="flex-wrap justify-end gap-1">
                 <PaginationItem>
@@ -1702,72 +1824,242 @@ const clientGroups: Record<string, string> = {
   enterprise_managed: "配置条目",
 };
 function NamedClientState({ value }: { value: Json }) {
+  const tableColumns1 = useColumnVisibility(
+    "components/config.tsx:1",
+    ["名称 / 内容", "标识", "状态", "详细记录"],
+    ["名称 / 内容", "状态"],
+  );
+
   const pagination = useTablePagination(Array.isArray(value) ? value : []);
   if (Array.isArray(value))
     return (
       <>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {["名称 / 内容", "标识", "状态", "详细记录"].map((label) => (
-                <TableHead key={label} scope="col">
-                  {label}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {value.length ? (
-              <>
-                {pagination.rows.map((raw, index) => {
-                  const row = obj(raw);
-                  return (
-                    <TableRow key={index}>
-                      <TableCell>
-                        {typeof raw === "string"
-                          ? raw
-                          : scalar(
-                              row.title ??
-                                row.name ??
-                                row.email ??
-                                row.category ??
-                                obj(row.gizmo).name,
-                            )}
-                      </TableCell>
-                      <TableCell className="break-all font-mono text-xs">
-                        {scalar(row.id ?? row.item_id ?? obj(row.gizmo).id)}
-                      </TableCell>
-                      <TableCell>{clientScalar(row.status ?? row.enabled)}</TableCell>
-                      <TableCell>
-                        {raw && typeof raw === "object" && !Array.isArray(raw) && (
-                          <Collapsible>
-                            <CollapsibleTrigger asChild>
-                              <Button type="button" variant="ghost" size="sm">
-                                查看详情
-                                <ChevronDown />
-                              </Button>
-                            </CollapsibleTrigger>
-                            <CollapsibleContent>
-                              <NamedClientState value={raw} />
-                            </CollapsibleContent>
-                          </Collapsible>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </>
-            ) : (
-              <TableRow>
-                <TableCell colSpan={["名称 / 内容", "标识", "状态", "详细记录"].length}>
-                  <Empty>
-                    <EmptyDescription>{"暂无记录"}</EmptyDescription>
-                  </Empty>
-                </TableCell>
+        <>
+          <div className="mb-2 flex justify-end">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  {tableColumns1.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {tableColumns1.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={tableColumns1.isVisible(label)}
+                    disabled={tableColumns1.count === 1 && tableColumns1.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => tableColumns1.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={tableColumns1.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={tableColumns1.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <Table
+            className={
+              tableColumns1.count > 4
+                ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+            }
+            role="table"
+          >
+            <TableHeader>
+              <TableRow role="row">
+                {["名称 / 内容", "标识", "状态", "详细记录"].map((label) => (
+                  <TableHead
+                    hidden={!tableColumns1.isVisible(label)}
+                    className={
+                      ["名称 / 内容", "状态"].includes(label)
+                        ? label === "名称 / 内容"
+                          ? ""
+                          : "max-md:w-20"
+                        : ""
+                    }
+                    key={label}
+                    scope="col"
+                  >
+                    {label}
+                  </TableHead>
+                ))}
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {value.length ? (
+                <>
+                  {pagination.rows.map((raw, index) => {
+                    const row = obj(raw);
+                    return (
+                      <TableRow role="row" key={index}>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("名称 / 内容")}
+                          className=" max-md:overflow-hidden"
+                          data-label="名称 / 内容"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            {typeof raw === "string"
+                              ? raw
+                              : scalar(
+                                  row.title ??
+                                    row.name ??
+                                    row.email ??
+                                    row.category ??
+                                    obj(row.gizmo).name,
+                                )}
+                          </div>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                aria-label={
+                                  "查看详情：" +
+                                  String(
+                                    typeof raw === "string"
+                                      ? raw
+                                      : scalar(
+                                          row.title ??
+                                            row.name ??
+                                            row.email ??
+                                            row.category ??
+                                            obj(row.gizmo).name,
+                                        ),
+                                  )
+                                }
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">
+                                    {typeof raw === "string"
+                                      ? raw
+                                      : scalar(
+                                          row.title ??
+                                            row.name ??
+                                            row.email ??
+                                            row.category ??
+                                            obj(row.gizmo).name,
+                                        )}
+                                  </span>
+                                </span>
+                                <ChevronRight className="size-3 shrink-0" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>记录详情</DialogTitle>
+                                <DialogDescription>当前记录的完整字段</DialogDescription>
+                              </DialogHeader>
+                              <FieldGroup className="gap-3">
+                                <Field>
+                                  <FieldTitle>名称 / 内容</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {typeof raw === "string"
+                                      ? raw
+                                      : scalar(
+                                          row.title ??
+                                            row.name ??
+                                            row.email ??
+                                            row.category ??
+                                            obj(row.gizmo).name,
+                                        )}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>标识</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {scalar(row.id ?? row.item_id ?? obj(row.gizmo).id)}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>状态</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {clientScalar(row.status ?? row.enabled)}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>详细记录</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {raw && typeof raw === "object" && !Array.isArray(raw) && (
+                                      <Collapsible>
+                                        <CollapsibleTrigger asChild>
+                                          <Button type="button" variant="ghost" size="sm">
+                                            查看详情
+                                            <ChevronDown />
+                                          </Button>
+                                        </CollapsibleTrigger>
+                                        <CollapsibleContent>
+                                          <NamedClientState value={raw} />
+                                        </CollapsibleContent>
+                                      </Collapsible>
+                                    )}
+                                  </div>
+                                </Field>
+                              </FieldGroup>
+                            </DialogContent>
+                          </Dialog>
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("标识")}
+                          data-label="标识"
+                          role="cell"
+                          className="break-all font-mono text-xs "
+                        >
+                          {scalar(row.id ?? row.item_id ?? obj(row.gizmo).id)}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("状态")}
+                          className=" max-md:overflow-hidden"
+                          data-label="状态"
+                          data-compact="true"
+                          role="cell"
+                        >
+                          {clientScalar(row.status ?? row.enabled)}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("详细记录")}
+                          className=" "
+                          data-label="详细记录"
+                          role="cell"
+                        >
+                          {raw && typeof raw === "object" && !Array.isArray(raw) && (
+                            <Collapsible>
+                              <CollapsibleTrigger asChild>
+                                <Button type="button" variant="ghost" size="sm">
+                                  查看详情
+                                  <ChevronDown />
+                                </Button>
+                              </CollapsibleTrigger>
+                              <CollapsibleContent>
+                                <NamedClientState value={raw} />
+                              </CollapsibleContent>
+                            </Collapsible>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </>
+              ) : (
+                <TableRow role="row">
+                  <TableCell role="cell" colSpan={tableColumns1.count}>
+                    <Empty>
+                      <EmptyDescription>{"暂无记录"}</EmptyDescription>
+                    </Empty>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </>
         <Pagination aria-label="记录分页" className="mt-3 justify-end">
           <PaginationContent className="flex-wrap justify-end gap-1">
             <PaginationItem>

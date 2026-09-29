@@ -1,7 +1,8 @@
 "use client";
+import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 import { useDialogFocus } from "@/lib/actions";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -14,6 +15,7 @@ import {
   FieldSet,
   FieldGroup,
   FieldLegend,
+  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -39,6 +41,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal, X, Inbox } from "lucide-react";
 import { useActions, useErrorToast } from "@/lib/actions";
@@ -49,6 +54,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogClose,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -66,6 +72,7 @@ import {
 } from "@/lib/api";
 import { modelKey, sameProviderModels, planWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
+import { useSavedFilters } from "@/lib/preferences";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
@@ -109,6 +116,12 @@ const windowSummary = (windows?: SpendingWindow[]) =>
     .map((window) => `${windowLabel(window.duration_seconds)} ${limit(window.cost_limit_usd)}`)
     .join("；") || "未设置";
 export default function PlansPage() {
+  const tableColumns0 = useColumnVisibility(
+    "app/plans/page.tsx:0",
+    ["套餐", "订阅模型", "费用上限", "到期免费访问", "分配状态", "操作"],
+    ["套餐", "分配状态", "操作"],
+  );
+
   const fieldId = useId();
   const actions = useActions();
   const resource = useResource<Plans>("/plans");
@@ -116,8 +129,7 @@ export default function PlansPage() {
   useErrorToast(models.error);
   const [editing, setEditing] = useState<Plan>();
   const empty = { search: "", status: "" };
-  const [filters, setFilters] = useState(empty);
-  const [applied, setApplied] = useState(empty);
+  const { filters, setFilters, applied, setApplied } = useSavedFilters("plans.filters", empty);
   const items =
     resource.data?.items.filter(
       (plan) =>
@@ -230,6 +242,33 @@ export default function PlansPage() {
                 重置
               </Button>
             </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {tableColumns0.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={tableColumns0.isVisible(label)}
+                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </form>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
             {
@@ -245,12 +284,32 @@ export default function PlansPage() {
       <Card>
         <CardContent className="space-y-4">
           {
-            <Table>
+            <Table
+              className={
+                tableColumns0.count > 4
+                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              }
+              role="table"
+            >
               <TableHeader>
-                <TableRow>
+                <TableRow role="row">
                   {["套餐", "订阅模型", "费用上限", "到期免费访问", "分配状态", "操作"].map(
                     (label) => (
-                      <TableHead key={label} scope="col">
+                      <TableHead
+                        hidden={!tableColumns0.isVisible(label)}
+                        className={
+                          ["套餐", "分配状态", "操作"].includes(label)
+                            ? label === "操作"
+                              ? "max-md:w-28"
+                              : label === "套餐"
+                                ? ""
+                                : "max-md:w-16"
+                            : ""
+                        }
+                        key={label}
+                        scope="col"
+                      >
                         {label}
                       </TableHead>
                     ),
@@ -261,12 +320,96 @@ export default function PlansPage() {
                 {items.length ? (
                   <>
                     {pagination.rows.map((plan) => (
-                      <TableRow key={plan.id}>
-                        <TableCell>
-                          <strong>{plan.name}</strong>
-                          <CardDescription>{plan.provider_id}</CardDescription>
+                      <TableRow role="row" key={plan.id}>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("套餐")}
+                          className=" max-md:overflow-hidden"
+                          data-label="套餐"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            <strong>{plan.name}</strong>
+                            <CardDescription>{plan.provider_id}</CardDescription>
+                          </div>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                aria-label={"查看详情：" + String(plan.name)}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">{plan.name}</span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {accessLabel(plan.model_access, plan.models)}
+                                  </span>
+                                </span>
+                                <ChevronRight className="size-3 shrink-0" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>记录详情</DialogTitle>
+                                <DialogDescription>当前记录的完整字段</DialogDescription>
+                              </DialogHeader>
+                              <FieldGroup className="gap-3">
+                                <Field>
+                                  <FieldTitle>套餐</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <strong>{plan.name}</strong>
+                                    <CardDescription>{plan.provider_id}</CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>订阅模型</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <span>{accessLabel(plan.model_access, plan.models)}</span>
+                                    {plan.model_access === "selected" && (
+                                      <CardDescription className="max-w-80 whitespace-normal break-words">
+                                        {plan.models.map((model) => model.model).join("、") ||
+                                          "尚未选择"}
+                                      </CardDescription>
+                                    )}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>费用上限</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {windowSummary(plan.spending_windows)}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>到期免费访问</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {plan.free_access_enabled
+                                      ? accessLabel(plan.free_model_access, plan.free_models)
+                                      : "不开放"}
+                                    {plan.free_access_enabled && (
+                                      <CardDescription>
+                                        {windowSummary(plan.free_spending_windows)}
+                                      </CardDescription>
+                                    )}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>分配状态</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <Badge variant={plan.enabled ? "secondary" : "outline"}>
+                                      {plan.enabled ? "可分配" : "停止新分配"}
+                                    </Badge>
+                                  </div>
+                                </Field>
+                              </FieldGroup>
+                            </DialogContent>
+                          </Dialog>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("订阅模型")}
+                          className=" "
+                          data-label="订阅模型"
+                          role="cell"
+                        >
                           <span>{accessLabel(plan.model_access, plan.models)}</span>
                           {plan.model_access === "selected" && (
                             <CardDescription className="max-w-80 whitespace-normal break-words">
@@ -274,8 +417,20 @@ export default function PlansPage() {
                             </CardDescription>
                           )}
                         </TableCell>
-                        <TableCell>{windowSummary(plan.spending_windows)}</TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("费用上限")}
+                          className=" "
+                          data-label="费用上限"
+                          role="cell"
+                        >
+                          {windowSummary(plan.spending_windows)}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("到期免费访问")}
+                          className=" "
+                          data-label="到期免费访问"
+                          role="cell"
+                        >
                           {plan.free_access_enabled
                             ? accessLabel(plan.free_model_access, plan.free_models)
                             : "不开放"}
@@ -285,12 +440,23 @@ export default function PlansPage() {
                             </CardDescription>
                           )}
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("分配状态")}
+                          className=" max-md:overflow-hidden"
+                          data-label="分配状态"
+                          data-compact="true"
+                          role="cell"
+                        >
                           <Badge variant={plan.enabled ? "secondary" : "outline"}>
                             {plan.enabled ? "可分配" : "停止新分配"}
                           </Badge>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("操作")}
+                          className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                          data-label="操作"
+                          role="cell"
+                        >
                           <div className="flex flex-wrap items-center gap-2">
                             <Button variant="outline" size="sm" onClick={() => setEditing(plan)}>
                               <Pencil />
@@ -341,12 +507,8 @@ export default function PlansPage() {
                     ))}
                   </>
                 ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={
-                        ["套餐", "订阅模型", "费用上限", "到期免费访问", "分配状态", "操作"].length
-                      }
-                    >
+                  <TableRow role="row">
+                    <TableCell role="cell" colSpan={tableColumns0.count}>
                       <Empty>
                         <EmptyDescription>{"暂无符合条件的套餐"}</EmptyDescription>
                       </Empty>

@@ -16,6 +16,7 @@ pub(crate) fn router(state: AdminState) -> Router {
     let protected = Router::new()
         .route("/logout", post(auth::logout))
         .route("/overview", get(settings::overview))
+        .route("/overview/usage", get(usage::statistics))
         .route("/suppliers", get(suppliers::list))
         .route("/suppliers/oauth/setup", get(suppliers::setup))
         .route("/suppliers/oauth/start", post(suppliers::start))

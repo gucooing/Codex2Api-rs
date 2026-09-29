@@ -102,6 +102,34 @@ pub async fn page(State(s): State<AdminState>, Query(f): Query<Filters>) -> ApiR
         page_size: page.page_size,
     })))
 }
+
+#[derive(Default, Deserialize)]
+pub struct StatisticsFilters {
+    #[serde(default)]
+    group_by: codex2api_storage::UsageGroup,
+}
+
+pub async fn statistics(
+    State(s): State<AdminState>,
+    Query(f): Query<Filters>,
+    Query(group): Query<StatisticsFilters>,
+) -> ApiResult {
+    let mut filter = f.storage_filter().map_err(ApiError::bad)?;
+    let until = filter
+        .until_ms
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    filter.from_ms = Some(filter.from_ms.unwrap_or(until - 7 * 86_400_000));
+    filter.until_ms = Some(until);
+    let statistics = s
+        .storage
+        .usage_statistics(&filter, group.group_by, f.tz_offset)
+        .await
+        .map_err(|error| match error {
+            codex2api_storage::StorageError::Constraint(message) => ApiError::bad(message),
+            error => ApiError::from(error),
+        })?;
+    Ok(Json(super::dto::value(statistics)))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

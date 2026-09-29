@@ -1,13 +1,38 @@
 "use client";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import { useColumnVisibility } from "@/lib/columns";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination, usePageControls } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Spinner } from "@/components/ui/spinner";
-import { FieldSet, FieldGroup, Field, FieldLabel, FieldDescription } from "@/components/ui/field";
+import {
+  FieldSet,
+  FieldGroup,
+  Field,
+  FieldLabel,
+  FieldDescription,
+  FieldTitle,
+} from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { useId } from "react";
 import {
@@ -720,6 +745,12 @@ function DiagnosticTable({
   columns: string[];
   fields: [string, ("date" | "diagnostics")?][];
 }) {
+  const tableColumns0 = useColumnVisibility(
+    "app/settings/page.tsx:0:" + path,
+    columns,
+    columns.slice(0, 2),
+  );
+
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const resource = useResource<{
@@ -759,56 +790,182 @@ function DiagnosticTable({
             重新加载
           </Button>
         )}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {columns.map((label) => (
-                <TableHead key={label} scope="col">
-                  {label}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.length ? (
-              <>
-                {items.map((item, index) => (
-                  <TableRow key={String(item.id ?? index)}>
-                    {fields.map(([field, format]) => (
-                      <TableCell key={field} className="max-w-80 whitespace-normal break-words">
-                        {format === "diagnostics"
-                          ? diagnosticSummary(item[field])
-                          : format === "date"
-                            ? date(
-                                typeof item[field] === "number" || typeof item[field] === "string"
-                                  ? (item[field] as string | number)
-                                  : null,
-                              )
-                            : item[field] == null
-                              ? "—"
-                              : String(item[field])}
-                      </TableCell>
-                    ))}
-                  </TableRow>
+        <>
+          <div className="mb-2 flex justify-end">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {tableColumns0.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={tableColumns0.isVisible(label)}
+                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
                 ))}
-              </>
-            ) : (
-              <TableRow>
-                <TableCell colSpan={columns.length}>
-                  <Empty>
-                    <EmptyDescription>
-                      {resource.loading
-                        ? "正在加载…"
-                        : resource.error
-                          ? "尚未取得记录"
-                          : "暂无记录"}
-                    </EmptyDescription>
-                  </Empty>
-                </TableCell>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <Table
+            className={
+              tableColumns0.count > 4
+                ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+            }
+            role="table"
+          >
+            <TableHeader>
+              <TableRow role="row">
+                {columns.map((label) => (
+                  <TableHead
+                    hidden={!tableColumns0.isVisible(label)}
+                    className={columns.indexOf(label) < 2 ? "max-md:w-1/2" : ""}
+                    key={label}
+                    scope="col"
+                  >
+                    {label}
+                  </TableHead>
+                ))}
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {items.length ? (
+                <>
+                  {items.map((item, index) => (
+                    <TableRow role="row" key={String(item.id ?? index)}>
+                      {fields.map(([field, format], fieldIndex) => (
+                        <TableCell
+                          hidden={!tableColumns0.isVisible(columns[fieldIndex])}
+                          role="cell"
+                          data-label={columns[fieldIndex]}
+                          key={field}
+                          className={
+                            fieldIndex < 2
+                              ? "max-w-80 whitespace-normal break-words"
+                              : " max-w-80 whitespace-normal break-words"
+                          }
+                        >
+                          <div className="max-md:hidden">
+                            {format === "diagnostics"
+                              ? diagnosticSummary(item[field])
+                              : format === "date"
+                                ? date(
+                                    typeof item[field] === "number" ||
+                                      typeof item[field] === "string"
+                                      ? (item[field] as string | number)
+                                      : null,
+                                  )
+                                : item[field] == null
+                                  ? "—"
+                                  : String(item[field])}
+                          </div>
+                          {fieldIndex === 0 ? (
+                            <Dialog>
+                              <DialogTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 md:hidden"
+                                  aria-label="查看记录详情"
+                                >
+                                  <span className="min-w-0 flex-1 truncate">
+                                    {format === "diagnostics"
+                                      ? diagnosticSummary(item[field])
+                                      : format === "date"
+                                        ? date(
+                                            typeof item[field] === "number" ||
+                                              typeof item[field] === "string"
+                                              ? (item[field] as string | number)
+                                              : null,
+                                          )
+                                        : item[field] == null
+                                          ? "—"
+                                          : String(item[field])}
+                                  </span>
+                                  <ChevronRight className="size-3 shrink-0" />
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                                <DialogHeader>
+                                  <DialogTitle>{title}</DialogTitle>
+                                  <DialogDescription>当前记录的完整字段</DialogDescription>
+                                </DialogHeader>
+                                <FieldGroup className="gap-3">
+                                  {fields.map(([field, format], fieldIndex) => (
+                                    <Field key={field}>
+                                      <FieldTitle>{columns[fieldIndex]}</FieldTitle>
+                                      <div className="min-w-0 break-words">
+                                        {format === "diagnostics"
+                                          ? diagnosticSummary(item[field])
+                                          : format === "date"
+                                            ? date(
+                                                typeof item[field] === "number" ||
+                                                  typeof item[field] === "string"
+                                                  ? (item[field] as string | number)
+                                                  : null,
+                                              )
+                                            : item[field] == null
+                                              ? "—"
+                                              : String(item[field])}
+                                      </div>
+                                    </Field>
+                                  ))}
+                                </FieldGroup>
+                              </DialogContent>
+                            </Dialog>
+                          ) : (
+                            <div className="truncate md:hidden">
+                              {format === "diagnostics"
+                                ? diagnosticSummary(item[field])
+                                : format === "date"
+                                  ? date(
+                                      typeof item[field] === "number" ||
+                                        typeof item[field] === "string"
+                                        ? (item[field] as string | number)
+                                        : null,
+                                    )
+                                  : item[field] == null
+                                    ? "—"
+                                    : String(item[field])}
+                            </div>
+                          )}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </>
+              ) : (
+                <TableRow role="row">
+                  <TableCell role="cell" colSpan={tableColumns0.count}>
+                    <Empty>
+                      <EmptyDescription>
+                        {resource.loading
+                          ? "正在加载…"
+                          : resource.error
+                            ? "尚未取得记录"
+                            : "暂无记录"}
+                      </EmptyDescription>
+                    </Empty>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </>
         <Pagination aria-label="记录分页" className="mt-3 justify-end">
           <PaginationContent className="flex-wrap justify-end gap-1">
             <PaginationItem>

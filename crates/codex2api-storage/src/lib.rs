@@ -38,6 +38,8 @@ pub use supplier_health::SupplierHealth;
 pub use supplier_routing::SupplierAuthSnapshot;
 mod types;
 mod usage;
+mod usage_statistics;
+pub use usage_statistics::{UsageGroup, UsageStatistics, UsageStatisticsRow, UsageTotals};
 mod virtual_accounts;
 mod virtual_plans;
 pub use virtual_plans::{VirtualPlan, plan_owned_config};

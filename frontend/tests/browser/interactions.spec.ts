@@ -247,8 +247,9 @@ test("failed reads keep all pages visible and settings disabled until retry succ
     await expect(page.getByRole("table")).toBeVisible();
   }
   await page.getByRole("link", { name: "概览", exact: true }).click();
-  await expect(page.getByRole("button", { name: "重新加载", exact: true })).toBeVisible();
-  await expect(page.locator("[data-slot=card-title]").filter({ hasText: "—" })).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "刷新", exact: true })).toBeVisible();
+  await expect(page.getByLabel("账户与模型概况").getByRole("link")).toHaveCount(4);
+  await expect(page.getByLabel("账户与模型概况").getByText("—", { exact: true })).toHaveCount(4);
   for (const kind of ["suppliers", "consumers"]) {
     await page.goto(`/admin/${kind}/detail/?id=missing-review-record`);
     await expect(page.getByRole("tablist")).toBeVisible();

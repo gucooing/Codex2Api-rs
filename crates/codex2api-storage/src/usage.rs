@@ -153,7 +153,7 @@ pub struct VirtualDailyModelTokens {
     pub tokens: i64,
 }
 
-fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFilter) {
+pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFilter) {
     query.push(" WHERE 1=1");
     if let Some(id) = filter.account_id.as_deref().filter(|s| !s.is_empty()) {
         query.push(" AND account_id = ").push_bind(id.to_string());

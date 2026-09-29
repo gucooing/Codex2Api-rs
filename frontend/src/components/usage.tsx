@@ -1,4 +1,14 @@
 "use client";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import { useColumnVisibility } from "@/lib/columns";
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -23,7 +33,14 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Inbox } from "lucide-react";
+import {
+  ChevronsLeft,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsRight,
+  Inbox,
+  Columns3,
+} from "lucide-react";
 import { useErrorToast, validateForm } from "@/lib/actions";
 import {
   Table,
@@ -75,9 +92,13 @@ import {
 } from "@/components/ui/dialog";
 import { FieldGroup, FieldTitle, FieldDescription } from "@/components/ui/field";
 import { useResource } from "@/lib/hooks";
+import { usePreference, useSavedFilters, validPageSize } from "@/lib/preferences";
 import { usePageControls } from "@/lib/pagination";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 const emptyFilters = {
+  supplier_label: "",
+  consumer_label: "",
   supplier_id: "",
   virtual_account: "",
   model: "",
@@ -87,16 +108,35 @@ const emptyFilters = {
 };
 export function UsagePageView({ consumerId }: { consumerId?: string }) {
   const fieldId = useId();
-  const [filters, setFilters] = useState({ ...emptyFilters, virtual_account: consumerId ?? "" });
-  const [applied, setApplied] = useState(filters);
+  const {
+    filters,
+    setFilters,
+    applied,
+    setApplied,
+    ready: preferencesReady,
+  } = useSavedFilters(`usage:${consumerId ?? "all"}:filters`, emptyFilters);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = usePreference<number>("usage.page-size", 20, validPageSize);
   const [supplierOpen, setSupplierOpen] = useState(false);
   const [consumerOpen, setConsumerOpen] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState("");
   const [consumerSearch, setConsumerSearch] = useState("");
-  const [selectedSupplier, setSelectedSupplier] = useState<Supplier>();
-  const [selectedConsumer, setSelectedConsumer] = useState<Consumer>();
+  type SupplierOption = Pick<Supplier, "id" | "display_name" | "email">;
+  type ConsumerOption = Pick<Consumer, "id" | "username" | "email">;
+  const selectedSupplier = filters.supplier_id
+    ? {
+        id: filters.supplier_id,
+        display_name: filters.supplier_label || filters.supplier_id,
+        email: "",
+      }
+    : null;
+  const selectedConsumer = filters.virtual_account
+    ? {
+        id: filters.virtual_account,
+        username: filters.consumer_label || filters.virtual_account,
+        email: "",
+      }
+    : null;
   const suppliers = useResource<List<Supplier>>(
     supplierOpen ? `/suppliers${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
     supplierSearch.trim() ? 250 : 0,
@@ -111,7 +151,9 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
   useErrorToast(consumers.error);
 
   const resource = useResource<UsagePage>(
-    `/usage${query({ ...applied, virtual_account: consumerId ?? applied.virtual_account, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`,
+    preferencesReady
+      ? `/usage${query({ supplier_id: applied.supplier_id, virtual_account: consumerId ?? applied.virtual_account, model: applied.model, status: applied.status, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
+      : null,
   );
   const pagination = usePageControls(
     resource.data?.page ?? page,
@@ -143,12 +185,15 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
               <div className="flex flex-wrap items-end gap-3">
                 <Field className="w-40">
                   <FieldLabel htmlFor={fieldId + "-supplier"}>供应账户</FieldLabel>
-                  <Combobox<Supplier>
+                  <Combobox<SupplierOption>
                     items={suppliers.data?.items ?? []}
                     value={selectedSupplier ?? null}
                     onValueChange={(item) => {
-                      setSelectedSupplier(item ?? undefined);
-                      update("supplier_id", item?.id ?? "");
+                      setFilters((current) => ({
+                        ...current,
+                        supplier_id: item?.id ?? "",
+                        supplier_label: item?.display_name || item?.email || item?.id || "",
+                      }));
                       setSupplierSearch("");
                     }}
                     itemToStringLabel={(item) => item.display_name || item.email || item.id}
@@ -164,8 +209,11 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                       if (details.reason === "input-change") {
                         setSupplierSearch(text);
                         if (!text) {
-                          setSelectedSupplier(undefined);
-                          update("supplier_id", "");
+                          setFilters((current) => ({
+                            ...current,
+                            supplier_id: "",
+                            supplier_label: "",
+                          }));
                         }
                       }
                     }}
@@ -186,7 +234,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                             : "没有匹配账户"}
                       </ComboboxEmpty>
                       <ComboboxList aria-busy={suppliers.loading}>
-                        {(item: Supplier) => (
+                        {(item: SupplierOption) => (
                           <ComboboxItem key={item.id} value={item}>
                             <span className="flex min-w-0 flex-col">
                               <span className="truncate">
@@ -205,12 +253,15 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                 {!consumerId && (
                   <Field className="w-40">
                     <FieldLabel htmlFor={fieldId + "-consumer"}>消费账户</FieldLabel>
-                    <Combobox<Consumer>
+                    <Combobox<ConsumerOption>
                       items={consumers.data?.items ?? []}
                       value={selectedConsumer ?? null}
                       onValueChange={(item) => {
-                        setSelectedConsumer(item ?? undefined);
-                        update("virtual_account", item?.id ?? "");
+                        setFilters((current) => ({
+                          ...current,
+                          virtual_account: item?.id ?? "",
+                          consumer_label: item?.username ?? "",
+                        }));
                         setConsumerSearch("");
                       }}
                       itemToStringLabel={(item) => item.username}
@@ -226,8 +277,11 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                         if (details.reason === "input-change") {
                           setConsumerSearch(text);
                           if (!text) {
-                            setSelectedConsumer(undefined);
-                            update("virtual_account", "");
+                            setFilters((current) => ({
+                              ...current,
+                              virtual_account: "",
+                              consumer_label: "",
+                            }));
                           }
                         }
                       }}
@@ -248,7 +302,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                               : "没有匹配账户"}
                         </ComboboxEmpty>
                         <ComboboxList aria-busy={consumers.loading}>
-                          {(item: Consumer) => (
+                          {(item: ConsumerOption) => (
                             <ComboboxItem key={item.id} value={item}>
                               <span className="flex min-w-0 flex-col">
                                 <span className="truncate">{item.username}</span>
@@ -324,8 +378,6 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     type="button"
                     onClick={() => {
                       const next = { ...emptyFilters, virtual_account: consumerId ?? "" };
-                      setSelectedSupplier(undefined);
-                      setSelectedConsumer(undefined);
                       setSupplierSearch("");
                       setConsumerSearch("");
                       setFilters(next);
@@ -465,164 +517,331 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
   );
 }
 function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string }) {
+  const tableColumns0 = useColumnVisibility(
+    "components/usage.tsx:0",
+    [
+      "消费账户",
+      "供应账户",
+      "模型 / 接口",
+      "推理强度 / 速度",
+      "用量",
+      "费用",
+      "耗时",
+      "时间 / 状态",
+    ],
+    ["模型 / 接口", "用量", "时间 / 状态"],
+  );
+
+  const mobile = useIsMobile();
   const [selected, setSelected] = useState<UsageRecord>();
   return (
     <>
-      <Table className="[&_td]:py-1.5">
-        <TableHeader>
-          <TableRow>
-            {[
-              "消费账户",
-              "供应账户",
-              "模型 / 接口",
-              "推理强度 / 速度",
-              "用量",
-              "费用",
-              "耗时",
-              "时间 / 状态",
-            ].map((label) => (
-              <TableHead key={label}>{label}</TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {records.length ? (
-            records.map((record) => {
-              const failed = failedUsage(record);
-              const mismatch = Boolean(
-                record.actual_model && record.model && record.actual_model !== record.model,
-              );
-              const metrics = [
-                {
-                  label: "输入",
-                  value: tokenCount(record.input_tokens),
-                  exact: record.input_tokens,
-                },
-                {
-                  label: "输出",
-                  value: tokenCount(record.output_tokens),
-                  exact: record.output_tokens,
-                },
-                {
-                  label: "思考",
-                  description: "思考（包含在输出中）",
-                  value: tokenCount(record.reasoning_tokens),
-                  exact: record.reasoning_tokens,
-                },
-                {
-                  label: "缓存读取",
-                  value: tokenCount(record.cached_tokens),
-                  exact: record.cached_tokens,
-                },
-                {
-                  label: "缓存写入",
-                  value: tokenCount(record.cache_write_tokens),
-                  exact: record.cache_write_tokens,
-                },
-                {
-                  label: "缓存率",
-                  description: "缓存率（缓存读取 / 总输入）",
-                  value: cacheRate(record),
-                  exact: undefined,
-                },
-              ];
-              return (
-                <TableRow key={record.id}>
-                  <TableCell>{record.subject_name || record.subject_id}</TableCell>
-                  <TableCell>
-                    {record.account_name}
-                    <CardDescription>{record.provider_id}</CardDescription>
-                  </TableCell>
-                  <TableCell>
-                    <strong
-                      className={mismatch ? "text-yellow-700 dark:text-yellow-400" : undefined}
-                    >
-                      {mismatch
-                        ? `${record.model} → ${record.actual_model}`
-                        : (record.actual_model ?? record.model ?? "-")}
-                    </strong>
-                    <CardDescription className="whitespace-nowrap text-xs">
-                      {record.endpoint} · {record.transport}
-                    </CardDescription>
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {record.reasoning_effort ?? "默认"} /{" "}
-                    {record.billing_tier ?? record.service_tier ?? "标准"}
-                  </TableCell>
-                  <TableCell>
-                    {failed ? (
-                      "-"
-                    ) : record.image_count !== null ? (
-                      <span>{imageUsageLabel(record)}</span>
-                    ) : (
-                      <div className="grid grid-cols-[repeat(3,max-content)] gap-x-3 gap-y-0.5 text-xs tabular-nums">
-                        {metrics.map(({ label, description, value, exact }) => (
-                          <Tooltip key={label}>
-                            <TooltipTrigger asChild>
-                              <span
-                                tabIndex={0}
-                                className="inline-flex items-center gap-1 whitespace-nowrap"
-                                aria-label={`${label}：${value}`}
-                              >
-                                <span className="text-muted-foreground">{label}</span>
-                                {value}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {description ?? label}：
-                              {exact == null ? value : exact.toLocaleString("en-US")}
-                            </TooltipContent>
-                          </Tooltip>
-                        ))}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {failed || record.cost_nano_usd === null
-                      ? "-"
-                      : money(record.cost_nano_usd / 1e9)}
-                  </TableCell>
-                  <TableCell>
-                    <CardDescription className="text-xs">
-                      首字节 {duration(record.first_byte_ms)}
-                    </CardDescription>
-                    <CardDescription className="text-xs">
-                      总计 {duration(record.total_ms)}
-                    </CardDescription>
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-xs">{date(record.requested_at_ms)}</span>
-                    <div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-1 tabular-nums"
-                        aria-label={`查看请求详情：${usageResultCode(record)}`}
-                        onClick={() => setSelected(record)}
-                      >
-                        <Badge variant="outline" className={usageStatus(record.status).className}>
-                          {usageStatus(record.status).label}
-                        </Badge>
-                        {usageResultCode(record)}
-                        <Info className="size-3" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              );
-            })
-          ) : (
-            <TableRow>
-              <TableCell colSpan={8}>
-                <Empty>
-                  <EmptyDescription>{empty ?? "暂无符合条件的用量记录"}</EmptyDescription>
-                </Empty>
-              </TableCell>
+      <>
+        <div className="mb-2 flex justify-end">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                <Columns3 />
+                显示列
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>
+                {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+              </DropdownMenuLabel>
+              {tableColumns0.labels.map((label) => (
+                <DropdownMenuCheckboxItem
+                  key={label}
+                  checked={tableColumns0.isVisible(label)}
+                  disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+                >
+                  {label}
+                </DropdownMenuCheckboxItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+              <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <Table
+          role="table"
+          className={
+            tableColumns0.count > 4
+              ? "[&_td]:py-1.5 max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              : "[&_td]:py-1.5 max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+          }
+        >
+          <TableHeader>
+            <TableRow role="row">
+              {[
+                "消费账户",
+                "供应账户",
+                "模型 / 接口",
+                "推理强度 / 速度",
+                "用量",
+                "费用",
+                "耗时",
+                "时间 / 状态",
+              ].map((label) => (
+                <TableHead
+                  hidden={!tableColumns0.isVisible(label)}
+                  className={
+                    ["模型 / 接口", "用量", "时间 / 状态"].includes(label)
+                      ? label === "模型 / 接口"
+                        ? ""
+                        : "max-md:w-20"
+                      : ""
+                  }
+                  key={label}
+                >
+                  {label}
+                </TableHead>
+              ))}
             </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {records.length ? (
+              records.map((record) => {
+                const failed = failedUsage(record);
+                const mismatch = Boolean(
+                  record.actual_model && record.model && record.actual_model !== record.model,
+                );
+                const metrics = [
+                  {
+                    label: "输入",
+                    value: tokenCount(record.input_tokens),
+                    exact: record.input_tokens,
+                  },
+                  {
+                    label: "输出",
+                    value: tokenCount(record.output_tokens),
+                    exact: record.output_tokens,
+                  },
+                  {
+                    label: "思考",
+                    description: "思考（包含在输出中）",
+                    value: tokenCount(record.reasoning_tokens),
+                    exact: record.reasoning_tokens,
+                  },
+                  {
+                    label: "缓存读取",
+                    value: tokenCount(record.cached_tokens),
+                    exact: record.cached_tokens,
+                  },
+                  {
+                    label: "缓存写入",
+                    value: tokenCount(record.cache_write_tokens),
+                    exact: record.cache_write_tokens,
+                  },
+                  {
+                    label: "缓存率",
+                    description: "缓存率（缓存读取 / 总输入）",
+                    value: cacheRate(record),
+                    exact: undefined,
+                  },
+                ];
+                return (
+                  <TableRow role="row" key={record.id}>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("消费账户")}
+                      className=" "
+                      data-label="消费账户"
+                      role="cell"
+                    >
+                      {record.subject_name || record.subject_id}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("供应账户")}
+                      className=" "
+                      data-label="供应账户"
+                      role="cell"
+                    >
+                      {record.account_name}
+                      <CardDescription>{record.provider_id}</CardDescription>
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("模型 / 接口")}
+                      className=" max-md:overflow-hidden"
+                      data-label="模型 / 接口"
+                      role="cell"
+                    >
+                      {mobile ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                          aria-label={
+                            "查看详情：" +
+                            String(record.actual_model ?? record.model ?? "未记录模型")
+                          }
+                          onClick={() => setSelected(record)}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">
+                              {record.actual_model ?? record.model ?? "未记录模型"}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {new Date(record.requested_at_ms).toLocaleTimeString("zh-CN", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              }) +
+                                " · " +
+                                (record.subject_name || record.subject_id)}
+                            </span>
+                          </span>
+                          <ChevronRight className="size-3 shrink-0" />
+                        </Button>
+                      ) : (
+                        <div className="max-md:hidden">
+                          <strong
+                            className={
+                              mismatch ? "text-yellow-700 dark:text-yellow-400" : undefined
+                            }
+                          >
+                            {mismatch
+                              ? `${record.model} → ${record.actual_model}`
+                              : (record.actual_model ?? record.model ?? "-")}
+                          </strong>
+                          <CardDescription className="whitespace-nowrap text-xs">
+                            {record.endpoint} · {record.transport}
+                          </CardDescription>
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("推理强度 / 速度")}
+                      data-label="推理强度 / 速度"
+                      data-compact="true"
+                      role="cell"
+                      className="text-xs "
+                    >
+                      {record.reasoning_effort ?? "默认"} /{" "}
+                      {record.billing_tier ?? record.service_tier ?? "标准"}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("用量")}
+                      className=" max-md:overflow-hidden"
+                      data-label="用量"
+                      role="cell"
+                    >
+                      {mobile ? (
+                        <div className="space-y-0.5 text-xs tabular-nums md:hidden">
+                          <div>
+                            {failed
+                              ? "-"
+                              : record.image_count !== null
+                                ? record.image_count + " 张"
+                                : (record.input_tokens == null && record.output_tokens == null
+                                    ? "-"
+                                    : tokenCount(
+                                        (record.input_tokens ?? 0) + (record.output_tokens ?? 0),
+                                      )) + " Token"}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {failed || record.cost_nano_usd == null
+                              ? "-"
+                              : money(record.cost_nano_usd / 1e9)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="max-md:hidden">
+                          {failed ? (
+                            "-"
+                          ) : record.image_count !== null ? (
+                            <span>{imageUsageLabel(record)}</span>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs tabular-nums md:grid-cols-[repeat(3,max-content)]">
+                              {metrics.map(({ label, description, value, exact }) => (
+                                <Tooltip key={label}>
+                                  <TooltipTrigger asChild>
+                                    <span
+                                      tabIndex={0}
+                                      className="inline-flex items-center gap-1 whitespace-nowrap"
+                                      aria-label={`${label}：${value}`}
+                                    >
+                                      <span className="text-muted-foreground">{label}</span>
+                                      {value}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {description ?? label}：
+                                    {exact == null ? value : exact.toLocaleString("en-US")}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("费用")}
+                      data-label="费用"
+                      data-compact="true"
+                      role="cell"
+                      className="tabular-nums "
+                    >
+                      {failed || record.cost_nano_usd === null
+                        ? "-"
+                        : money(record.cost_nano_usd / 1e9)}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("耗时")}
+                      className=" "
+                      data-label="耗时"
+                      role="cell"
+                    >
+                      <CardDescription className="text-xs">
+                        首字节 {duration(record.first_byte_ms)}
+                      </CardDescription>
+                      <CardDescription className="text-xs">
+                        总计 {duration(record.total_ms)}
+                      </CardDescription>
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("时间 / 状态")}
+                      className=" max-md:overflow-hidden"
+                      data-label="时间 / 状态"
+                      role="cell"
+                    >
+                      <span className="hidden text-xs md:inline">
+                        {date(record.requested_at_ms)}
+                      </span>
+                      <div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-1 tabular-nums"
+                          aria-label={`查看请求详情：${usageResultCode(record)}`}
+                          onClick={() => setSelected(record)}
+                        >
+                          <Badge variant="outline" className={usageStatus(record.status).className}>
+                            {usageStatus(record.status).label}
+                          </Badge>
+                          <span className="max-md:hidden">{usageResultCode(record)}</span>
+                          <Info className="size-3" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            ) : (
+              <TableRow role="row">
+                <TableCell role="cell" colSpan={tableColumns0.count}>
+                  <Empty>
+                    <EmptyDescription>{empty ?? "暂无符合条件的用量记录"}</EmptyDescription>
+                  </Empty>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </>
       <Dialog
         open={Boolean(selected)}
         onOpenChange={(open) => {

@@ -1,7 +1,8 @@
 "use client";
+import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { useDialogFocus, validateForm } from "@/lib/actions";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,6 +15,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal, Table2, LayoutGrid, Inbox, X, Copy } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -49,7 +53,14 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/u
 import { Badge } from "@/components/ui/badge";
 import { useActions, useErrorToast, copyElementText } from "@/lib/actions";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -81,16 +92,24 @@ import {
 import { mergeOAuth } from "@/lib/domain";
 
 import { useQueryId, useResource } from "@/lib/hooks";
+import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 export function SuppliersPage() {
+  const tableColumns0 = useColumnVisibility(
+    "components/suppliers.tsx:0",
+    ["供应账户", "提供商 / 订阅", "状态", "额度", "最近使用", "操作"],
+    ["供应账户", "状态", "操作"],
+  );
+
+  const mobile = useIsMobile();
   const fieldId = useId();
   const actions = useActions();
   const resource = useResource<List<Supplier>>("/suppliers");
   const [add, setAdd] = useState(false);
   const empty = { search: "", status: "" };
-  const [filters, setFilters] = useState(empty);
-  const [applied, setApplied] = useState(empty);
-  const [view, setView] = useState<"table" | "cards">("table");
+  const { filters, setFilters, applied, setApplied } = useSavedFilters("suppliers.filters", empty);
+  const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
   const all = useSupplierQuotas(resource.data?.items);
   const now = useQuotaClock();
   const items = all.filter(
@@ -294,7 +313,35 @@ export function SuppliersPage() {
               <RefreshCw />
               刷新
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {tableColumns0.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={tableColumns0.isVisible(label)}
+                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <ToggleGroup
+              className="hidden md:flex"
               type="single"
               variant="outline"
               size="sm"
@@ -322,15 +369,35 @@ export function SuppliersPage() {
           </div>
         </CardContent>
       </Card>
-      {view === "table" ? (
+      {mobile || view === "table" ? (
         <Card>
           <CardContent>
-            <Table>
+            <Table
+              className={
+                tableColumns0.count > 4
+                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              }
+              role="table"
+            >
               <TableHeader>
-                <TableRow>
+                <TableRow role="row">
                   {["供应账户", "提供商 / 订阅", "状态", "额度", "最近使用", "操作"].map(
                     (label) => (
-                      <TableHead key={label} scope="col">
+                      <TableHead
+                        hidden={!tableColumns0.isVisible(label)}
+                        className={
+                          ["供应账户", "状态", "操作"].includes(label)
+                            ? label === "操作"
+                              ? "max-md:w-28"
+                              : label === "供应账户"
+                                ? ""
+                                : "max-md:w-16"
+                            : ""
+                        }
+                        key={label}
+                        scope="col"
+                      >
                         {label}
                       </TableHead>
                     ),
@@ -341,18 +408,171 @@ export function SuppliersPage() {
                 {items.length ? (
                   <>
                     {pagination.rows.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>
-                          <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
-                            <strong>{item.display_name || item.email || item.id}</strong>
-                          </Link>
-                          <CardDescription>{item.email}</CardDescription>
+                      <TableRow role="row" key={item.id}>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("供应账户")}
+                          className=" max-md:overflow-hidden"
+                          data-label="供应账户"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
+                              <strong>{item.display_name || item.email || item.id}</strong>
+                            </Link>
+                            <CardDescription>{item.email}</CardDescription>
+                          </div>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                aria-label={
+                                  "查看详情：" + String(item.display_name || item.email || item.id)
+                                }
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">
+                                    {item.display_name || item.email || item.id}
+                                  </span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {item.plan_type ?? "未提供订阅"}
+                                  </span>
+                                </span>
+                                <ChevronRight className="size-3 shrink-0" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>记录详情</DialogTitle>
+                                <DialogDescription>当前记录的完整字段</DialogDescription>
+                              </DialogHeader>
+                              <FieldGroup className="gap-3">
+                                <Field>
+                                  <FieldTitle>供应账户</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <Link
+                                      href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}
+                                    >
+                                      <strong>{item.display_name || item.email || item.id}</strong>
+                                    </Link>
+                                    <CardDescription>{item.email}</CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>提供商 / 订阅</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {item.provider_id}
+                                    <CardDescription>{item.plan_type ?? "未提供"}</CardDescription>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>状态</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <Badge
+                                      title={item.error_message ?? undefined}
+                                      variant={
+                                        item.status === "error"
+                                          ? "destructive"
+                                          : item.status === "active"
+                                            ? "secondary"
+                                            : "outline"
+                                      }
+                                    >
+                                      {supplierStatusLabel(item.status)}
+                                    </Badge>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>额度</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    <div
+                                      className="flex w-80 flex-wrap gap-2"
+                                      aria-label="官方额度"
+                                      title={
+                                        item.quota
+                                          ? "缓存于 " + date(item.quota.observed_at)
+                                          : "暂无额度缓存"
+                                      }
+                                    >
+                                      {item.quota?.windows?.map((window) => (
+                                        <div
+                                          key={window.id}
+                                          className="min-w-0 flex-1 basis-64 space-y-1 text-xs"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span
+                                              className="truncate"
+                                              title={quotaResetLabel(window.reset_at, now)}
+                                            >
+                                              {quotaWindowLabel(window)}：
+                                              {quotaResetLabel(window.reset_at, now)}
+                                            </span>
+                                            <span
+                                              className="shrink-0 tabular-nums"
+                                              title={cycleUsageTitle(window)}
+                                            >
+                                              {cycleUsageLabel(window)}
+                                            </span>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            {window?.used_percent != null ? (
+                                              <>
+                                                <Progress
+                                                  value={Math.min(100, window.used_percent)}
+                                                  className="h-1 flex-1 [&>[data-slot=progress-indicator]]:bg-foreground"
+                                                  aria-label={quotaWindowLabel(window) + "额度已用"}
+                                                />
+                                                <span className="shrink-0 whitespace-nowrap tabular-nums">
+                                                  {percentLabel(window.used_percent)}
+                                                </span>
+                                              </>
+                                            ) : (
+                                              <span className="text-muted-foreground">
+                                                额度未提供
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))}
+                                      {!item.quota?.windows?.length && (
+                                        <span className="text-xs text-muted-foreground">
+                                          {item.quota?.windows
+                                            ? "官方未提供额度窗口"
+                                            : item.quota
+                                              ? "额度数据未加载"
+                                              : "暂无额度缓存"}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>最近使用</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {date(item.last_used_at)}
+                                  </div>
+                                </Field>
+                              </FieldGroup>
+                            </DialogContent>
+                          </Dialog>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("提供商 / 订阅")}
+                          className=" "
+                          data-label="提供商 / 订阅"
+                          role="cell"
+                        >
                           {item.provider_id}
                           <CardDescription>{item.plan_type ?? "未提供"}</CardDescription>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("状态")}
+                          className=" max-md:overflow-hidden"
+                          data-label="状态"
+                          data-compact="true"
+                          role="cell"
+                        >
                           <Badge
                             title={item.error_message ?? undefined}
                             variant={
@@ -366,7 +586,12 @@ export function SuppliersPage() {
                             {supplierStatusLabel(item.status)}
                           </Badge>
                         </TableCell>
-                        <TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("额度")}
+                          className=" "
+                          data-label="额度"
+                          role="cell"
+                        >
                           <div
                             className="flex w-80 flex-wrap gap-2"
                             aria-label="官方额度"
@@ -423,18 +648,28 @@ export function SuppliersPage() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell>{date(item.last_used_at)}</TableCell>
-                        <TableCell>{supplierActions(item)}</TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("最近使用")}
+                          className=" "
+                          data-label="最近使用"
+                          role="cell"
+                        >
+                          {date(item.last_used_at)}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("操作")}
+                          className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                          data-label="操作"
+                          role="cell"
+                        >
+                          {supplierActions(item)}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </>
                 ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={
-                        ["供应账户", "提供商 / 订阅", "状态", "额度", "最近使用", "操作"].length
-                      }
-                    >
+                  <TableRow role="row">
+                    <TableCell role="cell" colSpan={tableColumns0.count}>
                       <Empty>
                         <EmptyDescription>{"暂无符合条件的供应账户"}</EmptyDescription>
                       </Empty>
@@ -1588,6 +1823,12 @@ function OfficialData({
   );
 }
 function OfficialFields({ value, section }: { value: Json; section: string }) {
+  const tableColumns1 = useColumnVisibility(
+    "components/suppliers.tsx:1",
+    ["账户", "类型", "订阅"],
+    ["账户", "类型", "订阅"],
+  );
+
   const root = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const profile =
     root.profile && typeof root.profile === "object" && !Array.isArray(root.profile)
@@ -1703,43 +1944,171 @@ function OfficialFields({ value, section }: { value: Json; section: string }) {
         </ChartContainer>
       ) : (
         <>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {["账户", "类型", "订阅"].map((label) => (
-                  <TableHead key={label}>{label}</TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.length ? (
-                pagination.rows.map((raw, index) => {
-                  const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-                  const account =
-                    item.account && typeof item.account === "object" && !Array.isArray(item.account)
-                      ? item.account
-                      : item;
-                  return (
-                    <TableRow key={index}>
-                      <TableCell>
-                        {String(account.name ?? account.account_id ?? account.id ?? "—")}
-                      </TableCell>
-                      <TableCell>{String(account.structure ?? "—")}</TableCell>
-                      <TableCell>{String(account.plan_type ?? "—")}</TableCell>
-                    </TableRow>
-                  );
-                })
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={3}>
-                    <Empty>
-                      <EmptyDescription>暂无账户资料</EmptyDescription>
-                    </Empty>
-                  </TableCell>
+          <>
+            <div className="mb-2 flex justify-end">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                    <Columns3 />
+                    显示列
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>
+                    {tableColumns1.mobile ? "手机显示列" : "桌面显示列"}
+                  </DropdownMenuLabel>
+                  {tableColumns1.labels.map((label) => (
+                    <DropdownMenuCheckboxItem
+                      key={label}
+                      checked={tableColumns1.isVisible(label)}
+                      disabled={tableColumns1.count === 1 && tableColumns1.isVisible(label)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) =>
+                        tableColumns1.setVisible(label, checked === true)
+                      }
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={tableColumns1.showAll}>显示全部列</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={tableColumns1.reset}>恢复默认列</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <Table
+              className={
+                tableColumns1.count > 4
+                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              }
+              role="table"
+            >
+              <TableHeader>
+                <TableRow role="row">
+                  {["账户", "类型", "订阅"].map((label) => (
+                    <TableHead
+                      hidden={!tableColumns1.isVisible(label)}
+                      className={
+                        ["账户", "类型", "订阅"].includes(label)
+                          ? label === "账户"
+                            ? ""
+                            : "max-md:w-16"
+                          : ""
+                      }
+                      key={label}
+                    >
+                      {label}
+                    </TableHead>
+                  ))}
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.length ? (
+                  pagination.rows.map((raw, index) => {
+                    const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+                    const account =
+                      item.account &&
+                      typeof item.account === "object" &&
+                      !Array.isArray(item.account)
+                        ? item.account
+                        : item;
+                    return (
+                      <TableRow role="row" key={index}>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("账户")}
+                          className=" max-md:overflow-hidden"
+                          data-label="账户"
+                          role="cell"
+                        >
+                          <div className="max-md:hidden">
+                            {String(account.name ?? account.account_id ?? account.id ?? "—")}
+                          </div>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                                aria-label={
+                                  "查看详情：" +
+                                  String(
+                                    String(account.name ?? account.account_id ?? account.id ?? "—"),
+                                  )
+                                }
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">
+                                    {String(
+                                      account.name ?? account.account_id ?? account.id ?? "—",
+                                    )}
+                                  </span>
+                                </span>
+                                <ChevronRight className="size-3 shrink-0" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>记录详情</DialogTitle>
+                                <DialogDescription>当前记录的完整字段</DialogDescription>
+                              </DialogHeader>
+                              <FieldGroup className="gap-3">
+                                <Field>
+                                  <FieldTitle>账户</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {String(
+                                      account.name ?? account.account_id ?? account.id ?? "—",
+                                    )}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>类型</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {String(account.structure ?? "—")}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>订阅</FieldTitle>
+                                  <div className="min-w-0 break-words [&_*]:max-w-full">
+                                    {String(account.plan_type ?? "—")}
+                                  </div>
+                                </Field>
+                              </FieldGroup>
+                            </DialogContent>
+                          </Dialog>
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("类型")}
+                          className=" max-md:overflow-hidden"
+                          data-label="类型"
+                          data-compact="true"
+                          role="cell"
+                        >
+                          {String(account.structure ?? "—")}
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns1.isVisible("订阅")}
+                          className=" max-md:overflow-hidden"
+                          data-label="订阅"
+                          role="cell"
+                        >
+                          {String(account.plan_type ?? "—")}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow role="row">
+                    <TableCell role="cell" colSpan={tableColumns1.count}>
+                      <Empty>
+                        <EmptyDescription>暂无账户资料</EmptyDescription>
+                      </Empty>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </>
           <Pagination aria-label="记录分页" className="mt-3 justify-end">
             <PaginationContent className="flex-wrap justify-end gap-1">
               <PaginationItem>
@@ -1822,6 +2191,12 @@ function OfficialCredits({
   id: string;
   onRefresh: () => void;
 }) {
+  const tableColumns2 = useColumnVisibility(
+    "components/suppliers.tsx:2",
+    ["名称", "类型", "状态", "到期时间", "操作"],
+    ["名称", "状态", "操作"],
+  );
+
   const actions = useActions();
   const credits = Array.isArray(value.credits)
     ? value.credits.filter(
@@ -1842,65 +2217,204 @@ function OfficialCredits({
       <CardDescription>
         可用次数：{typeof value.available_count === "number" ? value.available_count : "官方未提供"}
       </CardDescription>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {["名称", "类型", "状态", "到期时间", "操作"].map((label) => (
-              <TableHead key={label} scope="col">
-                {label}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {credits.length ? (
-            <>
-              {pagination.rows.map((credit, index) => (
-                <TableRow key={String(credit.id ?? index)}>
-                  <TableCell>{String(credit.title ?? credit.id ?? "—")}</TableCell>
-                  <TableCell>{String(credit.reset_type ?? "—")}</TableCell>
-                  <TableCell>{String(credit.status ?? "—")}</TableCell>
-                  <TableCell>
-                    {date(typeof credit.expires_at === "string" ? credit.expires_at : null)}
-                  </TableCell>
-                  <TableCell>
-                    {credit.status === "available" && typeof credit.id === "string" ? (
-                      <Button
-                        type="button"
-                        variant={false ? "destructive" : "outline"}
-                        disabled={false || actions.isBusy("components\\suppliers.tsx:action:20")}
-                        onClick={() =>
-                          void actions.run(
-                            "components\\suppliers.tsx:action:20",
-                            () => consume(String(credit.id)),
-                            {
-                              confirm: "使用此供应账户的一次官方重置额度？",
-                              danger: false,
-                              success: undefined,
-                            },
-                          )
-                        }
-                      >
-                        使用重置额度
-                      </Button>
-                    ) : (
-                      "—"
-                    )}
-                  </TableCell>
-                </TableRow>
+      <>
+        <div className="mb-2 flex justify-end">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                <Columns3 />
+                显示列
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>
+                {tableColumns2.mobile ? "手机显示列" : "桌面显示列"}
+              </DropdownMenuLabel>
+              {tableColumns2.labels.map((label) => (
+                <DropdownMenuCheckboxItem
+                  key={label}
+                  checked={tableColumns2.isVisible(label)}
+                  disabled={tableColumns2.count === 1 && tableColumns2.isVisible(label)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => tableColumns2.setVisible(label, checked === true)}
+                >
+                  {label}
+                </DropdownMenuCheckboxItem>
               ))}
-            </>
-          ) : (
-            <TableRow>
-              <TableCell colSpan={["名称", "类型", "状态", "到期时间", "操作"].length}>
-                <Empty>
-                  <EmptyDescription>{"暂无记录"}</EmptyDescription>
-                </Empty>
-              </TableCell>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={tableColumns2.showAll}>显示全部列</DropdownMenuItem>
+              <DropdownMenuItem onSelect={tableColumns2.reset}>恢复默认列</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <Table
+          className={
+            tableColumns2.count > 4
+              ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+              : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
+          }
+          role="table"
+        >
+          <TableHeader>
+            <TableRow role="row">
+              {["名称", "类型", "状态", "到期时间", "操作"].map((label) => (
+                <TableHead
+                  hidden={!tableColumns2.isVisible(label)}
+                  className={
+                    ["名称", "状态", "操作"].includes(label)
+                      ? label === "操作"
+                        ? "max-md:w-28"
+                        : label === "名称"
+                          ? ""
+                          : "max-md:w-16"
+                      : ""
+                  }
+                  key={label}
+                  scope="col"
+                >
+                  {label}
+                </TableHead>
+              ))}
             </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {credits.length ? (
+              <>
+                {pagination.rows.map((credit, index) => (
+                  <TableRow role="row" key={String(credit.id ?? index)}>
+                    <TableCell
+                      hidden={!tableColumns2.isVisible("名称")}
+                      className=" max-md:overflow-hidden"
+                      data-label="名称"
+                      role="cell"
+                    >
+                      <div className="max-md:hidden">
+                        {String(credit.title ?? credit.id ?? "—")}
+                      </div>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
+                            aria-label={
+                              "查看详情：" + String(String(credit.title ?? credit.id ?? "—"))
+                            }
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">
+                                {String(credit.title ?? credit.id ?? "—")}
+                              </span>
+                            </span>
+                            <ChevronRight className="size-3 shrink-0" />
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+                          <DialogHeader>
+                            <DialogTitle>记录详情</DialogTitle>
+                            <DialogDescription>当前记录的完整字段</DialogDescription>
+                          </DialogHeader>
+                          <FieldGroup className="gap-3">
+                            <Field>
+                              <FieldTitle>名称</FieldTitle>
+                              <div className="min-w-0 break-words [&_*]:max-w-full">
+                                {String(credit.title ?? credit.id ?? "—")}
+                              </div>
+                            </Field>
+                            <Field>
+                              <FieldTitle>类型</FieldTitle>
+                              <div className="min-w-0 break-words [&_*]:max-w-full">
+                                {String(credit.reset_type ?? "—")}
+                              </div>
+                            </Field>
+                            <Field>
+                              <FieldTitle>状态</FieldTitle>
+                              <div className="min-w-0 break-words [&_*]:max-w-full">
+                                {String(credit.status ?? "—")}
+                              </div>
+                            </Field>
+                            <Field>
+                              <FieldTitle>到期时间</FieldTitle>
+                              <div className="min-w-0 break-words [&_*]:max-w-full">
+                                {date(
+                                  typeof credit.expires_at === "string" ? credit.expires_at : null,
+                                )}
+                              </div>
+                            </Field>
+                          </FieldGroup>
+                        </DialogContent>
+                      </Dialog>
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns2.isVisible("类型")}
+                      className=" "
+                      data-label="类型"
+                      data-compact="true"
+                      role="cell"
+                    >
+                      {String(credit.reset_type ?? "—")}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns2.isVisible("状态")}
+                      className=" max-md:overflow-hidden"
+                      data-label="状态"
+                      data-compact="true"
+                      role="cell"
+                    >
+                      {String(credit.status ?? "—")}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns2.isVisible("到期时间")}
+                      className=" "
+                      data-label="到期时间"
+                      role="cell"
+                    >
+                      {date(typeof credit.expires_at === "string" ? credit.expires_at : null)}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns2.isVisible("操作")}
+                      className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                      data-label="操作"
+                      role="cell"
+                    >
+                      {credit.status === "available" && typeof credit.id === "string" ? (
+                        <Button
+                          type="button"
+                          variant={false ? "destructive" : "outline"}
+                          disabled={false || actions.isBusy("components\\suppliers.tsx:action:20")}
+                          onClick={() =>
+                            void actions.run(
+                              "components\\suppliers.tsx:action:20",
+                              () => consume(String(credit.id)),
+                              {
+                                confirm: "使用此供应账户的一次官方重置额度？",
+                                danger: false,
+                                success: undefined,
+                              },
+                            )
+                          }
+                        >
+                          使用重置额度
+                        </Button>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </>
+            ) : (
+              <TableRow role="row">
+                <TableCell role="cell" colSpan={tableColumns2.count}>
+                  <Empty>
+                    <EmptyDescription>{"暂无记录"}</EmptyDescription>
+                  </Empty>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </>
       <Pagination aria-label="记录分页" className="mt-3 justify-end">
         <PaginationContent className="flex-wrap justify-end gap-1">
           <PaginationItem>

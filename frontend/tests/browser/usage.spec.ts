@@ -300,7 +300,7 @@ test("table pagination supports totals, page input, first and last pages after f
     await expect(page.locator("tbody > tr")).toHaveCount(50);
     if (path === "usage") {
       await expect(page.locator("tbody > tr").first().getByRole("cell").nth(3)).toHaveText(
-        "xhigh / default",
+        "xhigh / standard",
       );
       expect((await page.locator("tbody > tr").first().boundingBox())!.height).toBeLessThan(65);
     }

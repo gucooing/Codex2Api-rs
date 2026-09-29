@@ -2,8 +2,8 @@
 import Link from "next/link";
 import { useResource } from "@/lib/hooks";
 import { useErrorToast } from "@/lib/actions";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { OverviewStatistics } from "@/components/overview-statistics";
 
 export default function Overview() {
   const { data, error, reload } = useResource<{
@@ -15,33 +15,27 @@ export default function Overview() {
   useErrorToast(error);
   return (
     <>
-      {error && (
-        <Button variant="outline" size="sm" onClick={reload}>
-          重新加载
-        </Button>
-      )}
-      {
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            { label: "供应账户", value: data?.supplier_count ?? "—", href: "/suppliers/" },
-            { label: "虚拟账户", value: data?.consumer_count ?? "—", href: "/consumers/" },
-            { label: "已启用虚拟账户", value: data?.enabled_consumers ?? "—", href: "/consumers/" },
-            { label: "模型配置", value: data?.models_count ?? "—", href: "/models/" },
-          ].map((item) => (
-            <Card key={item.label}>
-              <CardHeader>
-                <CardDescription>{item.label}</CardDescription>
-                <CardTitle className="text-2xl tabular-nums">{item.value}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Button asChild variant="outline" size="sm">
-                  <Link href={item.href}>查看</Link>
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      }
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="账户与模型概况">
+        {[
+          { label: "供应账户", value: data?.supplier_count ?? "—", href: "/suppliers/" },
+          { label: "虚拟账户", value: data?.consumer_count ?? "—", href: "/consumers/" },
+          { label: "已启用虚拟账户", value: data?.enabled_consumers ?? "—", href: "/consumers/" },
+          { label: "模型配置", value: data?.models_count ?? "—", href: "/models/" },
+        ].map((item) => (
+          <Button
+            key={item.label}
+            asChild
+            variant="outline"
+            className="h-12 justify-between gap-2 px-3"
+          >
+            <Link href={item.href}>
+              <span className="text-xs text-muted-foreground">{item.label}</span>
+              <span className="text-lg font-semibold tabular-nums">{item.value}</span>
+            </Link>
+          </Button>
+        ))}
+      </div>
+      <OverviewStatistics onRefresh={reload} />
     </>
   );
 }
