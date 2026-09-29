@@ -30,6 +30,22 @@ function between(source, start, end) {
   return source.slice(a, b);
 }
 
+function statsigSdk(source) {
+  const vm = require('node:vm');
+  const main = source.read(source.unique('.vite/build', 'main-'));
+  const logger = /([\w$]+)=e\.t\(\(e=>\{Object\.defineProperty\(e,"__esModule",\{value:!0\}\),e\.Log=e\.LogLevel=void 0/.exec(main);
+  assert(logger, 'Installed Statsig SDK module start changed');
+  const exportAt = main.indexOf('e.StatsigClient=void 0', logger.index);
+  const modules = [...main.slice(logger.index, exportAt).matchAll(/([\w$]+)=e\.t\(/g)];
+  const name = modules.at(-1)?.[1];
+  const end = main.indexOf('}))(),', exportAt);
+  assert(name && end > exportAt, 'Installed Statsig SDK exports changed');
+  return vm.runInNewContext('var ' + main.slice(logger.index, end + 5) + ';' + name, {
+    e: { t(factory) { let module; return () => { if (!module) { module = {exports:{}}; factory(module.exports, module); } return module.exports; }; } },
+    console, setTimeout, clearTimeout, setInterval, clearInterval, URL, TextEncoder, TextDecoder, AbortController, performance,
+  });
+}
+
 async function renderer(file) {
   const source = archive(file), directory = 'webview/assets';
   const name = source.unique(directory, 'app-initial-');
@@ -54,4 +70,4 @@ async function renderer(file) {
   return {...source, name, text, bindings};
 }
 
-module.exports = {archive, between, renderer};
+module.exports = {archive, between, renderer, statsigSdk};

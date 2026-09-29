@@ -180,6 +180,8 @@ if desktop:
     # Only used by the ignored test's temporary router, database and fake credentials.
     launcher=os.environ["CODEX2API_TEST_GUI"]
     options={"executable":desktop,"proxyRoot":proxy,"clientHome":client_home,"appData":str(Path(client_home)/"desktop-app")}
+    if os.environ.get("CODEX2API_TEST_SHARED_PROFILE"):
+        options["sharedHome"] = str(Path(client_home) / "shared")
     fixture_path=Path(client_home)/"gui-fixture.json"
     report_path=Path(client_home)/"gui-result.json"
     fixture_path.write_text(json.dumps(options))
@@ -189,7 +191,11 @@ if desktop:
     print('Desktop fixture PID:', launched['processId'], flush=True)
     try:
         assert launched["nativeHookInstalled"]
+        if os.environ.get("CODEX2API_TEST_GUI_REPORT"):
+            Path(os.environ["CODEX2API_TEST_GUI_REPORT"]).write_text(json.dumps(launched), encoding="utf-8")
         time.sleep(12)
+        if os.environ.get("CODEX2API_TEST_GUI_PROBE_SECONDS"):
+            time.sleep(min(60, int(os.environ["CODEX2API_TEST_GUI_PROBE_SECONDS"])))
         import ctypes
         kernel = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel.OpenProcess.restype = ctypes.c_void_p

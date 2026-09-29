@@ -14,8 +14,8 @@ pub fn virtual_config_specs() -> Vec<VirtualConfigSpec> {
         (
             "desktop_ui_policy",
             "Desktop 界面布局",
-            "提供当前客户端的统一标签栏；侧栏、标签和会话记录仍由客户端维护。",
-            json!({"unified_tabs_enabled":true}),
+            "提供新版导航栏、统一标签栏、输入区和重置卡显示策略；侧栏、标签和会话记录仍由客户端维护。",
+            json!({"navigation_rail_enabled":true,"unified_tabs_enabled":true,"unified_composer_enabled":true,"reset_credits_visible":true}),
         ),
         (
             "desktop_model_policy",

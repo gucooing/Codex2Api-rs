@@ -20,12 +20,24 @@ internal static unsafe class ProfileFileRouting
 
     internal static string Map(string path, string shared, string separate)
     {
-        if (path.StartsWith("\\\\?\\", StringComparison.Ordinal) || path.StartsWith("\\??\\", StringComparison.Ordinal)) path = path[4..];
-        var full = Path.GetFullPath(path);
-        if (!string.Equals(Path.GetDirectoryName(full), shared.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return full;
-        var name = Path.GetFileName(full);
-        return name.Equals("auth.json", StringComparison.OrdinalIgnoreCase) || name.Equals("config.toml", StringComparison.OrdinalIgnoreCase)
-            ? Path.Combine(separate, name) : full;
+        // NT object names are not filesystem-relative paths. In particular,
+        // Rust opens child stdio through \??\pipe\...; normalizing that name
+        // would turn it into <cwd>\pipe\... and make every child spawn fail.
+        // Only resolve candidates for the two files we actually own. All other
+        // names (including device, pipe and extended UNC names) stay byte-for-byte.
+        var source = path;
+        if (source.StartsWith("\\\\.\\", StringComparison.Ordinal)) return path;
+        if (source.StartsWith("\\\\?\\", StringComparison.Ordinal) || source.StartsWith("\\??\\", StringComparison.Ordinal))
+        {
+            source = source[4..];
+            if (source.StartsWith("UNC\\", StringComparison.OrdinalIgnoreCase)) source = "\\\\" + source[4..];
+            else if (source.Length < 3 || !char.IsAsciiLetter(source[0]) || source[1] != ':' || source[2] != '\\') return path;
+        }
+        var name = Path.GetFileName(source);
+        if (!name.Equals("auth.json", StringComparison.OrdinalIgnoreCase) && !name.Equals("config.toml", StringComparison.OrdinalIgnoreCase)) return path;
+        var full = Path.GetFullPath(source);
+        return string.Equals(Path.GetDirectoryName(full), shared.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
+            ? Path.Combine(separate, name) : path;
     }
 
     private sealed class MappedPath : IDisposable
@@ -39,8 +51,7 @@ internal static unsafe class ProfileFileRouting
             var source = new string(path);
             if (source.StartsWith("\\\\.\\", StringComparison.Ordinal)) return;
             var target = Map(source, sharedHome, privateHome!);
-            var sourceWithoutPrefix = source.StartsWith("\\\\?\\", StringComparison.Ordinal) || source.StartsWith("\\??\\", StringComparison.Ordinal) ? source[4..] : source;
-            if (Path.GetFullPath(sourceWithoutPrefix).Equals(target, StringComparison.OrdinalIgnoreCase)) return;
+            if (source.Equals(target, StringComparison.Ordinal)) return;
             allocation = Marshal.StringToHGlobalUni(target); Value = (char*)allocation;
         }
         public void Dispose() { if (allocation != 0) Marshal.FreeHGlobal(allocation); }
@@ -133,7 +144,8 @@ internal static unsafe class ProfileFileRouting
         }
         if (!source.StartsWith("\\??\\", StringComparison.Ordinal) && !source.StartsWith("\\\\?\\", StringComparison.Ordinal)) return null;
         var target = Map(source, sharedHome!, privateHome!);
-        return source[4..].Equals(target, StringComparison.OrdinalIgnoreCase) ? null : "\\??\\" + target;
+        if (source.Equals(target, StringComparison.Ordinal)) return null;
+        return target.StartsWith("\\\\", StringComparison.Ordinal) ? "\\??\\UNC\\" + target[2..] : "\\??\\" + target;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]

@@ -53,6 +53,18 @@ def main():
                 request("initialize", {"clientInfo": {"name": "profile-regression", "version": "1"}, "capabilities": {"experimentalApi": True}})
                 process.stdin.write('{"method":"initialized"}\n')
                 process.stdin.flush()
+                # Rust creates named pipes for child stdio. Config-only tests
+                # miss routing bugs that break every shell/MCP/code-mode child.
+                executed = request("command/exec", {
+                    "command": [str(Path(os.environ["WINDIR"]) / "System32/cmd.exe"), "/c", "echo shared-profile-child-ok"],
+                    "cwd": str(root), "sandboxPolicy": {"type": "dangerFullAccess"},
+                })
+                assert executed["exitCode"] == 0 and "shared-profile-child-ok" in executed["stdout"], executed
+                host = request("command/exec", {
+                    "command": [str(Path(arguments.runtime).with_name("codex-code-mode-host.exe")), "--help"],
+                    "cwd": str(root), "sandboxPolicy": {"type": "dangerFullAccess"},
+                })
+                assert host["exitCode"] == 0 and "Transport endpoint" in host["stdout"], host
                 config = request("config/read", {"includeLayers": True})
                 assert config["config"]["model"] == "private-model", config
                 account = request("account/read", {"refreshToken": False})
@@ -87,7 +99,7 @@ def main():
                 restored = request("thread/read", {"threadId": thread["id"], "includeTurns": False})["thread"]
                 assert restored["id"] == thread["id"], "The original client could not read the hooked client's shared session"
                 print(json.dumps({"result": "PASS", "runtime": arguments.runtime, "runtime_sha256": hashlib.sha256(Path(arguments.runtime).read_bytes()).hexdigest(),
-                                  "checks": ["private config read", "atomic config write", "no shared credential fallback", "private login write", "private logout", "shared native SQLite", "original client reads hooked session"]}))
+                                  "checks": ["shell child with captured stdio", "installed code-mode host child", "private config read", "atomic config write", "no shared credential fallback", "private login write", "private logout", "shared native SQLite", "original client reads hooked session"]}))
             finally:
                 process.kill()
                 process.wait(timeout=10)

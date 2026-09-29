@@ -263,9 +263,19 @@ pub(crate) async fn bootstrap(
         .virtual_config(&account.id, "desktop_ui_policy")
         .await?
         .value;
-    payload["feature_gates"][hash("3528415127")] = json!({
-        "name":hash("3528415127"),"value":ui_policy["unified_tabs_enabled"],"rule_id":"local"
-    });
+    // Installed Desktop: Kv/Scn select the navigation rail, NIr selects tabs,
+    // app-primary cbt selects the unified
+    // composer, and usage-page zs gates the banked reset list before fetching it.
+    // A valid credits response alone cannot make that last section appear.
+    for (gate, key) in [
+        ("3085093835", "navigation_rail_enabled"),
+        ("3528415127", "unified_tabs_enabled"),
+        ("510816968", "unified_composer_enabled"),
+        ("85924660", "reset_credits_visible"),
+    ] {
+        payload["feature_gates"][hash(gate)] =
+            json!({"name":hash(gate),"value":ui_policy[key],"rule_id":"local"});
+    }
     let controls = state
         .storage
         .virtual_config(&account.id, "computer_use_policy")

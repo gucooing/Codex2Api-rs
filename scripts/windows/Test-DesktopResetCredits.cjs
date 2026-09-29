@@ -7,17 +7,19 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const asar = archive(process.argv[2]);
 const source = asar.read(asar.unique('webview/assets', 'app-initial-'));
 const calls = [];
-const kg = {
+const fetcher = {
   safeGet: async path => { calls.push({method:'GET',path}); return input.credits_before_reset; },
   safePost: async (path,options) => { calls.push({method:'POST',path,...options}); return input.reset_cases[options.requestBody.redeem_request_id]; },
 };
-const api = new Function('kg',
-  between(source,'function Tai(','function Dai(') +
-  between(source,'function Oai(','function kai(') +
-  between(source,'function Yii(','function Xii(') +
-  between(source,'function tIo(','var nIo,') +
-  between(source,'function aIo(','function oIo(') +
-  ';return {Tai,Eai,Oai,Yii,tIo,aIo};')(kg);
+const usage = asar.read('webview/assets/page-e25392cd6e63.js');
+const redemption = asar.read(asar.unique('webview/assets', 'redemption-'));
+const api = new Function('Gc',
+  between(source,'function Cpn(','function Tpn(') +
+  between(source,'function Epn(','function Dpn(') +
+  between(source,'function Yfn(','function UP(') +
+  between(usage,'function Ps(','var Fs,') +
+  between(redemption,'function t(','function n(') +
+  ';return {Tai:Cpn,Eai:wpn,Oai:Epn,Yii:Yfn,tIo:Ps,aIo:t};')(fetcher);
 (async () => {
   const list = api.Tai(await api.Eai());
   assert.equal(calls[0].path,'/wham/rate-limit-reset-credits');

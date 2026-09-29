@@ -34,15 +34,32 @@ fn field(
 pub fn client_fields(key: &str) -> Vec<ClientField> {
     let mut fields = Vec::new();
     if key == "desktop_ui_policy" {
-        let mut layout = field(
-            "unified_tabs_enabled",
-            "启用新版统一标签栏",
-            "界面布局",
-            "boolean",
-            "控制 Desktop 的统一标签栏布局；不改变会话归属、模型权限和客户端偏好。",
-        );
-        layout.optional = false;
-        fields.push(layout);
+        for (name, label, description) in [
+            (
+                "navigation_rail_enabled",
+                "启用新版导航布局",
+                "显示独立竖向导航栏和内侧项目列表；保留客户端导航状态和登录权限检查。",
+            ),
+            (
+                "unified_tabs_enabled",
+                "启用新版统一标签栏",
+                "控制 Desktop 的统一标签栏布局；不改变会话归属、模型权限和客户端偏好。",
+            ),
+            (
+                "unified_composer_enabled",
+                "启用新版统一输入区",
+                "使用 Desktop 的统一输入区和提示布局；保留客户端权限检查和输入偏好。",
+            ),
+            (
+                "reset_credits_visible",
+                "显示重置卡",
+                "在 Desktop 用量设置中显示本账号的重置卡；卡片发放和使用记录仍在重置卡标签管理。",
+            ),
+        ] {
+            let mut layout = field(name, label, "界面布局", "boolean", description);
+            layout.optional = false;
+            fields.push(layout);
+        }
     } else if key == "user_settings" {
         for (name, label, group, description) in [
             (
@@ -442,8 +459,17 @@ pub fn statsig_hash(name: &str) -> String {
 }
 
 pub fn validate_client_fields(key: &str, value: &Value) -> std::result::Result<(), String> {
-    if key == "desktop_ui_policy" && !value["unified_tabs_enabled"].is_boolean() {
-        return Err("请选择是否启用新版统一标签栏".into());
+    if key == "desktop_ui_policy"
+        && [
+            "navigation_rail_enabled",
+            "unified_tabs_enabled",
+            "unified_composer_enabled",
+            "reset_credits_visible",
+        ]
+        .iter()
+        .any(|name| !value[name].is_boolean())
+    {
+        return Err("请选择导航布局、统一标签栏、统一输入区和重置卡的显示设置".into());
     }
     if key == "conversation_metadata"
         && value["file_attachment_limits"].is_object()

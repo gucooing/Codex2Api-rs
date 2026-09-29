@@ -3559,6 +3559,10 @@ async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh()
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
+    storage
+        .grant_virtual_reset_credits(&account.id, "desktop-display", 2, "isolated GUI fixture")
+        .await
+        .unwrap();
     let mut plan = storage
         .virtual_plan(&account.plan_id)
         .await
@@ -6355,19 +6359,23 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
     )
     .await;
     let payload: Value = serde_json::from_str(enabled["statsigPayload"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        payload["feature_gates"][codex2api_storage::statsig_hash("3528415127")]["value"],
-        true
-    );
+    for gate in ["3085093835", "3528415127", "510816968", "85924660"] {
+        assert_eq!(
+            payload["feature_gates"][codex2api_storage::statsig_hash(gate)]["value"],
+            true
+        );
+    }
     let view = admin_config(&app, &account.id, "desktop_ui_policy", &cookie).await;
     assert_eq!(view["value"]["unified_tabs_enabled"], true);
+    assert_eq!(view["value"]["unified_composer_enabled"], true);
+    assert_eq!(view["value"]["reset_credits_visible"], true);
     admin_save_config(
         &app,
         &account.id,
         "desktop_ui_policy",
         &cookie,
         &csrf,
-        json!({"unified_tabs_enabled":false}),
+        json!({"navigation_rail_enabled":false,"unified_tabs_enabled":false,"unified_composer_enabled":false,"reset_credits_visible":false}),
     )
     .await;
     let disabled = json_body(
@@ -6384,10 +6392,12 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
     .await;
     let payload: Value =
         serde_json::from_str(disabled["statsigPayload"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        payload["feature_gates"][codex2api_storage::statsig_hash("3528415127")]["value"],
-        false
-    );
+    for gate in ["3085093835", "3528415127", "510816968", "85924660"] {
+        assert_eq!(
+            payload["feature_gates"][codex2api_storage::statsig_hash(gate)]["value"],
+            false
+        );
+    }
     assert!(codex2api_storage::validate_client_fields("desktop_ui_policy", &json!({})).is_err());
     let empty = json_body(
         app.clone()
@@ -6510,6 +6520,12 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
             .value["unified_tabs_enabled"],
         false
     );
+    let reopened_policy = reopened
+        .virtual_config(&account.id, "desktop_ui_policy")
+        .await
+        .unwrap();
+    assert_eq!(reopened_policy.value["unified_composer_enabled"], false);
+    assert_eq!(reopened_policy.value["reset_credits_visible"], false);
     assert_eq!(
         reopened
             .virtual_cloud_environments(&account.id)

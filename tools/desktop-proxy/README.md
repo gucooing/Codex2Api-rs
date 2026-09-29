@@ -39,3 +39,7 @@ dotnet publish tools/desktop-proxy/DesktopProxy.csproj -c Release -r win-x64 --s
 `tools/desktop-proxy-tests` 是开发测试工具，调用相同的 C# 地址规则及 HTTP 兼容代码。配合 `scripts/windows/Test-DesktopOAuth.py` 和 Rust 隔离服务测试实际登录、工作区发现、请求、重启及刷新。测试工具不随启动器发布。启动、登录和推理证据分别记录，不能把编译或组件加载成功当作后续请求成功。
 
 `Test-DesktopSharedProfile.py` 使用实际安装的原生 app-server 验证配置读取及原子保存、没有独立凭据时不回退、独立登录/退出和共享 SQLite。测试工具的 `--notifications` 验证 Windows 通知展示、COM 点击/操作/回复路由和断开后的清理；`--activate-notification` 可激活隔离 Desktop 测试所创建的通知。
+
+共享目录测试同时验证 shell 和 code-mode 宿主的子进程标准输入输出管道。`Test-DesktopToolExecution.py --runtime <已安装 codex.exe> --fixture <DesktopProxyTests.exe> --hook <编译后的 NativeHook>` 使用本地 Responses fixture 完成一次真实工具执行及结果回传；不调用生产模型或读取生产凭据。
+
+完整新界面和重置卡显示由服务端持久化配置下发，需要同时升级代理服务。管理端“账户设置 → 功能开关 → Desktop 界面布局”分别控制新版导航、统一标签栏、统一输入区和重置卡显示。详见 [实机修复证据](../../docs/DESKTOP_LAUNCHER_FIXES_2026-09-29.md)。

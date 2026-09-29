@@ -16,4 +16,6 @@
 
 已安装 Desktop 的实际 renderer 函数 `Eai/Oai/Tai/Yii/aIo/Dai` 已通过 `scripts/windows/Test-DesktopResetCredits.cjs` 验证：列表、选卡请求、缓存扣减、传输失败复用同一 UUID 和成功后的额度刷新均遵循原始逻辑。`Test-NativeUpdateContract.py` 同时对官方 0.157.0 与已安装 Desktop 内置 app-server 读取实际服务响应并发送用卡请求。
 
+2026-09-29 补充：当前 Desktop `26.924.51851` 将请求/缓存函数改为 `wpn/Epn/Cpn/Yfn`，重试状态机移至独立 `redemption` 模块，验证脚本已按实际安装包更新。用量设置的卡片区域还依赖 gate `85924660`，只有列表响应正确仍不会显示。服务端新增持久化 `desktop_ui_policy.reset_credits_visible` 和对应管理开关，默认开启；不改变卡片余额、有效期或消费条件。原版 Desktop 实机已显示两张隔离测试卡及到期时间，用户确认显示生效。详见 [完整验证记录](DESKTOP_LAUNCHER_FIXES_2026-09-29.md)。
+
 验证入口：`cargo test -p codex2api-storage --lib --test migrations`、`cargo test -p codex2api-admin --test reset_credits --test contracts --test virtual_accounts`、`cargo test -p codex2api-api --test virtual_oauth reset_credits_match_official_clients -- --nocapture`、`frontend/tests/browser/reset-credits.spec.ts`。原生验证仅使用进程内测试 token 和临时 TLS fixture，不代表部署或真实官方供应用卡。

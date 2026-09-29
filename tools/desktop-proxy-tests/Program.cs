@@ -7,6 +7,13 @@ using DesktopProxy.NativeHook;
 
 if (args[0] == "--self-test")
 {
+    const string shared = @"C:\fixture\shared", separate = @"C:\fixture\service";
+    foreach (var path in new[] { @"\??\pipe\codex-stdio", @"\\?\pipe\codex-stdio", @"\\.\pipe\codex-stdio", @"\??\pipe\auth.json", @"\??\UNC\server\share\sessions", @"C:\fixture\shared\sessions\auth.json", @"relative\session.json" })
+        if (ProfileFileRouting.Map(path, shared, separate) != path) throw new InvalidOperationException("Unrelated native path changed: " + path);
+    foreach (var prefix in new[] { "", @"\\?\", @"\??\" })
+        foreach (var file in new[] { "auth.json", "config.toml" })
+            if (ProfileFileRouting.Map(prefix + shared + "\\" + file, shared, separate) != separate + "\\" + file) throw new InvalidOperationException("Private file was not routed.");
+    if (ProfileFileRouting.Map(@"\??\UNC\server\share\auth.json", @"\\server\share", separate) != separate + @"\auth.json") throw new InvalidOperationException("UNC private file was not routed.");
     var block = Native.VirtualAlloc(0, 4096, 0x3000, 4);
     if (block == 0) throw new System.ComponentModel.Win32Exception();
     try

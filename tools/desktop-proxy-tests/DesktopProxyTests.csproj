@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><BaseOutputPath>../../target/desktop-proxy/tests-bin/</BaseOutputPath></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks><BaseOutputPath>../../target/desktop-proxy/tests-bin/</BaseOutputPath></PropertyGroup>
   <ItemGroup>
     <Compile Include="../desktop-proxy/PackagedApplication.cs" Link="PackagedApplication.cs" />
     <Compile Include="../desktop-proxy/NativeProcess.cs" Link="NativeProcess.cs" />
     <Compile Include="../desktop-proxy/CommandLine.cs" Link="CommandLine.cs" />
     <Compile Include="../desktop-proxy/NativeHook/HttpCompatibility.cs" Link="HttpCompatibility.cs" />
     <Compile Include="../desktop-proxy/NativeHook/AddressPolicy.cs" Link="AddressPolicy.cs" />
+    <Compile Include="../desktop-proxy/NativeHook/ProfileFileRouting.cs" Link="ProfileFileRouting.cs" />
   </ItemGroup>
 </Project>

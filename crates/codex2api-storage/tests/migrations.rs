@@ -49,6 +49,76 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn desktop_ui_visibility_upgrade_preserves_explicit_choices() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("desktop-ui.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(false)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 46)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    for (id, value) in [
+        ("old", serde_json::json!({"unified_tabs_enabled":false})),
+        (
+            "explicit",
+            serde_json::json!({"navigation_rail_enabled":false,"unified_tabs_enabled":true,"unified_composer_enabled":false,"reset_credits_visible":false}),
+        ),
+    ] {
+        sqlx::query("INSERT INTO virtual_accounts(id,username,password_hash,name,email,plan_type,plan_id,enabled,created_at) VALUES(?,?,'hash','Fixture','fixture@example.test','pro','pro',1,'2026-09-29')")
+            .bind(id).bind(id).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision) VALUES(?,'desktop_ui_policy',?,7)")
+            .bind(id).bind(value.to_string()).execute(&pool).await.unwrap();
+    }
+    pool.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    let old = storage
+        .virtual_config("old", "desktop_ui_policy")
+        .await
+        .unwrap();
+    assert_eq!(
+        old.value,
+        serde_json::json!({"navigation_rail_enabled":true,"unified_tabs_enabled":false,"unified_composer_enabled":true,"reset_credits_visible":true})
+    );
+    assert_eq!(old.revision, 8);
+    let explicit = storage
+        .virtual_config("explicit", "desktop_ui_policy")
+        .await
+        .unwrap();
+    assert_eq!(
+        explicit.value,
+        serde_json::json!({"navigation_rail_enabled":false,"unified_tabs_enabled":true,"unified_composer_enabled":false,"reset_credits_visible":false})
+    );
+    assert_eq!(explicit.revision, 7);
+    storage.close().await;
+    let reopened = Storage::open(&path).await.unwrap();
+    assert_eq!(
+        reopened
+            .virtual_config("old", "desktop_ui_policy")
+            .await
+            .unwrap()
+            .revision,
+        8
+    );
+}
+
+#[tokio::test]
 async fn gpt6_prices_seed_missing_models_without_overwriting_custom_or_deleted_catalog_entries() {
     for state in ["absent", "custom", "deleted"] {
         let dir = tempfile::tempdir().unwrap();
