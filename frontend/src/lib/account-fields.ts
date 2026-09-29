@@ -6,6 +6,7 @@ export const accountConfigGroups = [
     key: "features",
     label: "功能开关",
     sections: [
+      "desktop_ui_policy",
       "desktop_model_policy",
       "computer_use_policy",
       "account_settings",
@@ -36,6 +37,23 @@ export const accountSections: {
   readonly: boolean;
   fields: BusinessField[];
 }[] = [
+  {
+    key: "desktop_ui_policy",
+    label: "Desktop 界面布局",
+    description: "控制客户端的统一标签栏，侧栏和会话记录继续由客户端维护。",
+    readonly: false,
+    fields: [
+      {
+        path: ["unified_tabs_enabled"],
+        label: "启用新版统一标签栏",
+        group: "界面布局",
+        kind: "boolean",
+        description: "使用当前 Desktop 的统一标签栏布局，不改变会话归属和执行权限。",
+        choices: [],
+        optional: false,
+      },
+    ],
+  },
   {
     key: "desktop_model_policy",
     label: "Desktop 推理强度设置",

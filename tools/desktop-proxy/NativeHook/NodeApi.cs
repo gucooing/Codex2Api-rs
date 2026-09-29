@@ -28,6 +28,7 @@ internal sealed unsafe class Js(nint env)
     public bool Boolean(nint value) { Check(Api.napi_coerce_to_bool(Env, value, out var converted)); Check(Api.napi_get_value_bool(Env, converted, out var result)); return result; }
     public nint Bool(bool value) { Check(Api.napi_get_boolean(Env, value, out var result)); return result; }
     public int Integer(nint value) { Check(Api.napi_get_value_int32(Env, value, out var result)); return result; }
+    public nint Number(int value) { Check(Api.napi_create_int32(Env, value, out var result)); return result; }
     public nint Object() { Check(Api.napi_create_object(Env, out var result)); return result; }
     public nint Clone(nint value) => Call(Get(Global, "Object"), "assign", Object(), value);
     public nint Array(IEnumerable<nint> values)
@@ -131,6 +132,7 @@ internal static class Api
     [DllImport(Library)] internal static extern int napi_get_value_bool(nint env, nint value, [MarshalAs(UnmanagedType.I1)] out bool result);
     [DllImport(Library)] internal static extern int napi_get_boolean(nint env, [MarshalAs(UnmanagedType.I1)] bool value, out nint result);
     [DllImport(Library)] internal static extern int napi_get_value_int32(nint env, nint value, out int result);
+    [DllImport(Library)] internal static extern int napi_create_int32(nint env, int value, out nint result);
     [DllImport(Library)] internal static extern int napi_create_object(nint env, out nint value);
     [DllImport(Library)] internal static extern int napi_create_array_with_length(nint env, nuint length, out nint value);
     [DllImport(Library)] internal static extern int napi_is_array(nint env, nint value, [MarshalAs(UnmanagedType.I1)] out bool result);

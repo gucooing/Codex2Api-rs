@@ -10,6 +10,7 @@ internal static unsafe class IatHook
 
     internal static void Install()
     {
+        ProfileFileRouting.Initialize();
         var kernel = GetModuleHandleW("kernel32.dll");
         loadLibrary = GetProcAddress(kernel, "LoadLibraryW");
         loadLibraryEx = GetProcAddress(kernel, "LoadLibraryExW");
@@ -46,7 +47,7 @@ internal static unsafe class IatHook
                     : name == "CreateProcessW" || thunk[index] == createProcess ? (nint)(delegate* unmanaged[Stdcall]<char*, char*, nint, nint, int, uint, nint, char*, nint, nint, int>)&CreateProcess
                     : name == "CreateProcessAsUserW" || thunk[index] == createAsUser ? (nint)(delegate* unmanaged[Stdcall]<nint, char*, char*, nint, nint, int, uint, nint, char*, nint, nint, int>)&CreateAsUser
                     : name == "CreateProcessWithTokenW" || thunk[index] == createWithToken ? (nint)(delegate* unmanaged[Stdcall]<nint, uint, char*, char*, uint, nint, char*, nint, nint, int>)&CreateWithToken
-                    : 0;
+                    : ProfileFileRouting.Replacement(name);
                 if (replacement == 0) continue;
                 var slot = (nint)(thunk + index);
                 if (!VirtualProtect(slot, (nuint)sizeof(nint), 4, out var protection)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
@@ -83,6 +84,7 @@ internal static unsafe class IatHook
     private static nint Resolve(nint module, byte* name)
     {
         var function = ((delegate* unmanaged[Stdcall]<nint, byte*, nint>)getProcAddress)(module, name);
+        if (function != 0 && (nuint)name > 65535 && ProfileFileRouting.Replacement(Marshal.PtrToStringUTF8((nint)name)) is var mapped && mapped != 0) return mapped;
         if (function != 0 && (nuint)name > 65535 && Marshal.PtrToStringUTF8((nint)name) == "CreateProcessW")
             return (nint)(delegate* unmanaged[Stdcall]<char*, char*, nint, nint, int, uint, nint, char*, nint, nint, int>)&CreateProcess;
         if (function != 0 && (nuint)name > 65535 && Marshal.PtrToStringUTF8((nint)name) == "CreateProcessAsUserW")
@@ -139,10 +141,11 @@ internal static unsafe class IatHook
     private static int StartNative(char* application, char* command, uint flags, nint information, Func<uint, int> start)
     {
         string? executable = null;
+        var files = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CODEX2API_SHARED_HOME"));
+        var http = NativeEntry.Server.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
         try
         {
-            var server = NativeEntry.Server;
-            if (server?.StartsWith("http://", StringComparison.OrdinalIgnoreCase) == true)
+            if (files || http)
             {
                 var candidate = application != null ? new string(application) : command == null ? "" : new string(command).TrimStart();
                 if (application == null && candidate.StartsWith('"')) candidate = candidate[1..candidate.IndexOf('"', 1)];
@@ -156,7 +159,7 @@ internal static unsafe class IatHook
                     && arguments.Any(value => value is "app-server" or "app-server-daemon")) executable = Path.GetFullPath(candidate);
             }
             if (executable is null) return start(flags);
-            HttpCompatibility.Inspect(executable);
+            if (http) HttpCompatibility.Inspect(executable);
         }
         catch (Exception e) { Report(e); SetLastError(50); return 0; }
         var result = start(flags | 4);
@@ -164,7 +167,8 @@ internal static unsafe class IatHook
         var process = *(nint*)information; var thread = *(nint*)(information + IntPtr.Size);
         try
         {
-            HttpCompatibility.Apply(process, executable);
+            if (http) HttpCompatibility.Apply(process, executable);
+            if (files) NativeProcess.Inject(process, *(int*)(information + IntPtr.Size * 2), NativeEntry.ComponentFile, "", "InitializeFileRouting");
             if ((flags & 4) == 0 && ResumeThread(thread) == uint.MaxValue) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
             return 1;
         }

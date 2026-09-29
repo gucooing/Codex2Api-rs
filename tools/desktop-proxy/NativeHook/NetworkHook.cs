@@ -47,6 +47,8 @@ internal sealed class NetworkHook(Js js, AddressPolicy policy)
         js.Call(js.Require("node:module"), "syncBuiltinESMExports");
         var electron = js.TryRequire("electron");
         if (!js.IsObject(electron) || !js.Has(electron, "app") || !js.Has(electron, "net")) return;
+        var notificationPipe = Environment.GetEnvironmentVariable("CODEX2API_NOTIFICATION_PIPE");
+        if (!string.IsNullOrEmpty(notificationPipe)) new NotificationBridge(js).Install(electron, notificationPipe);
         var net = js.Get(electron, "net"); var netRequest = js.Hold(js.Get(net, "request"));
         js.Set(net, "request", js.Function((receiver, args) => js.Invoke(netRequest.Value, receiver, RequestArguments(args, "https")?.Arguments ?? args), netRequest));
         WrapFetch(net, "fetch");

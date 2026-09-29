@@ -1,8 +1,12 @@
 # Desktop 启动器
 
-发布为一个自包含的 `Codex2API.DesktopProxy.exe`。填写服务器地址，保存后启动已安装的客户端。界面的“配置目录”打开该服务的独立配置；首次登录后由客户端写入 `auth.json`，以后正常刷新令牌。再次启动保留现有配置和登录状态。
+发布为一个自包含的 `Codex2API.DesktopProxy.exe`。填写服务器地址，保存后启动已安装的客户端。界面的“配置目录”打开该服务的独立配置；首次登录后由客户端写入 `auth.json`，以后正常刷新令牌。再次启动保留现有配置和登录状态。启动前退出使用同一桌面数据目录的客户端。
 
-每个规范化服务地址对应 `%LOCALAPPDATA%/Codex2API/DesktopLauncher/profiles/<SHA-256>` 下的 `codex` 和 `desktop` 目录，分别保存配置、凭据、SQLite 和桌面应用数据。首次初始化 `config.toml` 设置文件凭据存储及服务地址。不同服务不混用凭据，也不复制默认 `.codex` 数据。导入、导出功能只处理启动器设置。
+按用户 2026-09-29 的要求，仅 `auth.json` 和 `config.toml` 独立，保存在 `%LOCALAPPDATA%/Codex2API/DesktopLauncher/profiles/<SHA-256>/codex`。其余客户端数据使用原客户端目录：`CODEX_HOME` 使用用户级环境变量或默认 `~/.codex`，SQLite、会话、侧栏、项目、插件及桌面数据共用。原生文件访问只把这两个根目录文件重定向到独立目录，覆盖读取、写入、原子替换和删除；独立凭据不存在时不会回退到原客户端凭据。首次配置使用文件凭据存储及服务地址。导入、导出功能只处理启动器设置。
+
+旧版启动器已产生的独立会话和桌面目录原样保留，不自动把正在使用的 SQLite 合并进原客户端目录。切换后的共享目录包含原客户端已有记录和之后的新记录；旧独立历史的迁移需在客户端退出后单独处理。
+
+Windows 通知由同一 EXE 的独立通知进程展示，按服务注册通知身份，经仅当前用户可用的管道把点击、操作及回复交回创建通知的客户端。通知进程明确退出商店包身份，避免 Windows 激活商店原客户端。客户端断开后清除其通知并结束通知进程。原客户端的业务回调及权限判断继续执行。
 
 ## 实现
 
@@ -30,6 +34,8 @@ dotnet publish tools/desktop-proxy/DesktopProxy.csproj -c Release -r win-x64 --s
 
 ## 验证
 
-`--self-test <报告路径>` 检查地址规则、配置隔离与保留、清单发现、参数转义及界面布局。实际启动测试使用 `--test-launch <测试配置路径> <结果路径>`，成功结果包含原客户端 PID 和 `nativeHookInstalled`；它使用单独的测试目录，不更改日常登录。
+`--self-test <报告路径>` 检查地址规则、两个配置文件的隔离与保留、共享目录、清单发现、参数转义、通知 XML 及界面布局。实际启动测试使用 `--test-launch <测试配置路径> <结果路径>`，成功结果包含原客户端 PID 和 `nativeHookInstalled`；测试配置可指定临时 `sharedHome` 和 `notificationProbe`，验证实际 Desktop 的通知回调，不更改日常登录。
 
 `tools/desktop-proxy-tests` 是开发测试工具，调用相同的 C# 地址规则及 HTTP 兼容代码。配合 `scripts/windows/Test-DesktopOAuth.py` 和 Rust 隔离服务测试实际登录、工作区发现、请求、重启及刷新。测试工具不随启动器发布。启动、登录和推理证据分别记录，不能把编译或组件加载成功当作后续请求成功。
+
+`Test-DesktopSharedProfile.py` 使用实际安装的原生 app-server 验证配置读取及原子保存、没有独立凭据时不回退、独立登录/退出和共享 SQLite。测试工具的 `--notifications` 验证 Windows 通知展示、COM 点击/操作/回复路由和断开后的清理；`--activate-notification` 可激活隔离 Desktop 测试所创建的通知。

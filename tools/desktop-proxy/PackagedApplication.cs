@@ -19,18 +19,7 @@ internal static class PackagedApplication
         finally { Marshal.ReleaseComObject(instance); }
     }
 
-    internal static string QuoteArgument(string value)
-    {
-        var result = new StringBuilder("\"");
-        var slashes = 0;
-        foreach (var c in value)
-        {
-            if (c == '\\') { slashes++; continue; }
-            result.Append('\\', c == '"' ? slashes * 2 + 1 : slashes).Append(c);
-            slashes = 0;
-        }
-        return result.Append('\\', slashes * 2).Append('"').ToString();
-    }
+    internal static string QuoteArgument(string value) => CommandLine.Quote(value);
 
     [ComImport, Guid("72E3A5B0-8FEA-485C-9F8B-822B16DBA17F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IDesktopAppXActivator

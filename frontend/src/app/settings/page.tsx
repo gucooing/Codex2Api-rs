@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { date } from "@/lib/format";
+import { diagnosticSummary } from "@/lib/records";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -72,13 +73,14 @@ export default function SettingsPage() {
             <DiagnosticTable
               path="/diagnostics"
               title="客户端诊断记录"
-              columns={["最近接收", "来源", "归属", "事件数", "接收次数"]}
+              columns={["最近接收", "来源", "归属", "事件数", "接收次数", "内容"]}
               fields={[
                 ["last_seen_at_ms", "date"],
                 ["source"],
                 ["owner"],
                 ["record_count"],
                 ["attempts"],
+                ["summaries", "diagnostics"],
               ]}
             />
           )}
@@ -716,7 +718,7 @@ function DiagnosticTable({
   path: string;
   title: string;
   columns: string[];
-  fields: [string, "date"?][];
+  fields: [string, ("date" | "diagnostics")?][];
 }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -774,15 +776,17 @@ function DiagnosticTable({
                   <TableRow key={String(item.id ?? index)}>
                     {fields.map(([field, format]) => (
                       <TableCell key={field} className="max-w-80 whitespace-normal break-words">
-                        {format === "date"
-                          ? date(
-                              typeof item[field] === "number" || typeof item[field] === "string"
-                                ? (item[field] as string | number)
-                                : null,
-                            )
-                          : item[field] == null
-                            ? "—"
-                            : String(item[field])}
+                        {format === "diagnostics"
+                          ? diagnosticSummary(item[field])
+                          : format === "date"
+                            ? date(
+                                typeof item[field] === "number" || typeof item[field] === "string"
+                                  ? (item[field] as string | number)
+                                  : null,
+                              )
+                            : item[field] == null
+                              ? "—"
+                              : String(item[field])}
                       </TableCell>
                     ))}
                   </TableRow>

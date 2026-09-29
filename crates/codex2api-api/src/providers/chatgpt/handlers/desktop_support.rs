@@ -21,6 +21,7 @@ const MAX_BODY: usize = 4 * 1024 * 1024;
 pub(crate) enum Intake {
     Telemetry,
     Events,
+    Metrics,
     Exception,
 }
 
@@ -115,6 +116,7 @@ pub(crate) async fn intake(
             serde_json::from_slice(&bytes)
                 .map_err(|_| crate::ApiError::bad_request("Invalid SDK exception."))?,
         ],
+        Intake::Metrics => metrics(&bytes)?,
     };
     if records.len() > 1000 || records.iter().any(|v| !v.is_object()) {
         return Err(crate::ApiError::bad_request("Invalid SDK batch."));
@@ -123,6 +125,7 @@ pub(crate) async fn intake(
         Intake::Telemetry => "telemetry",
         Intake::Events => "statsig_events",
         Intake::Exception => "sdk_exception",
+        Intake::Metrics => "statsc_metrics",
     };
     // These senders also run before login. Body user IDs are untrusted claims,
     // not evidence that a diagnostic belongs to a virtual account.
@@ -137,7 +140,8 @@ pub(crate) async fn intake(
     };
     let summaries:Vec<_>=records.iter().map(|v|json!({
         "event":token(&v["eventName"]),"level":token(&v["status"]),"logger":token(&v["logger"]["name"]),
-        "tag":token(&v["tag"]),"exception":token(&v["exception"]),"reason":token(&v["reason"]),"sdk_version":token(&v["sdkVersion"])
+        "tag":token(&v["tag"]),"exception":token(&v["exception"]),"reason":token(&v["reason"]),"sdk_version":token(&v["sdkVersion"]),
+        "namespace":token(&v["namespace"]),"metric":token(&v["metric"]),"value":v.get("value"),"values":v.get("values")
     })).collect();
     if state
         .storage
@@ -164,9 +168,40 @@ pub(crate) async fn intake(
     // The actual intake and exception readers ignore the success body. Statsig's
     // event logger reads success, so return it only after the persistence above.
     Ok(match kind {
-        Intake::Events => json_response(json!({"success":true})),
+        Intake::Events | Intake::Metrics => json_response(json!({"success":true})),
         _ => preflight().await,
     })
+}
+
+fn metrics(bytes: &[u8]) -> crate::Result<Vec<Value>> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| crate::ApiError::bad_request("Invalid metrics JSON."))?;
+    let mut records = Vec::new();
+    for (key, histogram) in [("counters", false), ("histograms", true)] {
+        let items = value[key]
+            .as_array()
+            .filter(|items| items.len() <= 1000)
+            .ok_or_else(|| crate::ApiError::bad_request("Invalid metrics batch."))?;
+        for item in items {
+            let names_valid = ["namespace", "metric"].iter().all(|key| {
+                item[key].as_str().is_some_and(|text| {
+                    !text.is_empty() && text.len() <= 160 && !text.chars().any(char::is_control)
+                })
+            });
+            let values_valid = if histogram {
+                item["values"].as_array().is_some_and(|samples| {
+                    samples.len() <= 10000 && samples.iter().all(Value::is_number)
+                })
+            } else {
+                item["value"].is_number()
+            };
+            if !names_valid || !values_valid || !item["tags"].is_object() {
+                return Err(crate::ApiError::bad_request("Invalid metric."));
+            }
+            records.push(item.clone());
+        }
+    }
+    Ok(records)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -223,6 +258,14 @@ pub(crate) async fn bootstrap(
         .await?
         .value;
     let hash = codex2api_storage::statsig_hash;
+    let ui_policy = state
+        .storage
+        .virtual_config(&account.id, "desktop_ui_policy")
+        .await?
+        .value;
+    payload["feature_gates"][hash("3528415127")] = json!({
+        "name":hash("3528415127"),"value":ui_policy["unified_tabs_enabled"],"rule_id":"local"
+    });
     let controls = state
         .storage
         .virtual_config(&account.id, "computer_use_policy")

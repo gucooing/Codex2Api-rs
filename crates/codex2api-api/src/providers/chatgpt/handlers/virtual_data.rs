@@ -9,6 +9,19 @@ use codex2api_storage::VirtualAccess;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
+pub(crate) async fn cloud_environments(
+    State(state): State<crate::ApiState>,
+    Extension(access): Extension<VirtualAccess>,
+) -> crate::Result<Response> {
+    let environments = state
+        .storage
+        .virtual_cloud_environments(&access.virtual_account_id)
+        .await?;
+    Ok(crate::providers::chatgpt::identity::json_response(json!(
+        environments
+    )))
+}
+
 #[derive(serde::Deserialize)]
 pub(crate) struct ReferralTrackingQuery {
     program_id: String,

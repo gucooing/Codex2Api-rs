@@ -385,6 +385,11 @@ pub async fn records(
             json!({"items":s.storage.family_graduation_notices(&id,true).await?}),
         ));
     }
+    if q.kind == "cloud_environment" {
+        return Ok(Json(
+            json!({"items":s.storage.virtual_cloud_environments(&id).await?}),
+        ));
+    }
     if !matches!(
         q.kind.as_str(),
         "task"

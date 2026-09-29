@@ -30,6 +30,26 @@ if (args[0] == "--self-test")
     }
     finally { Native.VirtualFree(block, 0, 0x8000); }
 }
+else if (args[0] == "--notifications")
+{
+    await NotificationTests.Run(args[1], args[2]);
+}
+else if (args[0] == "--activate-notification")
+{
+    NotificationTests.Activate(args[1], args[2]);
+}
+else if (args[0] == "--inject-files")
+{
+    var processId = int.Parse(args[1]);
+    var process = Native.OpenProcess(0xc3a, false, processId);
+    if (process == 0) throw new System.ComponentModel.Win32Exception();
+    try
+    {
+        NativeProcess.Inject(process, processId, args[2], "", "InitializeFileRouting");
+        if (Native.NtResumeProcess(process) != 0) throw new InvalidOperationException("Fixture resume failed.");
+    }
+    finally { Native.CloseHandle(process); }
+}
 else if (args[0] == "--prepare")
 {
     var process = Native.OpenProcess(0xc38, false, int.Parse(args[1]));

@@ -319,6 +319,10 @@ pub fn router(state: ApiState) -> Router {
             "/v1/responses/input_tokens",
             post(codex::forward).layer(Extension(Endpoint::InputTokens)),
         )
+        .route(
+            "/backend-api/wham/environments",
+            get(handlers::virtual_data::cloud_environments),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             oauth::require_oauth,
@@ -342,6 +346,12 @@ pub fn router(state: ApiState) -> Router {
             post(handlers::desktop_support::intake)
                 .options(handlers::desktop_support::preflight)
                 .layer(Extension(handlers::desktop_support::Intake::Events)),
+        )
+        .route(
+            "/ces/statsc/flush",
+            post(handlers::desktop_support::intake)
+                .options(handlers::desktop_support::preflight)
+                .layer(Extension(handlers::desktop_support::Intake::Metrics)),
         )
         .route(
             "/v1/sdk_exception",

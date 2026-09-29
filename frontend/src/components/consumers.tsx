@@ -2264,6 +2264,7 @@ function ClientRecords({ id }: { id: string }) {
   const [kind, setKind] = useState("logs");
   const kinds = [
     ["logs", "活动日志"],
+    ["cloud_environment", "任务关联的云环境"],
     ["subscription_operation", "订阅操作记录"],
     ...recordKinds,
     ["state", "客户端偏好与安装状态"],

@@ -6327,6 +6327,198 @@ async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownersh
     );
 }
 
+#[tokio::test]
+async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
+    use serde_json::json;
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("desktop-layout.sqlite");
+    let storage = Storage::open(&database).await.unwrap();
+    let (api, account) = fixture(&storage).await;
+    let app = api.merge(codex2api_admin::router(
+        codex2api_admin::AdminState::new(storage.clone()).unwrap(),
+    ));
+    let token = login(&app).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (cookie, csrf) = admin_login(&app).await;
+    let enabled = json_body(
+        app.clone()
+            .oneshot(client_json(
+                "POST",
+                "/backend-api/wham/statsig/bootstrap",
+                &token,
+                json!({}),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let payload: Value = serde_json::from_str(enabled["statsigPayload"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        payload["feature_gates"][codex2api_storage::statsig_hash("3528415127")]["value"],
+        true
+    );
+    let view = admin_config(&app, &account.id, "desktop_ui_policy", &cookie).await;
+    assert_eq!(view["value"]["unified_tabs_enabled"], true);
+    admin_save_config(
+        &app,
+        &account.id,
+        "desktop_ui_policy",
+        &cookie,
+        &csrf,
+        json!({"unified_tabs_enabled":false}),
+    )
+    .await;
+    let disabled = json_body(
+        app.clone()
+            .oneshot(client_json(
+                "POST",
+                "/backend-api/wham/statsig/bootstrap",
+                &token,
+                json!({}),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let payload: Value =
+        serde_json::from_str(disabled["statsigPayload"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        payload["feature_gates"][codex2api_storage::statsig_hash("3528415127")]["value"],
+        false
+    );
+    assert!(codex2api_storage::validate_client_fields("desktop_ui_policy", &json!({})).is_err());
+    let empty = json_body(
+        app.clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/wham/environments",
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(empty, json!([]));
+    let environment = json!({"id":"environment-owned","label":"Fixture project","repos":["repo-owned"],"repo_map":{"repo-owned":{"clone_url":"https://github.com/fixture/project.git"}}});
+    storage
+        .save_virtual_resource(
+            &account.id,
+            "task",
+            "task-owned",
+            None,
+            &json!({"task":{"id":"task-owned","environment":environment}}),
+        )
+        .await
+        .unwrap();
+    let mut other = account.clone();
+    other.id = "layout-other".into();
+    other.username = "layout-other".into();
+    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_virtual_resource(&other.id, "task", "task-foreign", None, &json!({"task":{"id":"task-foreign","environment":{"id":"foreign","label":"Foreign","repos":[],"repo_map":{}}}})).await.unwrap();
+    let environments = json_body(
+        app.clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/wham/environments",
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(environments, json!([environment]));
+    let records = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/api/consumers/{}/records?kind=cloud_environment",
+                    account.id
+                ))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(records.status(), StatusCode::OK);
+    assert_eq!(json_body(records).await["items"], environments);
+    let metrics = json!({"counters":[{"namespace":"desktop","metric":"ready","tags":{"account_id":other.id},"value":2}],"histograms":[{"namespace":"desktop","metric":"startup_ms","tags":{},"values":[123]}],"client_type":"web"});
+    let metrics_request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/oauth/chatgpt/ces/statsc/flush")
+            .header("content-type", "application/json")
+            .body(Body::from(metrics.to_string()))
+            .unwrap()
+    };
+    let metrics_response = json_body(app.clone().oneshot(metrics_request()).await.unwrap()).await;
+    assert_eq!(metrics_response, json!({"success":true}));
+    assert_eq!(
+        app.clone()
+            .oneshot(metrics_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let diagnostics = storage.desktop_diagnostics(i64::MAX).await.unwrap();
+    let metric = diagnostics
+        .iter()
+        .find(|item| item["source"] == "statsc_metrics")
+        .unwrap();
+    assert!(metric["owner"].is_null());
+    assert_eq!(metric["record_count"], 2);
+    assert_eq!(metric["attempts"], 2);
+    assert_eq!(metric["summaries"][0]["value"], 2);
+    assert!(!metric.to_string().contains(&other.id));
+    if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+        let mut child = Command::new("node")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-DesktopLayoutMetrics.cjs"),
+            )
+            .arg(archive)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(json!({"enabled":enabled,"disabled":disabled,"metrics_response":metrics_response,"environments":environments}).to_string().as_bytes()).unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    storage.close().await;
+    let reopened = Storage::open(&database).await.unwrap();
+    assert_eq!(
+        reopened
+            .virtual_config(&account.id, "desktop_ui_policy")
+            .await
+            .unwrap()
+            .value["unified_tabs_enabled"],
+        false
+    );
+    assert_eq!(
+        reopened
+            .virtual_cloud_environments(&account.id)
+            .await
+            .unwrap(),
+        vec![environment]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ultra_slider_default_settings_parse_and_real_client_toggle_roundtrips() {
     use serde_json::json;

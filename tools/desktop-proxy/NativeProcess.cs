@@ -8,6 +8,49 @@ namespace DesktopProxy;
 
 internal static class NativeProcess
 {
+    internal static Process StartUnpackaged(string executable, IEnumerable<string> arguments)
+    {
+        nuint size = 0;
+        InitializeProcThreadAttributeList(0, 1, 0, ref size);
+        var attributes = Marshal.AllocHGlobal(checked((int)size));
+        var policy = Marshal.AllocHGlobal(sizeof(uint));
+        var initialized = false;
+        try
+        {
+            if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size)) throw new Win32Exception();
+            initialized = true;
+            Marshal.WriteInt32(policy, 1);
+            if (!UpdateProcThreadAttribute(attributes, 0, 0x20012, policy, sizeof(uint), 0, 0)) throw new Win32Exception();
+            var startup = new ExtendedStartupInfo { startup = new StartupInfo { cb = Marshal.SizeOf<ExtendedStartupInfo>() }, attributes = attributes };
+            var command = new StringBuilder(CommandLine.Quote(executable) + " " + string.Join(" ", arguments.Select(CommandLine.Quote)));
+            if (!CreateProcessExtended(executable, command, 0, 0, false, 0x08080000, 0, Path.GetDirectoryName(executable)!, ref startup, out var info)) throw new Win32Exception();
+            try { return Process.GetProcessById(info.pid); }
+            finally { CloseHandle(info.thread); CloseHandle(info.process); }
+        }
+        finally { if (initialized) DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); Marshal.FreeHGlobal(policy); }
+    }
+
+    internal static void Inject(nint handle, int processId, string hookFile, string statusFile, string entryName)
+    {
+        var libraryPath = RemoteString(handle, hookFile);
+        nint statusPath = 0;
+        try
+        {
+            RunRemote(handle, GetProcAddress(GetModuleHandleW("kernel32.dll"), "LoadLibraryW"), libraryPath);
+            using var process = Process.GetProcessById(processId);
+            var module = process.Modules.Cast<ProcessModule>().SingleOrDefault(value => Path.GetFullPath(value.FileName).Equals(Path.GetFullPath(hookFile), StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("客户端配置隔离组件加载失败。");
+            statusPath = RemoteString(handle, statusFile);
+            if (RunRemote(handle, module.BaseAddress + ExportRva(hookFile, entryName), statusPath) != 0)
+                throw new InvalidOperationException("客户端配置隔离初始化失败。");
+        }
+        finally
+        {
+            if (statusPath != 0) VirtualFreeEx(handle, statusPath, 0, 0x8000);
+            VirtualFreeEx(handle, libraryPath, 0, 0x8000);
+        }
+    }
+
     public static int Start(ProcessStartInfo start, string hookFile, string statusFile, bool probeOnly = false, Func<bool>? cancelled = null)
     {
         var environment = string.Join('\0', start.Environment.Where(pair => pair.Value is not null)
@@ -19,7 +62,7 @@ internal static class NativeProcess
         try
         {
             if (cancelled?.Invoke() == true) throw new OperationCanceledException();
-            var command = new StringBuilder(PackagedApplication.QuoteArgument(start.FileName) + " " + string.Join(" ", start.ArgumentList.Select(PackagedApplication.QuoteArgument)));
+            var command = new StringBuilder(CommandLine.Quote(start.FileName) + " " + string.Join(" ", start.ArgumentList.Select(CommandLine.Quote)));
             if (!CreateProcessW(start.FileName, command, 0, 0, false, 0x404, block, start.WorkingDirectory, ref si, out info)) throw new Win32Exception();
             var libraryPath = RemoteString(info.process, hookFile);
             nint statusPath = 0;
@@ -105,6 +148,11 @@ internal static class NativeProcess
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct StartupInfo { public int cb; public nint reserved, desktop, title; public int x, y, w, h, xc, yc, fill, flags; public short show, cb2; public nint reserved2, stdin, stdout, stderr; }
     [StructLayout(LayoutKind.Sequential)] private struct ProcessInfo { public nint process, thread; public int pid, tid; }
+    [StructLayout(LayoutKind.Sequential)] private struct ExtendedStartupInfo { public StartupInfo startup; public nint attributes; }
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool InitializeProcThreadAttributeList(nint attributes, int count, uint flags, ref nuint size);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool UpdateProcThreadAttribute(nint attributes, uint flags, nuint attribute, nint value, nuint size, nint previous, nint returnedSize);
+    [DllImport("kernel32.dll")] private static extern void DeleteProcThreadAttributeList(nint attributes);
+    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool CreateProcessExtended(string application, StringBuilder commandLine, nint pa, nint ta, bool inherit, uint flags, nint environment, string cwd, ref ExtendedStartupInfo si, out ProcessInfo pi);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool CreateProcessW(string application, StringBuilder commandLine, nint pa, nint ta, bool inherit, uint flags, nint environment, string cwd, ref StartupInfo si, out ProcessInfo pi);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern nint GetModuleHandleW(string module);
     [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)] private static extern nint GetProcAddress(nint module, string name);

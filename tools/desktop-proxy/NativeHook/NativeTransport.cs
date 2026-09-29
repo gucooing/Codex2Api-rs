@@ -15,6 +15,7 @@ internal static class NativeTransport
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("model_provider=\"openai\"");
         if (environment is not null) { start.Environment.Clear(); foreach (var entry in environment) start.Environment[entry.Key] = entry.Value; }
+        if (Environment.GetEnvironmentVariable("CODEX2API_PRIVATE_HOME") is { Length: > 0 } privateHome) start.Environment["CODEX_HOME"] = privateHome;
         using var process = Process.Start(start) ?? throw new InvalidOperationException("无法读取客户端配置。");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         _ = process.StandardError.ReadToEndAsync(timeout.Token);

@@ -149,9 +149,11 @@ Before changing virtual-account endpoints, read
   Report server, launcher and
   actual Desktop execution evidence separately; parser tests alone do not prove
   that a task was created or that an inference request was sent.
-- Desktop launcher policy (user-updated 2026-09-26): launcher starts use persistent
-  per-service profiles owned by the launcher, including separate `auth.json`,
-  `config.toml`, SQLite and Desktop data directories. Initialize file credential
+- Desktop launcher policy (user-updated 2026-09-29): isolate only `auth.json` and
+  `config.toml` per service. Share the original client's session home, SQLite,
+  history, projects, plugins and Desktop data. This supersedes the earlier fully
+  isolated profile policy. Preserve old isolated data; do not overwrite or merge
+  live SQLite files. Initialize file credential
   storage and service addresses without copying default credentials or overwriting
   existing client preferences/tokens. Let the original client perform login and
   token refresh in that profile. Keep the installed native runtime and address

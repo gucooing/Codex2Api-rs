@@ -33,7 +33,17 @@ fn field(
 
 pub fn client_fields(key: &str) -> Vec<ClientField> {
     let mut fields = Vec::new();
-    if key == "user_settings" {
+    if key == "desktop_ui_policy" {
+        let mut layout = field(
+            "unified_tabs_enabled",
+            "启用新版统一标签栏",
+            "界面布局",
+            "boolean",
+            "控制 Desktop 的统一标签栏布局；不改变会话归属、模型权限和客户端偏好。",
+        );
+        layout.optional = false;
+        fields.push(layout);
+    } else if key == "user_settings" {
         for (name, label, group, description) in [
             (
                 "connector_search_enabled",
@@ -432,6 +442,9 @@ pub fn statsig_hash(name: &str) -> String {
 }
 
 pub fn validate_client_fields(key: &str, value: &Value) -> std::result::Result<(), String> {
+    if key == "desktop_ui_policy" && !value["unified_tabs_enabled"].is_boolean() {
+        return Err("请选择是否启用新版统一标签栏".into());
+    }
     if key == "conversation_metadata"
         && value["file_attachment_limits"].is_object()
         && value["file_attachment_limits"]["max_size_mb"]

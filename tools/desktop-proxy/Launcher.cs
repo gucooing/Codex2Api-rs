@@ -20,11 +20,18 @@ internal static class Launcher
     public static ProcessStartInfo StartInfo(ClientInstallation client, string server, ClientProfile profile)
     {
         var start = new ProcessStartInfo(client.Executable) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(client.Executable)!, CreateNoWindow = true };
-        start.ArgumentList.Add("--user-data-dir=" + profile.AppData);
+        if (profile.AppData.Length > 0) start.ArgumentList.Add("--user-data-dir=" + profile.AppData);
         foreach (var name in ClearedVariables) start.Environment.Remove(name);
-        start.Environment["CODEX_HOME"] = profile.CodexHome;
-        start.Environment["CODEX_SQLITE_HOME"] = Path.Combine(profile.CodexHome, "sqlite");
-        start.Environment["CODEX_ELECTRON_USER_DATA_PATH"] = profile.AppData;
+        start.Environment.Remove("CODEX2API_SHARED_HOME"); start.Environment.Remove("CODEX2API_PRIVATE_HOME");
+        start.Environment["CODEX_HOME"] = profile.SharedHome ?? profile.CodexHome;
+        if (profile.SharedHome is null) start.Environment["CODEX_SQLITE_HOME"] = Path.Combine(profile.CodexHome, "sqlite");
+        else if (Environment.GetEnvironmentVariable("CODEX_SQLITE_HOME", EnvironmentVariableTarget.User) is { Length: > 0 } sqliteHome) start.Environment["CODEX_SQLITE_HOME"] = sqliteHome;
+        if (profile.AppData.Length > 0) start.Environment["CODEX_ELECTRON_USER_DATA_PATH"] = profile.AppData;
+        if (profile.SharedHome is not null)
+        {
+            start.Environment["CODEX2API_SHARED_HOME"] = profile.SharedHome;
+            start.Environment["CODEX2API_PRIVATE_HOME"] = profile.CodexHome;
+        }
         start.Environment["CODEX_APP_SERVER_CHATGPT_BASE_URL"] = server + "/backend-api";
         start.Environment["CODEX_APP_SERVER_OPENAI_BASE_URL"] = server + "/backend-api/codex";
         start.Environment["CODEX_APP_SERVER_LOGIN_ISSUER"] = server;
@@ -32,6 +39,8 @@ internal static class Launcher
         start.Environment["CODEX_REVOKE_TOKEN_URL_OVERRIDE"] = server + "/oauth/revoke";
         start.Environment["CODEX2API_HOOK_SERVER"] = server;
         start.Environment["CODEX2API_HOOK_ARCHIVE"] = client.Archive;
+        start.Environment.Remove("CODEX2API_NOTIFICATION_PIPE");
+        start.Environment.Remove("CODEX2API_NOTIFICATION_TEST_REPORT");
         return start;
     }
 
@@ -60,7 +69,7 @@ internal static class Launcher
     public static async Task<int> Start(ClientInstallation client, string server, IProgress<string> log, CancellationToken cancel, IReadOnlyDictionary<string, string>? testEnvironment = null)
     {
         var profile = testEnvironment is null ? ClientProfile.ForServer(server)
-            : new ClientProfile(testEnvironment["CODEX_HOME"], testEnvironment["CODEX_ELECTRON_USER_DATA_PATH"], server);
+            : new ClientProfile(testEnvironment["CODEX_HOME"], testEnvironment["CODEX_ELECTRON_USER_DATA_PATH"], server, testEnvironment.GetValueOrDefault("CODEX2API_SHARED_HOME"));
         profile.Prepare(); CheckInstallation(client);
         if (testEnvironment is null)
         {
@@ -77,21 +86,29 @@ internal static class Launcher
         var hook = ExtractHook();
         var launch = Path.Combine(profile.CodexHome, "launcher", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(launch);
+        var notifications = NotificationHost.Describe(client, profile);
+        using var notificationHost = NotificationHost.Start(notifications, launch);
         var status = Path.Combine(launch, "hook-status.txt");
-        var request = new NativeLaunchRequest(client.Executable, server, profile.CodexHome, profile.AppData, hook, status);
+        var request = new NativeLaunchRequest(client.Executable, server, profile.CodexHome, profile.AppData, hook, status, notifications.Pipe, profile.SharedHome, testEnvironment?.GetValueOrDefault("CODEX2API_NOTIFICATION_TEST_REPORT"));
         var input = Path.Combine(launch, "request.json");
         var output = Path.Combine(launch, "process.json");
         File.WriteAllText(input, JsonSerializer.Serialize(request));
-        log.Report("正在启动客户端…");
-        cancel.ThrowIfCancellationRequested();
-        if (client.AppUserModelId is not null)
-            PackagedApplication.StartHost(client.AppUserModelId, Environment.ProcessPath!, ["--native-launch", input, output]);
-        else
-            StartNativeHost(input, output);
         Process? process = null;
         var success = false;
         try
         {
+            for (var attempt = 0; !File.Exists(Path.Combine(launch, "notifications.json.ready")); attempt++)
+            {
+                if (notificationHost.HasExited) throw new InvalidOperationException("独立通知服务启动失败，请检查 notifications.json.error。");
+                if (attempt >= 200) throw new TimeoutException("独立通知服务启动超时。");
+                await Task.Delay(100, cancel);
+            }
+            log.Report("正在启动客户端…");
+            cancel.ThrowIfCancellationRequested();
+            if (client.AppUserModelId is not null)
+                PackagedApplication.StartHost(client.AppUserModelId, Environment.ProcessPath!, ["--native-launch", input, output]);
+            else
+                StartNativeHost(input, output);
             for (var attempt = 0; attempt < 300; attempt++)
             {
                 cancel.ThrowIfCancellationRequested();
@@ -131,6 +148,7 @@ internal static class Launcher
                 }
             }
             if (!success && process is not null) { try { if (!process.HasExited) process.Kill(true); } catch { } }
+            if (!success && !notificationHost.HasExited) notificationHost.Kill();
             process?.Dispose();
         }
     }
@@ -141,9 +159,11 @@ internal static class Launcher
         {
             var request = JsonSerializer.Deserialize<NativeLaunchRequest>(File.ReadAllText(input))!;
             var client = ClientInstallation.FromPath(request.Executable);
-            var profile = new ClientProfile(request.CodexHome, request.AppData, request.Server);
+            var profile = new ClientProfile(request.CodexHome, request.AppData, request.Server, request.SharedHome);
             var start = StartInfo(client, request.Server, profile);
             start.Environment["CODEX2API_HOOK_FILE"] = request.HookFile;
+            start.Environment["CODEX2API_NOTIFICATION_PIPE"] = request.NotificationPipe;
+            if (request.NotificationTestReport is not null) start.Environment["CODEX2API_NOTIFICATION_TEST_REPORT"] = request.NotificationTestReport;
             var pid = NativeProcess.Start(start, request.HookFile, request.StatusFile, cancelled: () => File.Exists(output + ".cancel"));
             WriteReport(output, new { processId = pid });
             if (File.Exists(output + ".cancel")) { using var process = Process.GetProcessById(pid); if (!process.HasExited) process.Kill(true); }
@@ -157,4 +177,4 @@ internal static class Launcher
     }
 }
 
-internal sealed record NativeLaunchRequest(string Executable, string Server, string CodexHome, string AppData, string HookFile, string StatusFile);
+internal sealed record NativeLaunchRequest(string Executable, string Server, string CodexHome, string AppData, string HookFile, string StatusFile, string? NotificationPipe = null, string? SharedHome = null, string? NotificationTestReport = null);

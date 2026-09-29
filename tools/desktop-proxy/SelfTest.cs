@@ -22,8 +22,8 @@ internal static class SelfTest
             settings = Settings.Read(file);settings.Server = "https://second.example/next";settings.Save(file);
             Require(Settings.Read(file).Server == settings.Server, "Updated server did not persist");
             Require(Settings.Read(file).ClientPath == "", "Automatic discovery persisted a machine path");
-            var profile = ClientProfile.ForServer(settings.Server, root);
-            Require(profile == ClientProfile.ForServer(settings.Server + "/", root), "Equivalent server URLs split profiles");
+            var profile = ClientProfile.ForServer(settings.Server, root, Path.Combine(root, "shared"));
+            Require(profile == ClientProfile.ForServer(settings.Server + "/", root, profile.SharedHome), "Equivalent server URLs split profiles");
             Require(profile.CodexHome != ClientProfile.ForServer("https://third.example/next", root).CodexHome, "Different servers share credentials");
             Require(profile.CodexHome != ClientProfile.ForServer("https://second.example/other", root).CodexHome, "Different service paths share credentials");
             profile.Prepare();
@@ -55,15 +55,22 @@ internal static class SelfTest
             Launcher.CheckInstallation(client);
             var start = Launcher.StartInfo(client, settings.Server, profile);
             Require(start.FileName == client.Executable, "Client executable changed");
-            Require(start.ArgumentList.Count == 1 && start.ArgumentList[0] == "--user-data-dir=" + profile.AppData, "Unexpected client startup arguments");
-            Require(start.Environment["CODEX_HOME"] == profile.CodexHome, "Credentials/config path is not isolated");
-            Require(start.Environment["CODEX_SQLITE_HOME"] == Path.Combine(profile.CodexHome, "sqlite"), "Database path is not isolated");
-            Require(start.Environment["CODEX_ELECTRON_USER_DATA_PATH"] == profile.AppData, "Desktop profile is not isolated");
+            Require(start.ArgumentList.Count == 0, "Shared desktop was given an isolated user data directory");
+            Require(start.Environment["CODEX_HOME"] == profile.SharedHome, "Session home is not shared");
+            Require(!start.Environment.ContainsKey("CODEX_SQLITE_HOME") || start.Environment["CODEX_SQLITE_HOME"] == Environment.GetEnvironmentVariable("CODEX_SQLITE_HOME", EnvironmentVariableTarget.User), "Database location does not follow the original client");
+            Require(!start.Environment.ContainsKey("CODEX_ELECTRON_USER_DATA_PATH"), "Desktop data is not shared");
+            Require(start.Environment["CODEX2API_PRIVATE_HOME"] == profile.CodexHome, "Private credential/config destination missing");
             foreach (var name in new[] { "CODEX_CLI_PATH", "CODEX2API_REAL_CLI", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_CONNECTORS_TOKEN" }) Require(!start.Environment.ContainsKey(name), "Foreign runtime/credential override remained: " + name);
             Require(!start.Environment.ContainsKey("NODE_OPTIONS"), "An inherited script preload remained");
             Require(start.Environment["CODEX_APP_SERVER_LOGIN_ISSUER"] == settings.Server, "Login origin mismatch");
             Require(start.Environment["CODEX_REFRESH_TOKEN_URL_OVERRIDE"] == settings.Server + "/oauth/token", "Token origin mismatch");
-            File.WriteAllText(report, "PASS: URL routing, per-service profiles, credential/config preservation, package/manual discovery, activation argument quoting, runtime exports, original runtime, address settings and GUI rendering.\nClient: " + client.Version + "\nThis self-test does not launch Desktop or prove login/inference.");
+            var notice = JsonDocument.Parse("{\"title\":\"A < B\",\"body\":\"text & body\",\"hasReply\":true,\"actions\":[{\"text\":\"Open\"}]}");
+            var xml = System.Xml.Linq.XElement.Parse(NotificationHost.BuildXml(notice.RootElement, "fixture"));
+            Require(xml.Attribute("launch")?.Value == "fixture:click", "Notification click token changed");
+            Require(xml.Descendants("text").First().Value == "A < B", "Notification XML did not escape text");
+            Require(xml.Descendants("action").Select(element => element.Attribute("arguments")?.Value).SequenceEqual(["fixture:action:0", "fixture:reply"]), "Notification actions/reply changed");
+            Require(NotificationHost.Describe(client, profile).ApplicationId != NotificationHost.Describe(client, profile with { CodexHome = Path.Combine(root, "other") }).ApplicationId, "Notification identities are shared between services");
+            File.WriteAllText(report, "PASS: URL routing, shared session/desktop paths, separate credential/config paths and preservation, package/manual discovery, argument quoting, notification XML/actions/profile identity, runtime exports and GUI rendering.\nClient: " + client.Version + "\nThis self-test does not launch Desktop or prove login/inference.");
         }
         finally { Directory.Delete(root, true); }
     }

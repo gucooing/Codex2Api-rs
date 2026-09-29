@@ -10,4 +10,8 @@
     <BaseOutputPath>../../../target/desktop-proxy/native-bin/</BaseOutputPath>
     <DebugType>none</DebugType>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../NativeProcess.cs" Link="NativeProcess.cs" />
+    <Compile Include="../CommandLine.cs" Link="CommandLine.cs" />
+  </ItemGroup>
 </Project>

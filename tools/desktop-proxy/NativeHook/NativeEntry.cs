@@ -10,6 +10,18 @@ internal static unsafe class NativeEntry
     internal static string Archive = "";
     internal static string ComponentFile = "";
     internal static string? Failure;
+    [UnmanagedCallersOnly(EntryPoint = "InitializeFileRouting", CallConvs = [typeof(CallConvStdcall)])]
+    internal static uint InitializeFiles(nint parameter)
+    {
+        try
+        {
+            Server = Environment.GetEnvironmentVariable("CODEX2API_HOOK_SERVER") ?? "";
+            ComponentFile = Environment.GetEnvironmentVariable("CODEX2API_HOOK_FILE") ?? "";
+            IatHook.Install();
+            return 0;
+        }
+        catch { return 1; }
+    }
     [UnmanagedCallersOnly(EntryPoint = "InitializeHook", CallConvs = [typeof(CallConvStdcall)])]
     internal static uint Initialize(nint parameter)
     {

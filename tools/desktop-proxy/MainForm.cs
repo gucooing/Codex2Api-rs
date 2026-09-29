@@ -28,7 +28,7 @@ internal sealed class MainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(layout);
         layout.Controls.Add(new Label { Text = "原版客户端 · 自定义服务", Font = new Font(Font.FontFamily, 19F, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 8) });
-        layout.Controls.Add(new Label { Text = "按服务地址保存独立配置与登录状态，使用已安装的原版客户端。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 20) });
+        layout.Controls.Add(new Label { Text = "仅按服务隔离 auth.json 和 config.toml，会话及桌面数据与原客户端共用。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 0, 0, 20) });
         layout.Controls.Add(new Label { Text = "服务器地址", AutoSize = true }); layout.Controls.Add(server);
         layout.Controls.Add(automatic);
         var paths = new TableLayoutPanel { ColumnCount = 3, Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 4, 0, 4) };

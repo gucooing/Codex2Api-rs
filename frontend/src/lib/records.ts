@@ -4,7 +4,33 @@ import { taskRecord, subscriptionRecord } from "./record-selectors";
 import { atPath } from "./domain";
 
 type Column = readonly [string, readonly string[], "date"?];
+export function diagnosticSummary(value: unknown): string {
+  if (!Array.isArray(value)) return "—";
+  return (
+    value
+      .slice(0, 8)
+      .map((item) => {
+        if (!item || typeof item !== "object") return "";
+        if (typeof item.metric === "string") {
+          const name = [item.namespace, item.metric].filter(Boolean).join(".");
+          return Array.isArray(item.values)
+            ? `${name}：${item.values.length} 个样本`
+            : `${name}：${item.value}`;
+        }
+        return [item.event, item.exception, item.reason]
+          .filter((field) => typeof field === "string")
+          .join(" / ");
+      })
+      .filter(Boolean)
+      .join("；") || "—"
+  );
+}
 const columns: Record<string, readonly Column[]> = {
+  cloud_environment: [
+    ["环境", ["label"]],
+    ["标识", ["id"]],
+    ["仓库", ["repos"]],
+  ],
   realtime_call: [
     ["通话标识", ["id"]],
     ["模型", ["model"]],

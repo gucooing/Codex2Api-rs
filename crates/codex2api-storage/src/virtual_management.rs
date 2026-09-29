@@ -12,6 +12,12 @@ pub struct VirtualConfigSpec {
 pub fn virtual_config_specs() -> Vec<VirtualConfigSpec> {
     let entries = [
         (
+            "desktop_ui_policy",
+            "Desktop 界面布局",
+            "提供当前客户端的统一标签栏；侧栏、标签和会话记录仍由客户端维护。",
+            json!({"unified_tabs_enabled":true}),
+        ),
+        (
             "desktop_model_policy",
             "Desktop 推理强度设置",
             "控制原生配置页入口及模型支持的 Ultra 档位可见性；用户选择的档位仍由 Desktop 保存。",
@@ -487,6 +493,36 @@ pub fn validate_virtual_config(key: &str, value: &Value) -> std::result::Result<
 }
 
 impl Storage {
+    pub async fn virtual_cloud_environments(&self, owner: &str) -> Result<Vec<Value>> {
+        let mut environments = std::collections::BTreeMap::new();
+        for record in self.virtual_resources(owner, "task").await? {
+            let task = record.get("task").unwrap_or(&record);
+            let Some(environment) = task.get("environment").or(record.get("environment")) else {
+                continue;
+            };
+            if environment.is_null() {
+                continue;
+            }
+            let Some(id) = environment["id"].as_str() else {
+                return Err(StorageError::InvalidAdminUpdate(
+                    "Saved cloud environment has no ID",
+                ));
+            };
+            if !environment["label"].is_string()
+                || !environment["repos"].is_array()
+                || !environment["repo_map"].is_object()
+            {
+                return Err(StorageError::InvalidAdminUpdate(
+                    "Saved cloud environment metadata is incomplete",
+                ));
+            }
+            environments
+                .entry(id.to_owned())
+                .or_insert_with(|| environment.clone());
+        }
+        Ok(environments.into_values().collect())
+    }
+
     pub async fn create_virtual_conduit(
         &self,
         owner: &str,
