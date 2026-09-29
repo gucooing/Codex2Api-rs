@@ -115,7 +115,7 @@ export function SuppliersPage() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {item.error_message && (
+          {item.authentication_invalid && (
             <DropdownMenuItem
               disabled={actions.isBusy("recover-" + item.id)}
               onSelect={() =>
@@ -129,7 +129,7 @@ export function SuppliersPage() {
                 )
               }
             >
-              恢复账户
+              检查授权
             </DropdownMenuItem>
           )}
 
@@ -240,7 +240,7 @@ export function SuppliersPage() {
                         { value: "", label: "全部状态" },
                         { value: "active", label: "启用" },
                         { value: "disabled", label: "停用" },
-                        { value: "error", label: "错误" },
+                        { value: "error", label: "授权失效" },
                       ].find((option) => option.value === "")?.label ?? "请选择"
                     }
                   />
@@ -250,7 +250,7 @@ export function SuppliersPage() {
                     { value: "", label: "全部状态" },
                     { value: "active", label: "启用" },
                     { value: "disabled", label: "停用" },
-                    { value: "error", label: "错误" },
+                    { value: "error", label: "授权失效" },
                   ].map((option) => (
                     <SelectItem
                       key={option.value}

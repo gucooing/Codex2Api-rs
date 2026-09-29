@@ -31,6 +31,8 @@ pub struct UsageRecord {
     pub requested_at_ms: i64,
     pub status: String,
     pub http_status: Option<i64>,
+    pub failure_kind: Option<String>,
+    pub failure_status: Option<i64>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub cost_nano_usd: Option<i64>,
@@ -69,6 +71,8 @@ impl Default for UsageRecord {
             requested_at_ms: Default::default(),
             status: Default::default(),
             http_status: Default::default(),
+            failure_kind: None,
+            failure_status: None,
             error_code: None,
             error_message: None,
             cost_nano_usd: Default::default(),
@@ -350,9 +354,9 @@ impl Storage {
             Some(prices) => prices.charge(record),
             None => (None, "legacy", None, None),
         };
-        sqlx::query("UPDATE usage_records SET cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?, input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,error_code=?,error_message=?,upstream_request_id=? WHERE id=? AND status='in_progress'")
+        sqlx::query("UPDATE usage_records SET cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?, input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,failure_kind=?,failure_status=?,error_code=?,error_message=?,upstream_request_id=? WHERE id=? AND status='in_progress'")
             .bind(cost).bind(billing_status).bind(billing_model).bind(billing_tier).bind(&record.service_tier).bind(&record.actual_model).bind(record.input_tokens).bind(record.output_tokens).bind(record.cached_tokens).bind(record.cache_write_tokens)
-            .bind(record.reasoning_tokens).bind(&record.image_size).bind(record.image_count).bind(&record.image_usage_json).bind(&record.image_input_usage_json).bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.id)
+            .bind(record.reasoning_tokens).bind(&record.image_size).bind(record.image_count).bind(&record.image_usage_json).bind(&record.image_input_usage_json).bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.failure_kind).bind(record.failure_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.id)
             .execute(self.pool()).await?;
         Ok(())
     }

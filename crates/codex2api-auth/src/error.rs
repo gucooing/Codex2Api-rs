@@ -23,6 +23,12 @@ pub enum AuthError {
     CallbackBind(u16),
     #[error("token endpoint returned status {status}: {message}")]
     TokenEndpoint { status: u16, message: String },
+    #[error("token refresh returned HTTP {status}: {message}")]
+    RefreshRejected {
+        status: u16,
+        code: Option<String>,
+        message: String,
+    },
     #[error("refresh token is missing")]
     MissingRefreshToken,
     #[error("access token could not be refreshed: {0}")]

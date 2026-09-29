@@ -126,7 +126,7 @@ impl UpstreamClient {
                     }
                     Err(error) => {
                         if error.is_unauthorized() {
-                            self.record_http_status(401).await;
+                            self.reject_auth(auth.revision).await;
                         }
                         return Err(error);
                     }
@@ -183,11 +183,7 @@ impl UpstreamClient {
             let connected = match connected {
                 Ok(value) => value,
                 Err(_) => {
-                    self.record_communication_error("与 ChatGPT 官方 WebSocket 连接超时")
-                        .await;
-                    return Err(UpstreamError::Stream(
-                        "WebSocket connection timed out.".into(),
-                    ));
+                    return Err(UpstreamError::StreamIdleTimeout);
                 }
             };
             match connected {
@@ -213,13 +209,12 @@ impl UpstreamClient {
                         && self.auth_service().is_some()
                     {
                         retried = true;
-                        if self.refresh_access_token(&token).await.is_ok() {
-                            continue;
-                        }
-                        // Keep the rejected handshake's status, body and headers
-                        // when auth recovery itself cannot repair the request.
+                        self.refresh_access_token(&token).await?;
+                        continue;
                     }
-                    self.record_http_status(response.status().as_u16()).await;
+                    if response.status() == http::StatusCode::UNAUTHORIZED {
+                        self.reject_auth(auth.revision).await;
+                    }
                     return Err(UpstreamError::status_with_headers(
                         response.status(),
                         String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()),
@@ -227,8 +222,6 @@ impl UpstreamClient {
                     ));
                 }
                 Err(error) => {
-                    self.record_communication_error("与 ChatGPT 官方 WebSocket 通信失败")
-                        .await;
                     return Err(UpstreamError::Stream(error.to_string()));
                 }
             }

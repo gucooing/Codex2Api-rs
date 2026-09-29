@@ -19,6 +19,8 @@ pub use catalog::codex_model_descriptor;
 mod compat;
 mod endpoint;
 mod error;
+mod outcome;
+pub use outcome::{FailureKind, ResponseFailure, ResponseLifecycle, ResponseOutcome};
 mod headers;
 mod pool;
 mod proxy;

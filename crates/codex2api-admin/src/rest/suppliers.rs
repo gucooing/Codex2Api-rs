@@ -34,7 +34,7 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     let health = s.storage.supplier_health(&a.id).await?;
     value["status"] = json!(if a.status != SupplierStatus::Active {
         "disabled"
-    } else if health.error_message.is_some() {
+    } else if health.authentication_invalid {
         "error"
     } else {
         "active"
@@ -49,6 +49,7 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     );
     value["error_message"] = json!(health.error_message);
     value["error_at"] = json!(health.error_at);
+    value["authentication_invalid"] = json!(health.authentication_invalid);
     value["quota"] = match s.storage.get_account_quota(&a.id).await? {
         Some(snapshot) => crate::quota::summary(&s.storage, &a.id, &snapshot).await?,
         None => Value::Null,
@@ -113,14 +114,8 @@ pub async fn status(
     {
         return Err(ApiError::bad("供应账户需先完成授权"));
     }
-    if f.enabled
-        && s.storage
-            .supplier_health(&id)
-            .await?
-            .error_message
-            .is_some()
-    {
-        return Err(ApiError::bad("请先通过更多菜单恢复官方通信，再启用账户"));
+    if f.enabled && s.storage.supplier_health(&id).await?.authentication_invalid {
+        return Err(ApiError::bad("授权已失效，请重新授权或检查恢复后再启用"));
     }
     s.storage
         .set_account_status(
@@ -145,8 +140,8 @@ pub async fn recover(State(s): State<AdminState>, Path(id): Path<String>) -> Api
     crate::services::quota(&s, &id, true)
         .await
         .map_err(ApiError::upstream)?;
-    if health.error_message.is_some() && !s.storage.recover_supplier(&id, health.revision).await? {
-        return Err(ApiError::bad("检查期间发生了新的通信错误，请重新恢复"));
+    if health.authentication_invalid && !s.storage.recover_supplier(&id, health.revision).await? {
+        return Err(ApiError::bad("检查期间授权再次被拒绝，请重新授权"));
     }
     s.upstream.evict(&id).await;
     Ok(Json(
@@ -165,11 +160,7 @@ pub async fn quota(
 ) -> ApiResult {
     let account = s.storage.require_account(&id).await?;
     if account.status == SupplierStatus::Active
-        && s.storage
-            .supplier_health(&id)
-            .await?
-            .error_message
-            .is_none()
+        && s.storage.supplier_health(&id).await?.authentication_invalid == false
     {
         crate::services::quota(&s, &id, q.refresh)
             .await

@@ -22,11 +22,6 @@ pub(crate) async fn quota(
                 if value.get("rate_limit").is_none()
                     && value.get("plan_type").and_then(Value::as_str).is_none()
                 {
-                    state
-                        .storage
-                        .record_supplier_error(id, "ChatGPT 官方额度响应格式无效")
-                        .await
-                        .map_err(|e| e.to_string())?;
                     return Err("ChatGPT 官方额度响应格式无效".into());
                 }
                 Ok(value)
@@ -66,22 +61,12 @@ pub(crate) async fn request(
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(_) => {
-                state
-                    .storage
-                    .record_supplier_error(id, "ChatGPT 官方响应读取失败")
-                    .await
-                    .map_err(|e| e.to_string())?;
                 return Err("ChatGPT 官方响应读取失败".into());
             }
         };
         let value: Value = match serde_json::from_slice(&bytes) {
             Ok(value) => value,
             Err(_) => {
-                state
-                    .storage
-                    .record_supplier_error(id, "ChatGPT 官方响应格式无效")
-                    .await
-                    .map_err(|e| e.to_string())?;
                 return Err(format!("官方返回 HTTP {}，响应不是 JSON", status.as_u16()));
             }
         };
@@ -101,17 +86,10 @@ pub(crate) async fn request(
     };
     match tokio::time::timeout(std::time::Duration::from_secs(30), future).await {
         Ok(result) => result,
-        Err(_) => {
-            state
-                .storage
-                .record_supplier_error(id, "ChatGPT 官方请求超时")
-                .await
-                .map_err(|e| e.to_string())?;
-            Err(if endpoint == E::ConsumeCredit {
-                "官方响应超时，操作结果尚未确认，请先查看额度状态".to_string()
-            } else {
-                "官方请求超时，请重试".to_string()
-            })
-        }
+        Err(_) => Err(if endpoint == E::ConsumeCredit {
+            "官方响应超时，操作结果尚未确认，请先查看额度状态".to_string()
+        } else {
+            "官方请求超时，请重试".to_string()
+        }),
     }
 }

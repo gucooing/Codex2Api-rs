@@ -78,7 +78,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
         if error {
             storage
-                .record_supplier_error(id, "本地验收记录：ChatGPT 官方通信失败（HTTP 503）")
+                .reject_supplier_auth(
+                    id,
+                    storage.supplier_auth_revision(id).await.unwrap().unwrap(),
+                )
                 .await?;
         }
     }
@@ -215,6 +218,17 @@ async fn main() -> anyhow::Result<()> {
         record.cache_write_tokens = Some(256);
         record.reasoning_tokens = Some(2573);
         record.error_message = error.map(str::to_owned);
+        if error.is_some() {
+            record.failure_status = Some(if http_status == 429 { 429 } else { 400 });
+            record.failure_kind = Some(
+                if http_status == 429 {
+                    "quota_exhausted"
+                } else {
+                    "invalid_request"
+                }
+                .into(),
+            );
+        }
         record.error_code = error.map(|_| {
             if http_status == 429 {
                 "rate_limit_exceeded"

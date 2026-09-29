@@ -57,6 +57,8 @@ import {
   tokenCount,
   cacheRate,
   usageFailure,
+  usageFailureKind,
+  usageResultCode,
   duration,
   usageStatus,
   usageStatuses,
@@ -596,13 +598,13 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
                         variant="ghost"
                         size="sm"
                         className="h-6 px-1 tabular-nums"
-                        aria-label={`查看请求详情：${record.http_status ?? "-"}`}
+                        aria-label={`查看请求详情：${usageResultCode(record)}`}
                         onClick={() => setSelected(record)}
                       >
                         <Badge variant="outline" className={usageStatus(record.status).className}>
                           {usageStatus(record.status).label}
                         </Badge>
-                        {record.http_status ?? "-"}
+                        {usageResultCode(record)}
                         <Info className="size-3" />
                       </Button>
                     </div>
@@ -644,7 +646,9 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
               ["供应账户", selected?.account_name],
               ["请求模型", selected?.model],
               ["实际模型", selected?.actual_model],
-              ["响应码", selected?.http_status],
+              ["HTTP 状态（连接）", selected?.http_status],
+              ["生成错误状态", selected?.failure_status],
+              ["失败类别", usageFailureKind(selected?.failure_kind)],
               [
                 "请求状态",
                 selected

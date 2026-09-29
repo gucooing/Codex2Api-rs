@@ -99,7 +99,7 @@ test("quota countdown keeps missing and expired cache explicit without inventing
   assert.equal(quotaResetLabel(now / 1000 - 1, now), "已到重置时间，待更新");
   assert.equal(quotaResetLabel(null, now), "重置时间未提供");
   assert.equal(percentLabel(18), "18%");
-  assert.equal(supplierStatusLabel("error"), "错误");
+  assert.equal(supplierStatusLabel("error"), "授权失效");
 });
 import {
   allowedFields,
@@ -183,4 +183,13 @@ test("device polling preserves pending authorization context", () => {
     supplier_id: "supplier",
   });
   assert.throws(() => mergeOAuth(undefined, { status: "pending" }));
+});
+
+test("generation failures do not display a successful handshake as their result", async () => {
+  const { usageResultCode, usageFailureKind } = await import("../src/lib/usage-display.ts");
+  assert.equal(usageResultCode({ status: "failed", http_status: 200, failure_status: 429 }), 429);
+  assert.equal(usageResultCode({ status: "failed", http_status: 200, failure_status: null }), "-");
+  assert.equal(usageResultCode({ status: "failed", http_status: null, failure_status: 502 }), 502);
+  assert.equal(usageFailureKind("quota_exhausted"), "额度耗尽");
+  assert.equal(usageFailureKind("rate_limit"), "临时限流");
 });

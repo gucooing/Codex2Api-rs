@@ -221,10 +221,6 @@ impl UpstreamClient {
             let status = response.status();
             let body = response.bytes().await?;
             if !status.is_success() {
-                // A recoverable discovery 401 must not disable a supplier before refresh succeeds.
-                if status != reqwest::StatusCode::UNAUTHORIZED {
-                    self.record_http_status(status.as_u16()).await;
-                }
                 return Err(UpstreamError::status(
                     status,
                     String::from_utf8_lossy(&body),
@@ -236,15 +232,7 @@ impl UpstreamClient {
             })
         }
         .await;
-        let snapshot = match result {
-            Ok(snapshot) => snapshot,
-            Err(error @ (UpstreamError::Http(_) | UpstreamError::Json(_))) => {
-                self.record_communication_error("ChatGPT 官方工作区路由读取失败")
-                    .await;
-                return Err(error);
-            }
-            Err(error) => return Err(error),
-        };
+        let snapshot = result?;
         if let Some(storage) = storage
             && !storage
                 .store_supplier_routing_snapshot(id, request.revision, &snapshot)

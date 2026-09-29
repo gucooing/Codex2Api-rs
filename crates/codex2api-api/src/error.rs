@@ -221,108 +221,49 @@ pub fn map_upstream_status_body(status: StatusCode, body: &str) -> Response {
 }
 
 pub fn upstream_error_response(err: UpstreamError) -> Response {
-    match err {
-        UpstreamError::InvalidRequest(message) => ApiError::bad_request(message).into_response(),
-        UpstreamError::RequestTooLarge => openai_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "invalid_request_error",
-            "Request body is too large.",
-            None,
-        ),
-        UpstreamError::UnsupportedEncoding => openai_response(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "invalid_request_error",
-            "Supported request encodings are identity and zstd.",
-            None,
-        ),
-        UpstreamError::Unauthorized => openai_response(
-            StatusCode::UNAUTHORIZED,
-            "authentication_error",
-            "Upstream ChatGPT authentication failed.",
-            Some("upstream_unauthorized"),
-        ),
-        UpstreamError::MissingAccessToken(_) => {
-            ApiError::account_not_authenticated().into_response()
-        }
-        UpstreamError::Refresh(err) => {
-            tracing::warn!(error = %err, "upstream token refresh failed");
-            openai_response(
-                StatusCode::UNAUTHORIZED,
-                "authentication_error",
-                "Failed to refresh ChatGPT access token.",
-                Some("upstream_refresh_failed"),
-            )
-        }
-        UpstreamError::Status {
-            status,
-            body,
-            mut headers,
-        } => {
-            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut response = map_upstream_status_body(status, &body);
-            codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
-            // Preserve official error classification/retry evidence, without
-            // exposing supplier cookies, credentials or supplier quota windows.
-            for name in [
-                "x-error-json",
-                "x-openai-authorization-error",
-                "x-request-id",
-                "x-oai-request-id",
-                "cf-ray",
-                "retry-after",
-                "retry-after-ms",
-                "openai-model",
-                "x-openai-model",
-            ] {
-                for value in headers.get_all(name) {
-                    response.headers_mut().append(name, value.clone());
-                }
+    if let UpstreamError::Status {
+        status,
+        body,
+        mut headers,
+    } = err
+    {
+        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+        let mut response = map_upstream_status_body(status, &body);
+        codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
+        for name in [
+            "x-error-json",
+            "x-openai-authorization-error",
+            "x-request-id",
+            "x-oai-request-id",
+            "cf-ray",
+            "retry-after",
+            "retry-after-ms",
+            "openai-model",
+            "x-openai-model",
+        ] {
+            for value in headers.get_all(name) {
+                response.headers_mut().append(name, value.clone());
             }
-            response
         }
-        UpstreamError::WorkspaceChanged => openai_response(
-            StatusCode::CONFLICT,
-            "api_error",
-            "Supplier credentials or workspace routing changed. Reconnect and retry.",
-            Some("supplier_workspace_changed"),
-        ),
-        UpstreamError::WorkspaceRouting(message) => openai_response(
-            StatusCode::BAD_GATEWAY,
-            "api_error",
-            message,
-            Some("supplier_workspace_routing_failed"),
-        ),
-        UpstreamError::StreamIdleTimeout => openai_response(
-            StatusCode::GATEWAY_TIMEOUT,
-            "api_error",
-            "Upstream SSE stream idle timeout.",
-            Some("stream_idle_timeout"),
-        ),
-        UpstreamError::Stream(message) => openai_response(
-            StatusCode::BAD_GATEWAY,
-            "api_error",
-            format!("Upstream SSE stream error: {message}"),
-            Some("stream_error"),
-        ),
-        UpstreamError::Http(err) => {
-            tracing::error!(error = %err, "upstream HTTP error");
-            openai_response(
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                "Failed to reach upstream Codex servers.",
-                Some("upstream_http_error"),
-            )
-        }
-        other => {
-            tracing::error!(error = %other, "upstream error");
-            openai_response(
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                other.to_string(),
-                None,
-            )
-        }
+        return response;
     }
+    let failure = err.failure();
+    let status =
+        StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY);
+    let message = match &err {
+        UpstreamError::InvalidRequest(message) | UpstreamError::WorkspaceRouting(message) => {
+            message.clone()
+        }
+        _ => failure
+            .message
+            .unwrap_or_else(|| "Upstream request failed.".into()),
+    };
+    openai_response(
+        status,
+        error_type_for_status(status),
+        message,
+        failure.code.as_deref(),
+    )
 }
 
 pub fn error_type_for_status(status: StatusCode) -> &'static str {
@@ -421,6 +362,27 @@ fn service_error_response(error: codex2api_service::ServiceError) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn refresh_errors_keep_their_status_instead_of_becoming_unauthorized() {
+        for status in [400, 401, 403, 429, 503] {
+            let error = UpstreamError::Refresh(codex2api_auth::AuthError::RefreshRejected {
+                status,
+                code: Some(
+                    if status == 429 {
+                        "rate_limit_exceeded"
+                    } else {
+                        "refresh_rejected"
+                    }
+                    .into(),
+                ),
+                message: "fixture refresh failure".into(),
+            });
+            let failure = error.failure();
+            assert_eq!(failure.authentication_invalid(), status == 401);
+            assert_eq!(upstream_error_response(error).status().as_u16(), status);
+        }
+    }
 
     #[test]
     fn openai_json_shape() {

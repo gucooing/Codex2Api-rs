@@ -13,28 +13,49 @@ pub(crate) struct AccessCheck {
 }
 
 impl AccessCheck {
-    pub async fn allowed(&self, storage: &codex2api_storage::Storage) -> Result<bool> {
-        let Some(access) = storage.virtual_access(&self.hash).await? else {
-            return Ok(false);
-        };
+    pub async fn validate(&self, storage: &codex2api_storage::Storage) -> Result<()> {
+        let access = storage
+            .virtual_access(&self.hash)
+            .await?
+            .ok_or_else(ApiError::invalid_token)?;
         if access.account_id.as_deref() != Some(self.account_id.as_str()) {
-            return Ok(false);
+            return Err(ApiError::openai(
+                axum::http::StatusCode::CONFLICT,
+                "configuration_error",
+                "The supplier binding changed. Reconnect to continue.",
+                Some("supplier_binding_changed"),
+            ));
         }
-        let account = storage.get_account(&self.account_id).await?;
-        if !account.is_some_and(|a| {
-            a.status == SupplierStatus::Active
-                && a.provider_id == access.provider_id
-                && a.provider_id == codex2api_core::CHATGPT
-        }) {
-            return Ok(false);
+        let account = storage
+            .get_account(&self.account_id)
+            .await?
+            .ok_or_else(|| {
+                ApiError::openai(
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "server_error",
+                    "The supplier is unavailable.",
+                    Some("upstream_unavailable"),
+                )
+            })?;
+        if account.provider_id != access.provider_id
+            || account.provider_id != codex2api_core::CHATGPT
+        {
+            return Err(ApiError::openai(
+                axum::http::StatusCode::FORBIDDEN,
+                "permission_error",
+                "Provider mismatch.",
+                Some("provider_mismatch"),
+            ));
+        }
+        if account.status != SupplierStatus::Active {
+            return Err(ApiError::account_disabled());
         }
         if storage
             .supplier_health(&self.account_id)
             .await?
-            .error_message
-            .is_some()
+            .authentication_invalid
         {
-            return Ok(false);
+            return Err(codex2api_upstream::UpstreamError::Unauthorized.into());
         }
         if storage
             .load_supplier_tokens(&self.account_id)
@@ -42,10 +63,13 @@ impl AccessCheck {
             .and_then(|t| t.access_token)
             .is_none_or(|t| t.is_empty())
         {
-            return Ok(false);
+            return Err(codex2api_upstream::UpstreamError::MissingAccessToken(
+                self.account_id.clone(),
+            )
+            .into());
         }
         storage.touch_virtual_access(&self.hash).await?;
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -97,15 +121,16 @@ pub(crate) async fn resolve_supplier(
         )
         .into());
     }
-    if ctx.account.status != SupplierStatus::Active
-        || state
-            .storage
-            .supplier_health(account_id)
-            .await?
-            .error_message
-            .is_some()
-    {
+    if ctx.account.status != SupplierStatus::Active {
         return Err(ApiError::account_disabled());
+    }
+    if state
+        .storage
+        .supplier_health(account_id)
+        .await?
+        .authentication_invalid
+    {
+        return Err(codex2api_upstream::UpstreamError::Unauthorized.into());
     }
     let expected = oauth.virtual_account_id.as_str();
     if headers
@@ -238,7 +263,7 @@ mod tests {
             hash: hash.clone(),
             account_id: first.id.clone(),
         };
-        assert!(original.allowed(&storage).await.unwrap());
+        assert!(original.validate(&storage).await.is_ok());
         let mut headers = HeaderMap::new();
         headers.insert("x-codex-primary-used-percent", "17".parse().unwrap());
         headers.insert("x-codex-active-limit", "upstream".parse().unwrap());
@@ -342,17 +367,24 @@ mod tests {
             .await
             .unwrap();
         storage.save_virtual_account(&account).await.unwrap();
-        assert!(!original.allowed(&storage).await.unwrap());
+        assert!(original.validate(&storage).await.is_err());
         let rebound = AccessCheck {
             hash: hash.clone(),
             account_id: second.id,
         };
-        assert!(rebound.allowed(&storage).await.unwrap());
+        assert!(rebound.validate(&storage).await.is_ok());
         storage
-            .record_supplier_error(&rebound.account_id, "ChatGPT 官方通信失败")
+            .reject_supplier_auth(
+                &rebound.account_id,
+                storage
+                    .supplier_auth_revision(&rebound.account_id)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        assert!(!rebound.allowed(&storage).await.unwrap());
+        assert!(rebound.validate(&storage).await.is_err());
         let health = storage.supplier_health(&rebound.account_id).await.unwrap();
         assert!(
             storage
@@ -360,14 +392,14 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(rebound.allowed(&storage).await.unwrap());
+        assert!(rebound.validate(&storage).await.is_ok());
         storage
             .revoke_virtual_device(&account.id, &device)
             .await
             .unwrap();
-        assert!(!rebound.allowed(&storage).await.unwrap());
+        assert!(rebound.validate(&storage).await.is_err());
         storage.close().await;
-        assert!(rebound.allowed(&storage).await.is_err());
+        assert!(rebound.validate(&storage).await.is_err());
     }
 
     #[test]

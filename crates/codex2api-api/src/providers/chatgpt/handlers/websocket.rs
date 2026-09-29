@@ -161,10 +161,8 @@ pub(crate) async fn bridge_recorded(
             {
                 connection.check_current().await?;
             }
-            if matches!(&message, Message::Text(_) | Message::Binary(_))
-                && !access.allowed(&storage).await?
-            {
-                return Err(crate::ApiError::invalid_token());
+            if matches!(&message, Message::Text(_) | Message::Binary(_)) {
+                access.validate(&storage).await?;
             }
             let message = match message {
                 Message::Text(text) => UpstreamMessage::Text(
@@ -260,19 +258,23 @@ pub(crate) async fn bridge_recorded(
                 }
             };
             last_message_at = received_at;
-            let allowed = access.allowed(&storage).await?;
+            let access_result = access.validate(&storage).await;
+            let allowed = access_result.is_ok();
             let bytes = match &message {
                 UpstreamMessage::Text(text) => Some(text.as_bytes()),
                 UpstreamMessage::Binary(bytes) => Some(bytes.as_ref()),
                 _ => None,
             };
-            if let Some(bytes) = bytes {
-                let mut ledger = ledger.lock().await;
-                ledger.observe_at(bytes, allowed, received_at).await?;
-            }
-            if !allowed {
-                return Err(crate::ApiError::invalid_token());
-            }
+            let outcome = if let Some(bytes) = bytes {
+                ledger
+                    .lock()
+                    .await
+                    .observe_at(bytes, allowed, received_at)
+                    .await?
+            } else {
+                None
+            };
+            access_result?;
             let message = match message {
                 UpstreamMessage::Text(text) => {
                     let text = crate::providers::chatgpt::identity::websocket_message(
@@ -303,14 +305,14 @@ pub(crate) async fn bridge_recorded(
                     }
                 }
                 UpstreamMessage::Close(frame) => {
-                    ledger
-                        .lock()
-                        .await
-                        .fail_inflight(
-                            "upstream_websocket_closed",
-                            "上游 WebSocket 在请求完成前关闭",
-                        )
-                        .await?;
+                    if ledger.lock().await.has_pending() {
+                        return Err(crate::ApiError::openai(
+                            axum::http::StatusCode::BAD_GATEWAY,
+                            "server_error",
+                            "Upstream WebSocket closed before the generation ended.",
+                            Some("upstream_websocket_closed"),
+                        ));
+                    }
                     client_tx
                         .send(Message::Close(frame.map(|f| CloseFrame {
                             code: f.code.into(),
@@ -328,15 +330,30 @@ pub(crate) async fn bridge_recorded(
                 ledger.lock().await.client_stopped().await?;
                 return Err(relay_error(error));
             }
+            if let Some(codex2api_upstream::ResponseOutcome::Failed(failure)) = outcome {
+                ledger.lock().await.fail_pending(failure.clone()).await?;
+                client_tx
+                    .send(Message::Close(Some(CloseFrame {
+                        code: if failure.status.is_some_and(|s| s < 500) {
+                            1008
+                        } else {
+                            1011
+                        },
+                        reason: "Responses generation failed".into(),
+                    })))
+                    .await
+                    .map_err(relay_error)?;
+                return Ok(());
+            }
         }
-        ledger
-            .lock()
-            .await
-            .fail_inflight(
-                "upstream_websocket_closed",
-                "上游 WebSocket 在请求完成前结束",
-            )
-            .await?;
+        if ledger.lock().await.has_pending() {
+            return Err(crate::ApiError::openai(
+                axum::http::StatusCode::BAD_GATEWAY,
+                "server_error",
+                "Upstream WebSocket ended before the generation ended.",
+                Some("upstream_websocket_closed"),
+            ));
+        }
         let _ = client_tx.close().await;
         Ok(())
     };
@@ -349,7 +366,16 @@ pub(crate) async fn bridge_recorded(
             let reason = value["error"]["message"]
                 .as_str()
                 .unwrap_or("服务端转发异常，请求未完成");
-            if let Err(error) = ledger.lock().await.fail_inflight(code, reason).await {
+            if let Err(error) = ledger
+                .lock()
+                .await
+                .fail_pending(codex2api_upstream::ResponseFailure::new(
+                    Some(status),
+                    Some(code),
+                    Some(reason),
+                ))
+                .await
+            {
                 tracing::error!(%error, "failed to settle interrupted WebSocket requests");
             }
         }
@@ -473,6 +499,19 @@ mod tests {
         recorded_connection_fixture("compaction_binary").await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upstream_generation_errors_keep_the_event_settle_and_close_without_misclassifying_accounts()
+     {
+        for ending in [
+            "rate_event",
+            "quota_event",
+            "auth_event",
+            "unknown_limit_event",
+        ] {
+            recorded_connection_fixture(ending).await;
+        }
+    }
+
     async fn recorded_connection_fixture(ending: &'static str) {
         use axum::{Router, routing::get};
         use codex2api_storage::{
@@ -480,6 +519,22 @@ mod tests {
         };
         use serde_json::{Value, json};
         let compaction = ending.starts_with("compaction_");
+        let error_event = match ending {
+            "rate_event" => Some(
+                json!({"type":"response.failed","response":{"id":"response-1","error":{"code":"rate_limit_exceeded","message":"retry later"}}}),
+            ),
+            "quota_event" => Some(
+                json!({"type":"response.failed","response":{"id":"response-1","error":{"code":"insufficient_quota","message":"exhausted"}}}),
+            ),
+            "auth_event" => Some(
+                json!({"type":"error","status":401,"error":{"code":"invalid_token","message":"expired"}}),
+            ),
+            "unknown_limit_event" => {
+                Some(json!({"type":"error","status":429,"error":{"message":"limit"}}))
+            }
+            _ => None,
+        };
+        let server_error_event = error_event.clone();
         let dir = tempfile::tempdir().unwrap();
         let storage =
             codex2api_storage::Storage::open(dir.path().join("revoked-completion.sqlite"))
@@ -567,6 +622,14 @@ mod tests {
             }
             upstream.send(UpstreamMessage::Text(json!({"type":"response.created","response":{"id":"response-1","model":"gpt-6-astra","usage":{"input_tokens":10,"output_tokens":2}}}).to_string().into())).await.unwrap();
             ready.await.unwrap();
+            if let Some(event) = server_error_event {
+                upstream
+                    .send(UpstreamMessage::Text(event.to_string().into()))
+                    .await
+                    .unwrap();
+                let _ = upstream.next().await;
+                return;
+            }
             if ending == "client_closed" {
                 assert!(matches!(
                     upstream.next().await.unwrap().unwrap(),
@@ -679,12 +742,33 @@ mod tests {
             assert_eq!(created["type"], "response.created");
             if ending == "read_error_with_supplier_failure" {
                 storage
-                    .record_supplier_error(&supplier_id, "ChatGPT 官方通信失败（HTTP 401）")
+                    .reject_supplier_auth(
+                        &supplier_id,
+                        storage
+                            .supplier_auth_revision(&supplier_id)
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                    )
                     .await
                     .unwrap();
             }
             let health_before = storage.supplier_health(&supplier_id).await.unwrap();
             let expected = match ending {
+                "rate_event" | "quota_event" | "auth_event" | "unknown_limit_event" => {
+                    complete.send(()).unwrap();
+                    let received: Value =
+                        serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
+                            .unwrap();
+                    assert_eq!(Some(received), error_event);
+                    assert!(matches!(
+                        client.next().await.unwrap().unwrap(),
+                        UpstreamMessage::Close(_)
+                    ));
+                    let health = storage.supplier_health(&supplier_id).await.unwrap();
+                    assert_eq!(health.authentication_invalid, ending == "auth_event");
+                    "failed"
+                }
                 "upstream_read_error"
                 | "upstream_protocol_error"
                 | "idle_read_error"
@@ -718,9 +802,9 @@ mod tests {
                             hash: codex2api_storage::hash_token("access"),
                             account_id: supplier_id.clone(),
                         }
-                        .allowed(&storage)
+                        .validate(&storage)
                         .await
-                        .unwrap(),
+                        .is_ok(),
                         ending != "read_error_with_supplier_failure"
                     );
                     if ending == "idle_read_error" {
@@ -760,6 +844,11 @@ mod tests {
                 }
                 "upstream_closed" => {
                     complete.send(()).unwrap();
+                    let event: Value =
+                        serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
+                            .unwrap();
+                    assert_eq!(event["status"], 502);
+                    assert_eq!(event["error"]["code"], "upstream_websocket_closed");
                     assert!(matches!(
                         client.next().await.unwrap().unwrap(),
                         UpstreamMessage::Close(_)
@@ -796,7 +885,19 @@ mod tests {
             };
             assert_eq!(records.total, 1);
             assert_eq!(records.records[0].status, expected);
-            if ending == "upstream_closed" {
+            if error_event.is_some() {
+                let expected = match ending {
+                    "rate_event" => "rate_limit",
+                    "quota_event" => "quota_exhausted",
+                    "auth_event" => "authentication",
+                    _ => "limit_unknown",
+                };
+                assert_eq!(records.records[0].failure_kind.as_deref(), Some(expected));
+                assert_eq!(
+                    records.records[0].failure_status,
+                    Some(if ending == "auth_event" { 401 } else { 429 })
+                );
+            } else if ending == "upstream_closed" {
                 assert_eq!(
                     records.records[0].error_code.as_deref(),
                     Some("upstream_websocket_closed")
@@ -1101,7 +1202,16 @@ mod tests {
                     let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
                     while let Some(Ok(message)) = socket.next().await {
                         if message.is_text() || message.is_binary() {
-                            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            let value: serde_json::Value =
+                                serde_json::from_slice(&message.into_data()).unwrap();
+                            if !realtime
+                                && value.get("generate") == Some(&serde_json::Value::Bool(false))
+                            {
+                                // Native Desktop performs a non-billable connection warmup.
+                                socket.send(UpstreamMessage::Text(json!({"type":"response.completed","response":{"id":"warmup","status":"completed"}}).to_string().into())).await.unwrap();
+                            } else {
+                                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
                         }
                     }
                 });
@@ -1182,9 +1292,11 @@ mod tests {
                 std::process::Command::new("python")
                     .arg(
                         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .join("../../scripts/windows/Test-DesktopStreamError.py"),
+                            .join("../../scripts/windows/Test-DesktopResponseOutcomes.py"),
                     )
                     .arg(url)
+                    .arg("429")
+                    .arg("websocket")
                     .output()
                     .unwrap()
             })

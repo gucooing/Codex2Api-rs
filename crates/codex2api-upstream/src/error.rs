@@ -53,6 +53,56 @@ pub enum UpstreamError {
 }
 
 impl UpstreamError {
+    pub fn failure(&self) -> crate::ResponseFailure {
+        use crate::ResponseFailure as F;
+        if let Self::Status { status, body, .. } = self {
+            return F::from_error(
+                Some(*status),
+                &serde_json::from_str(body).unwrap_or_default(),
+            );
+        }
+        let (status, code, message) = match self {
+            Self::Unauthorized => (401, "upstream_unauthorized", "上游授权失效"),
+            Self::InvalidRequest(_) => (400, "invalid_request_error", "请求参数无效"),
+            Self::RequestTooLarge => (413, "request_too_large", "请求超过大小限制"),
+            Self::UnsupportedEncoding => (415, "unsupported_encoding", "请求编码不受支持"),
+            Self::StreamIdleTimeout => (504, "upstream_timeout", "等待上游响应超时"),
+            Self::Http(e) if e.is_timeout() => (504, "upstream_timeout", "上游请求超时"),
+            Self::Http(e) if e.is_connect() => {
+                (502, "upstream_connection_failed", "无法连接上游服务")
+            }
+            Self::Http(_) => (502, "upstream_transport_error", "上游传输失败"),
+            Self::Stream(message) => {
+                return F::new(Some(502), Some("upstream_stream_error"), Some(message));
+            }
+            Self::Refresh(e) | Self::Auth(e) => match e {
+                AuthError::RefreshRejected {
+                    status,
+                    code,
+                    message,
+                } => return F::new(Some(*status), code.as_deref(), Some(message)),
+                AuthError::TokenEndpoint { status, message } => {
+                    return F::new(Some(*status), None, Some(message));
+                }
+                AuthError::Http(e) if e.is_timeout() => {
+                    (504, "upstream_timeout", "授权服务请求超时")
+                }
+                AuthError::Http(_) | AuthError::Io(_) => {
+                    (502, "upstream_transport_error", "授权服务连接失败")
+                }
+                _ => (503, "upstream_auth_unavailable", "上游授权当前不可用"),
+            },
+            Self::MissingAccessToken(_) => (503, "upstream_auth_missing", "供应账户没有可用授权"),
+            Self::WorkspaceChanged => (
+                409,
+                "supplier_workspace_changed",
+                "供应授权或路由已变化，请重新连接",
+            ),
+            _ => (502, "upstream_error", "上游请求未能完成"),
+        };
+        F::new(Some(status), Some(code), Some(message))
+    }
+
     pub fn status(status: reqwest::StatusCode, body: impl Into<String>) -> Self {
         Self::status_with_headers(status, body, http::HeaderMap::new())
     }

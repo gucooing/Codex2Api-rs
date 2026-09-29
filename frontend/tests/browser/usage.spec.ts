@@ -51,7 +51,7 @@ test("usage text, returned models, unit conversion and failure details use persi
     page.getByRole("columnheader", { name: "推理强度 / 速度", exact: true }),
   ).toBeVisible();
   await expect(cells.nth(2)).toContainText("/v1/responses · http");
-  await expect(cells.nth(3)).toHaveText("默认 / 标准");
+  await expect(cells.nth(3)).toHaveText("默认 / standard");
   await expect(cells.nth(4).locator("svg")).toHaveCount(0);
   for (const value of [
     "输入",
@@ -102,7 +102,7 @@ test("usage text, returned models, unit conversion and failure details use persi
   await page.keyboard.press("Escape");
   for (const [id, code, reason] of [
     ["review-usage-failure", "429", "本地验收：已达到上游用量限制，请稍后重试。"],
-    ["review-usage-stream-failure", "200", "本地验收：输入超出模型上下文限制。"],
+    ["review-usage-stream-failure", "400", "本地验收：输入超出模型上下文限制。"],
   ]) {
     const row = page
       .getByRole("row")
@@ -113,6 +113,12 @@ test("usage text, returned models, unit conversion and failure details use persi
     await expect(row.getByText("失败", { exact: true })).toHaveClass(/text-red/);
     await row.getByRole("button", { name: `查看请求详情：${code}`, exact: true }).click();
     await expect(detail.getByText(reason, { exact: true })).toBeVisible();
+    await expect(detail.getByText("HTTP 状态（连接）", { exact: true })).toBeVisible();
+    await expect(
+      detail.getByText(id === "review-usage-stream-failure" ? "请求错误" : "额度耗尽", {
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(detail.locator("[data-slot=dialog-description]")).toContainText(
       `请求 ID：req-${id}`,
     );

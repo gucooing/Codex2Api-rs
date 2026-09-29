@@ -101,3 +101,28 @@ export function usageStatus(status: string) {
     }
   );
 }
+
+/** A successful stream handshake is never the failed generation's result code. */
+export function usageResultCode(
+  record: Pick<UsageRecord, "status" | "http_status" | "failure_status">,
+) {
+  return failedUsage(record)
+    ? (record.failure_status ??
+        (record.http_status != null && record.http_status >= 400 ? record.http_status : "-"))
+    : (record.http_status ?? "-");
+}
+export function usageFailureKind(kind: string | null | undefined) {
+  const labels: Record<string, string> = {
+    authentication: "授权失效",
+    permission: "权限拒绝",
+    rate_limit: "临时限流",
+    quota_exhausted: "额度耗尽",
+    limit_unknown: "429（上游未说明限制原因）",
+    invalid_request: "请求错误",
+    timeout: "超时",
+    transport: "传输中断",
+    upstream: "上游错误",
+    incomplete: "生成未完成",
+  };
+  return kind ? (labels[kind] ?? kind) : "未记录";
+}

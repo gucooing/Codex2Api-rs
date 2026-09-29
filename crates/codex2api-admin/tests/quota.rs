@@ -42,12 +42,26 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
     }
     // Missing auth would make an official request fail: repeated reads used the cache.
     f.storage
-        .record_supplier_error(&first.id, "ChatGPT 官方通信失败（HTTP 503）")
+        .reject_supplier_auth(
+            &first.id,
+            f.storage
+                .supplier_auth_revision(&first.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        )
         .await
         .unwrap();
     let revision = f.storage.supplier_health(&first.id).await.unwrap().revision;
     f.storage
-        .record_supplier_error(&first.id, "ChatGPT 官方连接失败")
+        .reject_supplier_auth(
+            &first.id,
+            f.storage
+                .supplier_auth_revision(&first.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert!(

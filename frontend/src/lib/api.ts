@@ -16,6 +16,7 @@ export type Supplier = {
   provider_id: string;
   status: "active" | "disabled" | "error";
   authorized: boolean;
+  authentication_invalid: boolean;
   error_message: string | null;
   error_at: string | null;
   quota: SupplierQuota | null;
@@ -225,6 +226,8 @@ export type UsageRecord = {
   requested_at_ms: number;
   status: string;
   http_status: number | null;
+  failure_kind: string | null;
+  failure_status: number | null;
   error_code: string | null;
   error_message: string | null;
   cost_nano_usd: number | null;

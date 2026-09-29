@@ -301,7 +301,7 @@ pub async fn refresh_tokens(
         return Ok(resp.json::<RefreshResponse>().await?);
     }
     let body = resp.text().await.unwrap_or_default();
-    tracing::error!("Failed to refresh token: {status}: {body}");
+    tracing::warn!(%status, "token endpoint rejected refresh");
     let detail = parse_token_endpoint_error(&body);
     let code = detail.error_code.as_deref().unwrap_or("");
     let permanent = status.as_u16() == 401
@@ -315,7 +315,11 @@ pub async fn refresh_tokens(
     } else {
         detail.display_message
     };
-    Err(AuthError::Refresh(format!("{status}: {message}")))
+    Err(AuthError::RefreshRejected {
+        status: status.as_u16(),
+        code: detail.error_code,
+        message,
+    })
 }
 
 /// Revoke POST JSON to `https://auth.openai.com/oauth/revoke`.

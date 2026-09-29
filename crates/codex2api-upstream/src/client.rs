@@ -212,7 +212,7 @@ impl UpstreamClient {
                     }
                     Err(error) => {
                         if error.is_unauthorized() {
-                            self.record_http_status(401).await;
+                            self.reject_auth(auth.revision).await;
                         }
                         return Err(error);
                     }
@@ -239,14 +239,7 @@ impl UpstreamClient {
             if method != http::Method::GET || !prepared.body.is_empty() {
                 request = request.body(prepared.body.clone());
             }
-            let response = match request.send().await {
-                Ok(response) => response,
-                Err(error) => {
-                    self.record_communication_error("与 ChatGPT 官方连接失败或超时")
-                        .await;
-                    return Err(error.into());
-                }
-            };
+            let response = request.send().await?;
             if response.status() == StatusCode::UNAUTHORIZED && !retried && self.auth.is_some() {
                 retried = true;
                 self.refresh_access_token(&auth.access_token).await?;
@@ -257,7 +250,9 @@ impl UpstreamClient {
                     "workspace redirects are not allowed".into(),
                 ));
             }
-            self.record_http_status(response.status().as_u16()).await;
+            if response.status() == StatusCode::UNAUTHORIZED {
+                self.reject_auth(auth.revision).await;
+            }
             return Ok(response);
         }
     }
@@ -364,30 +359,29 @@ impl UpstreamClient {
         {
             Ok(_) => (),
             Err(error) => {
-                self.record_communication_error("ChatGPT 官方授权刷新失败，请恢复检查或重新授权")
-                    .await;
+                // A refresh outage cannot establish invalid credentials.
+                let revision = self.request_auth()?.revision;
+                if matches!(
+                    &error,
+                    codex2api_auth::AuthError::RefreshRejected { status: 401, .. }
+                        | codex2api_auth::AuthError::TokenEndpoint { status: 401, .. }
+                ) {
+                    self.reject_auth(revision).await;
+                }
                 return Err(UpstreamError::Refresh(error));
             }
         };
         self.load_current_auth().await
     }
 
-    pub(crate) async fn record_http_status(&self, status: u16) {
-        // Invalid consumer requests and quota exhaustion are not supplier outages.
-        if matches!(status, 401 | 403 | 408) || status >= 500 {
-            self.record_communication_error(&format!("ChatGPT 官方通信失败（HTTP {status}）"))
-                .await;
-        }
-    }
-
-    pub(crate) async fn record_communication_error(&self, message: &str) {
+    pub(crate) async fn reject_auth(&self, revision: i64) {
         if let Some(auth) = &self.auth
             && let Ok(storage) = auth.accounts().storage()
             && let Err(error) = storage
-                .record_supplier_error(&self.identity.account_id, message)
+                .reject_supplier_auth(&self.identity.account_id, revision)
                 .await
         {
-            tracing::error!(account_id=%self.identity.account_id, %error, "failed to persist supplier health");
+            tracing::error!(%error, "failed to persist supplier authentication rejection");
         }
     }
 
@@ -448,7 +442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn communication_failure_is_sticky_and_does_not_confuse_invalid_requests_or_quota() {
+    async fn request_failures_never_disable_credentials_and_only_401_is_persisted() {
         use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
         let path =
             std::env::temp_dir().join(format!("supplier-health-{}.sqlite", uuid::Uuid::new_v4()));
@@ -494,8 +488,8 @@ mod tests {
             .await
             .unwrap();
         });
-        for status in [200, 400, 404, 429] {
-            client
+        for status in [200, 400, 403, 404, 408, 429, 500, 502, 503, 504] {
+            let response = client
                 .send_prepared(
                     http::Method::GET,
                     &format!("http://{addr}/{status}"),
@@ -507,44 +501,15 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            assert_eq!(response.status().as_u16(), status);
             assert!(
-                storage
+                !storage
                     .supplier_health(&account.id)
                     .await
                     .unwrap()
-                    .error_message
-                    .is_none()
+                    .authentication_invalid
             );
         }
-        for status in [403, 503, 200] {
-            client
-                .send_prepared(
-                    http::Method::GET,
-                    &format!("http://{addr}/{status}"),
-                    PreparedRequest {
-                        body: Bytes::new(),
-                        headers: HeaderMap::new(),
-                    },
-                    false,
-                )
-                .await
-                .unwrap();
-            assert!(
-                storage
-                    .supplier_health(&account.id)
-                    .await
-                    .unwrap()
-                    .error_message
-                    .is_some()
-            );
-        }
-        let health = storage.supplier_health(&account.id).await.unwrap();
-        assert!(
-            storage
-                .recover_supplier(&account.id, health.revision)
-                .await
-                .unwrap()
-        );
         server.abort();
         let _ = server.await;
         assert!(
@@ -562,12 +527,24 @@ mod tests {
                 .is_err()
         );
         assert!(
+            !storage
+                .supplier_health(&account.id)
+                .await
+                .unwrap()
+                .authentication_invalid
+        );
+        let revision = storage
+            .supplier_auth_revision(&account.id)
+            .await
+            .unwrap()
+            .unwrap();
+        client.reject_auth(revision).await;
+        assert!(
             storage
                 .supplier_health(&account.id)
                 .await
                 .unwrap()
-                .error_message
-                .is_some()
+                .authentication_invalid
         );
         drop(client);
         storage.close().await;

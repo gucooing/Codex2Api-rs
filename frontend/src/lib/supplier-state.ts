@@ -1,7 +1,7 @@
 import type { SupplierQuotaWindow } from "./api";
 
 export const supplierStatusLabel = (status: "active" | "disabled" | "error") =>
-  ({ active: "启用", disabled: "停用", error: "错误" })[status];
+  ({ active: "启用", disabled: "停用", error: "授权失效" })[status];
 
 export function quotaWindowLabel(window: SupplierQuotaWindow): string {
   const seconds = window.limit_window_seconds;

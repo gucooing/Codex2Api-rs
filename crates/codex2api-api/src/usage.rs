@@ -2,7 +2,9 @@
 use crate::execution::ExecutionContext;
 use axum::body::{Body, Bytes};
 use codex2api_storage::{Storage, UsageRecord};
-use codex2api_upstream::{Endpoint, RequestMetadata};
+use codex2api_upstream::{
+    Endpoint, RequestMetadata, ResponseFailure, ResponseLifecycle, ResponseOutcome,
+};
 use futures::Stream;
 use serde::Deserialize;
 use std::{
@@ -15,6 +17,10 @@ use std::{
     task::{Context, Poll},
     time::Instant,
 };
+
+#[cfg(test)]
+#[path = "usage_outcome_tests.rs"]
+mod outcome_tests;
 
 fn elapsed(start: Instant) -> i64 {
     start.elapsed().as_millis().min(i64::MAX as u128) as i64
@@ -31,7 +37,8 @@ pub(crate) struct RequestLog {
     record: Option<UsageRecord>,
     storage: Storage,
     start: Instant,
-    terminal: bool,
+    lifecycle: ResponseLifecycle,
+    auth_revision: Option<i64>,
     authoritative_model: bool,
     client_stopped: Arc<AtomicBool>,
 }
@@ -42,11 +49,13 @@ impl RequestLog {
         start: Instant,
     ) -> crate::Result<Self> {
         storage.insert_usage(&record).await?;
+        let auth_revision = storage.supplier_auth_revision(&record.account_id).await?;
         Ok(Self {
             storage,
             record: Some(record),
             start,
-            terminal: false,
+            lifecycle: ResponseLifecycle::default(),
+            auth_revision,
             authoritative_model: false,
             client_stopped: Arc::new(AtomicBool::new(false)),
         })
@@ -71,8 +80,6 @@ struct ResponseMetadata {
     id: Option<String>,
     model: Option<String>,
     headers: Option<serde_json::Value>,
-    error: Option<serde_json::Value>,
-    incomplete_details: Option<serde_json::Value>,
     size: Option<String>,
     usage: Option<Tokens>,
     status: Option<String>,
@@ -96,14 +103,11 @@ struct Event {
     response_id: Option<String>,
     model: Option<String>,
     headers: Option<serde_json::Value>,
-    code: Option<String>,
-    message: Option<String>,
     size: Option<String>,
     usage: Option<Tokens>,
     // Error envelopes use a numeric HTTP status; response events use a string.
     status: Option<serde_json::Value>,
     error: Option<serde_json::Value>,
-    detail: Option<serde_json::Value>,
     service_tier: Option<String>,
     data: Option<Vec<ImageOutput>>,
 }
@@ -228,44 +232,25 @@ impl RequestLog {
         }
     }
     pub fn failure(&mut self, code: &str, message: &str) {
-        if let Some(record) = &mut self.record {
-            record.error_code = Some(error_text(code, 128));
-            record.error_message = Some(error_text(message, 512));
-        }
+        self.lifecycle
+            .fail(ResponseFailure::new(None, Some(code), Some(message)));
+        self.apply_outcome();
     }
     pub fn upstream_failure(&mut self, error: &codex2api_upstream::UpstreamError) {
-        use codex2api_upstream::UpstreamError as E;
-        match error {
-            E::Status {
-                status,
-                body,
-                headers,
-            } => {
-                self.http_status(*status);
-                self.response_headers(headers);
-                let mut parser = BodyParser::default();
-                parser.feed(body.as_bytes(), false, self);
-                parser.end(false, self);
-            }
-            E::Unauthorized => {
-                self.http_status(401);
-                self.failure("upstream_unauthorized", "上游授权失效（HTTP 401）");
-            }
-            E::Http(error) if error.is_timeout() => {
-                self.failure("upstream_timeout", "上游请求超时")
-            }
-            E::Http(error) if error.is_connect() => {
-                self.failure("upstream_connection_failed", "无法连接上游服务")
-            }
-            E::Http(_) => self.failure("upstream_transport_error", "上游通信失败"),
-            E::Refresh(_) | E::Auth(_) => {
-                self.failure("upstream_auth_failed", "上游授权或令牌刷新失败")
-            }
-            E::MissingAccessToken(_) => {
-                self.failure("upstream_auth_missing", "供应账户没有可用授权")
-            }
-            _ => self.failure("upstream_request_failed", "上游请求未能完成"),
+        if let codex2api_upstream::UpstreamError::Status {
+            status,
+            headers,
+            body,
+        } = error
+        {
+            self.http_status(*status);
+            self.response_headers(headers);
+            let mut parser = BodyParser::default();
+            parser.feed(body.as_bytes(), false, self);
+            parser.end(false, self);
         }
+        self.lifecycle.fail(error.failure());
+        self.apply_outcome();
         self.finish("failed");
     }
     #[cfg(test)]
@@ -289,7 +274,10 @@ impl RequestLog {
             record.http_status = Some(i64::from(status));
         }
     }
-    fn observe(&mut self, event: &Event) {
+    fn observe(&mut self, event: &Event, value: &serde_json::Value) {
+        if self.lifecycle.outcome().is_some() {
+            return;
+        }
         let Some(record) = &mut self.record else {
             return;
         };
@@ -415,67 +403,36 @@ impl RequestLog {
             )
             .or(record.reasoning_tokens);
         }
-        let status = response
-            .and_then(|r| r.status.as_deref())
-            .or_else(|| event.status.as_ref().and_then(serde_json::Value::as_str));
-        let kind = event.kind.as_deref().unwrap_or("");
-        let http_error = record.http_status.is_some_and(|status| status >= 400);
-        let error = response
-            .and_then(|r| r.error.as_ref())
-            .or(event.error.as_ref())
-            .or_else(|| event.detail.as_ref().filter(|_| http_error));
-        fn nonempty(value: &serde_json::Value) -> Option<&str> {
-            value.as_str().filter(|value| !value.trim().is_empty())
+        let http_status = record.http_status.and_then(|s| u16::try_from(s).ok());
+        if self.lifecycle.observe(value, http_status) {
+            self.apply_outcome();
         }
-        let (code, message) = if let Some(error) = error {
-            let code = error
-                .get("code")
-                .and_then(nonempty)
-                .or_else(|| error.get("type").and_then(nonempty));
-            let message = error
-                .get("message")
-                .and_then(nonempty)
-                .or_else(|| nonempty(error));
-            (code, message)
-        } else if kind == "error" || http_error {
-            (
-                event.code.as_deref().filter(|v| !v.trim().is_empty()),
-                event.message.as_deref().filter(|v| !v.trim().is_empty()),
-            )
-        } else {
-            (None, None)
+    }
+    fn apply_outcome(&mut self) {
+        let (Some(outcome), Some(record)) = (self.lifecycle.outcome(), &mut self.record) else {
+            return;
         };
-        // Later metadata events must not erase an already reported protocol error.
-        if let Some(code) = code {
-            record.error_code = Some(error_text(code, 128));
+        record.status = outcome.record_status().into();
+        if let Some(failure) = outcome.failure() {
+            record.failure_kind = Some(failure.kind.as_str().into());
+            record.failure_status = failure.status.map(i64::from);
+            record.error_code = failure.code.as_deref().map(|v| error_text(v, 128));
+            record.error_message = failure.message.as_deref().map(|v| error_text(v, 512));
         }
-        if let Some(message) = message {
-            record.error_message = Some(error_text(message, 512));
-        }
-        if event.error.is_some()
-            || response.is_some_and(|r| r.error.is_some())
-            || matches!(kind, "error" | "response.failed")
-            || status == Some("failed")
+    }
+    async fn persist_auth_rejection(&self) -> crate::Result<()> {
+        if let (Some(record), Some(revision)) = (&self.record, self.auth_revision)
+            && self
+                .lifecycle
+                .outcome()
+                .and_then(ResponseOutcome::failure)
+                .is_some_and(ResponseFailure::authentication_invalid)
         {
-            record.status = "failed".into();
-            self.terminal = true;
-        } else if kind == "response.incomplete" || status == Some("incomplete") {
-            record.status = "incomplete".into();
-            record.error_code = response
-                .and_then(|r| r.incomplete_details.as_ref())
-                .and_then(|v| v.get("reason"))
-                .and_then(serde_json::Value::as_str)
-                .map(|v| error_text(v, 128));
-            self.terminal = true;
-        } else if kind == "response.cancelled" || status == Some("cancelled") {
-            record.status = "client_stopped".into();
-            self.terminal = true;
-        } else if matches!(kind, "response.completed" | "response.done")
-            || status == Some("completed")
-        {
-            record.status = "completed".into();
-            self.terminal = true;
+            self.storage
+                .reject_supplier_auth(&record.account_id, revision)
+                .await?;
         }
+        Ok(())
     }
     #[cfg(test)]
     fn parse(&mut self, bytes: &[u8]) {
@@ -493,14 +450,17 @@ impl RequestLog {
             {
                 record.status = "completed".into();
             }
-            self.terminal = true;
+            self.lifecycle
+                .observe(&serde_json::json!({"type":"response.completed"}), None);
             return;
         }
-        if let Ok(event) = serde_json::from_slice::<Event>(bytes) {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes)
+            && let Ok(event) = serde_json::from_value::<Event>(value.clone())
+        {
             if event.generation_message() {
                 self.first_message_at(received_at);
             }
-            self.observe(&event);
+            self.observe(&event, &value);
         }
     }
     pub fn finish(&mut self, status: &str) {
@@ -513,7 +473,20 @@ impl RequestLog {
         complete_failure_reason(&mut record);
         record.total_ms = Some(elapsed(self.start));
         let storage = self.storage.clone();
+        let rejected_revision = self.auth_revision.filter(|_| {
+            self.lifecycle
+                .outcome()
+                .and_then(ResponseOutcome::failure)
+                .is_some_and(ResponseFailure::authentication_invalid)
+        });
         tokio::spawn(async move {
+            if let Some(revision) = rejected_revision
+                && let Err(error) = storage
+                    .reject_supplier_auth(&record.account_id, revision)
+                    .await
+            {
+                tracing::error!(%error, "failed to persist supplier authentication rejection");
+            }
             if let Err(error) = storage.finish_usage(&record).await {
                 tracing::error!(%error,record_id=%record.id,"failed to finalize usage record");
             }
@@ -551,6 +524,10 @@ impl RequestLog {
             parser: BodyParser::default(),
             expected_bytes,
             received_bytes: 0,
+            ended: false,
+            idle: Box::pin(tokio::time::sleep(
+                codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
+            )),
         };
         if expected_bytes == Some(0) {
             stream.finish_body();
@@ -710,6 +687,8 @@ struct ObservedStream {
     parser: BodyParser,
     expected_bytes: Option<u64>,
     received_bytes: u64,
+    ended: bool,
+    idle: Pin<Box<tokio::time::Sleep>>,
 }
 impl ObservedStream {
     fn finish_body(&mut self) {
@@ -717,62 +696,109 @@ impl ObservedStream {
             return;
         }
         self.parser.end(self.sse, &mut self.log);
-        self.log.finish(if !self.success {
-            "failed"
-        } else if (self.sse || self.parser.detected_sse) && !self.log.terminal {
-            "incomplete"
-        } else {
-            "completed"
-        });
+        if self.log.lifecycle.outcome().is_none() {
+            if !self.success {
+                let status = self
+                    .log
+                    .record
+                    .as_ref()
+                    .and_then(|r| r.http_status)
+                    .and_then(|s| u16::try_from(s).ok());
+                self.log
+                    .lifecycle
+                    .fail(ResponseFailure::new(status, None, None));
+                self.log.apply_outcome();
+            } else if self.sse || self.parser.detected_sse {
+                self.log
+                    .failure("upstream_incomplete", "上游连接在生成终止事件之前结束");
+            }
+        }
+        self.log.finish("completed");
+    }
+    fn terminate_stream(&mut self, code: &str, message: &str) -> Bytes {
+        self.ended = true;
+        self.log.failure(code, message);
+        self.log.finish("failed");
+        // This event describes the broken generation. It cannot change the
+        // already-established HTTP status or reject the supplier's credentials.
+        let status = ResponseFailure::new(None, Some(code), None).status;
+        let value = serde_json::json!({"type":"response.failed","status":status,
+            "response":{"status":"failed","error":{"code":code,"message":message}}});
+        Bytes::from(format!("\n\nevent: response.failed\ndata: {value}\n\n"))
     }
 }
 impl Stream for ObservedStream {
     type Item = Result<Bytes, reqwest::Error>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        use std::future::Future;
         let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(bytes))) => {
-                if !bytes.is_empty() {
-                    this.parser.feed(&bytes, this.sse, &mut this.log);
+                this.idle.as_mut().reset(
+                    tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
+                );
+                this.parser.feed(&bytes, this.sse, &mut this.log);
+                if this.log.lifecycle.outcome().is_some() {
+                    this.log.finish("completed");
                 }
                 this.received_bytes = this.received_bytes.saturating_add(bytes.len() as u64);
-                // A Content-Length consumer may drop the body without polling EOF.
-                if this.expected_bytes == Some(this.received_bytes) {
+                if this.expected_bytes == Some(this.received_bytes) && !this.sse {
                     this.finish_body();
                 }
                 Poll::Ready(Some(Ok(bytes)))
             }
             Poll::Ready(Some(Err(error))) => {
-                this.log.failure(
-                    if error.is_timeout() {
-                        "upstream_timeout"
-                    } else {
-                        "upstream_stream_error"
-                    },
-                    if error.is_timeout() {
-                        "上游响应流超时"
-                    } else {
-                        "上游响应流读取失败，连接已断开"
-                    },
-                );
-                if let Some(record) = &this.log.record {
-                    let storage = this.log.storage.clone();
-                    let id = record.account_id.clone();
-                    tokio::spawn(async move {
-                        if let Err(error) = storage
-                            .record_supplier_error(&id, "ChatGPT 官方响应流读取失败")
-                            .await
-                        {
-                            tracing::error!(%error, "failed to persist supplier stream failure");
-                        }
-                    });
+                if this.log.lifecycle.outcome().is_some() {
+                    this.ended = true;
+                    this.finish_body();
+                    return Poll::Ready(None);
                 }
-                this.log.finish("failed");
-                Poll::Ready(Some(Err(error)))
+                let error = error.without_url();
+                let code = if error.is_timeout() {
+                    "upstream_timeout"
+                } else {
+                    "upstream_stream_error"
+                };
+                let mut detail = error.to_string();
+                let mut source = std::error::Error::source(&error);
+                while let Some(cause) = source {
+                    detail.push_str(": ");
+                    detail.push_str(&cause.to_string());
+                    source = cause.source();
+                }
+                let message = error_text(&detail, 512);
+                if this.sse {
+                    Poll::Ready(Some(Ok(this.terminate_stream(code, &message))))
+                } else {
+                    this.ended = true;
+                    this.log.failure(code, &message);
+                    this.log.finish("failed");
+                    Poll::Ready(Some(Err(error)))
+                }
             }
             Poll::Ready(None) => {
+                this.parser.end(this.sse, &mut this.log);
+                if this.sse && this.success && this.log.lifecycle.outcome().is_none() {
+                    return Poll::Ready(Some(Ok(this.terminate_stream(
+                        "upstream_incomplete",
+                        "上游连接在生成终止事件之前结束",
+                    ))));
+                }
+                this.ended = true;
                 this.finish_body();
                 Poll::Ready(None)
+            }
+            Poll::Pending if this.sse && this.idle.as_mut().poll(cx).is_ready() => {
+                if this.log.lifecycle.outcome().is_some() {
+                    this.ended = true;
+                    return Poll::Ready(None);
+                }
+                Poll::Ready(Some(Ok(
+                    this.terminate_stream("upstream_timeout", "等待上游响应流超时")
+                )))
             }
             Poll::Pending => Poll::Pending,
         }
@@ -839,12 +865,20 @@ impl WsLedger {
         }
         self.initial_headers = Some(initial);
     }
+    pub fn has_pending(&self) -> bool {
+        !self.slots.is_empty()
+    }
     pub async fn fail_inflight(&mut self, code: &str, message: &str) -> crate::Result<()> {
+        self.fail_pending(ResponseFailure::new(None, Some(code), Some(message)))
+            .await
+    }
+    pub async fn fail_pending(&mut self, failure: ResponseFailure) -> crate::Result<()> {
         for mut slot in self.slots.drain(..) {
             if let Some(log) = &mut slot.log {
-                log.failure(code, message);
+                log.lifecycle.fail(failure.clone());
+                log.apply_outcome();
                 if let Some(mut record) = log.record.take() {
-                    record.status = "failed".into();
+                    complete_failure_reason(&mut record);
                     record.total_ms = Some(elapsed(log.start));
                     log.storage.finish_usage(&record).await?;
                 }
@@ -884,19 +918,24 @@ impl WsLedger {
     }
     #[cfg(test)]
     async fn observe_authorized(&mut self, bytes: &[u8], allow_new: bool) -> crate::Result<()> {
-        self.observe_at(bytes, allow_new, Instant::now()).await
+        self.observe_at(bytes, allow_new, Instant::now())
+            .await
+            .map(|_| ())
     }
     pub(crate) async fn observe_at(
         &mut self,
         bytes: &[u8],
         allow_new: bool,
         received_at: Instant,
-    ) -> crate::Result<()> {
-        let Ok(event) = serde_json::from_slice::<Event>(bytes) else {
-            return Ok(());
+    ) -> crate::Result<Option<ResponseOutcome>> {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+            return Ok(None);
+        };
+        let Ok(event) = serde_json::from_value::<Event>(value.clone()) else {
+            return Ok(None);
         };
         if !event.generation_message() {
-            return Ok(());
+            return Ok(None);
         }
         // VAD may create a Realtime response without a client response.create.
         if allow_new
@@ -941,36 +980,46 @@ impl WsLedger {
                     None
                 }
             });
-        let Some(index) = index else { return Ok(()) };
+        let Some(index) = index else {
+            if response_id.is_none()
+                && let Some(ResponseOutcome::Failed(failure)) =
+                    ResponseOutcome::from_value(&value, None)
+            {
+                if failure.authentication_invalid() {
+                    for slot in &self.slots {
+                        if let Some(log) = &slot.log
+                            && let (Some(record), Some(revision)) = (&log.record, log.auth_revision)
+                        {
+                            log.storage
+                                .reject_supplier_auth(&record.account_id, revision)
+                                .await?;
+                        }
+                    }
+                }
+                self.fail_pending(failure.clone()).await?;
+                return Ok(Some(ResponseOutcome::Failed(failure)));
+            }
+            return Ok(None);
+        };
         let slot = &mut self.slots[index];
         if slot.response_id.is_none() {
             slot.response_id = response_id.map(str::to_string);
         }
         if let Some(log) = &mut slot.log {
             log.first_message_at(received_at);
-            log.observe(&event);
+            log.observe(&event, &value);
+            log.persist_auth_rejection().await?;
         }
-        if matches!(
-            event.kind.as_deref(),
-            Some(
-                "response.completed"
-                    | "response.done"
-                    | "response.failed"
-                    | "response.incomplete"
-                    | "response.cancelled"
-                    | "error"
-            )
-        ) && let Some(mut log) = self.slots.remove(index).and_then(|s| s.log)
+        let outcome = ResponseOutcome::from_value(&value, None);
+        if outcome.is_some()
+            && let Some(mut log) = self.slots.remove(index).and_then(|s| s.log)
             && let Some(mut record) = log.record.take()
         {
-            if record.status == "in_progress" {
-                record.status = "completed".into();
-            }
             complete_failure_reason(&mut record);
             record.total_ms = Some(elapsed(log.start));
             log.storage.finish_usage(&record).await?;
         }
-        Ok(())
+        Ok(outcome)
     }
 }
 
