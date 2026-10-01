@@ -152,11 +152,74 @@ async fn overview_preserves_unknowns_empty_results_and_persisted_costs() {
     let range = "from=2026-09-21T00:00&until=2026-09-22T00:00";
     let stats = f.get(&format!("/admin/api/overview/usage?{range}")).await;
     assert_eq!(stats["summary"]["total_tokens"], 120);
-    assert!(stats["summary"]["cache_rate"].is_null());
+    assert_eq!(stats["summary"]["cache_rate"], 80.0);
+    assert_eq!(stats["rows"][0]["cache_rate"], 80.0);
     assert_eq!(stats["summary"]["missing_token_requests"], 1);
     assert_eq!(stats["summary"]["missing_cache_requests"], 1);
     assert_eq!(stats["summary"]["cost_nano_usd"], 123456789);
     assert_eq!(stats["summary"]["unpriced_requests"], 1);
+    record(
+        &f,
+        "partial-known",
+        "partial",
+        start,
+        Some(100),
+        Some(80),
+        "completed",
+    )
+    .await;
+    record(
+        &f,
+        "partial-cache-missing",
+        "partial",
+        start,
+        Some(300),
+        None,
+        "completed",
+    )
+    .await;
+    let partial = f
+        .get(&format!(
+            "/admin/api/overview/usage?{range}&virtual_account=partial&group_by=model"
+        ))
+        .await;
+    assert_eq!(partial["summary"]["input_tokens"], 400);
+    assert_eq!(partial["summary"]["cached_tokens"], 80);
+    assert_eq!(partial["summary"]["cache_rate"], 20.0);
+    assert_eq!(partial["rows"][0]["cache_rate"], 20.0);
+    assert_eq!(partial["summary"]["missing_cache_requests"], 1);
+    record(
+        &f,
+        "zero-input",
+        "zero",
+        start,
+        Some(0),
+        Some(0),
+        "completed",
+    )
+    .await;
+    let zero = f
+        .get(&format!(
+            "/admin/api/overview/usage?{range}&virtual_account=zero"
+        ))
+        .await;
+    assert!(zero["summary"]["cache_rate"].is_null());
+    record(
+        &f,
+        "no-hits",
+        "no-hits",
+        start,
+        Some(100),
+        Some(0),
+        "completed",
+    )
+    .await;
+    let no_hits = f
+        .get(&format!(
+            "/admin/api/overview/usage?{range}&virtual_account=no-hits"
+        ))
+        .await;
+    assert_eq!(no_hits["summary"]["cache_rate"], 0.0);
     let unknown = f
         .get(&format!("/admin/api/overview/usage?{range}&status=failed"))
         .await;

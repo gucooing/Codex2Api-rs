@@ -466,6 +466,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                     <Bar
                       key={model.key}
                       dataKey={model.key}
+                      legendType="none"
                       yAxisId="tokens"
                       stackId="models"
                       fill={`var(--color-${model.key})`}

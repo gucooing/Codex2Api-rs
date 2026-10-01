@@ -40,6 +40,10 @@ test("overview statistics aggregate real records, filter dimensions, and retain 
   const data = await (await initial).json();
   expect(data.summary.request_count).toBeGreaterThan(100);
   expect(data.summary.missing_cache_requests).toBeGreaterThan(0);
+  expect(data.summary.cache_rate).toBeCloseTo(
+    (100 * data.summary.cached_tokens) / data.summary.input_tokens,
+    8,
+  );
   await page.unroute("**/admin/api/overview/usage?**");
   await expect(page.getByText(/缓存信息缺失 105 个请求/)).toHaveCount(0);
   const modelChart = page.getByLabel("用量统计组合图");
@@ -56,6 +60,7 @@ test("overview statistics aggregate real records, filter dimensions, and retain 
     await expect(
       modelChart.locator(".recharts-legend-wrapper").getByText(label, { exact: true }),
     ).toBeVisible();
+  await expect(modelChart.locator(".recharts-legend-wrapper").getByText(/^模型：/)).toHaveCount(0);
   expect(
     data.model_usage.reduce(
       (sum: number, item: { total_tokens: number }) => sum + item.total_tokens,
@@ -81,7 +86,11 @@ test("overview statistics aggregate real records, filter dimensions, and retain 
   await choose(page, "统计维度", "按模型");
   const model = await submit();
   expect(model.rows[0].key).toBe("review-cycle-model");
-  await expect(modelChart.getByText("模型：review-cycle-model", { exact: true })).toBeVisible();
+  await expect(
+    modelChart
+      .locator(".recharts-legend-wrapper")
+      .getByText("模型：review-cycle-model", { exact: true }),
+  ).toHaveCount(0);
   await form.getByLabel("虚拟账户", { exact: true }).fill("review-consumer");
   await page.getByRole("option", { name: "review-consumer", exact: true }).click();
   await choose(page, "统计维度", "按虚拟账户");

@@ -61,6 +61,7 @@ pub struct UsageStatistics {
 // Aggregate the ledger, never the current record page or current model prices.
 // Cache and reasoning are subsets of input/output. NULLs remain unknown; when
 // some values are known their subtotal is returned with explicit missing counts.
+// Cache rate divides those reported subtotals; missing rows do not hide the ratio.
 const TOTALS: &str = "COUNT(*) AS request_count,
     COALESCE(SUM(status IN ('completed','client_stopped')),0) AS completed_requests,
     COALESCE(SUM(status IN ('failed','incomplete','interrupted')),0) AS failed_requests,
@@ -73,8 +74,7 @@ const TOTALS: &str = "COUNT(*) AS request_count,
     CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cache_write_tokens) END AS cache_write_tokens,
     CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(reasoning_tokens) END AS reasoning_tokens,
     CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cost_nano_usd) END AS cost_nano_usd,
-    CASE WHEN SUM(input_tokens IS NULL OR (input_tokens>0 AND cached_tokens IS NULL))=0
-        AND SUM(input_tokens)>0 THEN 100.0*SUM(cached_tokens)/SUM(input_tokens) END AS cache_rate,
+    CASE WHEN SUM(input_tokens)>0 THEN 100.0*SUM(cached_tokens)/SUM(input_tokens) END AS cache_rate,
     COALESCE(SUM(input_tokens IS NULL OR output_tokens IS NULL),0) AS missing_token_requests,
     COALESCE(SUM(input_tokens IS NULL OR (input_tokens>0 AND cached_tokens IS NULL)),0) AS missing_cache_requests,
     COALESCE(SUM(cost_nano_usd IS NULL),0) AS unpriced_requests";
