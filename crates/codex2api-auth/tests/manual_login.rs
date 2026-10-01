@@ -106,9 +106,11 @@ async fn manual_callback_validates_full_url_and_works_with_occupied_callback_por
         "{}?code=browser-code&state={}",
         pending.redirect_uri, pending.state
     );
+    let mut foreign_origin = url::Url::parse(&valid).unwrap();
+    foreign_origin.set_host(Some("example.com")).unwrap();
     for invalid in [
         valid.replace(&pending.state, "wrong-state"),
-        valid.replace("localhost", "example.com"),
+        foreign_origin.to_string(),
         format!("{valid}&state={}", pending.state),
         format!("{valid}#fragment"),
         "browser-code".to_string(),

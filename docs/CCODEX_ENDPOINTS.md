@@ -21,3 +21,5 @@
 实际安装Desktop为Windows包`26.928.3736.0`。只读检查其`app.asar`中的`app-shared-7552fc8d5d82.js`等构造：`account/login/start`的ChatGPT分支仍读取login_id/auth_url，默认useHostedLoginSuccessPage=false，并保留`account/chatgptAuthTokens/refresh`与账号/工作区ready分支。检索未发现renderer直接构造上述deviceauth HTTP；设备码wire证据来自0.159.3原生CLI。未执行或修改Desktop，不能将这项源码核查表述为Desktop登录实测成功。只读提取证据在忽略目录`target/codex-audit-20261001/desktop/`。
 
 CLI确实包含MCP文件传递实现：官方固定commit的[core/src/mcp_tool_call.rs](https://github.com/openai/codex/blob/01fc69f4026735edfdf6789820549727a4867b11/codex-rs/core/src/mcp_tool_call.rs)在MCP参数准备阶段调用重写流程，[core/src/mcp_openai_file.rs](https://github.com/openai/codex/blob/01fc69f4026735edfdf6789820549727a4867b11/codex-rs/core/src/mcp_openai_file.rs#L247)调用`upload_openai_file`，具体协议在`codex-api/src/files.rs`。这不是通用CLI上传命令，也不证明所有第三方服务已支持该能力。本轮只修改客户端的服务地址、安装名称/默认目录及发布渠道，保留官方原有能力代码；不新增代理文件业务。
+
+更精确的启用条件是`mcp_tool_call.rs::openai_file_input_optional_fields_for_server`要求server等于`CODEX_APPS_MCP_SERVER_NAME`，且参数表非空；参数表来自工具的`_meta["openai/fileParams"]`。因此这是OpenAI Apps专用约定：先取得托管文件，再把file_id/download_url交给Apps工具。普通第三方MCP不会进入这段自动上传逻辑，可按自己的工具协议传文件；MCP协议不要求经模型提供商存储。
