@@ -387,6 +387,23 @@ pub fn router(state: ApiState) -> Router {
             post(oauth::token).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
+            "/api/accounts/deviceauth/usercode",
+            post(handlers::oauth_device::user_code).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/accounts/deviceauth/token",
+            post(handlers::oauth_device::poll).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route("/codex/device", get(handlers::oauth_device::page))
+        .route(
+            "/oauth/device/bootstrap",
+            get(handlers::oauth_device::bootstrap),
+        )
+        .route(
+            "/oauth/device/approve",
+            post(handlers::oauth_device::approve).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
             "/oauth/authorize",
             get(handlers::oauth_authorize::authorize).layer(DefaultBodyLimit::max(16 * 1024)),
         )

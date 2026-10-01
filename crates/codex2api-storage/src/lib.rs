@@ -22,6 +22,11 @@ mod consumer_management;
 mod desktop_support;
 mod oauth;
 mod oauth_authorization;
+mod oauth_device;
+pub use oauth_device::{
+    DeviceAuthorization, DeviceAuthorizationApproval, DeviceAuthorizationCode,
+    DeviceAuthorizationPoll,
+};
 mod password;
 mod proxy;
 mod quota;

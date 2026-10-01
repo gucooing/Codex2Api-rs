@@ -12,13 +12,13 @@ pub const APP_VERSION: &str = env!("CODEX2API_BUILD_TAG");
 pub const CODEX_REPO: &str = "https://github.com/openai/codex";
 
 /// Official Git ref the local snapshot was taken from.
-pub const CODEX_REF_BRANCH: &str = "rust-v0.157.0";
+pub const CODEX_REF_BRANCH: &str = "rust-v0.159.3";
 
-/// Exact commit the current implementation is aligned with.
-pub const CODEX_REF_COMMIT: &str = "00c972ed5d6ff6499317fd41b7f23605b8e6850d";
+/// Exact official protocol target; validation status is recorded in CODEX_UPDATE_PLAN.md.
+pub const CODEX_REF_COMMIT: &str = "01fc69f4026735edfdf6789820549727a4867b11";
 
 /// Commit timestamp (UTC).
-pub const CODEX_REF_COMMIT_DATE: &str = "2026-09-24T18:33:35-07:00";
+pub const CODEX_REF_COMMIT_DATE: &str = "2026-09-30T21:46:21Z";
 
 /// First-line commit message of the reference snapshot.
 pub const CODEX_REF_COMMIT_MESSAGE: &str = "## New Features";
@@ -28,15 +28,15 @@ pub const CODEX_REF_PATH: &str = "reference/codex";
 
 /// Current official packaged CLI release this proxy pretends to be.
 ///
-/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.157.0
+/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.159.3
 /// (`CARGO_PKG_VERSION` stamped into that binary). Not the source-tree `0.0.0`.
-pub const CODEX_RELEASE_VERSION: &str = "0.157.0";
+pub const CODEX_RELEASE_VERSION: &str = "0.159.3";
 
 /// GitHub release tag for [`CODEX_RELEASE_VERSION`].
-pub const CODEX_RELEASE_TAG: &str = "rust-v0.157.0";
+pub const CODEX_RELEASE_TAG: &str = "rust-v0.159.3";
 
-/// Commit the `rust-v0.157.0` tag points at.
-pub const CODEX_RELEASE_COMMIT: &str = "00c972ed5d6ff6499317fd41b7f23605b8e6850d";
+/// Commit the `rust-v0.159.3` tag points at.
+pub const CODEX_RELEASE_COMMIT: &str = "01fc69f4026735edfdf6789820549727a4867b11";
 
 /// User-Agent version token. Always the packaged release, never source `0.0.0`.
 pub const CODEX_PACKAGE_VERSION: &str = CODEX_RELEASE_VERSION;
@@ -140,8 +140,8 @@ mod tests {
     #[test]
     fn commit_is_pinned() {
         assert_eq!(CODEX_REF_COMMIT.len(), 40);
-        assert_eq!(CODEX_PACKAGE_VERSION, "0.157.0");
-        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.157.0");
+        assert_eq!(CODEX_PACKAGE_VERSION, "0.159.3");
+        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.159.3");
         assert_eq!(DEFAULT_ORIGINATOR, "codex_cli_rs");
         assert_eq!(OAUTH_CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
     }

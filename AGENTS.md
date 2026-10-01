@@ -8,12 +8,24 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `00c972ed5d6ff6499317fd41b7f23605b8e6850d` (2026-09-24T18:33:35-07:00)
+- commit: `01fc69f4026735edfdf6789820549727a4867b11` (2026-09-30T21:46:21Z)
 - constants: `crates/codex2api-version`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
 
 ## Updating the official Codex baseline
+
+The maintained client is https://github.com/gucooing/codex, branch `ccodex`
+(a sibling checkout such as `../codex`). Update that fork from an exact official
+stable release first, then compare and adapt this proxy. Record both the official
+release commit and the fork integration commit; fork-only service routing,
+`BASE_OAUTH_URL`, the `ccodex` executable and npm packaging must never replace
+official supplier-side protocol constants. The client otherwise retains official
+Codex behavior and isolates its default home from official Codex, not per service.
+
+User instruction for the 2026-10-01 update: do not perform local compilation
+validation. Push reviewed changes and let cloud CI compile and test them; record
+pending or failed CI honestly instead of claiming validation passed.
 
 When the user requests a Codex update, upgrade, or sync, read and follow
 [docs/CODEX_UPDATES.md](docs/CODEX_UPDATES.md) before making changes.
@@ -40,7 +52,7 @@ validation are complete.
 ## Official constants (do not invent)
 
 - originator: `codex_cli_rs`
-- package version in UA: `0.157.0`
+- package version in UA: `0.159.3`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`

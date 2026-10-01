@@ -17,7 +17,7 @@ use codex2api_version::{
     OAUTH_ISSUER, OAUTH_REVOKE_URL, OAUTH_SCOPE, OAUTH_TOKEN_URL,
 };
 
-/// Official localhost callback path used by Codex CLI.
+/// Official loopback callback path used by Codex CLI.
 pub const CALLBACK_PATH: &str = "/auth/callback";
 pub const CANCEL_PATH: &str = "/cancel";
 
@@ -150,7 +150,7 @@ pub fn generate_state() -> String {
 }
 
 pub fn redirect_uri(port: u16) -> String {
-    format!("http://localhost:{port}{CALLBACK_PATH}")
+    format!("http://127.0.0.1:{port}{CALLBACK_PATH}")
 }
 
 /// Query keys and order match official Codex CLI `build_authorize_url`.
@@ -636,7 +636,7 @@ mod tests {
         };
         let url = build_authorize_url(
             &cfg,
-            "http://localhost:1455/auth/callback",
+            "http://127.0.0.1:1455/auth/callback",
             &pkce,
             "state123",
         );
@@ -667,7 +667,7 @@ mod tests {
         );
         assert_eq!(pairs[0].1, "code");
         assert_eq!(pairs[1].1, OAUTH_CLIENT_ID);
-        assert_eq!(pairs[2].1, "http://localhost:1455/auth/callback");
+        assert_eq!(pairs[2].1, "http://127.0.0.1:1455/auth/callback");
         assert_eq!(pairs[3].1, "challenge");
         assert_eq!(pairs[4].1, "S256");
         assert_eq!(pairs[5].1, "state123");
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn redirect_uri_matches_official_path() {
-        assert_eq!(redirect_uri(1455), "http://localhost:1455/auth/callback");
+        assert_eq!(redirect_uri(1455), "http://127.0.0.1:1455/auth/callback");
     }
 
     #[test]

@@ -8,13 +8,13 @@
 
 供应账户仅负责上游执行；虚拟消费账户独立维护身份、订阅、设备及历史。创建消费账户时固定提供商，之后不可切换。当前只实现 ChatGPT，Grok 等未来提供商需要独立适配，不能复用 ChatGPT 协议冒充支持。
 
-官方 Codex 源码（https://github.com/openai/codex）只作为协议和行为参考，不作为必须依赖或必须照抄的实现。本仓库将官方源码快照放在 `reference/codex`，版本信息见 `reference/SOURCE.md`。实现可以自行编写，但与官方 Codex 服务器通信时的表现必须和在 Codex 中直接登录完全一致。
+客户端单独维护在 [gucooing/codex 的 ccodex 分支](https://github.com/gucooing/codex/tree/ccodex)，本地可与本仓库并列放在 `../codex`。更新顺序为官方稳定版 → ccodex → 本仓库。官方源码仍只作为协议和行为参考，不引入官方 Rust crates；纯净参考快照位置为 `reference/codex`，精确来源记录在版本常量及更新方案中。
 
-当前实现对齐的官方版本：
+本次代码的官方协议目标（编译与运行验证交由云端 CI，状态见更新记录）：
 
-- 发布版: `0.157.0`（tag `rust-v0.157.0`，commit `00c972ed5d6ff6499317fd41b7f23605b8e6850d`）
-- 源码快照: `00c972ed5d6ff6499317fd41b7f23605b8e6850d`（2026-09-24T18:33:35-07:00）
-- User-Agent 版本写死为 `0.157.0`，不用源码树的 `0.0.0`
+- 发布版: `0.159.3`（tag `rust-v0.159.3`，commit `01fc69f4026735edfdf6789820549727a4867b11`）
+- 源码快照: `01fc69f4026735edfdf6789820549727a4867b11`（2026-09-30T21:46:21Z）
+- User-Agent 版本写死为 `0.159.3`，不用源码树的 `0.0.0`
 - 常量 crate: `crates/codex2api-version`
 - 架构说明: `docs/ARCHITECTURE.md`
 
@@ -79,6 +79,16 @@ $env:CODEX2API_DB = "D:\data\codex2api.sqlite"
 
 ## 第三方客户端 OAuth 接入
 
+配套客户端安装与更新：`npm install -g @gucooing/ccodex@latest`（需要先完成 ccodex 首次发布）。命令为 `ccodex`，默认配置与登录数据放在 `~/.ccodex`，不覆盖官方 `codex`；不按服务地址另分凭据。客户端保留官方工具、权限、沙箱和交互逻辑。
+
+在 `~/.ccodex/config.toml` 顶层配置：
+
+```toml
+BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
+```
+
+不配置时使用同一默认值。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_BASE_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/api/oauth/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/api/oauth/chatgpt/codex/device`。设备码授权后的会话同样显示在消费账户的“登录设备”页，可由管理员撤销。
+
 在管理端 **消费账户** 创建用户名、密码、显示名称、邮箱、固定提供商、套餐和订阅信息，再在账户详情的 **执行路由** 中选择同提供商、已完成授权的供应账户。客户端在本系统授权网页输入虚拟账号密码，使用授权码 + PKCE S256 完成登录；Access Token 和 Refresh Token 由协议自动管理，后台没有手动创建、复制 RT 的入口。
 
 虚拟身份、登录设备和本系统用量独立于真实账户。更换绑定保留身份、设备及历史用量，新请求使用新绑定的官方凭据、代理和持久化 HTTP 指纹；旧 WebSocket 在下一条业务消息时结束，客户端需重新连接。删除真实账户只解除绑定；未绑定时仍能续期和读取虚拟身份，但无法发起上游请求。修改虚拟账号密码、停用或删除虚拟账号会使相关设备凭据失效。
@@ -100,6 +110,8 @@ $env:CODEX2API_DB = "D:\data\codex2api.sqlite"
 | 登录授权页及账号密码提交 | `GET /api/oauth/chatgpt/oauth/authorize`、`POST /api/oauth/chatgpt/oauth/authorize` |
 | 授权码兑换／令牌刷新 | `POST /api/oauth/chatgpt/oauth/token` |
 | 撤销代理令牌 | `POST /api/oauth/chatgpt/oauth/revoke` |
+| 申请设备码／轮询授权结果 | `POST /api/oauth/chatgpt/api/accounts/deviceauth/usercode`、`POST /api/oauth/chatgpt/api/accounts/deviceauth/token` |
+| 设备码验证页 | `GET /api/oauth/chatgpt/codex/device` |
 | Responses | `POST /api/oauth/chatgpt/backend-api/codex/responses` |
 | 上下文压缩 | `POST /api/oauth/chatgpt/backend-api/codex/responses/compact` |
 | 其他 Responses 子接口 | `POST /api/oauth/chatgpt/backend-api/codex/responses/{子路径}`（校验路径片段） |

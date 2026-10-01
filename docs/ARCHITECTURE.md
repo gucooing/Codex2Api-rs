@@ -1,16 +1,29 @@
 # Architecture
 
-Implementation is aligned with official Codex:
+Current implementation targets this official Codex release; cloud validation status
+is recorded in CODEX_UPDATE_PLAN.md:
 
 - repo: https://github.com/openai/codex
-- commit: `00c972ed5d6ff6499317fd41b7f23605b8e6850d`
-- date: 2026-09-24T18:33:35-07:00
+- commit: `01fc69f4026735edfdf6789820549727a4867b11`
+- date: 2026-09-30T21:46:21Z
 - snapshot: `reference/codex`
 - constants: `crates/codex2api-version`
 
 Official source is reference only. Do not depend on `codex-rs` crates.
 
-The 0.157.0 implementation and validation record is in [CODEX_UPDATE_PLAN.md](CODEX_UPDATE_PLAN.md).
+The separately maintained client is `gucooing/codex`, branch `ccodex`.
+Its single `BASE_OAUTH_URL` routes first-party client traffic to this service.
+Supplier execution continues to use official upstream endpoints and account-owned
+credentials/fingerprints. The fork keeps official behavior apart from routing,
+its `ccodex` command, isolated default home and its release/update channel.
+
+Device authorization uses `virtual_device_authorizations` for expiring one-time
+codes and PKCE state. Browser approval requires the existing virtual password and
+a cookie-bound CSRF flow. Code redemption reuses `virtual_authorization_codes`
+and creates the normal `virtual_devices` record; administrator listing/revocation,
+account disable and password changes retain their existing authority.
+
+The 0.159.3 implementation and validation record is in [CODEX_UPDATE_PLAN.md](CODEX_UPDATE_PLAN.md).
 The per-request inventory and remaining behavior differences are in
 [CODEX_REQUEST_AUDIT.md](CODEX_REQUEST_AUDIT.md); this baseline does not imply
 that every official product capability has an implemented virtual-account backend.
@@ -405,7 +418,7 @@ From `reference/codex` at the pinned commit:
 
 - originator: `codex_cli_rs` (constant)
 - User-Agent formula (official `get_codex_user_agent`): `{originator}/{CARGO_PKG_VERSION} ({os_type} {os_version}; {arch}) {terminal_token}`
-- UA version token is the packaged release `0.157.0` (constant)
+- UA version token is the packaged release `0.159.3` (constant)
 - OS / arch / version / terminal are rolled once per account from official `os_info` + terminal-detection value sets, then frozen on that account row. Same account always sends the same UA. Do not read the proxy host.
 - ChatGPT Codex base: `https://chatgpt.com/backend-api/codex`
 - Responses path: `/responses`

@@ -1,86 +1,78 @@
-# Codex 0.157.0 更新方案与实施结果
+# Codex 0.159.3 与 ccodex 接入方案
 
-2026-09-25。用户已回复“实施更新方案”，批准建议范围。本文件是同一方案的实施记录；逐请求结论见 [请求与动作核查](CODEX_REQUEST_AUDIT.md)，临时启动见 [本地测试](LOCAL_TEST.md)。
+2026-10-01（Asia/Shanghai）。状态：**用户已批准，正在实施**。用户已选择以官方 0.159.3 创建 `ccodex` 分支，npm 包为 `@gucooing/ccodex`。[前次实施记录](CODEX_UPDATE_0.157.0.md)已保留。用户随后要求不做本地编译验证，推送后由云端 CI 编译。
 
-## 基线与批准范围
+## 基线与证据
 
-| 项目 | 值 |
+| 项目 | 核实值 |
 | --- | --- |
-| 原 BASE_COMMIT / release | `b412ff32c417f855c2b2d1581b77058eed87c84b` / `0.156.1` |
-| TARGET_TAG / UA | `rust-v0.157.0` / `0.157.0` |
-| TARGET_COMMIT | `00c972ed5d6ff6499317fd41b7f23605b8e6850d`，annotated tag 解引用为 commit |
-| Commit 时间 | `2026-09-25T01:33:35Z`（原时区 `2026-09-24T18:33:35-07:00`） |
-| 发布时间 / 查询时间 | `2026-09-25T02:31:06Z` / `2026-09-25T07:05:24Z` |
-| 官方来源 | [0.157.0 release](https://github.com/openai/codex/releases/tag/rust-v0.157.0)，GitHub API latest 当时返回该稳定版 |
-| 原本地 main | `d7b07d45517a793acfba4cbf8de697d723cceb46`，保留在 `reference/codex` 的 `main` 分支 |
-| 当前参考快照 | `reference/codex` detached 到 TARGET；已补 `reference/SOURCE.md` |
-| 实际 Desktop | Appx `26.917.9434.0`、内包 `26.917.71314`、native `0.155.0-alpha.16.4`，与新 release 分别验证 |
-| Desktop archive SHA256 | `d4234b03eb532fe0f3e9a7d90caad51edb68af45f771cc786d966377e7446f5a` |
+| 当前 BASE / release / UA | `00c972ed5d6ff6499317fd41b7f23605b8e6850d` / `rust-v0.157.0` / `0.157.0` |
+| 目标 release / tag | `0.159.3` / `rust-v0.159.3` |
+| TARGET_COMMIT | `01fc69f4026735edfdf6789820549727a4867b11`，官方 tag 解引用结果 |
+| commit 时间 / 发布时间 | `2026-09-30T21:46:21Z` / `2026-09-30T22:57:34Z`（发布为北京时间 2026-10-01 06:57:34） |
+| 官方证据 / 查询日期 | [release](https://github.com/openai/codex/releases/tag/rust-v0.159.3)、[latest API](https://api.github.com/repos/openai/codex/releases/latest)，2026-10-01，非预发布版 |
+| 客户端 fork | `https://github.com/gucooing/codex`，本地 `D:\Github\codex` |
+| 原 main | `a933dd77dbe101d7bd746ea3c7d1f8174eca4a05`，保留；新 `ccodex` 分支从 TARGET 开始 |
+| 快照缺口 | 当前工作区没有 `reference/codex`/`SOURCE.md`，已从官方取回 BASE 对象完成源码比较；未写入新的已对齐快照 |
 
-批准的是稳定版更新、A01–A05/A08 兼容修复和请求审计。A06 完整文件业务、A07 供应健康重试策略扩展未获单独批准；A09 其他外部产品缺口保留未完成，不伪造成功。用户后来要求完成后提供临时启动方式；未做部署、提交/推送或运行中服务重启。
+两个完整树 `git diff BASE TARGET`：1,603 文件，72,575 行新增、19,198 行删除；244 新增、1,323 修改、29 删除、7 重命名。补齐历史后目标独有 283、旧基线独有 2 个提交。完整 files/stat/diff/commits 保存在忽略目录 `target/codex-audit-20261001/`，可由上述 commit 重建。没有用 main 或源码占位版本代替 release。
 
-## 官方源码比较
+变化主要涉及 TUI、工具/exec-server、Guardian、OAuth 回调、Retry-After deadline、WS continuation/interrupt、模型目录、图片文件引用及套餐类型。客户端本地执行/沙箱变化不移植到代理；源码分支的存在不等于发布默认启用。
 
-比较两个完整树 BASE→TARGET，共 1,086 个文件、42,832 行新增、10,984 行删除；154 新增、928 修改、3 删除、1 重命名。目标独有 128 提交，旧基线独有 2 提交（发布提交及 GPT-6 Sol/Luna 回移 `f1b21bb293`）。因此 GPT-6 Sol/Luna 已存在，不是本次项目新增模型。
+## 适配矩阵
 
-已沿请求/认证/网络/模型/上传/Guardian/插件/Realtime 调用链核对；TUI/沙箱/本地执行器变更作适用性分类。原 main 比目标树还多 1,074 个文件差异、169 个 main 侧额外可达提交；未把 main 当成 release。本地分析材料在忽略目录 `target/codex-audit-20260925/`（files/commits/diff、精确发布源码树和 Desktop 请求字面扫描）。可按上面的 commit 重新取得源码。
+官方路径相对 [TARGET 源码](https://github.com/openai/codex/tree/01fc69f4026735edfdf6789820549727a4867b11/codex-rs)。
 
-## 适配矩阵及结果
-
-| ID | 官方行为、实际差异 | 结果、实施位置与验证 |
+| ID / 状态 | 官方行为与证据 | 当前实现、修改及验证 |
 | --- | --- | --- |
-| A01 | 旧基线与目标都支持 origin 的 `NO_CONSTRAINT`；本项目把它当 URL 解析，产生用户提供的 `workspace backend origin is invalid` | **已修复**。upstream/routing.rs 按 bootstrap origin 解释哨兵；保持区域约束、账户唯一性、HTTPS/凭据/路径/空白检查。覆盖 HTTP/compact/Guardian/WS URL、旧 SQLite 快照与凭据变更；Admin 工作区记录显示实际解析结果。未读取真实供应快照，根因是源码定位，非该账户抓包。 |
-| A02 | 虚拟账户对 native 返回 chatgpt.com，renderer 则靠 UA 改哨兵，会改变 native 目的地 | **已修复**。identity.rs 统一返回 NO_CONSTRAINT，backend.rs 去掉 UA 分支。当前 Desktop `$Te` schema 和两版 native 使用服务实际响应通过。原生要求 HTTPS base，HTTP 管理页可用不等于 HTTP 原生工作区受支持。 |
-| A03 | 官方 WS 错误保留 headers，旧 Status 只留被截断 body 且 401 被折叠 | **已修复**。upstream/error.rs/websocket.rs、api/error.rs/usage.rs 保留状态、完整 JSON 及白名单的 error/retry/request ID 头；剥离连接头、供应 cookie/凭据/额度。400/401/403/426/429/503 与握手本地测试通过。 |
-| A04 | String.truncate(4096) 可能切断中文 UTF-8，还会破坏 JSON | **已修复**。协议正文不截断；Display 无正文，账本仍用已有有界脱敏逻辑。中文/emoji 长错误与分类测试通过。 |
-| A05 | 当前 Desktop `SFc` POST `/wham/realtime/calls?intent=quicksilver&architecture=avas`，旧路由缺失 | **已修复入口及已有数据链路**。单独 Wham kind 发到真实 WHAM 上游路径，保留 v1/v3 请求；检查成功 SDP/Location 后保存 call 归属。管理增加只读“语音通话创建记录”。实际 renderer 构造→本地 TLS 出站捕获→renderer reader 通过；完整在线音频未测试，有限额且未计价的调用仍明确拒绝。 |
-| A06/U09 | file blob timeout 60→300s、最多5次 retry，create/PUT/finalize；本项目尚无完整入口/存储 | **未实施**，独立业务范围。不能把文件引用透传或新重试常量视为上传支持；需要账户归属、大小/状态/来源、换绑策略和管理记录后才能完成。 |
-| A07 | 官方可重试瞬时 5xx/传输失败；本项目持久供应异常需管理员恢复 | **保留产品差异**，未批准改运营策略；不叠加代理与客户端重试造成重复执行。 |
-| A08 | 旧 Test-DesktopProxyHook 的压缩符号已过期 | **已修复本次受影响验证**。当前 bundle 的 launcher/workspace/model/realtime 实际函数执行通过；不改安装包或业务/权限逻辑。其他旧 bundle 专用脚本未全部迁移，报告中保留边界。 |
-| A09 | MCP 私有执行、连接器/插件授权目录、云安装/自动化、付款及部分历史采集不完整 | **未实施完整外部产品**，逐条记录真实501/不可用/仅查询行为，不能凭空集合算完成。 |
-| U01 | 0.156.1→0.157.0 package/UA/ref commit | **已同步**。version crate、版本断言、README/AGENTS/ARCHITECTURE、Admin fixtures、SOURCE 和准确快照。 |
-| U02 | 无 slug 增删；6 个模型对象改变，GPT-5.6 Sol 移除 ultrafast、priority 6→4，若干 metadata/messages/shell/plan/effort flags 改变 | **已同步**精确发布 models.json。当前 Desktop picker 和两版 native 可读取；管理模型元数据引用新 commit。本地启用、套餐、价格不从官方 available_in_plans 自动发放；历史费用不重算。 |
-| U03 | 本次 OAuth issuer/client_id/scopes/code exchange/refresh/revoke wire 不变；新增网络策略绑定 | **协议已兼容**。Auth 单元、PKCE/设备码/refresh/revoke/独立代理回归通过。网络策略即时撤销的整体等价性见 U15。 |
-| U04 | 新增 body-only `client_metadata.mcp_attribution`，只有官方目的地带内部元数据 | **透传已兼容**。JSON 归一化只重建安装身份，保留其它 metadata；官方客户端对自定义地址主动省略的字段不伪造。 |
-| U05 | Guardian classifier 每次租用前解析 workspace，连接 key/凭据代际、约束 HTTP 禁止重定向 | **已有代理路由适用，A01/A02已修复**。两角色均走供应 Responses 与连接校验；路由/禁止重定向/代际回归通过，实际审批结果留给客户端。 |
-| U06 | guardianv2.thread_context 默认启用，跨 compaction hash 让后端验证，额外政策/保留授权上下文改变 | **透传已兼容**，属于客户端审查上下文；代理不制造授权或改审批流程，在线 Guardian 全动作未验。 |
-| U07 | Realtime 支持配置代理/网络策略，跨线程保持语音，可选 v3 reasoning status | **配置代理及帧透传已有，A05补入口**；本地传输/参数/归属/限额测试通过，真实音频/线程切换未在线验。 |
-| U08 | standalone search 的每请求及重定向重新选路，路径/body不变 | **显式供应代理已兼容**；目标是服务端各账号固定代理，不继承桌面系统/PAC。所有在线重定向条件未测。 |
-| U10 | image failures 保留 x-codex-imagegen-request-id | **HTTP响应透传已兼容**，保持请求ID与图像ID区别；图像调用和真实成功数量计费测试通过，在线出图未测。 |
-| U11 | invalid_prompt 独立分类，network policy denied不可当瞬时失败 | **错误正文透传及A03修复通过**；不把策略拒绝改成功。 |
-| U12 | 远程插件 OAI-Product-Sku 可配置、默认codex；extensions返回 | **本地安装记录仍可读，完整目录/授权执行未实现**；不能借供应私有数据实现；见F12。 |
-| U13/U14 | daemon默认启用、fork/import/时间戳/MCP目标/技能缓存；Bedrock/Gateway/TUI/沙箱内部变化 | **客户端实现不适用代理移植**；产生的服务请求仍列入审计。未扩展其它提供商，launcher保持原生runtime/默认profile。 |
-| U15 | 官方即时撤销在途HTTP/WS网络策略 | **保留未对齐项**。本项目HTTP/SSE没有统一即时撤销，WS按消息/生成边界检查；此项已核查并报告，不作全部行为一致声明。 |
-| U16 | SQLx宏/AWS/crossterm/release workflow变化；WS fork revision不变 | **不需移植依赖升级**。保留已有Cargo.lock及crate边界，不依赖官方crates；Windows验证通过，其它发布目标未在本机运行。 |
+| S01 需要同步 | 版本 0.157.0 → 0.159.3；originator、UA公式、安装/账户头无变化；`login/src/auth/default_client.rs` | 最后统一更新 version crate、文档、快照、断言；复用现有 `align_user_agents` 幂等更新派生UA，测试旧账户身份保留和多账户隔离。 |
+| S02 需要同步 | OAuth callback/success 从 localhost 改为127.0.0.1；`login/src/server.rs`、`success_page.rs` | `auth/src/oauth.rs::redirect_uri` 仍用localhost，需修改；验证PKCE授权URL、code exchange、fallback port。旧pending授权仍用已保存redirect_uri。 |
+| S03 已兼容，补回归 | issuer/client_id/scopes、refresh/revoke wire不变 | 供应OAuth保持官方地址，虚拟OAuth保持服务前缀；虚拟redirect校验已接受新loopback。验证ccodex授权/刷新/撤销与原设备管理一致。 |
+| S04 需要同步 | `models-manager/models.json` 新增gpt-6.1-sol、移除内置gpt-5.4，排序/描述/messages变化 | 同步upstream的官方描述符。保留管理员目录、授权、价格及历史；不自动授予新模型或编造价格，不删除已有自定义模型。验证管理模型数据与客户端reader。 |
+| S05 已兼容，补回归 | WS `response.interrupt`携带response_id和discard_partial_items，保留连接以继续生成；`codex-api/src/endpoint/responses_websocket.rs`、`12de0e395d` | websocket handler仅归一化create，其他帧透传；ws_start仅为create建账。测试interrupt不开新账、continuation/完成usage顺序，发现缺口则修复bridge/ledger。 |
+| S06 已兼容，补回归 | HTTP遵守Retry-After deadline，错误限额上下文增强；`codex-client/src/retry.rs`、`http-client/src/retry_after.rs`、`codex-api/src/sse/responses_error.rs` | api/error已有retry-after/retry-after-ms及结构化错误透传；验证HTTP/SSE/WS。保留客户端重试职责，不叠加可能重复收费的代理重放。 |
+| S07 已兼容，补回归 | OpenAI provider显式endpoint override也保留内部metadata；`model-provider-info/src/lib.rs`、`model-provider/src/provider.rs`、`c9e2520707` | 当前JSON归一化仅替换供应安装身份，测试不丢工具/client_metadata。 |
+| S08 待确认 | 账户协议新增`promax`；`codex-backend-openapi-models/.../rate_limit_status_payload.rs`、`backend-client/src/client.rs` | 检查供应快照解析和管理展示；必要时补类型兼容。虚拟订阅只由管理员实际发放，不自动升级任何权益。 |
+| S09 本次排除 | CLI的MCP文件传递使用`core/src/mcp_openai_file.rs`→`codex-api/src/files.rs`，不是普通上传命令 | 用户最新要求撤回文件上传扩展。新增文件路由、迁移、管理页及引用校验已全部移除，保留此前未实现边界。 |
+| S10 已有差异 | 官方managed network policy绑定账户并影响在途请求；`login/src/auth/default_client.rs`、`chatgpt/src/chatgpt_client.rs` | 保留供应HTTP client/proxy/cookie隔离和连接代际检查，不移植桌面系统/PAC策略；既有HTTP在途即时撤销差异继续明确记录。 |
+| S11 不适用代理移植 | TUI安全提示、Guardian上下文、工具/沙箱/exec-server、Bedrock及第三方MCP认证变化 | 客户端继承稳定版；涉及服务请求继续登记，不伪造官方安全设置、购买、外部授权或执行成功。 |
+| S12 需要同步 | 新维护链：官方 → gucooing/codex → Codex2API | 更新AGENTS、CODEX_UPDATES、README，分别记录官方release commit及fork集成差异。供应wire依据仍是官方，fork地址不能写进供应端常量。保留用户README修改意图。 |
 
-主要官方证据（均锁定 TARGET）：
+## 客户端与服务接口
 
-- [workspace resolve_routing](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/app-server/src/request_processors/account_processor/workspace_routing.rs#L427)，[旧基线同分支](https://github.com/openai/codex/blob/b412ff32c417f855c2b2d1581b77058eed87c84b/codex-rs/app-server/src/request_processors/account_processor/workspace_routing.rs#L427)。
-- [模型目录](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/models-manager/models.json)、[Responses metadata](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/core/src/responses_metadata.rs#L325)。
-- [Guardian connection pool](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/ext/guardian-v2/src/async_scorer/sampler/connection_pool.rs)、[WS error](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/codex-api/src/endpoint/responses_websocket.rs#L561)。
-- [file upload](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/codex-api/src/files.rs)、[Realtime](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/codex-api/src/endpoint/realtime_websocket/methods.rs)、[插件SKU](https://github.com/openai/codex/blob/00c972ed5d6ff6499317fd41b7f23605b8e6850d/codex-rs/core-plugins/src/remote.rs#L2371)。
+客户端改造已获用户指示，可独立推进：
 
-## 验证证据与限制
+- 命令`ccodex`，包`@gucooing/ccodex`及同scope平台包；安装、更新检查、更新提示、归档和发布流程指向用户仓库。内部crate/协议字段/originator保留官方定义。
+- `config.toml`顶层`BASE_OAUTH_URL`，默认`https://oauth-ai.alsl.xyz/api/oauth/chatgpt`。校验URL并规范化尾斜线；OAuth、backend-api、v1、HTTP/WS从同一服务根派生。错误不能静默回退官方地址。
+- 逐调用链核查浏览器授权、交换、刷新、撤销、device code、models、usage、responses、compact、Guardian、图片、搜索、Realtime、工作区/云配置、插件/MCP/任务/遥测。JWT claim命名空间、OAuth client_id、用户第三方MCP、文档链接、npm/GitHub发布源不是可全局替换的服务endpoint。
+- ccodex配置/凭据默认独立于官方codex。用户明确要求仅与官方codex隔离，不按服务地址拆分凭据；统一使用ccodex自己的配置和登录数据。其他工具、权限、沙箱、登录及交互行为保持官方实现。
+- 服务端统一前缀`/api/oauth/chatgpt`；对每条请求登记method/path/query/body/response/error/ownership/admin数据源。真实已有实现复用，不能以fallback 200或空集合冒充缺失能力。
+- 设备码若进入登录序列，补usercode/token/验证页、短期状态及速率/到期处理，最终授权与撤销复用登录设备管理。保留PKCE/state/callback。
+- 本次不扩展文件上传、云插件执行、远程控制等既有产品缺口，不建立购买/付款系统。客户端仅增加第三方服务地址支持，其他行为沿用官方。
 
-| 验证层 | 实际结果 |
-| --- | --- |
-| 编译 | 受影响8个crate及 `cargo check --locked --workspace` 通过；前端静态导出后 `cargo build --locked -p codex2api` 通过，产物 `target/debug/codex2api.exe` |
-| Rust 回归 | API/Admin/Auth/Accounts/Storage/Service/Version 共165项通过、2项原有忽略；上游40项通过。后续增加的UA存量/幂等和只读通话记录2项单独通过，共207个不同测试通过；针对当前Desktop的重复执行不重复计数 |
-| 前端 | lint、Prettier、TypeScript、17项contract tests及Next静态build通过 |
-| 本次改动的Desktop reader | 当前安装包workspace `$Te`、模型`YVt/yVt`、voice `SFc`及其真实call ID schema、main/native launcher边界实际执行；输入包含真实本地API响应或传输捕获 |
-| 原生客户端 | 官方0.157.0 standalone app-server（release archive SHA256核对）和现有Desktop自行管理的runtime分别读取实际API fixtures；thread/start、turn/start、WS预热/生成、turn/completed成功；只使用进程内fixture外部token、默认profile及临时测试工作目录 |
-| 启动器 | 地址路由/Worker断点/原生启动合约通过；生产hook未新增业务修改，GUI全流程未运行 |
-| 二进制启动 | 独立测试SQLite与127.0.0.1:18080启动，healthz为true、version准确；Ctrl+C停止；未操作生产库 |
-| 在线/跨平台 | 未调用真实上游模型、没有全GUI点击验收，Linux/macOS发布目标未在本机验证。2个忽略项为真实proxy网络检查及旧完整Desktop登录脚本；原生fixture成功不替代它们 |
+## 实施、数据与验证
 
-逐条请求包括方法/path/query、数据归属、分页/空非空、错误与下游动作。当前登记152条，兼容挂载展开300个组合；反向扫描当前main/renderer还有未注册的动态/其它产品候选，全部留在 [审计表](CODEX_REQUEST_AUDIT.md)，不把字符串命中当执行证据。
+1. 批准后先做S02/S04和必要兼容修复，再连接ccodex与临时服务；最后更新基线声明。
+2. 保留installation_id、冻结OS/arch/terminal、代理、时区、token、订阅与账本；仅幂等更新派生UA并重建进程HTTP池，不重算费用。
+3. 基线更新本身无需数据库迁移。设备码/文件需要新状态时只新增迁移，用临时SQLite测试；必须复用/补齐设备和资源管理记录。真实库不操作。
+4. 按用户最新要求，编译、Rust测试、schema生成及三平台构建交由云端CI，不再在本地运行。保留本地格式、静态检查和不需编译的打包检查。云端结果与未执行项分别记录。
+5. 改虚拟接口前核查实际安装Desktop的请求/reader/下游分支，server mock、ccodex和Desktop证据分开；不修改Desktop。
+6. 本地mock使用假token和临时SQLite，捕获方法、地址、头部、PKCE、JSON、压缩、SSE/WS。用户域名尚未部署，不能声称在线登录/真实推理通过。
+7. 全部获准基线兼容项通过后更新version、AGENTS/README/ARCHITECTURE、reference/SOURCE与快照。客户端发布工作流准备好后，实际发布所需远程权限另按实际授权执行。
 
-## 存量数据、使用与恢复
+恢复方式：保留旧基线记录、原main分支；代码可逐文件恢复，不重启现有服务、不改真实库。未来部署需要备份与新构建验证。未取得的证据：修改后的编译/运行、Desktop执行、线上服务及跨平台发布，均尚未验证。
 
-没有新数据库迁移、依赖或锁文件更新。保留installation_id、OS/arch/terminal、时区、代理和凭据；现有启动 `align_user_agents` 幂等同步UA版本派生值，新增测试验证额外fingerprint字段、重启、二次启动均不丢失。供应工作区原始NO_CONSTRAINT快照可直接重读，无需删除账户/快照。UA变更后创建新的进程内HTTP pools；不重算价格快照/历史费用，不发放官方权益。
+## 裁决
 
-本地main分支仍保留用户拉取的提交，参考HEAD detached到目标release，没有reset main。`reference/`被git忽略，已提交源码记录足以重建快照。
+最终范围为S01–S08、S12和ccodex对现有服务的地址接入、必要设备码登录。用户后来明确移除S09文件扩展，已撤回全部相关代码。S10/S11保留已说明边界。
 
-临时启动使用已构建单进程EXE及独立测试库，见 [LOCAL_TEST.md](LOCAL_TEST.md)。管理页可用HTTP；原生Codex需指向实际HTTPS反向代理入口，配置PUBLIC_BASE_URL不会自行提供TLS。
+用户于2026-10-01明确回复“批准方案，继续实施”，批准本节建议范围。协议一致不能保证服务端无法识别代理。
 
-本次不部署。无需schema回退；如用户切换到真实库启动，先按既有运维流程备份，并在一次只运行一个正式实例的方式下测试。发生兼容问题可回退二进制与代码；不以删除账户、令牌或用量记录恢复。最终基线为0.157.0支持范围的协议参考，剩余功能与行为差异仍明确存在。
+## 当前实施记录
+
+- ccodex已推送到`gucooing/codex`的`ccodex`分支，提交`efcc6089a51a66397937faf9f09638162571d811`。它从官方0.159.3建立，不移动原main。六平台构建由[GitHub Actions](https://github.com/gucooing/codex/actions/runs/36877373461)执行，尚不能视为全部通过。
+- 客户端没有增加按地址存储凭据的逻辑，`login/src/auth/storage.rs`与官方基线无差异；默认`.ccodex`仅用于与官方安装分开。单个`BASE_OAUTH_URL`负责服务路由。
+- 服务端更新OAuth loopback回调、模型描述符、版本/UA目标和相应断言；补设备码usercode/token/浏览器授权，兑换仍走原PKCE和登录设备记录。后台现有登录设备列表及撤销操作复用，不引入手工token配置。
+- 新增迁移仅0048设备授权。文件上传、下载、文件记录页、文件票据、文件引用重写及0049迁移已按用户最新要求撤回；它们没有推送或作用于真实数据库。
+- npm平台别名/命令入口静态测试、Node语法、安装器Shell/PowerShell语法、Rust格式与前端新增页格式检查已执行；SQLite迁移在内存库检查，无真实库修改。
+- 用户要求停止本地编译后，没有继续本地build/test/clippy。此前尝试曾遇到缺少MSVC链接器及上游release锁文件workspace版本戳问题，不计为验证通过。后续编译、Rust回归、schema生成、跨平台产物检查均由云端执行；没有实际登录未部署的服务或调用真实上游模型。

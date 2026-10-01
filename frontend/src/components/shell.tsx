@@ -134,7 +134,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [pathname]);
   return (
     <>
-      {pathname.startsWith("/authorize") ? (
+      {pathname.startsWith("/authorize") || pathname.startsWith("/device") ? (
         children
       ) : (
         <SidebarProvider>

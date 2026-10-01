@@ -2283,6 +2283,13 @@ mod tests {
         )
         .await
         .unwrap();
+        // Official 0.159.3 steering interrupts a response without creating a new generation.
+        ws_start(
+            &ledger,
+            r#"{"type":"response.interrupt","response_id":"r1","mode":"discard_partial_items"}"#,
+        )
+        .await
+        .unwrap();
         ledger
             .lock()
             .await
