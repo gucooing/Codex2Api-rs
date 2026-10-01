@@ -6,12 +6,15 @@ use sqlx::{
 };
 use std::borrow::Cow;
 
-async fn snapshot(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info(?)")
+async fn columns(pool: &SqlitePool, table: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT name FROM pragma_table_info(?)")
         .bind(table)
         .fetch_all(pool)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+async fn snapshot(pool: &SqlitePool, table: &str, columns: &[String]) -> Vec<String> {
     let values = columns
         .iter()
         .map(|name| format!("quote(\"{name}\")"))
@@ -75,22 +78,35 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
     ];
     let mut before = Vec::new();
     for table in tables {
-        before.push(snapshot(&pool, table).await);
+        let columns = columns(&pool, table).await;
+        let rows = snapshot(&pool, table, &columns).await;
+        before.push((columns, rows));
     }
     // A caller bypassing Storage's migration connection must fail before a
     // parent rebuild can cascade into these child rows.
     assert!(migrations.run(&pool).await.is_err());
-    for (table, expected) in tables.iter().zip(&before) {
+    for (table, (columns, expected)) in tables.iter().zip(&before) {
         assert_eq!(
-            &snapshot(&pool, table).await,
+            &snapshot(&pool, table, columns).await,
             expected,
             "failed migration: {table}"
         );
     }
     pool.close().await;
     let storage = Storage::open(&path).await.unwrap();
-    for (table, expected) in tables.iter().zip(&before) {
-        assert_eq!(&snapshot(storage.pool(), table).await, expected, "{table}");
+    for (table, (original_columns, expected)) in tables.iter().zip(&before) {
+        // Later migrations may append fields; every pre-existing column and value must survive.
+        let current_columns = columns(storage.pool(), table).await;
+        assert!(
+            original_columns
+                .iter()
+                .all(|column| current_columns.contains(column))
+        );
+        assert_eq!(
+            &snapshot(storage.pool(), table, original_columns).await,
+            expected,
+            "{table}"
+        );
     }
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pragma_foreign_key_check")

@@ -79,3 +79,5 @@
 - 服务端提交`f94c41fc7971bc300e229621305947d95d4eb6a1`的[云端检查](https://github.com/gucooing/Codex2Api-rs/actions/runs/36880790481)已通过前端检查/导出、Rust格式及`cargo check --workspace --locked`；测试在既有管理接口fixture缺少`failure_kind`/`failure_status`处失败。实际输出与fixture结构比较仅差这两个既有字段，补为null后重跑，不改接口业务行为。
 - 第二轮云端测试已通过管理接口fixture和新增设备码的PKCE/单次兑换/设备撤销回归；旧手动回调负例使用`replace("localhost",...)`，在新版127.0.0.1地址上不再实际篡改host，导致负例失败。现改为解析URL再设置外部host，保持原有拒绝外部回调的检查目的，不放宽认证校验。
 - 客户端安装脚本补充提交`4a5f781653`仅修正与官方安装路径冲突的问题和脚本可执行位，Rust代码与正在构建的`efcc6089a5`相同；没有新增按服务隔离凭据。
+- 第三轮云端测试推进到存量供应身份迁移回归：旧测试把44版所有列与最新库所有列直接比较，46版新增的失败字段导致误报。改为核对原列全部存在且原值全部保留，继续检查外键、令牌轮换、删除和重启行为；没有修改任何既有迁移。CI测试增加`--no-fail-fast`，一次收集剩余失败。
+- `reference/codex`已恢复为官方目标commit的干净detached worktree，`reference/SOURCE.md`记录准确来源；该目录仍被忽略。完整基线验证继续以云端结果为准。

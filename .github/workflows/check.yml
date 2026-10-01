@@ -33,4 +33,4 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --locked
       - name: Test workspace
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
