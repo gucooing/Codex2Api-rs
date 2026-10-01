@@ -76,3 +76,4 @@
 - 新增迁移仅0048设备授权。文件上传、下载、文件记录页、文件票据、文件引用重写及0049迁移已按用户最新要求撤回；它们没有推送或作用于真实数据库。
 - npm平台别名/命令入口静态测试、Node语法、安装器Shell/PowerShell语法、Rust格式与前端新增页格式检查已执行；SQLite迁移在内存库检查，无真实库修改。
 - 用户要求停止本地编译后，没有继续本地build/test/clippy。此前尝试曾遇到缺少MSVC链接器及上游release锁文件workspace版本戳问题，不计为验证通过。后续编译、Rust回归、schema生成、跨平台产物检查均由云端执行；没有实际登录未部署的服务或调用真实上游模型。
+- 服务端提交`f94c41fc7971bc300e229621305947d95d4eb6a1`的[云端检查](https://github.com/gucooing/Codex2Api-rs/actions/runs/36880790481)已通过前端检查/导出、Rust格式及`cargo check --workspace --locked`；测试在既有管理接口fixture缺少`failure_kind`/`failure_status`处失败。实际输出与fixture结构比较仅差这两个既有字段，补为null后重跑，不改接口业务行为。

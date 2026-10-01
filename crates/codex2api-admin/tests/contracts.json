@@ -687,7 +687,9 @@
         "cost_nano_usd": 14100000,
         "billing_status": "priced",
         "billing_model": "gpt-6-astra",
-        "billing_tier": "standard"
+        "billing_tier": "standard",
+        "failure_kind": null,
+        "failure_status": null
       }
     ],
     "total": 1,
