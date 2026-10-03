@@ -40,9 +40,64 @@ pub(crate) struct RequestLog {
     lifecycle: ResponseLifecycle,
     auth_revision: Option<i64>,
     authoritative_model: bool,
+    supplier_failure: Option<codex2api_upstream::SupplierFailure>,
     client_stopped: Arc<AtomicBool>,
 }
 impl RequestLog {
+    pub(crate) async fn rebind_supplier(
+        &mut self,
+        account: &codex2api_storage::SupplierAccount,
+    ) -> crate::Result<()> {
+        if let Some(record) = &mut self.record {
+            record.account_id = account.id.clone();
+            record.account_name = account
+                .display_name
+                .as_deref()
+                .or(account.email.as_deref())
+                .unwrap_or(&account.id)
+                .into();
+            self.auth_revision = self.storage.supplier_auth_revision(&account.id).await?;
+            self.storage
+                .reroute_usage(&record.id, &record.account_id, &record.account_name)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn supplier_attempt_failed(&mut self, failure: ResponseFailure) {
+        // Keep the last rejection if all candidates fail; a successful retry clears
+        // it before observing the winning response. Pricing and request ID stay fixed.
+        // The pool already persisted the classified observation using the exact
+        // attempt revision. Do not reinterpret a refresh throttle as revoked auth.
+        self.auth_revision = None;
+        self.lifecycle.fail(failure);
+        self.apply_outcome();
+    }
+
+    pub(crate) fn retry_generation(&mut self) {
+        self.lifecycle = ResponseLifecycle::default();
+        self.authoritative_model = false;
+        self.supplier_failure = None;
+        if let Some(r) = &mut self.record {
+            r.status = "in_progress".into();
+            r.http_status = None;
+            r.error_code = None;
+            r.error_message = None;
+            r.upstream_request_id = None;
+            r.actual_model = None;
+            r.failure_kind = None;
+            r.failure_status = None;
+            r.first_byte_ms = None;
+            r.input_tokens = None;
+            r.output_tokens = None;
+            r.cached_tokens = None;
+            r.cache_write_tokens = None;
+            r.reasoning_tokens = None;
+            r.image_count = None;
+            r.image_usage_json = None;
+        }
+    }
+
     pub(crate) async fn begin(
         storage: Storage,
         record: UsageRecord,
@@ -57,6 +112,7 @@ impl RequestLog {
             lifecycle: ResponseLifecycle::default(),
             auth_revision,
             authoritative_model: false,
+            supplier_failure: None,
             client_stopped: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -281,6 +337,16 @@ impl RequestLog {
         let Some(record) = &mut self.record else {
             return;
         };
+        self.supplier_failure = codex2api_upstream::classify_supplier_failure(
+            record
+                .http_status
+                .and_then(|v| u16::try_from(v).ok())
+                .filter(|v| *v >= 400),
+            value,
+            &http::HeaderMap::new(),
+            chrono::Utc::now().timestamp(),
+        )
+        .or(self.supplier_failure.take());
         let response = event.response.as_ref();
         if let Some(id) = response
             .and_then(|r| r.headers.as_ref())
@@ -421,6 +487,16 @@ impl RequestLog {
         }
     }
     async fn persist_auth_rejection(&self) -> crate::Result<()> {
+        if let (
+            Some(record),
+            Some(revision),
+            Some(codex2api_upstream::SupplierFailure::Cooldown { kind, until, code }),
+        ) = (&self.record, self.auth_revision, &self.supplier_failure)
+        {
+            self.storage
+                .cool_down_supplier(&record.account_id, revision, kind, *until, code)
+                .await?;
+        }
         if let (Some(record), Some(revision)) = (&self.record, self.auth_revision)
             && self
                 .lifecycle
@@ -479,7 +555,18 @@ impl RequestLog {
                 .and_then(ResponseOutcome::failure)
                 .is_some_and(ResponseFailure::authentication_invalid)
         });
+        let cooldown = self.supplier_failure.clone().zip(self.auth_revision);
         tokio::spawn(async move {
+            if let Some((
+                codex2api_upstream::SupplierFailure::Cooldown { kind, until, code },
+                revision,
+            )) = cooldown
+                && let Err(error) = storage
+                    .cool_down_supplier(&record.account_id, revision, kind, until, &code)
+                    .await
+            {
+                tracing::error!(%error,"failed to persist supplier cooldown");
+            }
             if let Some(revision) = rejected_revision
                 && let Err(error) = storage
                     .reject_supplier_auth(&record.account_id, revision)
@@ -500,6 +587,17 @@ impl RequestLog {
         response: reqwest::Response,
         transform: impl FnOnce(Body) -> Body,
     ) -> Body {
+        if let Some(first) = response
+            .extensions()
+            .get::<crate::pool_execution::FirstEventAt>()
+        {
+            self.first_message_at(first.0);
+        }
+        self.auth_revision = response
+            .extensions()
+            .get::<codex2api_upstream::SupplierAuthRevision>()
+            .map(|r| r.0)
+            .or(self.auth_revision);
         self.response_headers(response.headers());
         self.http_status(response.status().as_u16());
         let sse = response
@@ -817,6 +915,22 @@ pub(crate) struct WsLedger {
     initial_headers: Option<http::HeaderMap>,
 }
 impl WsLedger {
+    pub(crate) async fn retry_supplier(
+        &mut self,
+        context: ExecutionContext,
+        account: &codex2api_storage::SupplierAccount,
+    ) -> crate::Result<()> {
+        self.context = context;
+        self.initial_headers = None;
+        for slot in &mut self.slots {
+            slot.response_id = None;
+            if let Some(log) = &mut slot.log {
+                log.retry_generation();
+                log.rebind_supplier(account).await?;
+            }
+        }
+        Ok(())
+    }
     pub fn new(context: ExecutionContext) -> Self {
         Self {
             context,
@@ -863,7 +977,11 @@ impl WsLedger {
         for name in ["x-request-id", "x-oai-request-id", "x-openai-request-id"] {
             initial.remove(name);
         }
-        self.initial_headers = Some(initial);
+        if let Some(log) = self.slots.front_mut().and_then(|slot| slot.log.as_mut()) {
+            log.response_headers(&initial);
+        } else {
+            self.initial_headers = Some(initial);
+        }
     }
     pub fn has_pending(&self) -> bool {
         !self.slots.is_empty()

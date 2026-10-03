@@ -1,4 +1,5 @@
 "use client";
+import { subscriptionChoices, subscriptionLabel } from "@/lib/subscriptions";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
@@ -78,6 +79,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Label } from "@/components/ui/label";
 
 const emptyPlan: Plan = {
+  plan_type: "plus",
   id: "",
   name: "",
   provider_id: "chatgpt",
@@ -133,7 +135,7 @@ export default function PlansPage() {
   const items =
     resource.data?.items.filter(
       (plan) =>
-        `${plan.name} ${plan.provider_id}`
+        `${plan.name} ${subscriptionLabel(plan.plan_type)} ${plan.provider_id}`
           .toLowerCase()
           .includes(applied.search.trim().toLowerCase()) &&
         (!applied.status || plan.enabled === (applied.status === "enabled")),
@@ -328,7 +330,12 @@ export default function PlansPage() {
                           role="cell"
                         >
                           <div className="max-md:hidden">
-                            <strong>{plan.name}</strong>
+                            <strong>
+                              {plan.name}
+                              <span className="block text-xs text-muted-foreground">
+                                {subscriptionLabel(plan.plan_type)}
+                              </span>
+                            </strong>
                             <CardDescription>{plan.provider_id}</CardDescription>
                           </div>
                           <Dialog>
@@ -340,7 +347,12 @@ export default function PlansPage() {
                                 aria-label={"查看详情：" + String(plan.name)}
                               >
                                 <span className="min-w-0 flex-1">
-                                  <span className="block truncate font-medium">{plan.name}</span>
+                                  <span className="block truncate font-medium">
+                                    {plan.name}
+                                    <span className="block text-xs text-muted-foreground">
+                                      {subscriptionLabel(plan.plan_type)}
+                                    </span>
+                                  </span>
                                   <span className="block truncate text-xs text-muted-foreground">
                                     {accessLabel(plan.model_access, plan.models)}
                                   </span>
@@ -357,7 +369,12 @@ export default function PlansPage() {
                                 <Field>
                                   <FieldTitle>套餐</FieldTitle>
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    <strong>{plan.name}</strong>
+                                    <strong>
+                                      {plan.name}
+                                      <span className="block text-xs text-muted-foreground">
+                                        {subscriptionLabel(plan.plan_type)}
+                                      </span>
+                                    </strong>
                                     <CardDescription>{plan.provider_id}</CardDescription>
                                   </div>
                                 </Field>
@@ -691,6 +708,36 @@ function PlanEditor({
                     </CardTitle>
                   </div>
                   <div className="grid sm:grid-cols-2 gap-3">
+                    <Field>
+                      <FieldLabel htmlFor={`${fieldId}-subscription`}>
+                        客户端展示的官方订阅
+                      </FieldLabel>
+                      <Select
+                        value={value.plan_type}
+                        onValueChange={(tier) => update("plan_type", tier)}
+                      >
+                        <SelectTrigger id={`${fieldId}-subscription`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {!subscriptionChoices.some((tier) => tier.value === value.plan_type) && (
+                            <SelectItem value={value.plan_type}>
+                              {subscriptionLabel(value.plan_type)}
+                            </SelectItem>
+                          )}
+                          {subscriptionChoices.map((tier) => (
+                            <SelectItem key={tier.value} value={tier.value}>
+                              {tier.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        官方档位同步到已分配账户；Free
+                        使用免费访问策略，模型、金额额度和到期策略由本套餐控制。
+                      </FieldDescription>
+                    </Field>
+
                     <Field>
                       <FieldLabel
                         htmlFor={

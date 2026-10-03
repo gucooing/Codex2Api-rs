@@ -84,6 +84,9 @@ impl ExecutionContext {
         requested_at_ms: i64,
     ) -> crate::Result<RequestLog> {
         self.authorize(&metadata, false).await?;
+        codex2api_service::ExecutionService::new(self.storage.clone())
+            .admit_request(&self.owner_id, true)
+            .await?;
         let record = UsageRecord {
             provider_id: self.provider_id.clone(),
             id: uuid::Uuid::new_v4().to_string(),

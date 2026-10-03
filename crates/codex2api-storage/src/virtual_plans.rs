@@ -66,8 +66,26 @@ impl VirtualPlan {
                 "请填写套餐名称，长度不能超过 128 字节".into(),
             ));
         }
-        if !["free", "plus", "pro", "business", "enterprise", "edu"]
-            .contains(&self.plan_type.as_str())
+        if ![
+            "free",
+            "go",
+            "plus",
+            "prolite",
+            "pro",
+            "promax",
+            "team",
+            "business",
+            "enterprise",
+            "edu",
+            "edu_plus",
+            "edu_pro",
+            "self_serve_business_prolite",
+            "self_serve_business_usage_based",
+            "ent26",
+            "enterprise_cbp_automation",
+            "enterprise_cbp_usage_based",
+        ]
+        .contains(&self.plan_type.as_str())
         {
             return Err(StorageError::InvalidAdminUpdate(
                 "Invalid client subscription compatibility value",
@@ -149,15 +167,26 @@ impl Storage {
         expected: Option<i64>,
     ) -> Result<bool> {
         plan.validate()?;
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let now = chrono::Utc::now().timestamp_millis();
         let changed = if let Some(revision) = expected {
-            // A plan's protocol type is fixed; change an account's subscription by selecting another plan.
-            sqlx::query("UPDATE virtual_plans SET name=?,config=?,enabled=?,revision=revision+1,updated_at_ms=? WHERE id=? AND revision=? AND plan_type=? AND provider_id=?")
-                .bind(plan.name.trim()).bind(plan.config.to_string()).bind(plan.enabled).bind(now).bind(&plan.id).bind(revision).bind(&plan.plan_type).bind(&plan.provider_id).execute(self.pool()).await?.rows_affected()
+            sqlx::query("UPDATE virtual_plans SET name=?,config=?,enabled=?,revision=revision+1,updated_at_ms=?,plan_type=? WHERE id=? AND revision=? AND provider_id=?")
+                .bind(plan.name.trim()).bind(plan.config.to_string()).bind(plan.enabled).bind(now).bind(&plan.plan_type).bind(&plan.id).bind(revision).bind(&plan.provider_id).execute(&mut *tx).await?.rows_affected()
         } else {
             sqlx::query("INSERT INTO virtual_plans(provider_id,id,name,plan_type,config,enabled,updated_at_ms) VALUES(?,?,?,?,?,?,?)")
-                .bind(&plan.provider_id).bind(&plan.id).bind(plan.name.trim()).bind(&plan.plan_type).bind(plan.config.to_string()).bind(plan.enabled).bind(now).execute(self.pool()).await?.rows_affected()
+                .bind(&plan.provider_id).bind(&plan.id).bind(plan.name.trim()).bind(&plan.plan_type).bind(plan.config.to_string()).bind(plan.enabled).bind(now).execute(&mut *tx).await?.rows_affected()
         };
+        if changed == 1 {
+            sqlx::query(
+                "UPDATE virtual_accounts SET plan_type=? WHERE plan_id=? AND provider_id=?",
+            )
+            .bind(&plan.plan_type)
+            .bind(&plan.id)
+            .bind(&plan.provider_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(changed == 1)
     }
 

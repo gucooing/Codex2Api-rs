@@ -6,6 +6,7 @@ pub(crate) mod error;
 mod proxies;
 mod settings;
 mod suppliers;
+mod tags;
 mod usage;
 use crate::{AdminState, session};
 use axum::{
@@ -18,6 +19,16 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/overview", get(settings::overview))
         .route("/overview/usage", get(usage::statistics))
         .route("/suppliers", get(suppliers::list))
+        .route("/supplier-tags", get(tags::list).post(tags::create))
+        .route(
+            "/supplier-tags/{id}",
+            put(tags::update).delete(tags::delete),
+        )
+        .route("/suppliers/tags", post(tags::batch))
+        .route(
+            "/consumers/{id}/rate-limit",
+            get(consumers::rate_limit).put(consumers::save_rate_limit),
+        )
         .route("/suppliers/oauth/setup", get(suppliers::setup))
         .route("/suppliers/oauth/start", post(suppliers::start))
         .route("/suppliers/oauth/callback", post(suppliers::callback))

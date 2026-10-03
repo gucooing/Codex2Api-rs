@@ -55,6 +55,7 @@ impl ResponseFailure {
                 | "credit_balance_exhausted"
                 | "organization_spend_limit_exceeded"
                 | "project_spend_limit_exceeded"
+                | "organization_usage_limit_exceeded"
                 | "virtual_quota_exceeded",
             ) => Some((K::QuotaExhausted, 429)),
             Some("context_length_exceeded" | "invalid_prompt" | "invalid_request_error") => {

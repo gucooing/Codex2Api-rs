@@ -69,7 +69,7 @@ import {
 import { useResource } from "@/lib/hooks";
 
 const settingTabs = [
-  ["gateway", "网关 UA"],
+  ["gateway", "网关与限流"],
   ["security", "管理员凭据"],
   ["desktop", "Desktop 支持"],
   ["diagnostics", "诊断记录"],
@@ -136,13 +136,14 @@ function Gateway() {
   const resource = useResource<GatewaySettings>("/settings/gateway");
   const [value, setValue] = useState<GatewaySettings>();
   const [rulesText, setRulesText] = useState<string>();
+  const [rpmText, setRpmText] = useState<string>();
   useErrorToast(resource.error ? resource.error : undefined);
-  const current = value ?? resource.data ?? { ua_mode: "blacklist", ua_rules: [] };
+  const current = value ?? resource.data ?? { ua_mode: "blacklist", ua_rules: [], default_rpm: 20 };
   return (
     <Card>
       <CardHeader>
         <CardTitle role="heading" aria-level={2}>
-          {"网关 UA 规则"}
+          {"网关与限流规则"}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -170,10 +171,20 @@ function Gateway() {
               "app\\settings\\page.tsx:form:1",
               async () => {
                 if (!resource.ready) throw new Error("请先加载设置");
+                const text = rpmText ?? String(current.default_rpm);
+                const defaultRpm = Number(text);
+                if (
+                  !text.trim() ||
+                  !Number.isInteger(defaultRpm) ||
+                  defaultRpm < 0 ||
+                  defaultRpm > 1_000_000
+                )
+                  throw new Error("RPM 须为 0 到 1000000 的整数");
                 await request("/settings/gateway", {
                   method: "PUT",
                   body: {
                     ...current,
+                    default_rpm: defaultRpm,
                     ua_rules: (rulesText ?? current.ua_rules.join("\n"))
                       .split(/\r?\n/)
                       .map((item) => item.trim())
@@ -191,6 +202,22 @@ function Gateway() {
               className="min-h-0 overflow-y-auto pr-1"
             >
               <FieldGroup className="gap-4">
+                <Field>
+                  <FieldLabel htmlFor={`${fieldId}-rpm`}>默认 RPM 限制</FieldLabel>
+                  <Input
+                    id={`${fieldId}-rpm`}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={resource.data ? (rpmText ?? current.default_rpm) : ""}
+                    onChange={(event) => setRpmText(event.target.value)}
+                  />
+                  <FieldDescription>
+                    每个虚拟账户每 60 秒最多允许的生成请求数，初始为 20，0
+                    为无限。账户单独配置优先。
+                  </FieldDescription>
+                </Field>
+
                 <section className="space-y-3">
                   <div className="space-y-1">
                     <CardTitle role="heading" aria-level={3}>

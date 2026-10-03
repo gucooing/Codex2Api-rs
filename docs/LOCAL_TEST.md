@@ -10,7 +10,7 @@ $env:CODEX2API_DB = 'data/codex2api-test.sqlite'
 .\codex2api.exe
 ```
 
-测试库首次管理员为 admin/admin。通过管理页授权供应账户、配置模型和套餐、创建消费账户并绑定执行供应。
+测试库首次管理员为 admin/admin。通过管理页授权供应账户、配置模型和套餐、创建消费账户并绑定标签号池。
 已有人工价格、停用和删除状态应保留；有完整预设的新支持模型应自动出现并启用。
 
 ```powershell
@@ -23,7 +23,7 @@ Invoke-RestMethod http://127.0.0.1:8080/version
 
 ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录、模型和额度读取、连续两轮生成、
 取消及客户端重连。使用实际反向代理入口时配置 CODEX2API_PUBLIC_BASE_URL 并启用 WebSocket；
-该环境变量只声明地址，不自动提供 TLS。客户端重连由客户端负责，代理不重放生成。
+该环境变量只声明地址，不自动提供 TLS。检查号池内授权失效和配额耗尽时输出前自动换号，号池耗尽的结构化错误，以及已输出后不重放的边界。
 
 检查用量记录中的实际模型、错误、上游 request ID 和费用快照。未知价格、未报告用量及
 [未实现能力](ARCHITECTURE.md#client-routes-and-capability-boundaries)不能用假成功代替。

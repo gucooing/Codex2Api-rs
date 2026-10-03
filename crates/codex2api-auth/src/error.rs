@@ -60,6 +60,26 @@ pub enum AuthError {
 }
 
 impl AuthError {
+    /// Mirrors login/auth/manager.rs at the pinned official commit.
+    pub fn permanent_refresh_failure(&self) -> bool {
+        match self {
+            Self::RefreshRejected { status, code, .. } => {
+                let code = code.as_deref().unwrap_or("").to_ascii_lowercase();
+                *status == 401
+                    || (*status == 400 && code == "invalid_grant")
+                    || matches!(
+                        code.as_str(),
+                        "refresh_token_expired"
+                            | "refresh_token_reused"
+                            | "refresh_token_invalidated"
+                    )
+            }
+            Self::MissingRefreshToken => true,
+            Self::TokenEndpoint { status: 401, .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn token_endpoint(status: reqwest::StatusCode, message: impl Into<String>) -> Self {
         Self::TokenEndpoint {
             status: status.as_u16(),

@@ -10,6 +10,7 @@ pub(crate) mod oauth;
 pub(crate) mod oauth_authorize;
 pub(crate) mod oauth_device;
 mod oauth_jwt;
+mod pooled_websocket;
 pub(crate) mod realtime;
 pub(crate) mod remote_control;
 pub(crate) mod system;

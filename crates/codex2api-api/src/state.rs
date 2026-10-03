@@ -12,6 +12,8 @@ pub struct ApiState {
     pub accounts: SupplierAccountStore,
     pub upstream: UpstreamPool,
     pub public_base_url: Option<String>,
+    #[cfg(test)]
+    pub(crate) websocket_test_targets: std::collections::HashMap<String, String>,
 }
 
 impl ApiState {
@@ -21,6 +23,8 @@ impl ApiState {
             accounts,
             upstream,
             public_base_url: None,
+            #[cfg(test)]
+            websocket_test_targets: Default::default(),
         }
     }
 

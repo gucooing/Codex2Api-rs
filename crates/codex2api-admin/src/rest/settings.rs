@@ -25,6 +25,9 @@ pub async fn save_gateway(
     State(s): State<AdminState>,
     Json(f): Json<GatewaySettings>,
 ) -> ApiResult {
+    if f.default_rpm > 1_000_000 {
+        return Err(ApiError::bad("默认 RPM 须为 0 到 1000000 的整数"));
+    }
     if f.ua_rules.len() > 1000 || f.ua_rules.iter().any(|v| v.len() > 1024) {
         return Err(ApiError::bad("User-Agent 规则过长"));
     }

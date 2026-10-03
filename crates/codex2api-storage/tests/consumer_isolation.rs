@@ -76,7 +76,15 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     let supplier = storage.create_account(new).await.unwrap();
     assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'chatgpt',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
     assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'test-provider',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
-    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'test-provider',?)").bind(&b.id).bind(&supplier.id).execute(storage.pool()).await.unwrap();
+    storage
+        .save_supplier_tag("other-pool", "test-provider", "Other pool")
+        .await
+        .unwrap();
+    storage
+        .edit_supplier_tags(&[supplier.id.clone()], &["other-pool".into()], false)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id,tag_id) VALUES(?,'test-provider',?,'other-pool')").bind(&b.id).bind(&supplier.id).execute(storage.pool()).await.unwrap();
     storage
         .save_virtual_resource(
             &b.id,

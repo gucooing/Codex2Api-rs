@@ -14,7 +14,11 @@ export type Fingerprint = {
 export type Supplier = {
   id: string;
   provider_id: string;
-  status: "active" | "disabled" | "error";
+  status: "active" | "disabled" | "error" | "rate_limited" | "quota_exhausted";
+  tag_ids: string[];
+  binding_count: number;
+  cooldown_until: number | null;
+  cooldown_code: string | null;
   authorized: boolean;
   authentication_invalid: boolean;
   error_message: string | null;
@@ -84,6 +88,7 @@ export type ConsumerWrite = Pick<
   "username" | "name" | "email" | "provider_id" | "plan_id" | "subscription_expires_at" | "enabled"
 > & { password: string };
 export type Plan = {
+  plan_type: string;
   id: string;
   name: string;
   provider_id: string;
@@ -275,7 +280,19 @@ export type AccountUsage = {
     };
   };
 };
-export type GatewaySettings = { ua_mode: "blacklist" | "whitelist"; ua_rules: string[] };
+export type GatewaySettings = {
+  ua_mode: "blacklist" | "whitelist";
+  ua_rules: string[];
+  default_rpm: number;
+};
+export type SupplierTag = {
+  id: string;
+  provider_id: string;
+  name: string;
+  supplier_count: number;
+  binding_count: number;
+};
+export type RpmLimit = { rpm: number | null; default_rpm: number; effective_rpm: number };
 export type DesktopSettings = {
   proxy_id: string | null;
   collect_diagnostics: boolean;

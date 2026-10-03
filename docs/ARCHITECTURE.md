@@ -80,20 +80,51 @@ Request normalization changes supplier identity metadata while preserving input,
 tools, opaque Guardian messages and dynamic IDs. This is application-layer identity,
 not forged TLS/JA3.
 
-The CLI owns reconnect, backoff, queued-message recovery, generation retries and
-transport fallback. The proxy does not replay generations after network failure,
-SSE interruption, 429, 5xx or content filtering. It forwards structured failures
-and retry headers; WebSocket failures end with the appropriate error/close path.
+Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags;
+each consumer selects one tag and keeps a temporary supplier assignment. SQLite
+serializes candidate counting and assignment in one write transaction. Confirmed supplier outages repair affected assignments. New or
+unavailable assignments select the healthy member with the fewest total current
+bindings across all tags; healthy assignments stay sticky. Manual selection is
+restricted to available members of that pool. Removing a member clears affected
+assignments; the next request selects another member. Referenced tags cannot be
+deleted. Migration preserves old isolation with one migration tag per bound supplier.
 
-Supplier authentication can refresh a rejected token and retry once before a
-generation/connection is established. This does not recover a broken established
-stream. Reqwest's default safe HTTP protocol-NACK behavior remains in the transport
-library; it is not an additional application retry loop.
+Supplier availability separates manual disablement, permanent credential rejection,
+temporary request throttling and quota exhaustion. The ChatGPT adapter follows
+`codex-api/src/api_bridge.rs`, `sse/responses_error.rs` and
+`login/src/auth/manager.rs` in the pinned reference: `usage_limit_reached` and known
+quota/credit codes indicate exhaustion; `rate_limit_exceeded`, `slow_down` and
+unclassified HTTP 429 use temporary cooldowns. 403, network failures, policy errors
+and 5xx never permanently invalidate credentials. Refresh rejection follows the
+official permanent codes, including HTTP 400 `invalid_grant`; expired access tokens
+are refreshed before abandoning their supplier. Observations carry credential
+revisions so stale failures cannot disable newly replaced authorization.
 
-Only an explicit upstream 401 rejects the corresponding supplier credential
-revision. Network faults, timeouts, 403, 429, 5xx and malformed responses are request
-failures. A delayed rejection of old credentials cannot disable newly refreshed
-credentials. Administrator enable/disable policy is separate.
+Cooldowns persist in SQLite and expire automatically at the official reset or
+Retry-After time. When timing is absent, a sixty-second probe cooldown is used;
+it is not presented as an official quota reset. Cached main quota responses can
+also record exhaustion; model-specific additional windows do not disable the whole
+account. The normal quota cache remains in use, without requests on UI timer ticks.
+
+HTTP Responses and Responses WebSocket internally try each eligible pool member
+at most once for a supplier rejection. Authentication recovery remains bounded.
+SSE and WS buffer the small pre-generation prelude so a rejected attempt does not
+leak its error/response ID into the client's successful generation. Prices and RPM
+admission are captured once; only the winning attempt's reported usage settles the
+request. Exhausted pools return a service `supplier_pool_exhausted` error rather
+than the supplier's login or quota error.
+
+Once response output or a tool event has been released, the generation cannot be
+replayed safely. Network interruption, malformed streams and post-output failures
+retain structured errors and close behavior; subsequent requests select a healthy
+member. Responses WS serializes queued generations, rechecks credentials and policy,
+and can reconnect supply between generations without replacing the virtual device.
+Its in-memory conversation input/output permits replay of known previous-response
+references on a new supplier. An opaque reference from outside that connection
+requires full client input (`supplier_context_required`); private supplier resources
+are never transferred between owners. Realtime and supplier-owned cloud resources
+retain their existing transport/resource contracts and cannot be replayed across
+accounts once established.
 
 ## Virtual-account data and management
 
@@ -122,6 +153,27 @@ Management uses named fields and choices. Actual activity, requests, device
 authorizations and resource operations are viewable as records; they cannot be
 manufactured with configuration forms. Empty results are valid only after querying
 an implemented data source and finding no records.
+
+### Request admission and subscription names
+
+RPM is a consumer-wide sliding sixty-second window across devices and HTTP/WS,
+persisted in SQLite and admitted atomically. Gateway settings default to 20;
+missing account configuration inherits it, an account override wins, and zero
+means unlimited. Each actual generation consumes one admission; internal supplier
+attempts, warmups, reads and WS handshakes do not. Handshakes check the current limit
+without consuming it. Rejections use HTTP/WS 429 `virtual_rpm_exceeded` with retry
+information and are distinct from the consumer's spending quota.
+
+Plan management selects the official client subscription tier independently of the
+business plan name. Updating that tier atomically updates assigned accounts while
+preserving subscription dates and historical records. Choosing Free applies the
+plan's configured free-access policy; other active tiers use its subscription policy. Public tier names include
+Free, Go, Plus, Pro 100, Pro 200, Pro 500, Business, Enterprise and Edu. Protocol
+values remain canonical (`prolite`, `pro`, `promax`, etc.). Supplier display also
+maps workspace/education variants to their official family name and does not expose
+unknown internal values as product names. Numbered Pro labels follow the installed
+Desktop's `plan-names` resource; accepted protocol variants follow the pinned
+`protocol/src/account.rs`. Local plans never fabricate supplier entitlements.
 
 ### OAuth and devices
 
