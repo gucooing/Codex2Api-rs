@@ -1,5 +1,6 @@
 "use client";
-import { SupplierTags } from "@/components/supplier-tags";
+import { SupplierTagEditor, SupplierTagsBatchDialog } from "@/components/supplier-tags";
+import { toggleSupplierSelection } from "@/lib/supplier-selection";
 import { Checkbox } from "@/components/ui/checkbox";
 import { subscriptionLabel } from "@/lib/subscriptions";
 import type { SupplierTag } from "@/lib/api";
@@ -99,6 +100,9 @@ import { useQueryId, useResource } from "@/lib/hooks";
 import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
 import { useIsMobile } from "@/hooks/use-mobile";
 
+const validSupplierFilters = (value: { status: string }) =>
+  ["", "active", "disabled", "error", "quota_exhausted"].includes(value.status);
+
 export function SuppliersPage() {
   const tableColumns0 = useColumnVisibility(
     "components/suppliers.tsx:0",
@@ -113,16 +117,20 @@ export function SuppliersPage() {
   const [add, setAdd] = useState(false);
   const tags = useResource<List<SupplierTag>>("/supplier-tags");
   const [selected, setSelected] = useState<string[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchAccounts, setBatchAccounts] = useState<Supplier[]>([]);
   useErrorToast(tags.error);
   const empty = { search: "", status: "", tag: "" };
-  const { filters, setFilters, applied, setApplied } = useSavedFilters("suppliers.filters", empty);
+  const { filters, setFilters, applied, setApplied } = useSavedFilters(
+    "suppliers.filters",
+    empty,
+    validSupplierFilters,
+  );
   const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
   const snapshots = useSupplierQuotas(resource.data?.items);
   const now = useQuotaClock();
   const all = snapshots.map((item) =>
-    item.cooldown_until &&
-    item.cooldown_until * 1000 <= now &&
-    ["rate_limited", "quota_exhausted"].includes(item.status)
+    item.cooldown_until && item.cooldown_until * 1000 <= now && item.status === "quota_exhausted"
       ? { ...item, status: "active" as const }
       : item,
   );
@@ -135,27 +143,22 @@ export function SuppliersPage() {
       (!applied.tag || item.tag_ids?.includes(applied.tag)),
   );
   const pagination = useTablePagination(items, applied, resource.data !== undefined);
+  const selectedAccounts = items.filter((item) => selected.includes(item.id));
+  const pageIds = pagination.rows.map((item) => item.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.includes(id));
+  const somePageSelected = pageIds.some((id) => selected.includes(id));
+  const batchBusy = actions.isBusy("supplier-tags-batch");
+  const toggleSelection = (ids: string[], checked: boolean) =>
+    setSelected((current) => toggleSupplierSelection(current, ids, checked));
+
   const supplierActions = (item: Supplier) => (
     <div className="flex flex-wrap items-center gap-2">
-      <Checkbox
-        aria-label={`选择供应账户 ${item.display_name || item.email || item.id}`}
-        checked={selected.includes(item.id)}
-        onCheckedChange={(checked) =>
-          setSelected(checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))
-        }
-      />
       <Badge variant="outline">{item.binding_count ?? 0} 个绑定</Badge>
       {(item.tag_ids ?? []).map((id) => (
         <Badge variant="secondary" key={id}>
           {tags.data?.items.find((t) => t.id === id)?.name ?? "标签"}
         </Badge>
       ))}
-      {item.cooldown_until && item.cooldown_until * 1000 > now ? (
-        <span className="text-xs text-muted-foreground">
-          {quotaResetLabel(item.cooldown_until, now)}后可重试
-        </span>
-      ) : null}
-
       <Button variant="outline" size="sm" asChild>
         <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
           详情 <ArrowRight />
@@ -246,6 +249,7 @@ export function SuppliersPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
+              setSelected([]);
               resource.reload();
             }}
           >
@@ -294,7 +298,6 @@ export function SuppliersPage() {
                         { value: "active", label: "启用" },
                         { value: "disabled", label: "停用" },
                         { value: "error", label: "授权失效" },
-                        { value: "rate_limited", label: "请求限流中" },
                         { value: "quota_exhausted", label: "配额耗尽" },
                       ].find((option) => option.value === "")?.label ?? "请选择"
                     }
@@ -306,7 +309,6 @@ export function SuppliersPage() {
                     { value: "active", label: "启用" },
                     { value: "disabled", label: "停用" },
                     { value: "error", label: "授权失效" },
-                    { value: "rate_limited", label: "请求限流中" },
                     { value: "quota_exhausted", label: "配额耗尽" },
                   ].map((option) => (
                     <SelectItem
@@ -338,6 +340,7 @@ export function SuppliersPage() {
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
+                  setSelected([]);
                   resource.reload();
                 }}
               >
@@ -352,7 +355,8 @@ export function SuppliersPage() {
               value={filters.tag || "all"}
               onValueChange={(tag) => {
                 setFilters({ ...filters, tag: tag === "all" ? "" : tag });
-                setApplied({ ...filters, tag: tag === "all" ? "" : tag });
+                setApplied({ ...applied, tag: tag === "all" ? "" : tag });
+                setSelected([]);
               }}
             >
               <SelectTrigger id={`${fieldId}-tag`}>
@@ -369,20 +373,39 @@ export function SuppliersPage() {
             </Select>
           </Field>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
+            <span className="text-sm text-muted-foreground">
+              已选择 {selectedAccounts.length} 个
+            </span>
             <Button
+              type="button"
               variant="outline"
               size="sm"
-              onClick={() => setSelected(selected.length ? [] : items.map((item) => item.id))}
+              disabled={!resource.ready || batchBusy || !items.length}
+              onClick={() => setSelected(items.map((item) => item.id))}
             >
-              {selected.length ? `清除选择（${selected.length}）` : "选择筛选结果"}
+              选择全部筛选结果（{items.length}）
             </Button>
-            <SupplierTags
-              selected={selected}
-              onSaved={() => {
-                resource.reload();
-                tags.reload();
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={!selectedAccounts.length || batchBusy}
+              onClick={() => setSelected([])}
+            >
+              取消选择
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!resource.ready || batchBusy || !selectedAccounts.length}
+              onClick={() => {
+                setBatchAccounts(selectedAccounts);
+                setBatchOpen(true);
               }}
-            />
+            >
+              更新标签
+            </Button>
 
             <Button type="button" variant="ghost" size="sm" onClick={resource.reload}>
               <RefreshCw />
@@ -457,6 +480,14 @@ export function SuppliersPage() {
             >
               <TableHeader>
                 <TableRow role="row">
+                  <TableHead className="w-9" scope="col">
+                    <Checkbox
+                      aria-label="选择当前页供应账户"
+                      checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                      disabled={!resource.ready || batchBusy || !pageIds.length}
+                      onCheckedChange={(checked) => toggleSelection(pageIds, checked === true)}
+                    />
+                  </TableHead>
                   {["供应账户", "提供商 / 订阅", "状态", "额度", "最近使用", "操作"].map(
                     (label) => (
                       <TableHead
@@ -483,7 +514,21 @@ export function SuppliersPage() {
                 {items.length ? (
                   <>
                     {pagination.rows.map((item) => (
-                      <TableRow role="row" key={item.id}>
+                      <TableRow
+                        role="row"
+                        key={item.id}
+                        data-state={selected.includes(item.id) ? "selected" : undefined}
+                      >
+                        <TableCell role="cell" className="w-9" data-label="选择">
+                          <Checkbox
+                            aria-label={`选择供应账户 ${item.display_name || item.email || item.id}`}
+                            checked={selected.includes(item.id)}
+                            disabled={!resource.ready || batchBusy}
+                            onCheckedChange={(checked) =>
+                              toggleSelection([item.id], checked === true)
+                            }
+                          />
+                        </TableCell>
                         <TableCell
                           hidden={!tableColumns0.isVisible("供应账户")}
                           className=" max-md:overflow-hidden"
@@ -746,7 +791,7 @@ export function SuppliersPage() {
                   </>
                 ) : (
                   <TableRow role="row">
-                    <TableCell role="cell" colSpan={tableColumns0.count}>
+                    <TableCell role="cell" colSpan={tableColumns0.count + 1}>
                       <Empty>
                         <EmptyDescription>{"暂无符合条件的供应账户"}</EmptyDescription>
                       </Empty>
@@ -763,7 +808,13 @@ export function SuppliersPage() {
             <Card key={item.id} size="sm">
               <CardContent className="space-y-3">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 break-words">
+                  <Checkbox
+                    aria-label={`选择供应账户 ${item.display_name || item.email || item.id}`}
+                    checked={selected.includes(item.id)}
+                    disabled={!resource.ready || batchBusy}
+                    onCheckedChange={(checked) => toggleSelection([item.id], checked === true)}
+                  />
+                  <div className="min-w-0 flex-1 break-words">
                     <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
                       <strong>{item.display_name || item.email || item.id}</strong>
                     </Link>
@@ -927,6 +978,18 @@ export function SuppliersPage() {
           </PaginationItem>
         </PaginationContent>
       </Pagination>
+      <SupplierTagsBatchDialog
+        open={batchOpen}
+        onOpenChange={setBatchOpen}
+        accounts={batchAccounts}
+        disabled={!resource.ready}
+        onSaved={() => {
+          setBatchOpen(false);
+          setSelected([]);
+          resource.reload();
+          tags.reload();
+        }}
+      />
       {add && (
         <OAuthWizard
           onClose={() => setAdd(false)}
@@ -982,6 +1045,7 @@ export function SupplierDetail() {
           <TabsList variant="line" aria-label={"供应账户详情"}>
             {[
               ["info", "账户资料"],
+              ["tags", "标签"],
               ["fingerprint", "指纹与网络"],
               ["quota", "官方额度"],
               ["local-usage", "本地用量"],
@@ -1069,6 +1133,18 @@ export function SupplierDetail() {
                     {account?.status !== "disabled" ? "停用" : "启用"}
                   </Button>
                 </div>
+              </CardContent>
+            </Card>
+          )}
+          {tab === "tags" && (
+            <Card>
+              <CardContent>
+                <SupplierTagEditor
+                  key={id}
+                  accounts={account ? [account] : []}
+                  disabled={!resource.ready}
+                  onSaved={resource.reload}
+                />
               </CardContent>
             </Card>
           )}

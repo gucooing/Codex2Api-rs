@@ -368,15 +368,20 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_prelude_is_consumed_and_exhausted_pool_sends_service_error_and_close() {
-        pool_websocket_fixture(false).await;
+        pool_websocket_fixture(false, false).await;
     }
 
     #[tokio::test]
     async fn quota_rejection_switches_supplier_without_leaking_failure_or_double_admission() {
-        pool_websocket_fixture(true).await;
+        pool_websocket_fixture(true, false).await;
     }
 
-    async fn pool_websocket_fixture(available: bool) {
+    #[tokio::test]
+    async fn request_throttle_is_forwarded_without_rebinding_or_supplier_cooldown() {
+        pool_websocket_fixture(true, true).await;
+    }
+
+    async fn pool_websocket_fixture(available: bool, throttle: bool) {
         let (_dir, mut state, oauth, ids) = crate::pool_execution::tests::setup_pool().await;
         state
             .storage
@@ -442,7 +447,7 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            socket.send(UpstreamMessage::Text(json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":"usage_limit_reached","resets_at":chrono::Utc::now().timestamp()+600}}}).to_string().into())).await.unwrap();
+            socket.send(UpstreamMessage::Text(json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if throttle {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600}},"headers":{"retry-after":"7"}}).to_string().into())).await.unwrap();
             let _ = socket.next().await;
         });
         let fixture_state = state.clone();
@@ -498,7 +503,32 @@ mod tests {
             .unwrap()
             .unwrap();
         let value: Value = serde_json::from_slice(&event.into_data()).unwrap();
-        if available {
+        if throttle {
+            assert_eq!(value["type"], "response.created");
+            assert_eq!(value["response"]["id"], "rejected-attempt");
+            let frame = client.next().await.unwrap().unwrap();
+            let error: Value = serde_json::from_slice(&frame.into_data()).unwrap();
+            assert_eq!(error["response"]["error"]["code"], "rate_limit_exceeded");
+            assert_eq!(error["headers"]["retry-after"], "7");
+            assert!(matches!(
+                client.next().await.unwrap().unwrap(),
+                UpstreamMessage::Close(Some(_))
+            ));
+            let health = state.storage.supplier_health(&ids[0]).await.unwrap();
+            assert!(!health.authentication_invalid);
+            assert!(health.cooldown_kind.is_none());
+            assert_eq!(
+                state
+                    .storage
+                    .execution_route(&oauth.virtual_account_id, "chatgpt")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .supplier_account_id
+                    .as_deref(),
+                Some(ids[0].as_str())
+            );
+        } else if available {
             assert_eq!(value["type"], "response.created");
             assert_eq!(value["response"]["id"], "winning-attempt");
             let event = tokio::time::timeout(std::time::Duration::from_secs(10), client.next())
@@ -541,7 +571,11 @@ mod tests {
         assert_eq!(admissions, 1);
         upstream_task.await.unwrap();
         if let Some(task) = second_task {
-            task.await.unwrap();
+            if throttle {
+                task.abort();
+            } else {
+                task.await.unwrap();
+            }
         }
         app_task.abort();
     }

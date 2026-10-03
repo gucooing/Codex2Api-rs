@@ -17,8 +17,8 @@ impl Storage {
     pub async fn supplier_health(&self, id: &str) -> Result<SupplierHealth> {
         Ok(sqlx::query_as(
             "SELECT h.error_message,h.error_at,h.revision,
-             CASE WHEN h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_kind END AS cooldown_kind,
-             CASE WHEN h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_until END AS cooldown_until,
+             CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_kind END AS cooldown_kind,
+             CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_until END AS cooldown_until,
              h.cooldown_code,
              COALESCE(h.rejected_auth_revision=a.auth_revision,0) AS authentication_invalid
              FROM supplier_health h JOIN supplier_accounts a ON a.id=h.account_id WHERE h.account_id=?",
@@ -27,21 +27,20 @@ impl Storage {
 
     /// Observations carry the credential revision used for that attempt; late
     /// failures cannot cool down freshly replaced authorization.
-    pub async fn cool_down_supplier(
+    pub async fn exhaust_supplier_quota(
         &self,
         id: &str,
         auth_revision: i64,
-        kind: &str,
         until: i64,
         code: &str,
     ) -> Result<()> {
         sqlx::query("INSERT INTO supplier_health(account_id,cooldown_kind,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at)
-            SELECT id,?,?,auth_revision,?,unixepoch() FROM supplier_accounts WHERE id=? AND auth_revision=?
+            SELECT id,'quota_exhausted',?,auth_revision,?,unixepoch() FROM supplier_accounts WHERE id=? AND auth_revision=?
             ON CONFLICT(account_id) DO UPDATE SET
-            cooldown_kind=CASE WHEN supplier_health.cooldown_auth_revision=excluded.cooldown_auth_revision AND supplier_health.cooldown_until>excluded.cooldown_until THEN supplier_health.cooldown_kind ELSE excluded.cooldown_kind END,
-            cooldown_until=CASE WHEN supplier_health.cooldown_auth_revision=excluded.cooldown_auth_revision THEN MAX(COALESCE(supplier_health.cooldown_until,0),excluded.cooldown_until) ELSE excluded.cooldown_until END,
+            cooldown_kind=excluded.cooldown_kind,
+            cooldown_until=CASE WHEN supplier_health.cooldown_kind='quota_exhausted' AND supplier_health.cooldown_auth_revision=excluded.cooldown_auth_revision THEN MAX(COALESCE(supplier_health.cooldown_until,0),excluded.cooldown_until) ELSE excluded.cooldown_until END,
             cooldown_auth_revision=excluded.cooldown_auth_revision,cooldown_code=excluded.cooldown_code,cooldown_observed_at=excluded.cooldown_observed_at")
-            .bind(kind).bind(until).bind(code).bind(id).bind(auth_revision).execute(self.pool()).await?;
+            .bind(until).bind(code).bind(id).bind(auth_revision).execute(self.pool()).await?;
         self.refresh_supplier_bindings(id).await?;
         Ok(())
     }

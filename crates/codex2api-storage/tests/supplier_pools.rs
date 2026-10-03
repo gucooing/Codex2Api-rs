@@ -48,6 +48,173 @@ async fn consumer(storage: &Storage, id: &str) {
 }
 
 #[tokio::test]
+async fn obsolete_request_cooldowns_are_ignored_and_migrated_without_clearing_real_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("retired-state.sqlite"))
+        .await
+        .unwrap();
+    for id in ["limited", "exhausted", "unauthorized"] {
+        supplier(&storage, id).await;
+    }
+    for (id, kind) in [
+        ("limited", "rate_limited"),
+        ("exhausted", "quota_exhausted"),
+        ("unauthorized", "rate_limited"),
+    ] {
+        let revision = storage.supplier_auth_revision(id).await.unwrap().unwrap();
+        sqlx::query("INSERT INTO supplier_health(account_id,cooldown_kind,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at) VALUES(?,?,?,?,?,?)")
+            .bind(id).bind(kind).bind(chrono::Utc::now().timestamp()+600).bind(revision).bind("fixture").bind(chrono::Utc::now().timestamp()).execute(storage.pool()).await.unwrap();
+    }
+    consumer(&storage, "v").await;
+    storage
+        .save_supplier_tag("pool", "chatgpt", "Pool")
+        .await
+        .unwrap();
+    storage
+        .edit_supplier_tags(&["limited".into()], &["pool".into()], false)
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .save_pool_route("v", "chatgpt", Some("pool"), Some("limited"), None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .supplier_health("limited")
+            .await
+            .unwrap()
+            .cooldown_kind
+            .is_none()
+    );
+    let revision = storage
+        .supplier_auth_revision("unauthorized")
+        .await
+        .unwrap()
+        .unwrap();
+    storage
+        .reject_supplier_auth("unauthorized", revision)
+        .await
+        .unwrap();
+    sqlx::query(include_str!(
+        "../migrations/0052_remove_supplier_throttling.sql"
+    ))
+    .execute(storage.pool())
+    .await
+    .unwrap();
+    let remaining:i64=sqlx::query_scalar("SELECT COUNT(*) FROM supplier_health WHERE cooldown_kind='rate_limited' OR (account_id!='exhausted' AND cooldown_until IS NOT NULL)").fetch_one(storage.pool()).await.unwrap();
+    assert_eq!(remaining, 0);
+    assert!(
+        storage
+            .supplier_health("unauthorized")
+            .await
+            .unwrap()
+            .authentication_invalid
+    );
+    assert_eq!(
+        storage
+            .supplier_health("exhausted")
+            .await
+            .unwrap()
+            .cooldown_kind
+            .as_deref(),
+        Some("quota_exhausted")
+    );
+    assert_eq!(
+        storage
+            .select_pool_supplier("v", "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("limited")
+    );
+}
+
+#[tokio::test]
+async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("replace-tags.sqlite"))
+        .await
+        .unwrap();
+    for id in ["s1", "s2", "untouched"] {
+        supplier(&storage, id).await;
+    }
+    for id in ["a", "b", "c"] {
+        storage.save_supplier_tag(id, "chatgpt", id).await.unwrap();
+    }
+    storage
+        .edit_supplier_tags(&["s1".into(), "untouched".into()], &["a".into()], false)
+        .await
+        .unwrap();
+    storage
+        .edit_supplier_tags(&["s1".into(), "s2".into()], &["b".into()], false)
+        .await
+        .unwrap();
+    consumer(&storage, "v").await;
+    storage
+        .save_pool_route("v", "chatgpt", Some("a"), Some("s1"), None)
+        .await
+        .unwrap();
+    let original = storage.require_account("s1").await.unwrap();
+    storage
+        .replace_supplier_tags(&["s1".into(), "s2".into()], &["c".into()])
+        .await
+        .unwrap();
+    assert_eq!(storage.supplier_tag_ids("s1").await.unwrap(), vec!["c"]);
+    assert_eq!(storage.supplier_tag_ids("s2").await.unwrap(), vec!["c"]);
+    assert_eq!(
+        storage.supplier_tag_ids("untouched").await.unwrap(),
+        vec!["a"]
+    );
+    let updated = storage.require_account("s1").await.unwrap();
+    assert_eq!(updated.installation_id, original.installation_id);
+    assert_eq!(updated.status, original.status);
+    assert_eq!(updated.updated_at, original.updated_at);
+    assert_eq!(
+        storage
+            .execution_route("v", "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .supplier_account_id
+            .as_deref(),
+        Some("untouched")
+    );
+    sqlx::query("INSERT INTO providers VALUES('other','Other')")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    storage
+        .save_supplier_tag("foreign", "other", "Foreign")
+        .await
+        .unwrap();
+    for invalid in [vec!["foreign".into()], vec!["missing".into()]] {
+        assert!(
+            storage
+                .replace_supplier_tags(&["s1".into(), "s2".into()], &invalid)
+                .await
+                .is_err()
+        );
+        assert_eq!(storage.supplier_tag_ids("s1").await.unwrap(), vec!["c"]);
+        assert_eq!(storage.supplier_tag_ids("s2").await.unwrap(), vec!["c"]);
+    }
+    assert!(
+        storage
+            .replace_supplier_tags(&["s1".into(), "missing-account".into()], &[])
+            .await
+            .is_err()
+    );
+    assert_eq!(storage.supplier_tag_ids("s1").await.unwrap(), vec!["c"]);
+    storage
+        .replace_supplier_tags(&["s1".into()], &[])
+        .await
+        .unwrap();
+    assert!(storage.supplier_tag_ids("s1").await.unwrap().is_empty());
+    assert_eq!(storage.supplier_tag_ids("s2").await.unwrap(), vec!["c"]);
+}
+
+#[tokio::test]
 async fn concurrent_assignments_are_balanced_sticky_and_provider_isolated() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("pools.sqlite"))
@@ -170,13 +337,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
     let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     let now = chrono::Utc::now().timestamp();
     storage
-        .cool_down_supplier(
-            "s",
-            rev,
-            "quota_exhausted",
-            now + 600,
-            "usage_limit_reached",
-        )
+        .exhaust_supplier_quota("s", rev, now + 600, "usage_limit_reached")
         .await
         .unwrap();
     assert_eq!(
@@ -217,7 +378,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
             .is_none()
     );
     storage
-        .cool_down_supplier("s", rev - 1, "rate_limited", now + 600, "slow_down")
+        .exhaust_supplier_quota("s", rev - 1, now + 600, "usage_limit_reached")
         .await
         .unwrap();
     assert!(

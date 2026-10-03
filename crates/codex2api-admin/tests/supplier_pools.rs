@@ -4,6 +4,88 @@ use common::*;
 use serde_json::json;
 
 #[tokio::test]
+async fn tag_updates_replace_explicit_selection_and_require_authenticated_writes() {
+    let f = Fixture::new().await;
+    let account = f.state.accounts.create_pending().await.unwrap().account;
+    for tag in ["old", "new"] {
+        f.storage
+            .save_supplier_tag(tag, "chatgpt", tag)
+            .await
+            .unwrap();
+    }
+    f.storage
+        .edit_supplier_tags(&[account.id.clone()], &["old".into()], false)
+        .await
+        .unwrap();
+    let input = json!({"account_ids":[account.id],"tag_ids":["new"]});
+    assert_eq!(
+        f.with_auth(
+            "POST",
+            "/admin/api/suppliers/tags",
+            input.clone(),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.with_auth(
+            "POST",
+            "/admin/api/suppliers/tags",
+            input.clone(),
+            Some(&f.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.request("POST", "/admin/api/suppliers/tags", input)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.storage.supplier_tag_ids(&account.id).await.unwrap(),
+        vec!["new"]
+    );
+    assert_eq!(
+        f.request(
+            "POST",
+            "/admin/api/suppliers/tags",
+            json!({"account_ids":[account.id]})
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        f.storage.supplier_tag_ids(&account.id).await.unwrap(),
+        vec!["new"]
+    );
+    assert_eq!(
+        f.request(
+            "POST",
+            "/admin/api/suppliers/tags",
+            json!({"account_ids":[account.id],"tag_ids":[]})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert!(
+        f.storage
+            .supplier_tag_ids(&account.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
     let f = Fixture::new().await;
     let consumer = f.consumer("pool-admin").await;

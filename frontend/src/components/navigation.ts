@@ -6,6 +6,7 @@ import {
   Layers3,
   Server,
   Settings2,
+  Tags,
   Users,
 } from "lucide-react";
 
@@ -33,6 +34,14 @@ export const navigation = [
     icon: Server,
     keywords: "supplier 上游 授权",
     description: "上游授权与执行账户",
+  },
+  {
+    href: "/supplier-tags/",
+    label: "标签管理",
+    group: "账户管理",
+    icon: Tags,
+    keywords: "tag 标签 号池 平台",
+    description: "供应标签与号池管理",
   },
   {
     href: "/consumers/",

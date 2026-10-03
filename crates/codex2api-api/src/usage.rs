@@ -490,11 +490,11 @@ impl RequestLog {
         if let (
             Some(record),
             Some(revision),
-            Some(codex2api_upstream::SupplierFailure::Cooldown { kind, until, code }),
+            Some(codex2api_upstream::SupplierFailure::QuotaExhausted { until, code }),
         ) = (&self.record, self.auth_revision, &self.supplier_failure)
         {
             self.storage
-                .cool_down_supplier(&record.account_id, revision, kind, *until, code)
+                .exhaust_supplier_quota(&record.account_id, revision, *until, code)
                 .await?;
         }
         if let (Some(record), Some(revision)) = (&self.record, self.auth_revision)
@@ -558,11 +558,11 @@ impl RequestLog {
         let cooldown = self.supplier_failure.clone().zip(self.auth_revision);
         tokio::spawn(async move {
             if let Some((
-                codex2api_upstream::SupplierFailure::Cooldown { kind, until, code },
+                codex2api_upstream::SupplierFailure::QuotaExhausted { until, code },
                 revision,
             )) = cooldown
                 && let Err(error) = storage
-                    .cool_down_supplier(&record.account_id, revision, kind, until, &code)
+                    .exhaust_supplier_quota(&record.account_id, revision, until, &code)
                     .await
             {
                 tracing::error!(%error,"failed to persist supplier cooldown");

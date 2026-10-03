@@ -20,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { supplierStatusLabel } from "@/lib/supplier-state";
 
 export type RoutingResponse = {
   items: {
@@ -56,6 +55,7 @@ export function RoutingForm({
   const available = (suppliers.data?.items ?? []).filter(
     (s) => s.provider_id === account?.provider_id && s.tag_ids?.includes(current.tag),
   );
+  const assigned = suppliers.data?.items.find((supplier) => supplier.id === current.supplier);
   useErrorToast(tags.error);
   useErrorToast(suppliers.error);
   useErrorToast(rpm.error);
@@ -89,7 +89,17 @@ export function RoutingForm({
             <FieldLabel htmlFor={`${id}-tag`}>标签号池</FieldLabel>
             <Select
               value={current.tag || "none"}
-              onValueChange={(tag) => setDraft({ tag: tag === "none" ? "" : tag, supplier: "" })}
+              onValueChange={(tag) => {
+                if (
+                  disabled ||
+                  !tags.ready ||
+                  !suppliers.ready ||
+                  !tag ||
+                  tag === (current.tag || "none")
+                )
+                  return;
+                setDraft({ tag: tag === "none" ? "" : tag, supplier: "" });
+              }}
             >
               <SelectTrigger id={`${id}-tag`}>
                 <SelectValue placeholder="选择标签号池" />
@@ -107,36 +117,49 @@ export function RoutingForm({
             </Select>
           </Field>
           <Field>
-            <FieldLabel htmlFor={`${id}-supplier`}>当前临时绑定 / 手动选择</FieldLabel>
+            <FieldLabel htmlFor={`${id}-supplier`}>分配账户</FieldLabel>
             <Select
-              value={current.supplier || "auto"}
+              value={disabled && !route && !draft ? "" : current.supplier || "unassigned"}
               disabled={!current.tag}
-              onValueChange={(supplier) =>
-                setDraft({ ...current, supplier: supplier === "auto" ? "" : supplier })
-              }
+              onValueChange={(supplier) => {
+                if (
+                  disabled ||
+                  !tags.ready ||
+                  !suppliers.ready ||
+                  !supplier ||
+                  supplier === "unassigned" ||
+                  supplier === current.supplier
+                )
+                  return;
+                setDraft({ ...current, supplier });
+              }}
             >
               <SelectTrigger id={`${id}-supplier`}>
-                <SelectValue placeholder="自动选择" />
+                <SelectValue placeholder={disabled ? "加载中…" : "暂未分配"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">自动选择绑定数最少的可用账户</SelectItem>
+                <SelectItem value="unassigned" disabled>
+                  暂未分配
+                </SelectItem>
+                {current.supplier &&
+                  !available.some((supplier) => supplier.id === current.supplier) && (
+                    <SelectItem value={current.supplier} disabled>
+                      {assigned?.display_name || assigned?.email || current.supplier}
+                    </SelectItem>
+                  )}
                 {available.map((s) => (
                   <SelectItem
                     key={s.id}
                     value={s.id}
                     disabled={s.status !== "active" || !s.authorized}
                   >
-                    {s.display_name || s.email || s.id} · {s.binding_count} 个绑定 ·{" "}
-                    {supplierStatusLabel(s.status)}
+                    {s.display_name || s.email || s.id}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <FieldDescription>
-              保留健康绑定；授权失效或冷却期间自动切换。手动选择只允许当前号池内可用账户。
-            </FieldDescription>
           </Field>
-          <Button type="submit">保存号池绑定</Button>
+          <Button type="submit">保存绑定</Button>
         </FieldSet>
         <Button
           type="button"
@@ -149,7 +172,7 @@ export function RoutingForm({
             rpm.reload();
           }}
         >
-          刷新绑定与设置
+          刷新
         </Button>
       </form>
       <form
@@ -183,16 +206,10 @@ export function RoutingForm({
               onChange={(event) => setRpm(event.target.value)}
             />
             <FieldDescription>
-              留空继承默认值（{rpm.data?.default_rpm ?? "—"}），0 表示无限。当前生效：
-              {rpm.data
-                ? rpm.data.effective_rpm === 0
-                  ? "无限"
-                  : `${rpm.data.effective_rpm} 次/分钟`
-                : "—"}
-              。内部换号不重复计数。
+              留空用默认值（{rpm.data?.default_rpm ?? "—"}），0 为无限。
             </FieldDescription>
           </Field>
-          <Button type="submit">保存 RPM 限制</Button>
+          <Button type="submit">保存 RPM</Button>
         </FieldSet>
       </form>
     </div>
