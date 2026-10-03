@@ -50,6 +50,11 @@ validation are complete.
 - Admin web: one user, username/password, default `admin` / `admin`.
 - Public API is Codex-compatible `POST /v1/responses`.
 - Upstream requests must look like a logged-in official Codex CLI for the pinned commit.
+- Ordinary supplier request throttling (`rate_limit_exceeded`, `slow_down`, or an
+  unclassified HTTP 429) belongs to client backoff. Forward its structured error
+  and retry information; never persist a supplier throttled state or switch
+  suppliers for it. Pool failover is for unrecoverable authorization failure or
+  explicit quota exhaustion.
 
 ## Official constants (do not invent)
 

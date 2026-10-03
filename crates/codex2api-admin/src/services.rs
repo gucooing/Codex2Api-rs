@@ -37,13 +37,7 @@ pub(crate) async fn quota(
                 {
                     state
                         .storage
-                        .cool_down_supplier(
-                            id,
-                            revision,
-                            "quota_exhausted",
-                            until,
-                            "usage_limit_reached",
-                        )
+                        .exhaust_supplier_quota(id, revision, until, "usage_limit_reached")
                         .await
                         .map_err(|e| e.to_string())?;
                 }

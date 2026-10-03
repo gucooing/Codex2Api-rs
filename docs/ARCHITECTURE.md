@@ -89,25 +89,35 @@ restricted to available members of that pool. Removing a member clears affected
 assignments; the next request selects another member. Referenced tags cannot be
 deleted. Migration preserves old isolation with one migration tag per bound supplier.
 
-Supplier availability separates manual disablement, permanent credential rejection,
-temporary request throttling and quota exhaustion. The ChatGPT adapter follows
+Supplier tag definitions are managed on their own administrator page. Account
+detail and list batch editing submit a complete checked tag set, limited to the
+suppliers' provider. `POST /admin/api/suppliers/tags` requires `account_ids` and
+`tag_ids`: replacement is atomic, an explicit empty set clears memberships, and
+omitted fields cannot clear tags. Unselected suppliers and other account fields
+remain unchanged. Only edited selections are submitted.
+
+Supplier availability separates manual disablement, permanent credential rejection
+and quota exhaustion. Ordinary request throttling remains a client retry concern.
+The ChatGPT adapter follows
 `codex-api/src/api_bridge.rs`, `sse/responses_error.rs` and
 `login/src/auth/manager.rs` in the pinned reference: `usage_limit_reached` and known
-quota/credit codes indicate exhaustion; `rate_limit_exceeded`, `slow_down` and
-unclassified HTTP 429 use temporary cooldowns. 403, network failures, policy errors
+quota/credit codes indicate exhaustion. `rate_limit_exceeded`, `slow_down` and
+unclassified HTTP 429 are forwarded with their retry information; they never
+change supplier health or binding. 403, network failures, policy errors
 and 5xx never permanently invalidate credentials. Refresh rejection follows the
 official permanent codes, including HTTP 400 `invalid_grant`; expired access tokens
 are refreshed before abandoning their supplier. Observations carry credential
 revisions so stale failures cannot disable newly replaced authorization.
 
-Cooldowns persist in SQLite and expire automatically at the official reset or
+Quota cooldowns persist in SQLite and expire automatically at the official reset or
 Retry-After time. When timing is absent, a sixty-second probe cooldown is used;
 it is not presented as an official quota reset. Cached main quota responses can
 also record exhaustion; model-specific additional windows do not disable the whole
 account. The normal quota cache remains in use, without requests on UI timer ticks.
 
 HTTP Responses and Responses WebSocket internally try each eligible pool member
-at most once for a supplier rejection. Authentication recovery remains bounded.
+at most once for unrecoverable authorization or explicit quota exhaustion.
+Authentication recovery remains bounded.
 SSE and WS buffer the small pre-generation prelude so a rejected attempt does not
 leak its error/response ID into the client's successful generation. Prices and RPM
 admission are captured once; only the winning attempt's reported usage settles the

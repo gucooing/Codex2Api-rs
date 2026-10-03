@@ -49,10 +49,10 @@ pub(crate) async fn observe(
             SupplierFailure::Authentication => {
                 state.storage.reject_supplier_auth(id, revision).await?
             }
-            SupplierFailure::Cooldown { kind, until, code } => {
+            SupplierFailure::QuotaExhausted { until, code } => {
                 state
                     .storage
-                    .cool_down_supplier(id, revision, kind, *until, code)
+                    .exhaust_supplier_quota(id, revision, *until, code)
                     .await?
             }
         }
@@ -297,7 +297,7 @@ where
                 observe(state, &ctx.account.id, revision, &failure).await?;
                 if let Some(log) = log {
                     let cause = match &failure {
-                        SupplierFailure::Cooldown { code, .. } => {
+                        SupplierFailure::QuotaExhausted { code, .. } => {
                             codex2api_upstream::ResponseFailure::new(
                                 Some(429),
                                 Some(code),
@@ -328,6 +328,67 @@ pub(crate) mod tests {
     };
     use serde_json::json;
 
+    #[tokio::test]
+    async fn request_throttling_is_forwarded_without_changing_supplier_or_health() {
+        use axum::response::IntoResponse;
+        let (_dir, state, oauth, ids) = setup_pool().await;
+        let original = state
+            .storage
+            .execution_route(&oauth.virtual_account_id, "chatgpt")
+            .await
+            .unwrap()
+            .unwrap();
+        for code in [Some("rate_limit_exceeded"), Some("slow_down"), None] {
+            let value = json!({"error":{"type":"rate_limit_error","code":code,"message":"Please try again in 7s."}});
+            let mut calls = 0;
+            let ctx = select(&state, &oauth, &[]).await.unwrap();
+            let error = execute(&state, &oauth, ctx, &mut None, |supplier| {
+                calls += 1;
+                assert_eq!(supplier, ids[0]);
+                let mut upstream = response(429, false, &value.to_string());
+                upstream
+                    .headers_mut()
+                    .insert("retry-after", http::HeaderValue::from_static("7"));
+                std::future::ready(Ok(upstream))
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(calls, 1);
+            let response = error.into_response();
+            assert_eq!(response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(response.headers()["retry-after"], "7");
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                value
+            );
+            let health = state.storage.supplier_health(&ids[0]).await.unwrap();
+            assert!(!health.authentication_invalid);
+            assert!(health.cooldown_kind.is_none());
+            assert!(health.cooldown_until.is_none());
+            let route = state
+                .storage
+                .execution_route(&oauth.virtual_account_id, "chatgpt")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(route.supplier_account_id, original.supplier_account_id);
+            assert_eq!(route.revision, original.revision);
+        }
+        let frame = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"Please try again in 7s.\"}}}\n\n";
+        assert_eq!(
+            inspect(response(200, true, frame))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            frame
+        );
+    }
+
     fn response(status: u16, sse: bool, text: &str) -> reqwest::Response {
         http::Response::builder()
             .status(status)
@@ -353,10 +414,7 @@ pub(crate) mod tests {
             .unwrap_err();
         assert!(matches!(
             error.supplier_failure(100),
-            Some(SupplierFailure::Cooldown {
-                kind: "quota_exhausted",
-                ..
-            })
+            Some(SupplierFailure::QuotaExhausted { .. })
         ));
         let output = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n";
         let body = format!("{prefix}{output}{rejection}");

@@ -21,7 +21,7 @@ async fn candidates(conn: &mut SqliteConnection, tag: &str, now: i64) -> Result<
          LEFT JOIN supplier_health h ON h.account_id=a.id
          WHERE m.tag_id=? AND a.status='active' AND COALESCE(k.access_token,'')!=''
            AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
-           AND (h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision OR h.cooldown_until<=?)
+           AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted' OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision OR h.cooldown_until<=?)
          ORDER BY (SELECT COUNT(*) FROM execution_routes r WHERE r.supplier_account_id=a.id),a.created_at,a.id",
     ).bind(tag).bind(now).fetch_all(conn).await?)
 }
@@ -97,6 +97,54 @@ impl Storage {
         .bind(account)
         .fetch_all(self.pool())
         .await?)
+    }
+
+    /// Replace the selected accounts' complete tag sets atomically. An empty
+    /// submitted set clears tags; callers must not submit unloaded placeholders.
+    pub async fn replace_supplier_tags(&self, accounts: &[String], tags: &[String]) -> Result<()> {
+        let accounts: std::collections::BTreeSet<_> = accounts.iter().collect();
+        let tags: std::collections::BTreeSet<_> = tags.iter().collect();
+        if accounts.is_empty() || accounts.len() > 1000 || tags.len() > 100 {
+            return Err(StorageError::Constraint(
+                "请选择 1 到 1000 个账户，标签不能超过 100 个".into(),
+            ));
+        }
+        let account_json = serde_json::to_string(&accounts)?;
+        let tag_json = serde_json::to_string(&tags)?;
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let found: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM supplier_accounts WHERE id IN(SELECT value FROM json_each(?))",
+        )
+        .bind(&account_json)
+        .fetch_one(&mut *tx)
+        .await?;
+        if found != accounts.len() as i64 {
+            return Err(StorageError::Constraint(
+                "所选供应账户已变更，请刷新后重试".into(),
+            ));
+        }
+        let providers:Vec<String>=sqlx::query_scalar("SELECT DISTINCT provider_id FROM supplier_accounts WHERE id IN(SELECT value FROM json_each(?))")
+            .bind(&account_json).fetch_all(&mut *tx).await?;
+        for provider in providers {
+            let valid:i64=sqlx::query_scalar("SELECT COUNT(*) FROM supplier_tags WHERE provider_id=? AND id IN(SELECT value FROM json_each(?))")
+                .bind(provider).bind(&tag_json).fetch_one(&mut *tx).await?;
+            if valid != tags.len() as i64 {
+                return Err(StorageError::Constraint(
+                    "只能选择与供应账户同平台的标签".into(),
+                ));
+            }
+        }
+        let routes:Vec<(String,String)>=sqlx::query_as("SELECT virtual_account_id,provider_id FROM execution_routes WHERE supplier_account_id IN(SELECT value FROM json_each(?))")
+            .bind(&account_json).fetch_all(&mut *tx).await?;
+        sqlx::query("DELETE FROM supplier_tag_members WHERE account_id IN(SELECT value FROM json_each(?)) AND tag_id NOT IN(SELECT value FROM json_each(?))")
+            .bind(&account_json).bind(&tag_json).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO supplier_tag_members(tag_id,account_id) SELECT t.value,a.value FROM json_each(?) t CROSS JOIN json_each(?) a WHERE 1 ON CONFLICT(tag_id,account_id) DO NOTHING")
+            .bind(&tag_json).bind(&account_json).execute(&mut *tx).await?;
+        tx.commit().await?;
+        for (owner, provider) in routes {
+            self.select_pool_supplier(&owner, &provider, &[]).await?;
+        }
+        Ok(())
     }
 
     /// Batch add/remove is atomic and never replaces unrelated tags.

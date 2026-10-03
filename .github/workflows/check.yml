@@ -28,6 +28,28 @@ jobs:
       - name: Export embedded application
         working-directory: frontend
         run: npm run build
+      - name: Test supplier administration in the browser
+        working-directory: frontend
+        env:
+          CODEX2API_TEST_BASE_URL: http://127.0.0.1:8793
+          CODEX2API_TEST_OUTPUT_DIR: ../target/supplier-admin-ui
+        run: |
+          npx playwright install --with-deps chromium
+          node scripts/preview-export.mjs > /tmp/codex2api-ui-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8793/admin/suppliers/ > /dev/null; then break; fi
+            sleep 1
+          done
+          npx playwright test supplier-management.spec.ts
+      - name: Upload supplier administration screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: supplier-administration-ui
+          path: target/supplier-admin-ui
+          if-no-files-found: ignore
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Check workspace

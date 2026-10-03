@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useId, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -8,186 +9,184 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogTrigger,
 } from "@/components/ui/dialog";
-import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { Field, FieldLabel, FieldDescription, FieldSet, FieldLegend } from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-} from "@/components/ui/table";
 import { useActions, useErrorToast } from "@/lib/actions";
-import { request, type SupplierTag, type List } from "@/lib/api";
+import { request, type Supplier, type SupplierTag, type List } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
+import {
+  commonSupplierTags,
+  selectedSupplierProvider,
+  supplierTagChecked,
+  toggleSupplierSelection,
+} from "@/lib/supplier-selection";
 
-export function SupplierTags({ selected, onSaved }: { selected: string[]; onSaved: () => void }) {
-  const [open, setOpen] = useState(false);
-  const tags = useResource<List<SupplierTag>>(open ? "/supplier-tags" : null);
+export function SupplierTagEditor({
+  accounts,
+  disabled,
+  batch = false,
+  onSaved,
+}: {
+  accounts: Supplier[];
+  disabled: boolean;
+  batch?: boolean;
+  onSaved: () => void;
+}) {
+  const fieldId = useId();
+  const tags = useResource<List<SupplierTag>>("/supplier-tags");
+  const [draft, setDraft] = useState<string[]>();
   const actions = useActions();
-  const [names, setNames] = useState<Record<string, string>>({});
-  const [name, setName] = useState("");
-  const [checked, setChecked] = useState<string[]>([]);
+  const provider = selectedSupplierProvider(accounts);
+  const choices = (tags.data?.items ?? []).filter((tag) => tag.provider_id === provider);
+  const common = commonSupplierTags(accounts);
+  const changed =
+    draft !== undefined &&
+    accounts.some(
+      (account) =>
+        account.tag_ids.length !== draft.length ||
+        account.tag_ids.some((tag) => !draft.includes(tag)),
+    );
+  const key = batch ? "supplier-tags-batch" : "supplier-tags-single";
+  const busy = actions.isBusy(key);
+  const ready = !disabled && tags.ready && accounts.length > 0 && provider !== undefined;
   useErrorToast(tags.error);
-  const refresh = () => {
-    tags.reload();
-    onSaved();
-  };
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          标签管理{selected.length ? `（已选 ${selected.length}）` : ""}
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>供应账户标签</DialogTitle>
-          <DialogDescription>
-            同一账户可加入多个标签号池。删除标签前须先调整引用它的虚拟账户。
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          noValidate
-          className="flex items-end gap-2"
-          onSubmit={(event) =>
-            actions.submit(event, "create-supplier-tag", async () => {
-              if (!name.trim()) throw new Error("请填写标签名称");
-              await request("/supplier-tags", {
-                method: "POST",
-                body: { name, provider_id: "chatgpt" },
-              });
-              setName("");
-              refresh();
-            })
-          }
-        >
-          <Field>
-            <FieldLabel htmlFor="new-supplier-tag">新标签名称</FieldLabel>
-            <Input
-              id="new-supplier-tag"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={80}
-            />
-          </Field>
-          <Button disabled={!tags.ready || actions.isBusy("create-supplier-tag")}>创建标签</Button>
-          <Button type="button" variant="ghost" onClick={tags.reload}>
-            刷新
-          </Button>
-        </form>
-        <ScrollArea className="max-h-[50dvh]">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>选择</TableHead>
-                <TableHead>名称</TableHead>
-                <TableHead>供应 / 虚拟账户</TableHead>
-                <TableHead>操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(tags.data?.items ?? []).map((tag) => (
-                <TableRow key={tag.id}>
-                  <TableCell>
-                    <Checkbox
-                      aria-label={`选择标签 ${tag.name}`}
-                      checked={checked.includes(tag.id)}
-                      onCheckedChange={(value) =>
-                        setChecked(
-                          value ? [...checked, tag.id] : checked.filter((id) => id !== tag.id),
-                        )
-                      }
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      aria-label={`标签名称 ${tag.name}`}
-                      value={names[tag.id] ?? tag.name}
-                      maxLength={80}
-                      onChange={(event) => setNames({ ...names, [tag.id]: event.target.value })}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    {tag.supplier_count} / {tag.binding_count}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!tags.ready || actions.isBusy(`tag-${tag.id}`)}
-                        onClick={() =>
-                          void actions.run(`tag-${tag.id}`, async () => {
-                            await request(`/supplier-tags/${tag.id}`, {
-                              method: "PUT",
-                              body: {
-                                name: names[tag.id] ?? tag.name,
-                                provider_id: tag.provider_id,
-                              },
-                            });
-                            refresh();
-                          })
-                        }
-                      >
-                        保存
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={
-                          !tags.ready || tag.binding_count > 0 || actions.isBusy(`tag-${tag.id}`)
-                        }
-                        onClick={() =>
-                          void actions.run(
-                            `tag-${tag.id}`,
-                            async () => {
-                              await request(`/supplier-tags/${tag.id}`, { method: "DELETE" });
-                              setChecked(checked.filter((id) => id !== tag.id));
-                              refresh();
-                            },
-                            { confirm: "删除此标签？供应账户会保留。" },
-                          )
-                        }
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+    <form
+      noValidate
+      className="space-y-4"
+      onSubmit={(event) =>
+        actions.submit(
+          event,
+          key,
+          async () => {
+            if (!ready || draft === undefined || !changed)
+              throw new Error("请加载账户资料并修改标签后再保存");
+            await request("/suppliers/tags", {
+              method: "POST",
+              body: { account_ids: accounts.map((account) => account.id), tag_ids: draft },
+            });
+            setDraft(undefined);
+            onSaved();
+          },
+          "标签已更新",
+        )
+      }
+    >
+      <FieldSet disabled={!ready || busy}>
+        <FieldLegend>
+          所属标签{provider ? ` · ${provider === "chatgpt" ? "ChatGPT" : provider}` : ""}
+        </FieldLegend>
+        {batch && (
+          <FieldDescription>
+            修改后按勾选结果覆盖所选账户的标签。横线表示仅部分账户使用。
+          </FieldDescription>
+        )}
+        {!provider && accounts.length > 0 && (
+          <FieldDescription>请选择同一平台的账户。</FieldDescription>
+        )}
+        <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-72">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {choices.map((tag) => (
+              <Field key={tag.id} orientation="horizontal">
+                <Checkbox
+                  id={`${fieldId}-${tag.id}`}
+                  checked={
+                    draft === undefined
+                      ? supplierTagChecked(accounts, tag.id)
+                      : draft.includes(tag.id)
+                  }
+                  onCheckedChange={(checked) =>
+                    setDraft(toggleSupplierSelection(draft ?? common, [tag.id], checked === true))
+                  }
+                />
+                <FieldLabel htmlFor={`${fieldId}-${tag.id}`}>{tag.name}</FieldLabel>
+              </Field>
+            ))}
+          </div>
         </ScrollArea>
-        <FieldDescription>
-          已选择 {selected.length} 个供应账户、{checked.length} 个标签；批量操作保留其他标签。
-        </FieldDescription>
-        <div className="flex justify-end gap-2">
-          {(["add", "remove"] as const).map((operation) => (
-            <Button
-              key={operation}
-              variant={operation === "add" ? "default" : "outline"}
-              disabled={
-                !tags.ready || !selected.length || !checked.length || actions.isBusy("batch-tags")
-              }
-              onClick={() =>
-                void actions.run("batch-tags", async () => {
-                  await request("/suppliers/tags", {
-                    method: "POST",
-                    body: { account_ids: selected, tag_ids: checked, operation },
-                  });
-                  refresh();
-                })
-              }
-            >
-              {operation === "add" ? "批量添加标签" : "批量移除标签"}
-            </Button>
-          ))}
+        {tags.ready && provider && choices.length === 0 && (
+          <FieldDescription>当前平台暂无标签。</FieldDescription>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => setDraft([])}>
+            清空勾选
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={draft === undefined || busy}
+            onClick={() => setDraft(undefined)}
+          >
+            撤销修改
+          </Button>
         </div>
+      </FieldSet>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={tags.reload}
+          disabled={busy || tags.refreshing}
+        >
+          刷新标签
+        </Button>
+        {!batch && (
+          <Button asChild type="button" variant="outline">
+            <Link href="/supplier-tags/">前往标签管理</Link>
+          </Button>
+        )}
+        <Button type="submit" disabled={!ready || busy || !changed}>
+          {busy ? "正在更新…" : "更新标签"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+export function SupplierTagsBatchDialog({
+  open,
+  onOpenChange,
+  accounts,
+  disabled,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  accounts: Supplier[];
+  disabled: boolean;
+  onSaved: () => void;
+}) {
+  const actions = useActions();
+  const busy = actions.isBusy("supplier-tags-batch");
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        className="sm:max-w-xl"
+        onInteractOutside={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          if (busy) event.preventDefault();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>批量更新标签</DialogTitle>
+          <DialogDescription>已选择 {accounts.length} 个供应账户。</DialogDescription>
+        </DialogHeader>
+        <SupplierTagEditor
+          key={accounts.map((account) => account.id).join(",")}
+          accounts={accounts}
+          disabled={disabled}
+          batch
+          onSaved={onSaved}
+        />
       </DialogContent>
     </Dialog>
   );

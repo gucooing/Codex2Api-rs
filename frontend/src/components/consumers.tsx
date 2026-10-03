@@ -2124,9 +2124,6 @@ function Routing({ account, id }: { account?: Consumer; id: string }) {
         <CardTitle role="heading" aria-level={2}>
           供应绑定
         </CardTitle>
-        <CardDescription>
-          绑定同提供商的标签号池；更换号池保留账户身份、订阅和历史。
-        </CardDescription>
       </CardHeader>
       <CardContent>
         {
