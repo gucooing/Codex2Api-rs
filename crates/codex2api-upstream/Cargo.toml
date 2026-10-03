@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+codex2api-core.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 async-stream.workspace = true

@@ -494,6 +494,7 @@ dependencies = [
  "chrono-tz",
  "codex2api-accounts",
  "codex2api-auth",
+ "codex2api-core",
  "codex2api-storage",
  "codex2api-version",
  "eventsource-stream",
