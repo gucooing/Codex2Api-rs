@@ -2,7 +2,7 @@
 //!
 //! Talks to official Codex servers with the same application-layer request
 //! identity as a logged-in Codex CLI at commit
-//! `01fc69f4026735edfdf6789820549727a4867b11`.
+//! `a956835d020762cb2b570053af06f643a11c0ecc`.
 //!
 //! Transport uses stock reqwest and the pinned WebSocket transport dependencies.
 //! This crate does not spoof TLS/JA3.
@@ -15,7 +15,7 @@
 mod backend;
 mod catalog;
 mod client;
-pub use catalog::codex_model_descriptor;
+pub use catalog::{codex_model_descriptor, supported_models};
 mod compat;
 mod endpoint;
 mod error;

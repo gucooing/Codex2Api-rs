@@ -442,6 +442,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transient_http_failures_are_forwarded_once_for_the_client_to_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let app = Router::new().route(
+            "/{status}",
+            post(
+                move |axum::extract::Path(status): axum::extract::Path<u16>| {
+                    let hits = counted.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        Response::builder()
+                            .status(status)
+                            .header("retry-after", "9")
+                            .body(Body::from("upstream rejection"))
+                            .unwrap()
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = UpstreamClient::new(
+            AccountIdentity::new("fixture", "installation", HostRuntime::generate()),
+            "fixture".into(),
+            None,
+        )
+        .unwrap()
+        .with_direct_test_http();
+        for (index, status) in [429, 500, 503].into_iter().enumerate() {
+            let response = client
+                .forward_to(
+                    &format!("http://{address}/{status}"),
+                    Bytes::from_static(br#"{"model":"fixture","input":[]}"#),
+                    HeaderMap::new(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers()["retry-after"], "9");
+            assert_eq!(response.text().await.unwrap(), "upstream rejection");
+            assert_eq!(hits.load(Ordering::SeqCst), index + 1);
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn request_failures_never_disable_credentials_and_only_401_is_persisted() {
         use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
         let path =
@@ -750,7 +798,7 @@ mod tests {
             }
             assert_eq!(received_headers["authorization"], "Bearer test-token");
             assert_eq!(received_headers["originator"], "codex_cli_rs");
-            assert_eq!(received_headers["version"], "0.159.3");
+            assert_eq!(received_headers["version"], "0.160.0");
             for name in ["forwarded", "via", "x-forwarded-for", "x-custom"] {
                 assert!(!received_headers.contains_key(name), "{name}");
             }

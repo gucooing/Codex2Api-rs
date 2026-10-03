@@ -8,7 +8,7 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `01fc69f4026735edfdf6789820549727a4867b11` (2026-09-30T21:46:21Z)
+- commit: `a956835d020762cb2b570053af06f643a11c0ecc` (2026-10-01T17:13:37Z)
 - constants: `crates/codex2api-version`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
@@ -22,6 +22,8 @@ release commit and the fork integration commit; fork-only service routing,
 `BASE_OAUTH_URL`, the `ccodex` executable and npm packaging must never replace
 official supplier-side protocol constants. The client otherwise retains official
 Codex behavior and isolates its default home from official Codex, not per service.
+
+Current official release integration in the fork: `232d7083cdd3a063f560e5f97a89c1b3bf8ee063`.
 
 User instruction for the 2026-10-01 update: do not perform local compilation
 validation. Push reviewed changes and let cloud CI compile and test them; record
@@ -52,7 +54,7 @@ validation are complete.
 ## Official constants (do not invent)
 
 - originator: `codex_cli_rs`
-- package version in UA: `0.159.3`
+- package version in UA: `0.160.0`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`
@@ -63,6 +65,13 @@ validation are complete.
 - installation_id: UUID persisted on the account SQLite row
 
 ## Coding rules
+
+### Documentation lifecycle (user-confirmed 2026-10-03)
+
+- Keep documentation focused on the current architecture, behavior, contracts and maintenance rules.
+- Update plans are temporary working documents used for approval and implementation. After the task is complete, remove the completed plan and historical version plans, investigation notes, audit logs and execution diaries; do not archive them as new Markdown files.
+- Merge enduring conclusions and known limitations into the relevant current documentation, then remove links to deleted records. Git history and cloud CI retain the change and validation history.
+- Do not add dated progress logs or prose such as "the previous implementation record has been archived" to README or architectural documentation.
 
 ### Frontend
 
@@ -185,7 +194,7 @@ Before changing virtual-account endpoints, read
   data source and finding no records. Missing capabilities remain explicitly
   unfinished until persistence, management and client behavior are connected.
 - Existing placeholders and supplier-data forwarding are known gaps, not patterns
-  to copy. Follow the documented repair inventory; do not invent usage, task/log
+  to copy. Follow the current capability boundaries in `docs/ARCHITECTURE.md`; do not invent usage, task/log
   history, official grants, billing transactions or external-service success.
 - These requirements do not authorize unrelated feature expansion or a Codex
   baseline update. Implement each requested repair through its data and UI path.

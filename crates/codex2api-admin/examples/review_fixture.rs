@@ -107,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
         model: "review-cycle-model".into(),
         tier: "standard".into(),
         min_input_tokens: 0,
+        max_input_tokens: None,
         input_rate: 2_000_000,
         cached_rate: 500_000,
         cache_write_rate: 2_000_000,

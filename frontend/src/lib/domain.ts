@@ -56,15 +56,16 @@ export function planWrite(value: Plan) {
     revision: value.id ? value.revision : null,
   };
 }
-export function modelWrite(value: Model) {
+export function modelWrite(value: Model, presetVersion?: string) {
   return {
     provider_id: value.provider_id,
     model: value.model,
     kind: value.kind,
     enabled: value.enabled,
     revision: value.revision,
-    token_prices: value.kind === "text" ? value.token_prices : [],
-    image_prices: value.kind === "image" ? value.image_prices : [],
+    token_prices: !presetVersion && value.kind === "text" ? value.token_prices : [],
+    image_prices: !presetVersion && value.kind === "image" ? value.image_prices : [],
+    ...(presetVersion ? { pricing_preset: presetVersion } : {}),
   };
 }
 export function mergeOAuth(

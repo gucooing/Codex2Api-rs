@@ -9,6 +9,8 @@ pub struct ModelPrice {
     pub model: String,
     pub tier: String,
     pub min_input_tokens: i64,
+    #[serde(default)]
+    pub max_input_tokens: Option<i64>,
     pub input_rate: i64,
     pub cached_rate: i64,
     pub cache_write_rate: i64,
@@ -130,6 +132,9 @@ pub(crate) fn validate_model_price(price: &ModelPrice) -> Result<()> {
             .all(|b| b.is_ascii_alphanumeric() || b"-._:/".contains(&b))
         || !matches!(price.tier.as_str(), "standard" | "fast" | "flex")
         || !(0..=10_000_000).contains(&price.min_input_tokens)
+        || price
+            .max_input_tokens
+            .is_some_and(|max| max < price.min_input_tokens || max > 10_000_000)
         || [
             price.input_rate,
             price.cached_rate,
@@ -231,7 +236,8 @@ pub(crate) fn charge(
                 && Some(p.tier.as_str()) == tier
                 && p.min_input_tokens <= input
         })
-        .max_by_key(|p| p.min_input_tokens);
+        .max_by_key(|p| p.min_input_tokens)
+        .filter(|p| p.max_input_tokens.is_none_or(|max| input <= max));
     let Some(price) = price else {
         return (None, "unpriced", model, tier.map(str::to_owned));
     };
@@ -303,11 +309,11 @@ impl Storage {
                 "请在模型配置中恢复模型或选择正确的计费方式",
             ));
         }
-        let mut affected=sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,revision) SELECT ?,?,?,?,?,?,?,?,'custom',1 WHERE ?=0 ON CONFLICT(provider_id,model,tier,min_input_tokens) DO NOTHING")
-            .bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.revision).execute(&mut *tx).await?.rows_affected();
+        let mut affected=sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,max_input_tokens,source,revision) SELECT ?,?,?,?,?,?,?,?,?,'custom',1 WHERE ?=0 ON CONFLICT(provider_id,model,tier,min_input_tokens) DO NOTHING")
+            .bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
         if affected == 0 {
-            affected=sqlx::query("UPDATE model_prices SET input_rate=?,cached_rate=?,cache_write_rate=?,output_rate=?,source='custom',revision=revision+1 WHERE provider_id=? AND model=? AND tier=? AND min_input_tokens=? AND revision=?")
-                .bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
+            affected=sqlx::query("UPDATE model_prices SET input_rate=?,cached_rate=?,cache_write_rate=?,output_rate=?,max_input_tokens=?,source='custom',revision=revision+1 WHERE provider_id=? AND model=? AND tier=? AND min_input_tokens=? AND revision=?")
+                .bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
         }
         if affected == 0 {
             return Ok(false);

@@ -195,6 +195,7 @@ async fn supplier_cycles_sum_settled_prices_with_exact_boundaries_and_account_is
         model: "cycle-test".into(),
         tier: "standard".into(),
         min_input_tokens: 0,
+        max_input_tokens: None,
         input_rate: 2_000_000,
         cached_rate: 500_000,
         cache_write_rate: 3_000_000,

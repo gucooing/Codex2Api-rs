@@ -79,7 +79,7 @@ git -C $analysisDir diff --find-renames $baseCommit $targetCommit
 
 分析阶段可以读取代码、查询官方仓库、运行只读检查，以及编写方案；**不得提前修改业务实现、协议常量、依赖、SQLite 数据、当前参考快照或已对齐版本声明**。
 
-把方案写入 `docs/CODEX_UPDATE_PLAN.md`，在对话中提供该文件入口和需要用户决定的内容。保持同一份方案随用户裁决更新，记录日期与目标 commit，避免多个方案版本相互矛盾。方案至少包含：
+把方案写入临时工作文档 `docs/CODEX_UPDATE_PLAN.md`，在对话中提供该文件入口和需要用户决定的内容。保持同一份方案随用户裁决更新，记录日期与目标 commit，避免多个方案版本相互矛盾；不复制为历史版本归档。方案至少包含：
 
 1. 当前参考 commit、当前发布版及 commit、目标发布版/tag/commit、官方证据链接与查询时间。
 2. 官方客户端更新概览，以及从当前参考快照到目标发布版的实际行为差异。
@@ -121,7 +121,9 @@ git -C $analysisDir diff --find-renames $baseCommit $targetCommit
 - `crates/codex2api-version/src/lib.rs`：参考 commit、来源、时间、提交说明、官方发布版/tag/commit、UA 版本及有证据变化的协议常量；同步相关版本断言。
 - `AGENTS.md`、`README.md`、`docs/ARCHITECTURE.md`：当前对齐版本与相应行为说明。
 - `reference/SOURCE.md` 和本地 `reference/codex`：实际采用的目标源码快照。该目录被忽略，其他工作区必须能根据已提交的 commit 信息重新取得源码。
-- `docs/CODEX_UPDATE_PLAN.md`：用户批准范围、实施结果、验证证据、未完成项和最终采用的基线。
+- `docs/CODEX_UPDATE_PLAN.md`：实施期间保存批准范围、验证状态和未完成项。任务完成后删除；长期有效的行为及限制并入 README、架构或相应当前规范。
+
+文档只维护当前有效状态。更新完成后删除历史版本方案、排查记录、审计日志和实施日记，并清理所有引用；不要新增归档 Markdown 或“前次实施记录已归档”之类的叙述。Git 历史及云端 CI 保留提交、验证和发布的追溯信息。
 
 下一次更新从这个已核实、已完成适配的 `CODEX_REF_COMMIT` 继续比较。交付时说明官方改了什么、本项目同步了什么、哪些无需改、验证结果和使用新构建所需步骤。
 

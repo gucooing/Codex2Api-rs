@@ -422,7 +422,8 @@ mod tests {
     #[test]
     fn normalizes_only_identity_and_preserves_session_and_tool_contents() {
         let input = json!({"model":"model", "service_tier":"priority", "stream":true,
-            "input":[{"role":"user","content":"installation_id=do not edit"}],
+            "input":[{"role":"user","content":"installation_id=do not edit"},
+                {"type":"agent_message","encrypted_content":"opaque-guardian-evidence","id":"agent-message"}],
             "tools":[{"type":"function","name":"tool"}], "previous_response_id":"previous",
             "client_metadata": {"x-codex-installation-id":"caller", "session_id":"session",
                 "thread_id":"thread", "turn_id":"turn", "x-codex-window-id":"window",

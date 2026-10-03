@@ -61,7 +61,7 @@ import { Switch } from "@/components/ui/switch";
 import { money } from "@/lib/format";
 import { useState } from "react";
 import { Plus, Pencil, Search, RotateCcw, Trash2 } from "lucide-react";
-import { request, type List, type Model, type TokenPrice } from "@/lib/api";
+import { request, type List, type Model, type ModelPreset, type TokenPrice } from "@/lib/api";
 import { modelWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
 import { useSavedFilters } from "@/lib/preferences";
@@ -70,6 +70,8 @@ import {
   pricingRows,
   emptyBasePrice,
   priceFields,
+  findModelPreset,
+  withModelPreset,
   type PricingDraft,
   type BasePrice,
 } from "@/lib/model-pricing";
@@ -101,6 +103,7 @@ export default function ModelsPage() {
   const fieldId = useId();
   const actions = useActions();
   const resource = useResource<List<Model>>("/models");
+  const presets = useResource<List<ModelPreset>>("/models/presets");
   const [editing, setEditing] = useState<Model>();
   const empty = { search: "", kind: "", status: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters("models.filters", empty);
@@ -115,6 +118,7 @@ export default function ModelsPage() {
     ) ?? [];
   const pagination = useTablePagination(items, applied, resource.data !== undefined);
   useErrorToast(resource.error);
+  useErrorToast(presets.error);
   return (
     <>
       <Card>
@@ -304,8 +308,16 @@ export default function ModelsPage() {
             </DropdownMenu>
           </form>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
-            {resource.error && (
-              <Button type="button" variant="outline" size="sm" onClick={resource.reload}>
+            {(resource.error || presets.error) && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  resource.reload();
+                  presets.reload();
+                }}
+              >
                 重新加载
               </Button>
             )}
@@ -418,7 +430,11 @@ export default function ModelsPage() {
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
                                     {model.kind === "text" ? (
                                       <>
-                                        <span>{model.token_prices.length} 条价格规则</span>
+                                        <span>
+                                          {model.token_prices.length
+                                            ? `${model.token_prices.length} 条价格规则`
+                                            : "待定价"}
+                                        </span>
                                         <CardDescription>
                                           {[
                                             ...new Set(
@@ -473,7 +489,11 @@ export default function ModelsPage() {
                         >
                           {model.kind === "text" ? (
                             <>
-                              <span>{model.token_prices.length} 条价格规则</span>
+                              <span>
+                                {model.token_prices.length
+                                  ? `${model.token_prices.length} 条价格规则`
+                                  : "待定价"}
+                              </span>
                               <CardDescription>
                                 {[
                                   ...new Set(
@@ -685,6 +705,7 @@ export default function ModelsPage() {
       {editing && (
         <ModelEditor
           model={editing}
+          presets={presets.data?.items}
           onClose={() => setEditing(undefined)}
           onSaved={() => {
             setEditing(undefined);
@@ -697,10 +718,12 @@ export default function ModelsPage() {
 }
 function ModelEditor({
   model,
+  presets,
   onClose,
   onSaved,
 }: {
   model: Model;
+  presets: ModelPreset[] | undefined;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -709,13 +732,43 @@ function ModelEditor({
   const fieldId = useId();
   const actions = useActions();
   const [value, setValue] = useState(model);
-  const update = <K extends keyof Model>(key: K, next: Model[K]) =>
-    setValue((current) => ({ ...current, [key]: next }));
   const [pricing, setPricing] = useState(() => pricingDraft(model.token_prices));
   const [pricingChanged, setPricingChanged] = useState(false);
+  const [customPricing, setCustomPricing] = useState(model.revision !== null);
+  const [presetVersion, setPresetVersion] = useState<string>();
+  const matchedPreset = findModelPreset(presets, value.provider_id, value.model);
+  const applyPreset = (current: Model, preset: ModelPreset) => {
+    const next = withModelPreset(current, preset);
+    setValue(next);
+    setPricing(pricingDraft(next.token_prices));
+    setPricingChanged(true);
+    setCustomPricing(false);
+    setPresetVersion(preset.version);
+  };
+  const update = <K extends keyof Model>(key: K, next: Model[K]) => {
+    const current = { ...value, [key]: next };
+    if ((key === "model" || key === "provider_id") && model.revision === null && !customPricing) {
+      const preset = findModelPreset(presets, current.provider_id, current.model);
+      if (preset?.token_prices.length) {
+        applyPreset(current, preset);
+        return;
+      }
+      current.token_prices = [tokenRule()];
+      setPricing(pricingDraft(current.token_prices));
+      setPricingChanged(false);
+      setPresetVersion(undefined);
+    }
+    if (key === "kind" || key === "image_prices") {
+      setCustomPricing(true);
+      setPresetVersion(undefined);
+    }
+    setValue(current);
+  };
   const changePricing = (next: PricingDraft) => {
     setPricing(next);
     setPricingChanged(true);
+    setCustomPricing(true);
+    setPresetVersion(undefined);
   };
   const updateRange = (index: number, patch: Partial<BasePrice>) =>
     changePricing({
@@ -766,15 +819,20 @@ function ModelEditor({
               event,
               "app\\models\\page.tsx:form:6",
               async () => {
+                if (model.revision === null && !presets)
+                  throw new Error("价格预设尚未加载，请重试。");
                 await request("/models", {
                   method: "POST",
-                  body: modelWrite({
-                    ...value,
-                    token_prices:
-                      value.kind === "text" && pricingChanged
-                        ? pricingRows(pricing)
-                        : value.token_prices,
-                  }),
+                  body: modelWrite(
+                    {
+                      ...value,
+                      token_prices:
+                        value.kind === "text" && pricingChanged
+                          ? pricingRows(pricing)
+                          : value.token_prices,
+                    },
+                    presetVersion,
+                  ),
                 });
                 onSaved();
               },
@@ -866,6 +924,7 @@ function ModelEditor({
                         required
                         maxLength={256}
                         readOnly={model.revision !== null}
+                        disabled={model.revision === null && !presets}
                         value={value.model}
                         onChange={(e) => update("model", e.target.value)}
                       />
@@ -950,6 +1009,33 @@ function ModelEditor({
                     </div>
                   </Field>
                 </section>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!matchedPreset?.token_prices.length}
+                    onClick={() => matchedPreset && applyPreset(value, matchedPreset)}
+                  >
+                    应用预设价格
+                  </Button>
+                  {matchedPreset?.source_url ? (
+                    <span>
+                      {presetVersion ? "已应用预设 · " : "可用预设 · "}
+                      <a
+                        href={matchedPreset.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-4"
+                      >
+                        官方参考价
+                      </a>{" "}
+                      · {matchedPreset.verified_at}
+                    </span>
+                  ) : (
+                    <span>{!presets ? "正在加载价格预设" : "暂无完整预设，请填写自定义价格"}</span>
+                  )}
+                </div>
                 {value.kind === "text" ? (
                   <FieldSet className="gap-4">
                     <FieldLegend>基础价格（美元 / 百万 Token）</FieldLegend>
@@ -1000,6 +1086,25 @@ function ModelEditor({
                             />
                           </Field>
                         )}
+                        <Field>
+                          <FieldLabel htmlFor={`${fieldId}-range-${index}-end`}>
+                            输入 Token 上限（留空不限）
+                          </FieldLabel>
+                          <Input
+                            id={`${fieldId}-range-${index}-end`}
+                            type="number"
+                            min={row.min_input_tokens}
+                            max={10000000}
+                            step={1}
+                            value={row.max_input_tokens ?? ""}
+                            onChange={(e) =>
+                              updateRange(index, {
+                                max_input_tokens:
+                                  e.target.value === "" ? null : Number(e.target.value),
+                              })
+                            }
+                          />
+                        </Field>
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                           {priceFields.map(([key, label]) => (
                             <Field key={key}>
@@ -1114,6 +1219,38 @@ function ModelEditor({
                                           rows: pricing[tier].rows.map((old, i) =>
                                             i === index
                                               ? { ...old, min_input_tokens: Number(e.target.value) }
+                                              : old,
+                                          ),
+                                        },
+                                      })
+                                    }
+                                  />
+                                </Field>
+                                <Field>
+                                  <FieldLabel htmlFor={`${fieldId}-${tier}-${index}-end`}>
+                                    输入 Token 上限（留空不限）
+                                  </FieldLabel>
+                                  <Input
+                                    id={`${fieldId}-${tier}-${index}-end`}
+                                    type="number"
+                                    min={row.min_input_tokens}
+                                    max={10000000}
+                                    step={1}
+                                    value={row.max_input_tokens ?? ""}
+                                    onChange={(e) =>
+                                      changePricing({
+                                        ...pricing,
+                                        [tier]: {
+                                          ...pricing[tier],
+                                          rows: pricing[tier].rows.map((old, i) =>
+                                            i === index
+                                              ? {
+                                                  ...old,
+                                                  max_input_tokens:
+                                                    e.target.value === ""
+                                                      ? null
+                                                      : Number(e.target.value),
+                                                }
                                               : old,
                                           ),
                                         },
@@ -1353,7 +1490,13 @@ function ModelEditor({
                 {"取消"}
               </Button>
             )}
-            <Button type="submit" disabled={actions.isBusy("app\\models\\page.tsx:form:6")}>
+            <Button
+              type="submit"
+              disabled={
+                actions.isBusy("app\\models\\page.tsx:form:6") ||
+                (model.revision === null && !presets)
+              }
+            >
               {actions.isBusy("app\\models\\page.tsx:form:6") && <Spinner />}
               {actions.isBusy("app\\models\\page.tsx:form:6") ? "正在提交…" : "保存"}
             </Button>

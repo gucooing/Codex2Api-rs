@@ -110,6 +110,7 @@ export type Plans = List<Plan>;
 export type TokenPrice = {
   tier: "standard" | "fast" | "flex";
   min_input_tokens: number;
+  max_input_tokens?: number | null;
   input_rate: string;
   cached_rate: string;
   cache_write_rate: string;
@@ -126,6 +127,15 @@ export type Model = {
   codex_metadata_source?: string | null;
   token_prices: TokenPrice[];
   image_prices: ImagePrice[];
+};
+export type ModelPreset = {
+  provider_id: string;
+  model: string;
+  kind: "text" | "image";
+  version: string;
+  source_url: string | null;
+  verified_at: string | null;
+  token_prices: TokenPrice[];
 };
 export type Proxy = {
   id: string;

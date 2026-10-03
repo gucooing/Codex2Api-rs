@@ -1,4 +1,31 @@
-import type { TokenPrice } from "./api";
+import type { Model, ModelPreset, TokenPrice } from "./api";
+
+export function findModelPreset(
+  presets: ModelPreset[] | undefined,
+  provider: string,
+  model: string,
+) {
+  return presets?.find(
+    (preset) => preset.provider_id === provider && preset.model === model.trim(),
+  );
+}
+
+export function withModelPreset(model: Model, preset: ModelPreset): Model {
+  if (
+    !preset.token_prices.length ||
+    model.provider_id !== preset.provider_id ||
+    model.model.trim() !== preset.model
+  ) {
+    throw new Error("该模型没有完整预设价格。");
+  }
+  return {
+    ...model,
+    model: preset.model,
+    kind: preset.kind,
+    token_prices: preset.token_prices.map((price) => ({ ...price })),
+    image_prices: [],
+  };
+}
 
 export const priceFields = [
   ["input_rate", "普通输入"],
@@ -50,6 +77,8 @@ export function pricingDraft(prices: TokenPrice[]): PricingDraft {
       for (const row of rows) {
         const base = ranges.find((r) => r.min_input_tokens === row.min_input_tokens);
         if (!base) throw new Error("different intervals");
+        if ((base.max_input_tokens ?? null) !== (row.max_input_tokens ?? null))
+          throw new Error("different upper bounds");
         for (const [key] of priceFields) {
           const a = decimal(base[key]),
             b = decimal(row[key]);
@@ -96,6 +125,7 @@ export function pricingRows(draft: PricingDraft): TokenPrice[] {
       ...draft.ranges.map((row): TokenPrice => ({
         tier: name,
         min_input_tokens: row.min_input_tokens,
+        ...(row.max_input_tokens != null ? { max_input_tokens: row.max_input_tokens } : {}),
         input_rate: multiplyPrice(row.input_rate, tier.multiplier),
         output_rate: multiplyPrice(row.output_rate, tier.multiplier),
         cached_rate: multiplyPrice(row.cached_rate, tier.multiplier),
@@ -103,6 +133,15 @@ export function pricingRows(draft: PricingDraft): TokenPrice[] {
       })),
     );
   }
-  for (const row of result) for (const [key] of priceFields) decimal(row[key]);
+  for (const row of result) {
+    if (
+      row.max_input_tokens != null &&
+      (!Number.isSafeInteger(row.max_input_tokens) ||
+        row.max_input_tokens < row.min_input_tokens ||
+        row.max_input_tokens > 10_000_000)
+    )
+      throw new Error("上下文上限须不小于起点，且不超过 10000000 Token。");
+    for (const [key] of priceFields) decimal(row[key]);
+  }
   return result;
 }

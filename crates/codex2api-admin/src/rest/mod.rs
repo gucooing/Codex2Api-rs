@@ -76,6 +76,7 @@ pub(crate) fn router(state: AdminState) -> Router {
             put(catalog::update_plan).delete(catalog::delete_plan),
         )
         .route("/models", get(catalog::models).post(catalog::save_model))
+        .route("/models/presets", get(catalog::model_presets))
         .route("/models/status", post(catalog::model_status))
         .route("/models/delete", post(catalog::delete_model))
         .route("/usage", get(usage::page))

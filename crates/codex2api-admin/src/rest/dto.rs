@@ -123,6 +123,8 @@ pub struct Plans {
 pub struct TokenPrice {
     pub tier: String,
     pub min_input_tokens: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<i64>,
     pub input_rate: String,
     pub cached_rate: String,
     pub cache_write_rate: String,
@@ -132,6 +134,16 @@ pub struct TokenPrice {
 pub struct ImagePrice {
     pub resolution: String,
     pub price: String,
+}
+#[derive(Serialize)]
+pub struct ModelPreset {
+    pub provider_id: String,
+    pub model: String,
+    pub kind: String,
+    pub version: &'static str,
+    pub source_url: Option<String>,
+    pub verified_at: Option<&'static str>,
+    pub token_prices: Vec<TokenPrice>,
 }
 #[derive(Serialize)]
 pub struct Model {

@@ -74,6 +74,12 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
             "incomplete",
             None,
         ),
+        (
+            "content-filter",
+            json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}),
+            "incomplete",
+            None,
+        ),
     ];
     let mut count = 0;
     for (name, event, kind, status) in cases {
@@ -121,13 +127,16 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
             let record = result.iter().find(|r| r.id == id).unwrap();
             assert_eq!(
                 record.status,
-                if name == "incomplete" {
+                if kind == "incomplete" {
                     "incomplete"
                 } else {
                     "failed"
                 }
             );
             assert_eq!(record.failure_kind.as_deref(), Some(kind), "{id}");
+            if name == "content-filter" {
+                assert_eq!(record.error_code.as_deref(), Some("content_filter"));
+            }
             assert_eq!(record.failure_status, status, "{id}");
             assert_eq!(record.http_status, (transport == "http").then_some(200));
         }

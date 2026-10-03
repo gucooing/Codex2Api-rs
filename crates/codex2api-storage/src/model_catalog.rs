@@ -186,8 +186,8 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         for price in tokens {
-            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,revision) VALUES(?,?,?,?,?,?,?,?,'custom',?)")
-                .bind(&model.provider_id).bind(&model.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,max_input_tokens,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+                .bind(&model.provider_id).bind(&model.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.source).bind(price.max_input_tokens).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
         }
         for price in images {
             sqlx::query(

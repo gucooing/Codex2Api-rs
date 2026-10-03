@@ -1,6 +1,6 @@
 # 虚拟账户重置卡
 
-用户于 2026-09-25 确认：重置卡使用后清零用量，刷新周期也重新计时，但订阅到期时间不变；发送给客户端的响应必须遵守官方协议，不能夹带本地管理字段。
+重置卡使用后清零用量，刷新周期也重新计时，但订阅到期时间不变；发送给客户端的响应必须遵守官方协议，不能夹带本地管理字段。
 
 虚拟账户详情的“重置卡”标签提供发放、使用和记录查询。每次发放 1–100 张，默认立即启用、有效期 30 天；管理员也可指定启用时间和 1–3650 天有效时长，时长从启用时间起计算。启用前或过期后客户端不会获取、也不会看到卡片，管理端仍可看到待启用／过期记录。管理备注只在管理 API 中返回。每张卡使用一次，不附带订阅、付款或供应账户权益。已到期订阅不能通过用卡恢复，未消耗的卡保留。
 
@@ -12,10 +12,6 @@
 
 发卡和批量请求带 `request_id`，迁移 `0041_admin_consumer_operations.sql` 持久化参数与结果。同一请求重试不重复发卡或重置；数量、备注、启用时间、有效时长、操作或范围变更会拒绝。批量目标按相同筛选 SQL 在事务中每次读取 200 个 ID，可排除部分账户；任一账户写入失败则整体回滚。返回实际处理和跳过数量。用卡使用官方 `redeem_request_id`，账号之间隔离；成功请求重试返回 `already_redeemed`，不会再扣卡或重开周期。不同请求并发选择同一卡，也只有一次成功。直接重置无可处理用量时不会留下可用的内部卡片，客户端按 ID 查询也不能获取内部重置记录。
 
-固定参考仍为 `00c972ed5d6ff6499317fd41b7f23605b8e6850d`。官方客户端合同为：GET `/wham/usage` 的 `rate_limit_reset_credits.available_count`；GET `/wham/rate-limit-reset-credits` 的 `credits/available_count/total_earned_count` 和官方卡片字段；POST `/wham/rate-limit-reset-credits/consume` 的 `redeem_request_id`、可选 `credit_id`，以及 `reset/nothing_to_reset/no_credit/already_redeemed`、整数 `windows_reset` 和可选 `credit`。客户端响应不返回管理备注、美元计费、供应账户信息或内部窗口数组。证据来自 pinned `backend-client/src/types.rs`、`client/rate_limit_resets.rs` 及 `rate_limit_resets_tests.rs`。
+协议基线由版本常量固定。官方客户端合同为：GET `/wham/usage` 的 `rate_limit_reset_credits.available_count`；GET `/wham/rate-limit-reset-credits` 的 `credits/available_count/total_earned_count` 和官方卡片字段；POST `/wham/rate-limit-reset-credits/consume` 的 `redeem_request_id`、可选 `credit_id`，以及 `reset/nothing_to_reset/no_credit/already_redeemed`、整数 `windows_reset` 和可选 `credit`。客户端响应不返回管理备注、美元计费、供应账户信息或内部窗口数组。证据来自 pinned `backend-client/src/types.rs`、`client/rate_limit_resets.rs` 及 `rate_limit_resets_tests.rs`。
 
-已安装 Desktop 的实际 renderer 函数 `Eai/Oai/Tai/Yii/aIo/Dai` 已通过 `scripts/windows/Test-DesktopResetCredits.cjs` 验证：列表、选卡请求、缓存扣减、传输失败复用同一 UUID 和成功后的额度刷新均遵循原始逻辑。`Test-NativeUpdateContract.py` 同时对官方 0.157.0 与已安装 Desktop 内置 app-server 读取实际服务响应并发送用卡请求。
-
-2026-09-29 补充：当前 Desktop `26.924.51851` 将请求/缓存函数改为 `wpn/Epn/Cpn/Yfn`，重试状态机移至独立 `redemption` 模块，验证脚本已按实际安装包更新。用量设置的卡片区域还依赖 gate `85924660`，只有列表响应正确仍不会显示。服务端新增持久化 `desktop_ui_policy.reset_credits_visible` 和对应管理开关，默认开启；不改变卡片余额、有效期或消费条件。原版 Desktop 实机已显示两张隔离测试卡及到期时间，用户确认显示生效。详见 [完整验证记录](DESKTOP_LAUNCHER_FIXES_2026-09-29.md)。
-
-验证入口：`cargo test -p codex2api-storage --lib --test migrations`、`cargo test -p codex2api-admin --test reset_credits --test contracts --test virtual_accounts`、`cargo test -p codex2api-api --test virtual_oauth reset_credits_match_official_clients -- --nocapture`、`frontend/tests/browser/reset-credits.spec.ts`。原生验证仅使用进程内测试 token 和临时 TLS fixture，不代表部署或真实官方供应用卡。
+云端回归覆盖：`cargo test -p codex2api-storage --lib --test migrations`、`cargo test -p codex2api-admin --test reset_credits --test contracts --test virtual_accounts`、`cargo test -p codex2api-api --test virtual_oauth reset_credits_match_official_clients -- --nocapture`、`frontend/tests/browser/reset-credits.spec.ts`。原生验证仅使用进程内测试 token 和临时 TLS fixture，不代表部署或真实官方供应用卡。

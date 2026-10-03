@@ -6,6 +6,8 @@
 
 mod billing;
 mod model_catalog;
+mod model_presets;
+pub use model_presets::preset_model_prices;
 mod token;
 pub use model_catalog::{
     IMAGE_RESOLUTION_TIERS, ImagePrice, ImageUsage, ModelConfig, image_resolution,

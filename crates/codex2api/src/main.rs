@@ -20,10 +20,14 @@ async fn main() -> Result<()> {
         commit = CODEX_REF_COMMIT,
         commit_date = CODEX_REF_COMMIT_DATE,
         package_version = CODEX_PACKAGE_VERSION,
-        "starting Codex2API aligned with official Codex snapshot"
+        "starting Codex2API with the pinned official Codex protocol target"
     );
 
     let storage = Storage::open(&db_path).await?;
+    let registered = storage
+        .sync_supported_models(&codex2api_upstream::supported_models())
+        .await?;
+    tracing::info!(registered, "synchronized supported model presets");
     codex2api_accounts::SupplierAccountStore::open(storage.clone())
         .align_user_agents()
         .await?;

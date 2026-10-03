@@ -3,6 +3,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod model_presets;
+pub use model_presets::{
+    MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset, model_price_preset,
+};
+
 pub const CHATGPT: &str = "chatgpt";
 
 pub const PROVIDERS: &[(&str, &str)] = &[(CHATGPT, "ChatGPT")];
