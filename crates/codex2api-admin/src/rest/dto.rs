@@ -92,6 +92,7 @@ pub struct ModelRef {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    pub plan_type: String,
     pub id: String,
     pub provider_id: String,
     pub name: String,
@@ -170,6 +171,7 @@ pub struct Usage {
 }
 #[derive(Serialize)]
 pub struct Route {
+    pub tag_id: Option<String>,
     pub virtual_account_id: String,
     pub provider_id: String,
     pub supplier_account_id: Option<String>,

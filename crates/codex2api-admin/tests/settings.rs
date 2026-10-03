@@ -5,17 +5,26 @@ use serde_json::json;
 #[tokio::test]
 async fn gateway_settings_require_session_and_csrf_and_persist_mode_and_rules() {
     let f = Fixture::new().await;
-    let value = json!({"ua_mode":"whitelist","ua_rules":["codex*","desktop"]});
+    let mut value = json!({"ua_mode":"whitelist","ua_rules":["codex*","desktop"]});
     assert_eq!(
         f.request("PUT", "/admin/api/settings/gateway", value.clone())
             .await
             .status(),
         StatusCode::OK
     );
+    value["default_rpm"] = 20.into();
     assert_eq!(f.get("/admin/api/settings/gateway").await, value);
+    value["default_rpm"] = 0.into();
+    assert_eq!(
+        f.request("PUT", "/admin/api/settings/gateway", value.clone())
+            .await
+            .status(),
+        StatusCode::OK
+    );
     let reopened = codex2api_storage::Storage::open(f.dir.path().join("test.sqlite"))
         .await
         .unwrap();
+    assert_eq!(reopened.gateway_settings().await.unwrap().default_rpm, 0);
     assert!(
         reopened
             .gateway_settings()

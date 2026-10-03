@@ -239,7 +239,7 @@ impl UpstreamClient {
             if method != http::Method::GET || !prepared.body.is_empty() {
                 request = request.body(prepared.body.clone());
             }
-            let response = request.send().await?;
+            let mut response = request.send().await?;
             if response.status() == StatusCode::UNAUTHORIZED && !retried && self.auth.is_some() {
                 retried = true;
                 self.refresh_access_token(&auth.access_token).await?;
@@ -253,6 +253,9 @@ impl UpstreamClient {
             if response.status() == StatusCode::UNAUTHORIZED {
                 self.reject_auth(auth.revision).await;
             }
+            response
+                .extensions_mut()
+                .insert(crate::SupplierAuthRevision(auth.revision));
             return Ok(response);
         }
     }
@@ -345,6 +348,12 @@ impl UpstreamClient {
             return Ok(());
         };
         if let Err(error) = auth.refresh(&self.identity.account_id, false).await {
+            if error.permanent_refresh_failure()
+                && !matches!(error, codex2api_auth::AuthError::MissingRefreshToken)
+            {
+                self.reject_auth(self.request_auth()?.revision).await;
+                return Err(UpstreamError::Refresh(error));
+            }
             // Official proactive refresh keeps persisted auth on transient failure.
             tracing::warn!(%error, "proactive token refresh failed");
         }
@@ -361,11 +370,7 @@ impl UpstreamClient {
             Err(error) => {
                 // A refresh outage cannot establish invalid credentials.
                 let revision = self.request_auth()?.revision;
-                if matches!(
-                    &error,
-                    codex2api_auth::AuthError::RefreshRejected { status: 401, .. }
-                        | codex2api_auth::AuthError::TokenEndpoint { status: 401, .. }
-                ) {
+                if error.permanent_refresh_failure() {
                     self.reject_auth(revision).await;
                 }
                 return Err(UpstreamError::Refresh(error));

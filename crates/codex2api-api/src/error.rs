@@ -304,6 +304,18 @@ fn service_error_response(error: codex2api_service::ServiceError) -> Response {
     use codex2api_core::PolicyError;
     use codex2api_service::ServiceError;
     let (status, kind, code) = match &error {
+        ServiceError::RpmExceeded { retry_after } => {
+            let mut response = openai_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                error.to_string(),
+                Some("virtual_rpm_exceeded"),
+            );
+            if let Ok(value) = retry_after.to_string().parse() {
+                response.headers_mut().insert("retry-after", value);
+            }
+            return response;
+        }
         ServiceError::Storage(_) => {
             return match error {
                 ServiceError::Storage(e) => ApiError::Storage(e).into_response(),

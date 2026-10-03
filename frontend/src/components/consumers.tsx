@@ -1,4 +1,5 @@
 "use client";
+import { RoutingForm, type RoutingResponse } from "@/components/consumer-routing";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination, usePageControls } from "@/lib/pagination";
@@ -37,14 +38,7 @@ import {
   FieldSeparator,
 } from "@/components/ui/field";
 import { useId } from "react";
-import {
-  Combobox,
-  ComboboxInput,
-  ComboboxContent,
-  ComboboxList,
-  ComboboxItem,
-  ComboboxEmpty,
-} from "@/components/ui/combobox";
+
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -94,7 +88,6 @@ import {
   type ConsumerWrite,
   type List,
   type Plans,
-  type Supplier,
   type Device,
   type Json,
 } from "@/lib/api";
@@ -2122,14 +2115,6 @@ function ConsumerResetCredits({ id }: { id: string }) {
     </>
   );
 }
-type RoutingResponse = {
-  items: {
-    virtual_account_id: string;
-    provider_id: string;
-    supplier_account_id: string | null;
-    revision: number;
-  }[];
-};
 function Routing({ account, id }: { account?: Consumer; id: string }) {
   const resource = useResource<RoutingResponse>(`/consumers/${id}/routing`);
   useErrorToast(resource.error);
@@ -2140,7 +2125,7 @@ function Routing({ account, id }: { account?: Consumer; id: string }) {
           供应绑定
         </CardTitle>
         <CardDescription>
-          选择同提供商的供应账户；更换绑定保留账户身份、订阅和历史。
+          绑定同提供商的标签号池；更换号池保留账户身份、订阅和历史。
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -2155,140 +2140,6 @@ function Routing({ account, id }: { account?: Consumer; id: string }) {
         }
       </CardContent>
     </Card>
-  );
-}
-function RoutingForm({
-  account,
-  data,
-  onSaved,
-  disabled,
-}: {
-  account?: Consumer;
-  disabled: boolean;
-  data: RoutingResponse;
-  onSaved: () => void;
-}) {
-  const fieldId = useId();
-  const actions = useActions();
-  const route = data.items.find((route) => route.provider_id === account?.provider_id);
-  const [supplierDraft, setSupplier] = useState<string>();
-  const supplier = supplierDraft ?? route?.supplier_account_id ?? "";
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Supplier>();
-  const current = useResource<Supplier>(
-    supplier && selected?.id !== supplier ? `/suppliers/${encodeURIComponent(supplier)}` : null,
-  );
-  const suppliers = useResource<List<Supplier>>(
-    open && account
-      ? `/suppliers${query({ search: search.trim(), limit: 5, provider_id: account.provider_id, for_routing: true })}`
-      : null,
-    search.trim() ? 250 : 0,
-  );
-  const selectedAccount = selected?.id === supplier ? selected : current.data;
-  useErrorToast(current.error);
-  useErrorToast(suppliers.error);
-
-  return (
-    <form
-      noValidate
-      className="flex min-h-0 flex-col gap-4"
-      aria-busy={actions.isBusy("components\\consumers.tsx:form:14")}
-      onSubmit={(event) =>
-        actions.submit(
-          event,
-          "components\\consumers.tsx:form:14",
-          async () => {
-            if (disabled || !account) throw new Error("请先加载执行路由");
-            await request(`/consumers/${account.id}/routing`, {
-              method: "PUT",
-              body: { supplier_id: supplier || null, revision: route?.revision ?? null },
-            });
-            onSaved();
-          },
-          "已保存",
-        )
-      }
-    >
-      <FieldSet
-        disabled={disabled || actions.isBusy("components\\consumers.tsx:form:14")}
-        className="min-w-0"
-      >
-        <Field>
-          <FieldLabel
-            htmlFor={fieldId + "-field-16" + "-" + encodeURIComponent(String("执行供应账户"))}
-          >
-            {"执行供应账户"}
-          </FieldLabel>
-          <Combobox<Supplier>
-            items={suppliers.data?.items ?? []}
-            value={selectedAccount ?? null}
-            onValueChange={(item) => {
-              setSupplier(item?.id ?? "");
-              setSelected(item ?? undefined);
-              setSearch("");
-            }}
-            itemToStringLabel={(item) => item.display_name || item.email || item.id}
-            itemToStringValue={(item) => item.id}
-            isItemEqualToValue={(item, value) => item.id === value.id}
-            filter={null}
-            open={open}
-            onOpenChange={(next, details) => {
-              setOpen(next);
-              if (next && details.reason !== "input-change") setSearch("");
-            }}
-            onInputValueChange={(text, details) => {
-              if (details.reason === "input-change") {
-                setSearch(text);
-                if (!text) {
-                  setSupplier("");
-                  setSelected(undefined);
-                }
-              }
-            }}
-          >
-            <ComboboxInput
-              id={fieldId + "-field-16" + "-" + encodeURIComponent("执行供应账户")}
-              aria-label="执行供应账户"
-              placeholder="不提供执行服务"
-              showClear
-              className="w-full"
-            />
-            <ComboboxContent>
-              <ComboboxEmpty>
-                {suppliers.loading
-                  ? "正在加载…"
-                  : suppliers.error
-                    ? "加载失败，请重新搜索"
-                    : "没有匹配账户"}
-              </ComboboxEmpty>
-              <ComboboxList aria-busy={suppliers.loading}>
-                {(item: Supplier) => (
-                  <ComboboxItem key={item.id} value={item}>
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate">
-                        {item.display_name || item.email || item.id}
-                        {item.status === "active" ? "" : "（未启用）"}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground">{item.email}</span>
-                    </span>
-                  </ComboboxItem>
-                )}
-              </ComboboxList>
-            </ComboboxContent>
-          </Combobox>
-        </Field>
-      </FieldSet>
-      <FieldGroup className="flex-row justify-end gap-2 border-t pt-3">
-        <Button
-          type="submit"
-          disabled={disabled || actions.isBusy("components\\consumers.tsx:form:14")}
-        >
-          {actions.isBusy("components\\consumers.tsx:form:14") && <Spinner />}
-          {actions.isBusy("components\\consumers.tsx:form:14") ? "正在提交…" : "保存供应绑定"}
-        </Button>
-      </FieldGroup>
-    </form>
   );
 }
 function Devices({ id }: { id: string }) {

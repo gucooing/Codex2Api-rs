@@ -14,6 +14,8 @@ pub enum ServiceError {
     BudgetExceeded,
     #[error("Reliable billing is unavailable for this model or operation")]
     PricingUnavailable,
+    #[error("The virtual account has reached its requests-per-minute limit")]
+    RpmExceeded { retry_after: u32 },
 }
 
 pub type Result<T> = std::result::Result<T, ServiceError>;
@@ -33,6 +35,17 @@ pub struct ExecutionService {
 impl ExecutionService {
     pub fn new(storage: Storage) -> Self {
         Self { storage }
+    }
+
+    pub async fn admit_request(&self, owner: &str, consume: bool) -> Result<()> {
+        if let Some(retry_after) = self
+            .storage
+            .admit_virtual_request(owner, consume, chrono::Utc::now().timestamp_millis())
+            .await?
+        {
+            return Err(ServiceError::RpmExceeded { retry_after });
+        }
+        Ok(())
     }
 
     pub async fn check_budget(&self, owner: &str) -> Result<()> {

@@ -19,8 +19,7 @@
 | 图像/搜索/input_tokens/Realtime | 现有显式 HTTP/WS 路由 | 实际返回数据、计价和通话归属 |
 | 配置/会话/通知/任务 | 按账号归属查询、写入或执行 | virtual state/resources/events 及管理记录 |
 
-重试、断线恢复和排队消息恢复由 CLI 决定。代理保留结构化错误、Retry-After、SSE 未完成原因及
-WS close，不叠加生成重试。供应 token 的一次 401 恢复与客户端虚拟凭据刷新分别管理。
+Responses 在输出开始前遇到供应授权失效、配额耗尽或请求限流时，在标签号池内换号重试；号池耗尽返回 `supplier_pool_exhausted`。已输出内容、工具事件或网络中断不能盲目重放，保留结构化错误、Retry-After、SSE 未完成原因及 WS close。虚拟账户 RPM 拒绝为 429 `virtual_rpm_exceeded`，独立于消费金额额度。供应授权恢复与虚拟凭据刷新分别管理。
 
 文件 create/PUT/finalize/download 及外部插件/MCP/云自动化/购买等尚未实现的能力，
 不能通过地址转发、空集合或模拟 success 宣称支持。具体边界见

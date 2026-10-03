@@ -110,6 +110,12 @@ pub struct WorkspaceConnection {
 }
 
 impl WorkspaceConnection {
+    /// Credential generation actually used by this connection, not a later
+    /// snapshot read after another virtual account refreshed the supplier.
+    pub fn auth_revision(&self) -> i64 {
+        self.revision
+    }
+
     pub async fn check_current(&self) -> Result<()> {
         let storage = self.auth.storage()?;
         if storage.supplier_auth_revision(&self.supplier_id).await? != Some(self.revision) {

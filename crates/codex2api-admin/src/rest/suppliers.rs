@@ -36,6 +36,8 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
         "disabled"
     } else if health.authentication_invalid {
         "error"
+    } else if let Some(kind) = &health.cooldown_kind {
+        kind
     } else {
         "active"
     });
@@ -50,6 +52,10 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     value["error_message"] = json!(health.error_message);
     value["error_at"] = json!(health.error_at);
     value["authentication_invalid"] = json!(health.authentication_invalid);
+    value["cooldown_until"] = json!(health.cooldown_until);
+    value["cooldown_code"] = json!(health.cooldown_code);
+    value["tag_ids"] = json!(s.storage.supplier_tag_ids(&a.id).await?);
+    value["binding_count"] = json!(s.storage.supplier_binding_count(&a.id).await?);
     value["quota"] = match s.storage.get_account_quota(&a.id).await? {
         Some(snapshot) => crate::quota::summary(&s.storage, &a.id, &snapshot).await?,
         None => Value::Null,
@@ -128,6 +134,7 @@ pub async fn status(
         )
         .await?;
     s.upstream.evict(&id).await;
+    s.storage.refresh_supplier_bindings(&id).await?;
     Ok(ok())
 }
 pub async fn recover(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {

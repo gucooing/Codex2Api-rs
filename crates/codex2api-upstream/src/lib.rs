@@ -16,10 +16,14 @@ mod backend;
 mod catalog;
 mod client;
 pub use catalog::{codex_model_descriptor, supported_models};
+mod availability;
 mod compat;
 mod endpoint;
 mod error;
 mod outcome;
+pub use availability::{SupplierFailure, classify_supplier_failure, quota_unavailable_until};
+#[derive(Clone, Copy, Debug)]
+pub struct SupplierAuthRevision(pub i64);
 pub use outcome::{FailureKind, ResponseFailure, ResponseLifecycle, ResponseOutcome};
 mod headers;
 mod pool;

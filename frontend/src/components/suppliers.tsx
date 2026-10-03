@@ -1,4 +1,8 @@
 "use client";
+import { SupplierTags } from "@/components/supplier-tags";
+import { Checkbox } from "@/components/ui/checkbox";
+import { subscriptionLabel } from "@/lib/subscriptions";
+import type { SupplierTag } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
@@ -107,21 +111,51 @@ export function SuppliersPage() {
   const actions = useActions();
   const resource = useResource<List<Supplier>>("/suppliers");
   const [add, setAdd] = useState(false);
-  const empty = { search: "", status: "" };
+  const tags = useResource<List<SupplierTag>>("/supplier-tags");
+  const [selected, setSelected] = useState<string[]>([]);
+  useErrorToast(tags.error);
+  const empty = { search: "", status: "", tag: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters("suppliers.filters", empty);
   const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
-  const all = useSupplierQuotas(resource.data?.items);
+  const snapshots = useSupplierQuotas(resource.data?.items);
   const now = useQuotaClock();
+  const all = snapshots.map((item) =>
+    item.cooldown_until &&
+    item.cooldown_until * 1000 <= now &&
+    ["rate_limited", "quota_exhausted"].includes(item.status)
+      ? { ...item, status: "active" as const }
+      : item,
+  );
   const items = all.filter(
     (item) =>
       `${item.display_name ?? ""} ${item.email ?? ""} ${item.provider_id}`
         .toLowerCase()
         .includes(applied.search.trim().toLowerCase()) &&
-      (!applied.status || item.status === applied.status),
+      (!applied.status || item.status === applied.status) &&
+      (!applied.tag || item.tag_ids?.includes(applied.tag)),
   );
   const pagination = useTablePagination(items, applied, resource.data !== undefined);
   const supplierActions = (item: Supplier) => (
     <div className="flex flex-wrap items-center gap-2">
+      <Checkbox
+        aria-label={`选择供应账户 ${item.display_name || item.email || item.id}`}
+        checked={selected.includes(item.id)}
+        onCheckedChange={(checked) =>
+          setSelected(checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))
+        }
+      />
+      <Badge variant="outline">{item.binding_count ?? 0} 个绑定</Badge>
+      {(item.tag_ids ?? []).map((id) => (
+        <Badge variant="secondary" key={id}>
+          {tags.data?.items.find((t) => t.id === id)?.name ?? "标签"}
+        </Badge>
+      ))}
+      {item.cooldown_until && item.cooldown_until * 1000 > now ? (
+        <span className="text-xs text-muted-foreground">
+          {quotaResetLabel(item.cooldown_until, now)}后可重试
+        </span>
+      ) : null}
+
       <Button variant="outline" size="sm" asChild>
         <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
           详情 <ArrowRight />
@@ -168,7 +202,7 @@ export function SuppliersPage() {
                 {
                   confirm:
                     item.status !== "disabled"
-                      ? "停用此供应账户？绑定账户将暂时无法通过它执行请求。"
+                      ? "停用此供应账户？其虚拟账户将在下次请求时自动改选号池内可用账户。"
                       : undefined,
                   danger: false,
                   success: undefined,
@@ -260,6 +294,8 @@ export function SuppliersPage() {
                         { value: "active", label: "启用" },
                         { value: "disabled", label: "停用" },
                         { value: "error", label: "授权失效" },
+                        { value: "rate_limited", label: "请求限流中" },
+                        { value: "quota_exhausted", label: "配额耗尽" },
                       ].find((option) => option.value === "")?.label ?? "请选择"
                     }
                   />
@@ -270,6 +306,8 @@ export function SuppliersPage() {
                     { value: "active", label: "启用" },
                     { value: "disabled", label: "停用" },
                     { value: "error", label: "授权失效" },
+                    { value: "rate_limited", label: "请求限流中" },
+                    { value: "quota_exhausted", label: "配额耗尽" },
                   ].map((option) => (
                     <SelectItem
                       key={option.value}
@@ -308,7 +346,44 @@ export function SuppliersPage() {
               </Button>
             </div>
           </form>
+          <Field className="w-44">
+            <FieldLabel htmlFor={`${fieldId}-tag`}>标签号池</FieldLabel>
+            <Select
+              value={filters.tag || "all"}
+              onValueChange={(tag) => {
+                setFilters({ ...filters, tag: tag === "all" ? "" : tag });
+                setApplied({ ...filters, tag: tag === "all" ? "" : tag });
+              }}
+            >
+              <SelectTrigger id={`${fieldId}-tag`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部标签</SelectItem>
+                {(tags.data?.items ?? []).map((tag) => (
+                  <SelectItem key={tag.id} value={tag.id}>
+                    {tag.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelected(selected.length ? [] : items.map((item) => item.id))}
+            >
+              {selected.length ? `清除选择（${selected.length}）` : "选择筛选结果"}
+            </Button>
+            <SupplierTags
+              selected={selected}
+              onSaved={() => {
+                resource.reload();
+                tags.reload();
+              }}
+            />
+
             <Button type="button" variant="ghost" size="sm" onClick={resource.reload}>
               <RefreshCw />
               刷新
@@ -436,7 +511,7 @@ export function SuppliersPage() {
                                     {item.display_name || item.email || item.id}
                                   </span>
                                   <span className="block truncate text-xs text-muted-foreground">
-                                    {item.plan_type ?? "未提供订阅"}
+                                    {subscriptionLabel(item.plan_type)}
                                   </span>
                                 </span>
                                 <ChevronRight className="size-3 shrink-0" />
@@ -463,7 +538,9 @@ export function SuppliersPage() {
                                   <FieldTitle>提供商 / 订阅</FieldTitle>
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
                                     {item.provider_id}
-                                    <CardDescription>{item.plan_type ?? "未提供"}</CardDescription>
+                                    <CardDescription>
+                                      {subscriptionLabel(item.plan_type)}
+                                    </CardDescription>
                                   </div>
                                 </Field>
                                 <Field>
@@ -564,7 +641,7 @@ export function SuppliersPage() {
                           role="cell"
                         >
                           {item.provider_id}
-                          <CardDescription>{item.plan_type ?? "未提供"}</CardDescription>
+                          <CardDescription>{subscriptionLabel(item.plan_type)}</CardDescription>
                         </TableCell>
                         <TableCell
                           hidden={!tableColumns0.isVisible("状态")}
@@ -709,7 +786,7 @@ export function SuppliersPage() {
                 <FieldGroup className="grid grid-cols-2 gap-x-3 gap-y-2">
                   {[
                     { label: "提供商", value: item.provider_id },
-                    { label: "上游订阅", value: item.plan_type ?? "未提供" },
+                    { label: "上游订阅", value: subscriptionLabel(item.plan_type) },
                     { label: "最近使用", value: date(item.last_used_at) },
                   ].map(({ label, value }) => (
                     <Field
@@ -946,7 +1023,7 @@ export function SupplierDetail() {
                         </Badge>
                       ),
                     },
-                    { label: "上游订阅", value: account?.plan_type },
+                    { label: "上游订阅", value: subscriptionLabel(account?.plan_type) },
                     { label: "上游空间编号", value: account?.chatgpt_account_id },
                     { label: "上游用户编号", value: account?.chatgpt_user_id },
                     { label: "创建时间", value: date(account?.created_at) },
@@ -981,7 +1058,7 @@ export function SupplierDetail() {
                         {
                           confirm:
                             account?.status === "active"
-                              ? "停用此供应账户？绑定账户将暂时无法通过它执行请求。"
+                              ? "停用此供应账户？其虚拟账户将在下次请求时自动改选号池内可用账户。"
                               : undefined,
                           danger: false,
                           success: undefined,
@@ -2070,7 +2147,7 @@ function OfficialFields({ value, section }: { value: Json; section: string }) {
                                 <Field>
                                   <FieldTitle>订阅</FieldTitle>
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {String(account.plan_type ?? "—")}
+                                    {subscriptionLabel(account.plan_type)}
                                   </div>
                                 </Field>
                               </FieldGroup>
@@ -2092,7 +2169,7 @@ function OfficialFields({ value, section }: { value: Json; section: string }) {
                           data-label="订阅"
                           role="cell"
                         >
-                          {String(account.plan_type ?? "—")}
+                          {subscriptionLabel(account.plan_type)}
                         </TableCell>
                       </TableRow>
                     );

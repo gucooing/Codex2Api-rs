@@ -105,32 +105,14 @@ pub(crate) async fn resolve_supplier(
     oauth: axum::Extension<codex2api_storage::VirtualAccess>,
 ) -> Result<(ExecutionPrincipal, SupplierContext)> {
     let axum::Extension(oauth) = oauth;
-    let account_id = oauth.account_id.as_deref().ok_or_else(|| {
-        ApiError::openai(
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "server_error",
-            "No upstream account is bound to this virtual account.",
-            Some("upstream_unavailable"),
-        )
-    })?;
-    let ctx = state.accounts.load_context(account_id).await?;
+    let ctx = crate::pool_execution::select(state, &oauth, &[]).await?;
+    let account_id = ctx.account.id.clone();
     if oauth.provider_id != ctx.account.provider_id || oauth.provider_id != codex2api_core::CHATGPT
     {
         return Err(codex2api_service::ServiceError::Policy(
             codex2api_core::PolicyError::ProviderMismatch,
         )
         .into());
-    }
-    if ctx.account.status != SupplierStatus::Active {
-        return Err(ApiError::account_disabled());
-    }
-    if state
-        .storage
-        .supplier_health(account_id)
-        .await?
-        .authentication_invalid
-    {
-        return Err(codex2api_upstream::UpstreamError::Unauthorized.into());
     }
     let expected = oauth.virtual_account_id.as_str();
     if headers
@@ -149,7 +131,7 @@ pub(crate) async fn resolve_supplier(
         .storage
         .touch_virtual_access(&oauth.token_hash)
         .await?;
-    state.storage.touch_account(account_id).await?;
+    state.storage.touch_account(&account_id).await?;
     Ok((
         ExecutionPrincipal {
             id: oauth.virtual_account_id,

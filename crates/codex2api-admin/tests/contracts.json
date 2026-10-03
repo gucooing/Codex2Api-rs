@@ -49,7 +49,8 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ]
+        ],
+        "plan_type": "free"
       },
       {
         "id": "plus",
@@ -86,7 +87,8 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ]
+        ],
+        "plan_type": "plus"
       },
       {
         "id": "pro",
@@ -114,7 +116,8 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ]
+        ],
+        "plan_type": "pro"
       },
       {
         "id": "business",
@@ -142,7 +145,8 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ]
+        ],
+        "plan_type": "business"
       },
       {
         "id": "enterprise",
@@ -170,7 +174,8 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ]
+        ],
+        "plan_type": "enterprise"
       },
       {
         "id": "edu",
@@ -198,7 +203,8 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ]
+        ],
+        "plan_type": "edu"
       }
     ]
   },
@@ -647,7 +653,8 @@
         "virtual_account_id": "contract-consumer",
         "provider_id": "chatgpt",
         "supplier_account_id": null,
-        "revision": 1
+        "revision": 1,
+        "tag_id": null
       }
     ]
   },

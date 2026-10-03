@@ -2,6 +2,7 @@
 //! execution authorization is shared through codex2api-service.
 mod error;
 mod execution;
+mod pool_execution;
 mod providers;
 mod response;
 mod state;

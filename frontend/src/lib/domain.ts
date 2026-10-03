@@ -39,6 +39,7 @@ export function sameProviderModels(models: ModelRef[], provider: string) {
 }
 export function planWrite(value: Plan) {
   return {
+    plan_type: value.plan_type,
     name: value.name,
     provider_id: value.provider_id,
     model_access: value.model_access,

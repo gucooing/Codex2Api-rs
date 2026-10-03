@@ -5,11 +5,9 @@ use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
-use crate::providers::chatgpt::access::{AccessCheck, resolve_supplier};
+use crate::providers::chatgpt::access::AccessCheck;
 use crate::{ApiState, Result};
-use codex2api_upstream::{
-    Endpoint, UpstreamWebSocket, normalize_response_identity, strip_hop_by_hop_headers,
-};
+use codex2api_upstream::{Endpoint, UpstreamWebSocket, normalize_response_identity};
 
 pub(crate) struct ResponseSession {
     workspace: Option<codex2api_upstream::WorkspaceConnection>,
@@ -24,64 +22,10 @@ pub async fn responses_websocket(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    let (key, ctx) = resolve_supplier(&state, &headers, oauth).await?;
-    crate::providers::chatgpt::access::check_virtual_quota(&state.storage, &key.id).await?;
-    let mut ledger = crate::usage::WsLedger::new(crate::execution::ExecutionContext::new(
-        state.storage.clone(),
-        &ctx.account,
-        &key.id,
-        &key.name,
-        &format!("/v1/{}", endpoint.codex_path()),
-        "websocket",
-    ));
-    let upstream = state.upstream.get(&ctx.account.id).await?;
-    let guardian_reviewer = endpoint == Endpoint::Guardian
-        || headers
-            .get("x-codex-guardian")
-            .is_some_and(|value| value == "reviewer");
-    let (socket, mut response_headers, workspace) =
-        upstream.connect_websocket(endpoint, headers).await?;
-    ledger.response_headers(&response_headers);
-    crate::providers::chatgpt::identity::quota_headers(
-        &state.storage,
-        &key.id,
-        &mut response_headers,
-    )
-    .await?;
-    let installation_id = upstream.identity().installation_id.clone();
-    let timezone = upstream.identity().http_fingerprint.timezone.clone();
-    strip_hop_by_hop_headers(&mut response_headers);
-    for name in [
-        "sec-websocket-accept",
-        "sec-websocket-extensions",
-        "sec-websocket-protocol",
-        "content-length",
-        "set-cookie",
-    ] {
-        response_headers.remove(name);
-    }
-    let mut response = upgrade
-        .max_message_size(codex2api_upstream::MAX_REQUEST_BYTES)
-        .on_upgrade(move |client| {
-            bridge_recorded(
-                client,
-                socket,
-                installation_id,
-                false,
-                timezone,
-                ledger,
-                (state.storage, key.access),
-                Some(ResponseSession {
-                    workspace,
-                    guardian_reviewer,
-                }),
-            )
-        });
-    response.headers_mut().extend(response_headers);
-    Ok(response)
+    super::pooled_websocket::connect(state, endpoint, oauth.0, headers, upgrade).await
 }
 
-fn prepare_message(
+pub(super) fn prepare_message(
     text: &str,
     installation_id: &str,
     timezone: Option<&str>,
@@ -416,7 +360,7 @@ fn upstream_failure_message(
     crate::usage::error_text(&format!("上游 WebSocket {operation}失败：{detail}"), 512)
 }
 
-fn relay_error(error: impl std::fmt::Display) -> crate::ApiError {
+pub(super) fn relay_error(error: impl std::fmt::Display) -> crate::ApiError {
     tracing::debug!(%error, "WebSocket transport or frame error");
     crate::ApiError::openai(
         axum::http::StatusCode::BAD_GATEWAY,
@@ -426,9 +370,14 @@ fn relay_error(error: impl std::fmt::Display) -> crate::ApiError {
     )
 }
 
-async fn error_message(error: crate::ApiError) -> (u16, String) {
+pub(super) async fn error_message(error: crate::ApiError) -> (u16, String) {
     let response = error.into_response();
     let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_owned);
     let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
         .await
         .unwrap_or_default();
@@ -437,6 +386,9 @@ async fn error_message(error: crate::ApiError) -> (u16, String) {
     });
     value["type"] = "error".into();
     value["status"] = status.into();
+    if let Some(retry_after) = retry_after {
+        value["headers"] = serde_json::json!({"retry-after":retry_after});
+    }
     (status, value.to_string())
 }
 

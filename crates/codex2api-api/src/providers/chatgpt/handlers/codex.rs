@@ -38,7 +38,7 @@ pub async fn forward(
     let path = subpath
         .map(|s| format!("responses/{s}"))
         .unwrap_or_else(|| endpoint.codex_path().into());
-    let (key, ctx) = resolve_supplier(&state, &headers, oauth).await?;
+    let (key, ctx) = resolve_supplier(&state, &headers, oauth.clone()).await?;
     if endpoint == codex2api_upstream::Endpoint::InputTokens {
         let metadata = codex2api_upstream::request_metadata(&body, &headers)?;
         crate::execution::ExecutionContext::new(
@@ -75,26 +75,17 @@ pub async fn forward(
     } else {
         None
     };
-    let result = async {
-        let upstream = state.upstream.get(&ctx.account.id).await?;
-        if let Some(subpath) = subpath {
-            upstream
-                .forward_responses_subpath(subpath, body, headers)
-                .await
-        } else {
-            upstream.forward_endpoint(endpoint, body, headers).await
-        }
-    }
-    .await;
-    let response = match result {
-        Ok(response) => response,
-        Err(error) => {
-            if let Some(log) = &mut log {
-                log.upstream_failure(&error);
-            }
-            return Err(error.into());
-        }
-    };
+    let response = crate::pool_execution::forward(
+        &state,
+        &oauth,
+        ctx,
+        endpoint,
+        subpath.map(String::as_str),
+        body,
+        headers,
+        &mut log,
+    )
+    .await?;
     let status = response.status();
     let mut headers = response.headers().clone();
     crate::providers::chatgpt::identity::quota_headers(&state.storage, &virtual_id, &mut headers)

@@ -507,6 +507,7 @@ pub async fn routes(State(s): State<AdminState>, Path(id): Path<String>) -> ApiR
         .await?
         .into_iter()
         .map(|r| super::dto::Route {
+            tag_id: r.tag_id,
             virtual_account_id: r.virtual_account_id,
             provider_id: r.provider_id,
             supplier_account_id: r.supplier_account_id,
@@ -520,6 +521,7 @@ pub async fn routes(State(s): State<AdminState>, Path(id): Path<String>) -> ApiR
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteInput {
+    tag_id: Option<String>,
     supplier_id: Option<String>,
     revision: Option<i64>,
 }
@@ -531,9 +533,10 @@ pub async fn save_route(
     let account = require(&s, &id).await?;
     if !s
         .storage
-        .save_execution_route(
+        .save_pool_route(
             &id,
             &account.provider_id,
+            f.tag_id.as_deref().filter(|s| !s.is_empty()),
             f.supplier_id.as_deref().filter(|s| !s.is_empty()),
             f.revision,
         )
@@ -542,6 +545,27 @@ pub async fn save_route(
         return Err(ApiError::conflict());
     }
     routes(State(s), Path(id)).await
+}
+
+pub async fn rate_limit(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+    require(&s, &id).await?;
+    Ok(Json(json!(s.storage.virtual_rpm_limit(&id).await?)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpmInput {
+    rpm: Option<u32>,
+}
+
+pub async fn save_rate_limit(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Json(input): Json<RpmInput>,
+) -> ApiResult {
+    require(&s, &id).await?;
+    s.storage.save_virtual_rpm_limit(&id, input.rpm).await?;
+    rate_limit(State(s), Path(id)).await
 }
 
 pub async fn plugins(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {

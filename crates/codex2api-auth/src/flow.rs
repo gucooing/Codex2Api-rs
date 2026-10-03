@@ -133,14 +133,25 @@ impl AuthService {
         let http = self.account_http(account_id).await?;
         let _guard = http.refresh_lock.lock().await;
         let account = self.storage()?.require_account(account_id).await?;
-        refresh_account(
+        let revision = self.storage()?.supplier_auth_revision(account_id).await?;
+        let result = refresh_account(
             &self.accounts,
             &http.authenticated,
             &self.cfg,
             &account,
             force,
         )
-        .await
+        .await;
+        if let Err(error) = &result
+            && error.permanent_refresh_failure()
+            && (force || !matches!(error, AuthError::MissingRefreshToken))
+            && let Some(revision) = revision
+        {
+            self.storage()?
+                .reject_supplier_auth(account_id, revision)
+                .await?;
+        }
+        result
     }
 
     pub async fn refresh_rejected_token(
@@ -161,14 +172,24 @@ impl AuthService {
         {
             return Ok(current);
         }
-        refresh_account(
+        let revision = self.storage()?.supplier_auth_revision(account_id).await?;
+        let result = refresh_account(
             &self.accounts,
             &http.authenticated,
             &self.cfg,
             &account,
             true,
         )
-        .await
+        .await;
+        if let Err(error) = &result
+            && error.permanent_refresh_failure()
+            && let Some(revision) = revision
+        {
+            self.storage()?
+                .reject_supplier_auth(account_id, revision)
+                .await?;
+        }
+        result
     }
 
     pub async fn revoke(&self, account_id: &str) -> Result<()> {

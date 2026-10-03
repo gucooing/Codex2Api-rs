@@ -43,6 +43,7 @@ fn plan_dto(p: &VirtualPlan) -> dto::Plan {
             .collect()
     };
     dto::Plan {
+        plan_type: p.plan_type.clone(),
         id: p.id.clone(),
         provider_id: p.provider_id.clone(),
         name: p.name.clone(),
@@ -82,6 +83,7 @@ pub async fn plans(State(s): State<AdminState>) -> ApiResult {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanInput {
+    plan_type: Option<String>,
     name: String,
     provider_id: String,
     model_access: String,
@@ -190,7 +192,10 @@ async fn save_plan(s: AdminState, id: Option<String>, f: PlanInput) -> ApiResult
         id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         provider_id: f.provider_id,
         name: f.name,
-        plan_type: old.map(|p| p.plan_type).unwrap_or_else(|| "plus".into()),
+        plan_type: f
+            .plan_type
+            .or_else(|| old.map(|p| p.plan_type))
+            .unwrap_or_else(|| "plus".into()),
         config,
         enabled: f.enabled,
         revision: 0,

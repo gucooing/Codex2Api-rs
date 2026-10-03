@@ -11,16 +11,28 @@ pub enum UaMode {
 }
 
 /// Global inbound gateway policy, persisted independently of account fingerprints.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GatewaySettings {
     pub ua_mode: UaMode,
     pub ua_rules: Vec<String>,
+    pub default_rpm: u32,
+}
+
+impl Default for GatewaySettings {
+    fn default() -> Self {
+        Self {
+            ua_mode: UaMode::default(),
+            ua_rules: Vec::new(),
+            default_rpm: 20,
+        }
+    }
 }
 
 impl GatewaySettings {
     pub fn from_lines(ua_mode: UaMode, rules: &str) -> Self {
         Self {
+            default_rpm: 20,
             ua_mode,
             ua_rules: rules
                 .lines()

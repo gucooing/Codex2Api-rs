@@ -18,11 +18,34 @@ pub(crate) async fn quota(
             codex2api_storage::SupplierInfoSection::Quota,
             refresh,
             || async {
+                let revision = state
+                    .storage
+                    .supplier_auth_revision(id)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 let value = request(state, id, E::Usage, &HashMap::new(), None, None).await?;
                 if value.get("rate_limit").is_none()
                     && value.get("plan_type").and_then(Value::as_str).is_none()
                 {
                     return Err("ChatGPT 官方额度响应格式无效".into());
+                }
+                if let Some(revision) = revision
+                    && let Some(until) = codex2api_upstream::quota_unavailable_until(
+                        &value,
+                        chrono::Utc::now().timestamp(),
+                    )
+                {
+                    state
+                        .storage
+                        .cool_down_supplier(
+                            id,
+                            revision,
+                            "quota_exhausted",
+                            until,
+                            "usage_limit_reached",
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
                 }
                 Ok(value)
             },

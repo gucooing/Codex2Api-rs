@@ -451,6 +451,7 @@ dependencies = [
 name = "codex2api-service"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "codex2api-core",
  "codex2api-storage",
  "serde_json",

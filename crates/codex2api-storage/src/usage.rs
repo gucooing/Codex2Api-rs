@@ -245,6 +245,11 @@ fn account_usage_summary(
 }
 
 impl Storage {
+    pub async fn reroute_usage(&self, id: &str, account: &str, name: &str) -> Result<()> {
+        sqlx::query("UPDATE usage_records SET account_id=?,account_name=? WHERE id=? AND status='in_progress'")
+            .bind(account).bind(name).bind(id).execute(self.pool()).await?;
+        Ok(())
+    }
     pub async fn supplier_cycle_usage(
         &self,
         account_id: &str,
