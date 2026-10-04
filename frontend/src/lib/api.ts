@@ -291,6 +291,5 @@ export type SupplierTag = {
 export type RpmLimit = { rpm: number | null; default_rpm: number; effective_rpm: number };
 export type DesktopSettings = {
   proxy_id: string | null;
-  collect_diagnostics: boolean;
   resource_cache_minutes: number;
 };

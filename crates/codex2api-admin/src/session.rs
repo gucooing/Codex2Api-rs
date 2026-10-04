@@ -63,14 +63,15 @@ pub fn csrf_token(id: &str) -> String {
         Sha256::digest(format!("codex2api-official-actions:{id}"))
     )
 }
-pub fn set_session_cookie(id: &str, ttl: Duration) -> String {
+pub fn set_session_cookie(state: &AdminState, id: &str, ttl: Duration) -> String {
     format!(
-        "{SESSION_COOKIE}={id}; HttpOnly; Path=/admin; SameSite=Lax; Max-Age={}",
-        ttl.as_secs()
+        "{SESSION_COOKIE}={id}; HttpOnly; Path=/admin; SameSite=Lax; Max-Age={}{}",
+        ttl.as_secs(),
+        if state.secure_cookies { "; Secure" } else { "" }
     )
 }
-pub fn clear_session_cookie() -> String {
-    format!("{SESSION_COOKIE}=; HttpOnly; Path=/admin; SameSite=Lax; Max-Age=0")
+pub fn clear_session_cookie(state: &AdminState) -> String {
+    set_session_cookie(state, "", Duration::ZERO)
 }
 pub(crate) async fn require_session(
     State(state): State<AdminState>,

@@ -18,7 +18,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination, usePageControls } from "@/lib/pagination";
+import { useTablePagination } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -45,7 +45,6 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useActions, useErrorToast } from "@/lib/actions";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableHeader,
@@ -56,7 +55,6 @@ import {
 } from "@/components/ui/table";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { date } from "@/lib/format";
-import { diagnosticSummary } from "@/lib/records";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -72,7 +70,6 @@ const settingTabs = [
   ["gateway", "网关与限流"],
   ["security", "管理员凭据"],
   ["desktop", "Desktop 支持"],
-  ["diagnostics", "诊断记录"],
   ["resources", "公开资源"],
   ["missing", "端点诊断"],
 ] as const;
@@ -94,23 +91,8 @@ export default function SettingsPage() {
           {tab === "gateway" && <Gateway />}
           {tab === "security" && <Security />}
           {tab === "desktop" && <Desktop />}
-          {tab === "diagnostics" && (
-            <DiagnosticTable
-              path="/diagnostics"
-              title="客户端诊断记录"
-              columns={["最近接收", "来源", "归属", "事件数", "接收次数", "内容"]}
-              fields={[
-                ["last_seen_at_ms", "date"],
-                ["source"],
-                ["owner"],
-                ["record_count"],
-                ["attempts"],
-                ["summaries", "diagnostics"],
-              ]}
-            />
-          )}
           {tab === "resources" && (
-            <DiagnosticTable
+            <ResourceTable
               path="/resources"
               title="公开资源缓存"
               columns={["资源", "大小", "缓存时间"]}
@@ -118,7 +100,7 @@ export default function SettingsPage() {
             />
           )}
           {tab === "missing" && (
-            <DiagnosticTable
+            <ResourceTable
               path="/missing-endpoints"
               title="缺失端点记录"
               columns={["方法", "接口", "请求次数", "最近请求"]}
@@ -550,8 +532,7 @@ function Desktop() {
   const [value, setValue] = useState<DesktopSettings>();
   useErrorToast(resource.error ? resource.error : undefined);
   useErrorToast(proxies.error);
-  const current = value ??
-    resource.data ?? { proxy_id: null, resource_cache_minutes: 0, collect_diagnostics: false };
+  const current = value ?? resource.data ?? { proxy_id: null, resource_cache_minutes: 0 };
   return (
     <Card>
       <CardHeader>
@@ -572,7 +553,7 @@ function Desktop() {
           </Button>
         )}
         <CardDescription className="text-sm text-muted-foreground">
-          公开资源缓存、客户端诊断元数据与资源出站代理。客户端更新状态由官方服务提供。
+          公开资源缓存与资源出站代理。客户端更新状态由官方服务提供。
         </CardDescription>
         <form
           noValidate
@@ -710,40 +691,6 @@ function Desktop() {
                     </Field>
                   </div>
                 </section>
-                <section className="space-y-3">
-                  <div className="space-y-1">
-                    <CardTitle role="heading" aria-level={3}>
-                      诊断采集
-                    </CardTitle>
-                  </div>
-                  <Field orientation="horizontal">
-                    <Switch
-                      id={
-                        fieldId +
-                        "-field-12" +
-                        "-" +
-                        encodeURIComponent(String("保留客户端诊断元数据"))
-                      }
-                      checked={current.collect_diagnostics}
-                      onCheckedChange={(collect_diagnostics) =>
-                        setValue({ ...current, collect_diagnostics })
-                      }
-                    />
-                    <div>
-                      <FieldLabel
-                        htmlFor={
-                          fieldId +
-                          "-field-12" +
-                          "-" +
-                          encodeURIComponent(String("保留客户端诊断元数据"))
-                        }
-                      >
-                        {"保留客户端诊断元数据"}
-                      </FieldLabel>
-                      <FieldDescription>{"接收的诊断记录可在“诊断记录”中查看。"}</FieldDescription>
-                    </div>
-                  </Field>
-                </section>
               </FieldGroup>
             </FieldSet>
           </ScrollArea>
@@ -761,7 +708,7 @@ function Desktop() {
     </Card>
   );
 }
-function DiagnosticTable({
+function ResourceTable({
   path,
   title,
   columns,
@@ -770,7 +717,7 @@ function DiagnosticTable({
   path: string;
   title: string;
   columns: string[];
-  fields: [string, ("date" | "diagnostics")?][];
+  fields: [string, "date"?][];
 }) {
   const tableColumns0 = useColumnVisibility(
     "app/settings/page.tsx:0:" + path,
@@ -778,26 +725,14 @@ function DiagnosticTable({
     columns.slice(0, 2),
   );
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const resource = useResource<{
-    items: Record<string, unknown>[];
-    total?: number;
-    page?: number;
-    page_size?: number;
-  }>(path === "/diagnostics" ? `${path}?page=${page}&page_size=${pageSize}` : path);
+  const resource = useResource<{ items: Record<string, unknown>[] }>(path);
   useErrorToast(resource.error);
-  const local = useTablePagination(resource.data?.items ?? [], path, resource.data !== undefined);
-  const remote = usePageControls(
-    resource.data?.page ?? page,
-    resource.data?.total,
-    setPage,
-    pageSize,
-    resource.refreshing,
-    setPageSize,
+  const pagination = useTablePagination(
+    resource.data?.items ?? [],
+    path,
+    resource.data !== undefined,
   );
-  const pagination = path === "/diagnostics" ? remote : local;
-  const items = path === "/diagnostics" ? (resource.data?.items ?? []) : local.rows;
+  const items = pagination.rows;
   return (
     <Card>
       <CardHeader>
@@ -887,18 +822,15 @@ function DiagnosticTable({
                           }
                         >
                           <div className="max-md:hidden">
-                            {format === "diagnostics"
-                              ? diagnosticSummary(item[field])
-                              : format === "date"
-                                ? date(
-                                    typeof item[field] === "number" ||
-                                      typeof item[field] === "string"
-                                      ? (item[field] as string | number)
-                                      : null,
-                                  )
-                                : item[field] == null
-                                  ? "—"
-                                  : String(item[field])}
+                            {format === "date"
+                              ? date(
+                                  typeof item[field] === "number" || typeof item[field] === "string"
+                                    ? (item[field] as string | number)
+                                    : null,
+                                )
+                              : item[field] == null
+                                ? "—"
+                                : String(item[field])}
                           </div>
                           {fieldIndex === 0 ? (
                             <Dialog>
@@ -910,18 +842,16 @@ function DiagnosticTable({
                                   aria-label="查看记录详情"
                                 >
                                   <span className="min-w-0 flex-1 truncate">
-                                    {format === "diagnostics"
-                                      ? diagnosticSummary(item[field])
-                                      : format === "date"
-                                        ? date(
-                                            typeof item[field] === "number" ||
-                                              typeof item[field] === "string"
-                                              ? (item[field] as string | number)
-                                              : null,
-                                          )
-                                        : item[field] == null
-                                          ? "—"
-                                          : String(item[field])}
+                                    {format === "date"
+                                      ? date(
+                                          typeof item[field] === "number" ||
+                                            typeof item[field] === "string"
+                                            ? (item[field] as string | number)
+                                            : null,
+                                        )
+                                      : item[field] == null
+                                        ? "—"
+                                        : String(item[field])}
                                   </span>
                                   <ChevronRight className="size-3 shrink-0" />
                                 </Button>
@@ -936,18 +866,16 @@ function DiagnosticTable({
                                     <Field key={field}>
                                       <FieldTitle>{columns[fieldIndex]}</FieldTitle>
                                       <div className="min-w-0 break-words">
-                                        {format === "diagnostics"
-                                          ? diagnosticSummary(item[field])
-                                          : format === "date"
-                                            ? date(
-                                                typeof item[field] === "number" ||
-                                                  typeof item[field] === "string"
-                                                  ? (item[field] as string | number)
-                                                  : null,
-                                              )
-                                            : item[field] == null
-                                              ? "—"
-                                              : String(item[field])}
+                                        {format === "date"
+                                          ? date(
+                                              typeof item[field] === "number" ||
+                                                typeof item[field] === "string"
+                                                ? (item[field] as string | number)
+                                                : null,
+                                            )
+                                          : item[field] == null
+                                            ? "—"
+                                            : String(item[field])}
                                       </div>
                                     </Field>
                                   ))}
@@ -956,18 +884,16 @@ function DiagnosticTable({
                             </Dialog>
                           ) : (
                             <div className="truncate md:hidden">
-                              {format === "diagnostics"
-                                ? diagnosticSummary(item[field])
-                                : format === "date"
-                                  ? date(
-                                      typeof item[field] === "number" ||
-                                        typeof item[field] === "string"
-                                        ? (item[field] as string | number)
-                                        : null,
-                                    )
-                                  : item[field] == null
-                                    ? "—"
-                                    : String(item[field])}
+                              {format === "date"
+                                ? date(
+                                    typeof item[field] === "number" ||
+                                      typeof item[field] === "string"
+                                      ? (item[field] as string | number)
+                                      : null,
+                                  )
+                                : item[field] == null
+                                  ? "—"
+                                  : String(item[field])}
                             </div>
                           )}
                         </TableCell>

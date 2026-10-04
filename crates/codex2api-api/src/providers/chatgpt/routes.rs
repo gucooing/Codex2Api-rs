@@ -336,30 +336,6 @@ pub fn router(state: ApiState) -> Router {
             get(handlers::remote_control::socket),
         )
         .route(
-            "/ces/v1/telemetry/intake",
-            post(handlers::desktop_support::intake)
-                .options(handlers::desktop_support::preflight)
-                .layer(Extension(handlers::desktop_support::Intake::Telemetry)),
-        )
-        .route(
-            "/ces/v1/rgstr",
-            post(handlers::desktop_support::intake)
-                .options(handlers::desktop_support::preflight)
-                .layer(Extension(handlers::desktop_support::Intake::Events)),
-        )
-        .route(
-            "/ces/statsc/flush",
-            post(handlers::desktop_support::intake)
-                .options(handlers::desktop_support::preflight)
-                .layer(Extension(handlers::desktop_support::Intake::Metrics)),
-        )
-        .route(
-            "/v1/sdk_exception",
-            post(handlers::desktop_support::intake)
-                .options(handlers::desktop_support::preflight)
-                .layer(Extension(handlers::desktop_support::Intake::Exception)),
-        )
-        .route(
             "/v1/initialize",
             post(handlers::desktop_support::initialize)
                 .options(handlers::desktop_support::preflight),

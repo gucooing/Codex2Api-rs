@@ -15,6 +15,7 @@ pub async fn forward(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
+    crate::response::complete_on_disconnect(async move {
     let account = state
         .storage
         .effective_virtual_account(&access.virtual_account_id)
@@ -160,4 +161,5 @@ pub async fn forward(
     let value =
         local.ok_or_else(|| crate::ApiError::internal("Missing virtual-account response"))?;
     Ok(crate::providers::chatgpt::identity::json_response(value))
+    }).await
 }

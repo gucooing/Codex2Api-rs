@@ -21,27 +21,6 @@ export function mobileRecordColumns(kind: string): string[] {
   };
   return preferred[kind] ?? recordColumns(kind).slice(0, 2);
 }
-export function diagnosticSummary(value: unknown): string {
-  if (!Array.isArray(value)) return "—";
-  return (
-    value
-      .slice(0, 8)
-      .map((item) => {
-        if (!item || typeof item !== "object") return "";
-        if (typeof item.metric === "string") {
-          const name = [item.namespace, item.metric].filter(Boolean).join(".");
-          return Array.isArray(item.values)
-            ? `${name}：${item.values.length} 个样本`
-            : `${name}：${item.value}`;
-        }
-        return [item.event, item.exception, item.reason]
-          .filter((field) => typeof field === "string")
-          .join(" / ");
-      })
-      .filter(Boolean)
-      .join("；") || "—"
-  );
-}
 const columns: Record<string, readonly Column[]> = {
   cloud_environment: [
     ["环境", ["label"]],
@@ -137,13 +116,6 @@ const columns: Record<string, readonly Column[]> = {
     ["状态", ["status"]],
     ["创建时间", ["created_at_ms", "created_at"], "date"],
     ["处理时间", ["reacted_to_at"], "date"],
-  ],
-  diagnostics: [
-    ["最近接收", ["last_seen_at_ms"], "date"],
-    ["来源", ["source"]],
-    ["账户", ["owner"]],
-    ["事件数", ["record_count"]],
-    ["接收次数", ["attempts"]],
   ],
   resources: [
     ["资源路径", ["path"]],

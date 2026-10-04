@@ -5,15 +5,11 @@ use codex2api_storage::{Storage, UsageRecord};
 use codex2api_upstream::{
     Endpoint, RequestMetadata, ResponseFailure, ResponseLifecycle, ResponseOutcome,
 };
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::{
     collections::VecDeque,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     task::{Context, Poll},
     time::Instant,
 };
@@ -41,7 +37,6 @@ pub(crate) struct RequestLog {
     auth_revision: Option<i64>,
     authoritative_model: bool,
     supplier_failure: Option<codex2api_upstream::SupplierFailure>,
-    client_stopped: Arc<AtomicBool>,
 }
 impl RequestLog {
     pub(crate) async fn rebind_supplier(
@@ -113,7 +108,6 @@ impl RequestLog {
             auth_revision,
             authoritative_model: false,
             supplier_failure: None,
-            client_stopped: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -613,7 +607,6 @@ impl RequestLog {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse().ok())
         });
-        let client_stopped = self.client_stopped.clone();
         let mut stream = ObservedStream {
             inner: Box::pin(response.bytes_stream()),
             log: self,
@@ -631,44 +624,32 @@ impl RequestLog {
             stream.finish_body();
         }
         Body::from_stream(ClientBody {
-            inner: transform(Body::from_stream(stream)).into_data_stream(),
-            client_stopped,
+            inner: Some(transform(Body::from_stream(stream)).into_data_stream()),
             ended: false,
         })
     }
 }
 impl Drop for RequestLog {
     fn drop(&mut self) {
-        let status = if self.client_stopped.load(Ordering::Acquire) {
-            if self
-                .record
-                .as_ref()
-                .is_some_and(|record| record.http_status.is_some_and(|code| code >= 400))
-            {
-                "failed"
-            } else {
-                "client_stopped"
-            }
-        } else {
-            "interrupted"
-        };
-        self.finish(status);
+        self.finish("interrupted");
     }
 }
 
-// Only the outermost response body can identify downstream cancellation. A
-// server-side transform can also drop its input after an error; that is not a
-// client stop. Drop runs before fields are released and the ledger is finalized.
+// The client owns delivery, while the service owns an accepted upstream request.
+// Keep the parser and account-local transforms alive after delivery is cancelled;
+// only a real upstream/transform error or terminal response ends settlement.
 struct ClientBody {
-    inner: axum::body::BodyDataStream,
-    client_stopped: Arc<AtomicBool>,
+    inner: Option<axum::body::BodyDataStream>,
     ended: bool,
 }
 impl Stream for ClientBody {
     type Item = Result<Bytes, axum::Error>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let result = Pin::new(&mut this.inner).poll_next(cx);
+        let Some(inner) = &mut this.inner else {
+            return Poll::Ready(None);
+        };
+        let result = Pin::new(inner).poll_next(cx);
         if matches!(result, Poll::Ready(None | Some(Err(_)))) {
             this.ended = true;
         }
@@ -677,8 +658,17 @@ impl Stream for ClientBody {
 }
 impl Drop for ClientBody {
     fn drop(&mut self) {
-        if !self.ended && !std::thread::panicking() {
-            self.client_stopped.store(true, Ordering::Release);
+        if !self.ended
+            && !std::thread::panicking()
+            && let Some(mut stream) = self.inner.take()
+        {
+            tokio::spawn(async move {
+                while let Some(chunk) = stream.next().await {
+                    if chunk.is_err() {
+                        break;
+                    }
+                }
+            });
         }
     }
 }
@@ -1004,21 +994,6 @@ impl WsLedger {
         }
         Ok(())
     }
-    pub async fn client_stopped(&mut self) -> crate::Result<()> {
-        for mut slot in self.slots.drain(..) {
-            if let Some(log) = &mut slot.log
-                && let Some(mut record) = log.record.take()
-            {
-                if record.status == "in_progress" {
-                    record.status = "client_stopped".into();
-                }
-                complete_failure_reason(&mut record);
-                record.total_ms = Some(elapsed(log.start));
-                log.storage.finish_usage(&record).await?;
-            }
-        }
-        Ok(())
-    }
     pub fn push(&mut self, mut log: Option<RequestLog>) {
         if let Some(log) = &mut log
             && let Some(headers) = self.initial_headers.take()
@@ -1324,16 +1299,12 @@ mod tests {
     use futures::StreamExt;
 
     #[tokio::test]
-    async fn client_stop_is_successful_and_settles_only_reported_usage() {
+    async fn http_disconnect_drains_unpolled_and_partial_bodies_and_settles_final_usage() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("stop.sqlite")).await.unwrap();
-        let usage = b"data: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":40},\"output_tokens_details\":{\"reasoning_tokens\":5}}}}\n\n";
-        let no_usage = b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n";
-        for (index, bytes, server_error) in [
-            (0, usage.as_slice(), false),
-            (1, no_usage.as_slice(), false),
-            (2, usage.as_slice(), true),
-        ] {
+        let storage = Storage::open(dir.path().join("disconnect.sqlite"))
+            .await
+            .unwrap();
+        for (index, read_first, failed) in [(0, false, false), (1, true, false), (2, true, true)] {
             let log = context(storage.clone(), "/v1/responses", "http")
                 .start(
                     RequestMetadata {
@@ -1345,56 +1316,103 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            let source = futures::stream::once(async move {
-                Ok::<_, std::io::Error>(Bytes::copy_from_slice(bytes))
-            })
-            .chain(futures::stream::pending());
+            let (finish, ready) = tokio::sync::oneshot::channel::<()>();
+            let initial = Bytes::from_static(
+                b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n",
+            );
+            let source = futures::stream::once(async move { Ok::<_, std::io::Error>(initial) })
+                .chain(futures::stream::once(async move {
+                    ready.await.unwrap();
+                    let value = if failed {
+                        serde_json::json!({"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"retry later"},"usage":{"input_tokens":700,"output_tokens":30}}})
+                    } else {
+                        serde_json::json!({"type":"response.completed","response":{"usage":{"input_tokens":700,"output_tokens":30,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}})
+                    };
+                    Ok(Bytes::from(format!("data: {value}\n\n")))
+                }));
             let response = reqwest::Response::from(
                 http::Response::builder()
                     .header("content-type", "text/event-stream")
                     .body(reqwest::Body::wrap_stream(source))
                     .unwrap(),
             );
-            let mut body = log
-                .wrap_with(response, |body| {
-                    if server_error {
-                        Body::from_stream(body.into_data_stream().map(|_| {
-                            Err::<Bytes, _>(std::io::Error::other("server-side transform failed"))
-                        }))
-                    } else {
-                        body
-                    }
-                })
-                .into_data_stream();
-            let first = body.next().await.unwrap();
-            assert_eq!(first.is_err(), server_error);
+            let mut body = log.wrap(response).into_data_stream();
+            if read_first {
+                body.next().await.unwrap().unwrap();
+            }
             drop(body);
+            let pending = storage.query_usage(&UsageFilter::default()).await.unwrap();
+            assert_eq!(
+                pending
+                    .records
+                    .iter()
+                    .find(|r| r.requested_at_ms == index)
+                    .unwrap()
+                    .status,
+                "in_progress"
+            );
+            finish.send(()).unwrap();
             let rows = finalized(&storage, index as usize + 1).await;
             let record = rows.iter().find(|r| r.requested_at_ms == index).unwrap();
-            if server_error {
-                assert_eq!(record.status, "interrupted");
-                assert!(record.error_message.is_some());
+            assert_eq!(record.status, if failed { "failed" } else { "completed" });
+            assert_eq!(
+                (record.input_tokens, record.output_tokens),
+                (Some(700), Some(30))
+            );
+            if failed {
+                assert_eq!(record.error_code.as_deref(), Some("rate_limit_exceeded"));
             } else {
-                assert_eq!(record.status, "client_stopped");
+                assert_eq!(record.billing_status, "priced");
+                assert!(record.cost_nano_usd.unwrap() > 0);
                 assert!(record.error_code.is_none());
-                assert!(record.error_message.is_none());
-                if index == 0 {
-                    assert_eq!(record.input_tokens, Some(100));
-                    assert_eq!(record.output_tokens, Some(20));
-                    assert_eq!(record.billing_status, "priced");
-                    assert!(record.cost_nano_usd.unwrap() > 0);
-                    storage.finish_usage(record).await.unwrap();
-                    assert_eq!(
-                        finalized(&storage, 1).await[0].cost_nano_usd,
-                        record.cost_nano_usd
-                    );
-                } else {
-                    assert_eq!(record.billing_status, "missing_usage");
-                    assert_eq!(record.cost_nano_usd, None);
-                }
+                storage.finish_usage(record).await.unwrap();
+                assert_eq!(
+                    finalized(&storage, index as usize + 1)
+                        .await
+                        .iter()
+                        .find(|r| r.id == record.id)
+                        .unwrap()
+                        .cost_nano_usd,
+                    record.cost_nano_usd
+                );
             }
         }
         storage.close().await;
+    }
+
+    #[tokio::test]
+    async fn server_transform_failure_is_not_treated_as_client_disconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("transform.sqlite"))
+            .await
+            .unwrap();
+        let log = context(storage.clone(), "/v1/responses", "http")
+            .start(RequestMetadata::default(), Instant::now(), 0)
+            .await
+            .unwrap();
+        let source = futures::stream::once(async {
+            Ok::<_, std::io::Error>(Bytes::from_static(
+                b"data: {\"type\":\"response.created\"}\n\n",
+            ))
+        })
+        .chain(futures::stream::pending());
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(reqwest::Body::wrap_stream(source))
+                .unwrap(),
+        );
+        let mut body = log
+            .wrap_with(response, |body| {
+                Body::from_stream(
+                    body.into_data_stream()
+                        .map(|_| Err::<Bytes, _>(std::io::Error::other("transform failed"))),
+                )
+            })
+            .into_data_stream();
+        assert!(body.next().await.unwrap().is_err());
+        drop(body);
+        assert_eq!(finalized(&storage, 1).await[0].status, "interrupted");
     }
 
     #[tokio::test]
@@ -1420,7 +1438,7 @@ mod tests {
             ledger.push(Some(log));
             ledger.observe(br#"{"type":"response.created","response":{"id":"r","usage":{"input_tokens":100,"output_tokens":20}}}"#).await.unwrap();
             match ending {
-                "client" => { ledger.client_stopped().await.unwrap(); ledger.client_stopped().await.unwrap(); },
+                "client" => { assert!(ledger.has_pending()); ledger.observe_authorized(br#"{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":100,"output_tokens":20}}}"#, false).await.unwrap(); },
                 "upstream" => ledger.fail_inflight("upstream_websocket_closed", "上游 WebSocket 在请求完成前关闭").await.unwrap(),
                 _ => ledger.observe(br#"{"type":"response.done","response":{"id":"r","status":"cancelled","usage":{"input_tokens":100,"output_tokens":20}}}"#).await.unwrap(),
             }
@@ -1439,7 +1457,14 @@ mod tests {
                 );
                 assert!(record.error_message.is_some());
             } else {
-                assert_eq!(record.status, "client_stopped");
+                assert_eq!(
+                    record.status,
+                    if ending == "client" {
+                        "completed"
+                    } else {
+                        "client_stopped"
+                    }
+                );
                 assert!(record.error_message.is_none());
             }
         }
@@ -1942,7 +1967,7 @@ mod tests {
         drop(log.wrap(response));
         let rows = finalized(&storage, 4).await;
         for (model, status) in [
-            ("partial", "client_stopped"),
+            ("partial", "completed"),
             ("error", "failed"),
             ("chunked", "completed"),
             ("empty", "completed"),

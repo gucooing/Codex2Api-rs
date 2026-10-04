@@ -15,6 +15,7 @@ pub(crate) async fn forward(
     mut headers: HeaderMap,
     body: Bytes,
 ) -> crate::Result<Response> {
+    crate::response::complete_on_disconnect(async move {
     let started = std::time::Instant::now();
     let requested_at = chrono::Utc::now().timestamp_millis();
     let mut value = codex2api_upstream::decode_body(&body, &headers)?;
@@ -197,6 +198,7 @@ pub(crate) async fn forward(
         capture(Body::from_stream(response.bytes_stream()))
     };
     Ok(crate::response::forward_response(status, headers, body))
+    }).await
 }
 
 fn record_conversations(

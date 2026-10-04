@@ -63,7 +63,7 @@ pub async fn save_security(
         )
         .await?;
     Ok((
-        [(header::SET_COOKIE, session::clear_session_cookie())],
+        [(header::SET_COOKIE, session::clear_session_cookie(&s))],
         ok(),
     )
         .into_response())
@@ -83,19 +83,6 @@ pub async fn save_desktop(
     }
     s.storage.save_desktop_support_settings(&f).await?;
     Ok(Json(json!(f)))
-}
-#[derive(Deserialize)]
-pub struct PageQuery {
-    page: Option<u32>,
-    page_size: Option<u32>,
-}
-pub async fn diagnostics(State(s): State<AdminState>, Query(q): Query<PageQuery>) -> ApiResult {
-    codex2api_storage::table_page_size(q.page_size).map_err(|e| ApiError::bad(e.to_string()))?;
-    Ok(Json(
-        s.storage
-            .desktop_diagnostic_page(q.page.unwrap_or(1), q.page_size)
-            .await?,
-    ))
 }
 pub async fn resources(State(s): State<AdminState>) -> ApiResult {
     Ok(Json(json!({"items":s.storage.desktop_resources().await?})))

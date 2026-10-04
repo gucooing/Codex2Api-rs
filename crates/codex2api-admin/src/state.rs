@@ -9,6 +9,7 @@ pub struct AdminState {
     pub accounts: SupplierAccountStore,
     pub auth: AuthService,
     pub upstream: codex2api_upstream::UpstreamPool,
+    pub secure_cookies: bool,
     pub(crate) supplier_cache: Arc<crate::quota::SupplierCache>,
 }
 impl AdminState {
@@ -21,6 +22,7 @@ impl AdminState {
         Self {
             upstream: codex2api_upstream::UpstreamPool::new(auth.clone()),
             supplier_cache: Arc::new(crate::quota::SupplierCache::new(storage.clone())),
+            secure_cookies: true,
             storage,
             accounts,
             auth,
@@ -28,6 +30,11 @@ impl AdminState {
     }
     pub fn with_upstream(mut self, upstream: codex2api_upstream::UpstreamPool) -> Self {
         self.upstream = upstream;
+        self
+    }
+    /// Set from the configured public origin, never from client-supplied proxy headers.
+    pub fn with_secure_cookies(mut self, secure: bool) -> Self {
+        self.secure_cookies = secure;
         self
     }
 }

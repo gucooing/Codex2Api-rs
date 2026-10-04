@@ -15,9 +15,11 @@ pub fn routers(
     storage: Storage,
     api_origin: &str,
     user_origin: &str,
+    admin_origin: &str,
 ) -> Result<ApplicationRouters> {
     let api_origin = validate_origin(api_origin)?;
     let user_origin = validate_origin(user_origin)?;
+    let admin_origin = validate_origin(admin_origin)?;
     let accounts = SupplierAccountStore::open(storage.clone());
     let auth = AuthService::new(accounts.clone())?;
     let upstream = UpstreamPool::new(auth.clone());
@@ -25,7 +27,8 @@ pub fn routers(
         .with_public_base_url(&api_origin)?;
     api.user_base_url = user_origin.clone();
     let admin = codex2api_admin::AdminState::from_parts(storage.clone(), accounts, auth)
-        .with_upstream(upstream);
+        .with_upstream(upstream)
+        .with_secure_cookies(admin_origin.starts_with("https://"));
     let user = codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: user_origin,

@@ -15,6 +15,7 @@ pub async fn call(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
+    crate::response::complete_on_disconnect(async move {
     let virtual_id = oauth.virtual_account_id.clone();
     if query_parameter(uri.query(), "call_id")?.is_some() {
         return Err(crate::ApiError::bad_request(
@@ -143,6 +144,7 @@ pub async fn call(
         response_headers,
         Body::from(answer),
     ))
+    }).await
 }
 
 pub async fn socket(

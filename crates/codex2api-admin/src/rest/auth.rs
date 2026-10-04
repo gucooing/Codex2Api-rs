@@ -46,7 +46,10 @@ pub async fn login(
         state.storage.delete_admin_session(&old.id).await?;
     }
     Ok((
-        [(header::SET_COOKIE, session::set_session_cookie(&token, ttl))],
+        [(
+            header::SET_COOKIE,
+            session::set_session_cookie(&state, &token, ttl),
+        )],
         Json(dto::Session {
             authenticated: true,
             app_version: codex2api_version::APP_VERSION,
@@ -78,7 +81,7 @@ pub async fn logout(
         state.storage.delete_admin_session(&session.id).await?;
     }
     Ok((
-        [(header::SET_COOKIE, session::clear_session_cookie())],
+        [(header::SET_COOKIE, session::clear_session_cookie(&state))],
         ok(),
     )
         .into_response())

@@ -351,6 +351,15 @@ HTTP JSON, SSE and WS share the outcome state machine. Later disconnects cannot
 overwrite a completed generation. WS completion usage is persisted before releasing
 completion to the client. Warmups and interrupts do not create another generation.
 
+Client disconnection does not cancel an accepted upstream request. HTTP workers
+continue while waiting for headers, and detached response bodies continue through
+the same usage parser and account-local transforms. WebSocket relays finish the
+active upstream generation after a close frame, TCP loss or downstream write
+failure; unsent queued generations are discarded. The final upstream outcome and
+reported usage determine the record and charge. Normal upstream failures, idle
+timeouts and credential revocation checks still apply. Disconnection itself does
+not mark a platform failure or finalize a partial charge.
+
 Request records contain model, actual model, token counts, cost snapshot, timing,
 structured error cause and official upstream request ID. They do not retain prompts,
 response text, image bytes or credentials. Error text is bounded and redacted.
@@ -383,6 +392,10 @@ consumer quotas.
 
 The single administrator defaults to admin/admin on first initialization.
 The admin and user websites store their own purpose-bound JWT in an HttpOnly cookie.
+`CODEX2API_PUBLIC_ADMIN_URL` declares the administrator browser origin. HTTPS
+enables `Secure` on session creation and deletion, including password changes;
+HTTP origins retain local development support. Client-supplied `Forwarded` and
+`X-Forwarded-Proto` headers cannot change that policy.
 Each interface accepts only its own session purpose, whether supplied by Cookie or
 Bearer; an invalid/wrong-purpose Bearer never falls back to another cookie. Mutations
 also require the corresponding session's CSRF token. User APIs never serialize
@@ -405,6 +418,13 @@ same execution authorization and ownership rules. Reverse proxies must preserve
 paths, support WebSocket and provide TLS when required. CODEX2API_PUBLIC_API_URL declares
 an externally reachable origin; it does not start a TLS server.
 See [CCODEX_ENDPOINTS.md](CCODEX_ENDPOINTS.md) for the current route groups.
+
+Desktop support provides authenticated feature configuration and a cache of
+allowlisted public resources. It does not collect client telemetry, SDK exceptions,
+Statsig events or metrics. Retired intake URLs return 404 without recording their
+requests; there is no diagnostic management API or collection setting. Database
+migration removes the collected diagnostic data while preserving public resources,
+account-owned activity and the inference billing ledger.
 
 Locally recorded tasks, conversations, events, profiles and statistics are scoped
 to the consumer. Cloud operations require actual successful upstream execution

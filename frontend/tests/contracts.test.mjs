@@ -129,16 +129,12 @@ test("actual nested task and subscription records preserve nonempty business det
     assert.equal(row.plan_name, "Plus");
   }
 });
-test("actual client state remains read only and diagnostics expose actual counters", () => {
+test("actual client state remains read only", () => {
   const state = fixture.client_state;
   assert.equal(canEditConfig(state.key, false), false);
   assert.equal(state.value.branch_format, "codex/{task_id}");
   assert.equal(state.write_origin, "client");
   assert.ok(Array.isArray(state.fields));
-  const diagnostic = fixture.diagnostics.items[0];
-  assert.equal(diagnostic.record_count, 1);
-  assert.equal(diagnostic.attempts, 1);
-  assert.ok(Array.isArray(diagnostic.summaries));
 });
 test("actual task execution and operation records include model and rejection reason", () => {
   const execution = fixture.task_execution_records.items[0];

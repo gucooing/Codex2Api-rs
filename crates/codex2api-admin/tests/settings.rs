@@ -88,13 +88,13 @@ async fn security_checks_both_previous_credentials_and_revokes_sessions() {
     );
 }
 #[tokio::test]
-async fn desktop_settings_diagnostics_and_resources_share_persisted_data() {
+async fn desktop_settings_and_resources_share_persisted_data() {
     let f = Fixture::new().await;
     assert_eq!(
         f.request(
             "PUT",
             "/admin/api/settings/desktop",
-            json!({"proxy_id":null,"collect_diagnostics":false,"resource_cache_minutes":0})
+            json!({"proxy_id":null,"resource_cache_minutes":0})
         )
         .await
         .status(),
@@ -104,13 +104,13 @@ async fn desktop_settings_diagnostics_and_resources_share_persisted_data() {
         f.request(
             "PUT",
             "/admin/api/settings/desktop",
-            json!({"proxy_id":"missing","collect_diagnostics":false,"resource_cache_minutes":60})
+            json!({"proxy_id":"missing","resource_cache_minutes":60})
         )
         .await
         .status(),
         StatusCode::NOT_FOUND
     );
-    let input = json!({"proxy_id":null,"collect_diagnostics":false,"resource_cache_minutes":30});
+    let input = json!({"proxy_id":null,"resource_cache_minutes":30});
     assert_eq!(
         f.request("PUT", "/admin/api/settings/desktop", input.clone())
             .await
@@ -118,11 +118,89 @@ async fn desktop_settings_diagnostics_and_resources_share_persisted_data() {
         StatusCode::OK
     );
     assert_eq!(f.get("/admin/api/settings/desktop").await, input);
-    for path in [
-        "/admin/api/diagnostics",
-        "/admin/api/resources",
-        "/admin/api/missing-endpoints",
-    ] {
+    assert_eq!(
+        f.request("GET", "/admin/api/diagnostics", json!(null))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.request(
+            "PUT",
+            "/admin/api/settings/desktop",
+            json!({"collect_diagnostics":true,"resource_cache_minutes":30})
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    for path in ["/admin/api/resources", "/admin/api/missing-endpoints"] {
         assert!(f.get(path).await["items"].is_array());
+    }
+}
+
+#[tokio::test]
+async fn admin_cookie_security_uses_configured_origin_for_login_logout_and_password_changes() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let f = Fixture::new().await;
+    for secure in [true, false] {
+        let app = codex2api_admin::router(f.state.clone().with_secure_cookies(secure));
+        for action in ["logout", "settings/security"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/admin/api/login")
+                        .header("content-type", "application/json")
+                        .header("x-forwarded-proto", if secure { "http" } else { "https" })
+                        .header(
+                            "forwarded",
+                            if secure { "proto=http" } else { "proto=https" },
+                        )
+                        .body(Body::from(
+                            json!({"username":"admin","password":"admin"}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let cookie = response.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                cookie.split(';').any(|part| part.trim() == "Secure"),
+                secure
+            );
+            assert!(cookie.contains("HttpOnly; Path=/admin; SameSite=Lax"));
+            let session = body(response).await;
+            let input = if action == "logout" {
+                json!({})
+            } else {
+                json!({"old_username":"admin","old_password":"admin","new_username":"admin","new_password":""})
+            };
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(if action == "logout" { "POST" } else { "PUT" })
+                        .uri(format!("/admin/api/{action}"))
+                        .header("content-type", "application/json")
+                        .header("cookie", cookie.split(';').next().unwrap())
+                        .header("x-csrf-token", session["csrf_token"].as_str().unwrap())
+                        .body(Body::from(input.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let cleared = response.headers()["set-cookie"].to_str().unwrap();
+            assert!(cleared.contains("Max-Age=0"));
+            assert_eq!(
+                cleared.split(';').any(|part| part.trim() == "Secure"),
+                secure
+            );
+        }
     }
 }

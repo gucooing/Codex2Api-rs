@@ -40,7 +40,7 @@ async fn existing_configuration_reads_do_not_acquire_sqlite_write_locks() {
         );
         assert_eq!(quota.unwrap()["plan_type"], "pro");
         assert_eq!(secret.unwrap(), key);
-        assert!(support.unwrap().collect_diagnostics);
+        assert_eq!(support.unwrap().resource_cache_minutes, 60);
     })
     .await;
     tx.rollback().await.unwrap();

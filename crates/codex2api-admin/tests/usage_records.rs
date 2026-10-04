@@ -1,7 +1,7 @@
 mod common;
 
 #[tokio::test]
-async fn log_and_diagnostic_pages_report_totals_and_jump_without_crossing_accounts() {
+async fn log_pages_report_totals_and_jump_without_crossing_accounts() {
     let f = common::Fixture::new().await;
     let a = f.consumer("paged-logs").await;
     let b = f.consumer("other-logs").await;
@@ -15,16 +15,6 @@ async fn log_and_diagnostic_pages_report_totals_and_jump_without_crossing_accoun
                 &format!("/page/{index:03}"),
                 if index < 55 { 200 } else { 500 },
                 1,
-            )
-            .await
-            .unwrap();
-        f.storage
-            .record_desktop_diagnostic(
-                &format!("page-{index}"),
-                "fixture",
-                Some(owner),
-                1,
-                &serde_json::json!([]),
             )
             .await
             .unwrap();
@@ -47,10 +37,7 @@ async fn log_and_diagnostic_pages_report_totals_and_jump_without_crossing_accoun
                 "/admin/api/consumers/{owner}/logs?page={page}&page_size=50"
             ))
             .await;
-        let diagnostics = f
-            .get(&format!("/admin/api/diagnostics?page={page}&page_size=50"))
-            .await;
-        for value in [&logs, &diagnostics] {
+        for value in [&logs] {
             assert_eq!(value["total"], 105);
             assert_eq!(value["page"], actual);
             assert_eq!(value["page_size"], 50);
@@ -66,10 +53,7 @@ async fn log_and_diagnostic_pages_report_totals_and_jump_without_crossing_accoun
         assert!(!logs.to_string().contains("other-only"));
     }
     for size in [10, 20, 30, 50] {
-        for path in [
-            format!("/admin/api/consumers/{owner}/logs"),
-            "/admin/api/diagnostics".into(),
-        ] {
+        for path in [format!("/admin/api/consumers/{owner}/logs")] {
             let page = f.get(&format!("{path}?page=2&page_size={size}")).await;
             assert_eq!(page["page_size"], size);
             assert_eq!(page["items"].as_array().unwrap().len(), size as usize);
@@ -77,7 +61,6 @@ async fn log_and_diagnostic_pages_report_totals_and_jump_without_crossing_accoun
     }
     for path in [
         format!("/admin/api/consumers/{owner}/logs"),
-        "/admin/api/diagnostics".into(),
         "/admin/api/usage".into(),
     ] {
         let default = f.get(&path).await;

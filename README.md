@@ -57,10 +57,13 @@ bash scripts/build.sh --release
 | `CODEX2API_USER_BIND` | `127.0.0.1:8082` | 用户端监听地址。 |
 | `CODEX2API_PUBLIC_API_URL` | `http://127.0.0.1:8080` | 对外 AI API origin，用于 OAuth 资源发现和客户端事件地址。 |
 | `CODEX2API_PUBLIC_USER_URL` | `http://127.0.0.1:8082` | 对外用户端 origin，用于浏览器授权跳转、同源校验和安全 Cookie。 |
+| `CODEX2API_PUBLIC_ADMIN_URL` | `http://127.0.0.1:8081` | 对外管理端 origin；HTTPS 时登录、退出和改密 Cookie 都带 `Secure`，不采信请求中的转发协议头。 |
 | `CODEX2API_DB` | `data/codex2api.sqlite` | SQLite 数据库文件路径；相对路径以程序启动目录为基准。 |
 | `CODEX_CA_CERTIFICATE` | 未设置 | 可选的 PEM 格式自定义 CA 证书文件路径。 |
 | `SSL_CERT_FILE` | 未设置 | 未配置 `CODEX_CA_CERTIFICATE` 时使用的自定义 CA 证书文件路径。 |
 | `RUST_LOG` | `codex2api=info` | 日志过滤规则。 |
+
+通过 HTTPS 反向代理提供管理端时，将 `CODEX2API_PUBLIC_ADMIN_URL` 设置为浏览器访问的 HTTPS origin。该配置不启动 TLS 监听器。
 
 直接使用默认配置启动：
 

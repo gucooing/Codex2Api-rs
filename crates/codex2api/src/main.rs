@@ -45,7 +45,9 @@ async fn main() -> Result<()> {
             "http://127.0.0.1:8082".into()
         }
     });
-    let apps = codex2api::routers(storage.clone(), &api_origin, &user_origin)?;
+    let admin_origin = std::env::var("CODEX2API_PUBLIC_ADMIN_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8081".into());
+    let apps = codex2api::routers(storage.clone(), &api_origin, &user_origin, &admin_origin)?;
     let api_listener = tokio::net::TcpListener::bind(&api_bind)
         .await
         .with_context(|| format!("bind AI API {api_bind}"))?;

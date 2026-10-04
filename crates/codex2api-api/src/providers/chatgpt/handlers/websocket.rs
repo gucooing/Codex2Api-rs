@@ -86,16 +86,20 @@ pub(crate) async fn bridge_recorded(
     let (storage, access) = consumer_access;
     let (mut client_tx, mut client_rx) = client.split();
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    let (detached, mut detached_events) = tokio::sync::watch::channel(false);
     let guardian_reviewer = response_session
         .as_ref()
         .is_some_and(|session| session.guardian_reviewer);
-    let to_upstream = async {
+    let mut to_upstream = Box::pin(async {
         while let Some(message) = client_rx.next().await {
+            if *detached.borrow() {
+                return Ok(());
+            }
             let message = match message {
                 Ok(message) => message,
-                Err(error) => {
-                    ledger.lock().await.client_stopped().await?;
-                    return Err(relay_error(error));
+                Err(_) => {
+                    detached.send_replace(true);
+                    return Ok(());
                 }
             };
             if matches!(message, Message::Text(_) | Message::Binary(_))
@@ -137,17 +141,8 @@ pub(crate) async fn bridge_recorded(
                         .into(),
                     )
                 }
-                Message::Close(frame) => {
-                    ledger.lock().await.client_stopped().await?;
-                    upstream_tx
-                        .send(UpstreamMessage::Close(frame.map(|f| {
-                            tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                                code: f.code.into(),
-                                reason: f.reason.to_string().into(),
-                            }
-                        })))
-                        .await
-                        .map_err(relay_error)?;
+                Message::Close(_) => {
+                    detached.send_replace(true);
                     return Ok::<_, crate::ApiError>(());
                 }
                 Message::Ping(_) | Message::Pong(_) => continue,
@@ -174,13 +169,32 @@ pub(crate) async fn bridge_recorded(
                 return Err(relay_error(message));
             }
         }
-        ledger.lock().await.client_stopped().await?;
-        let _ = upstream_tx.close().await;
+        detached.send_replace(true);
         Ok(())
-    };
-    let to_client = async {
+    });
+    let mut to_client = Box::pin(async {
         let mut last_message_at = connected_at;
-        while let Some(message) = upstream_rx.next().await {
+        loop {
+            let pending = ledger.lock().await.has_pending();
+            let disconnected = *detached_events.borrow_and_update();
+            if disconnected && !pending {
+                return Ok(());
+            }
+            let incoming = tokio::select! {
+                incoming = upstream_rx.next() => incoming,
+                _ = detached_events.changed() => continue,
+                _ = tokio::time::sleep(codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT), if pending => {
+                    return Err(crate::ApiError::openai(
+                        axum::http::StatusCode::GATEWAY_TIMEOUT,
+                        "server_error",
+                        "Timed out waiting for the upstream generation.",
+                        Some("upstream_timeout"),
+                    ));
+                }
+            };
+            let Some(message) = incoming else {
+                break;
+            };
             let received_at = std::time::Instant::now();
             let message = match message {
                 Ok(message) => message,
@@ -204,6 +218,7 @@ pub(crate) async fn bridge_recorded(
             last_message_at = received_at;
             let access_result = access.validate(&storage).await;
             let allowed = access_result.is_ok();
+            let allow_new = allowed && !*detached.borrow();
             let bytes = match &message {
                 UpstreamMessage::Text(text) => Some(text.as_bytes()),
                 UpstreamMessage::Binary(bytes) => Some(bytes.as_ref()),
@@ -213,12 +228,18 @@ pub(crate) async fn bridge_recorded(
                 ledger
                     .lock()
                     .await
-                    .observe_at(bytes, allowed, received_at)
+                    .observe_at(bytes, allow_new, received_at)
                     .await?
             } else {
                 None
             };
             access_result?;
+            if let Some(codex2api_upstream::ResponseOutcome::Failed(failure)) = &outcome {
+                ledger.lock().await.fail_pending(failure.clone()).await?;
+            }
+            if *detached.borrow() && !matches!(message, UpstreamMessage::Close(_)) {
+                continue;
+            }
             let message = match message {
                 UpstreamMessage::Text(text) => {
                     let text = crate::providers::chatgpt::identity::websocket_message(
@@ -257,6 +278,9 @@ pub(crate) async fn bridge_recorded(
                             Some("upstream_websocket_closed"),
                         ));
                     }
+                    if *detached.borrow() {
+                        return Ok(());
+                    }
                     client_tx
                         .send(Message::Close(frame.map(|f| CloseFrame {
                             code: f.code.into(),
@@ -270,9 +294,9 @@ pub(crate) async fn bridge_recorded(
                     continue;
                 }
             };
-            if let Err(error) = client_tx.send(message).await {
-                ledger.lock().await.client_stopped().await?;
-                return Err(relay_error(error));
+            if client_tx.send(message).await.is_err() {
+                detached.send_replace(true);
+                continue;
             }
             if let Some(codex2api_upstream::ResponseOutcome::Failed(failure)) = outcome {
                 ledger.lock().await.fail_pending(failure.clone()).await?;
@@ -300,8 +324,17 @@ pub(crate) async fn bridge_recorded(
         }
         let _ = client_tx.close().await;
         Ok(())
+    });
+    let result = tokio::select! {
+        result = &mut to_upstream => match result {
+            Ok(()) => (&mut to_client).await,
+            Err(error) => Err(error),
+        },
+        result = &mut to_client => result,
     };
-    let result = tokio::select! { result = to_upstream => result, result = to_client => result };
+    drop(to_client);
+    drop(to_upstream);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), upstream_tx.close()).await;
     if let Err(error) = result {
         tracing::debug!(%error, "Responses WebSocket relay ended");
         let (status, message) = error_message(error).await;
@@ -582,13 +615,6 @@ mod tests {
                 let _ = upstream.next().await;
                 return;
             }
-            if ending == "client_closed" {
-                assert!(matches!(
-                    upstream.next().await.unwrap().unwrap(),
-                    UpstreamMessage::Close(_)
-                ));
-                return;
-            }
             if ending == "upstream_closed" {
                 upstream.close(None).await.unwrap();
                 return;
@@ -794,7 +820,7 @@ mod tests {
                 "client_closed" => {
                     client.close(None).await.unwrap();
                     complete.send(()).unwrap();
-                    "client_stopped"
+                    "completed"
                 }
                 "upstream_closed" => {
                     complete.send(()).unwrap();

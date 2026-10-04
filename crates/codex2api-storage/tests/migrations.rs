@@ -49,6 +49,79 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn removing_desktop_diagnostics_deletes_records_and_settings_but_keeps_resources() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("remove-diagnostics.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version < 62)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("INSERT INTO desktop_diagnostics(batch_hash,source,record_count,summaries_json,first_seen_at_ms,last_seen_at_ms) VALUES('old','telemetry',1,'[]',1,1);
+        INSERT INTO meta(key,value) VALUES('desktop_support','{\"proxy_id\":null,\"collect_diagnostics\":true,\"resource_cache_minutes\":15}');
+        INSERT INTO desktop_public_resources VALUES('/asset.js',X'61','{}',1);
+        INSERT INTO oauth_missing_endpoints(method,path,hits,first_seen_at,last_seen_at) VALUES('POST','/api/oauth/chatgpt/ces/v1/telemetry/intake',1,'now','now'),('GET','/still-missing',1,'now','now');")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    let tables: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name='desktop_diagnostics'")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(tables, 0);
+    let settings = storage.desktop_support_settings().await.unwrap();
+    assert_eq!(settings.resource_cache_minutes, 15);
+    let raw: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='desktop_support'")
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+    assert!(!raw.contains("collect_diagnostics"));
+    assert_eq!(
+        storage
+            .desktop_resource("/asset.js")
+            .await
+            .unwrap()
+            .unwrap()
+            .content,
+        b"a"
+    );
+    let missing: Vec<String> = sqlx::query_scalar("SELECT path FROM oauth_missing_endpoints")
+        .fetch_all(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(missing, ["/still-missing"]);
+    storage.close().await;
+    let reopened = Storage::open(&path).await.unwrap();
+    assert_eq!(
+        reopened
+            .desktop_support_settings()
+            .await
+            .unwrap()
+            .resource_cache_minutes,
+        15
+    );
+}
+
+#[tokio::test]
 async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("account-identities.sqlite");

@@ -1283,7 +1283,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
 }
 
 #[tokio::test]
-async fn desktop_support_records_actual_batches_and_authenticates_sdk_refresh() {
+async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() {
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().join("support.sqlite"))
         .await
@@ -1384,40 +1384,22 @@ async fn desktop_support_records_actual_batches_and_authenticates_sdk_refresh() 
     for entry in requests.as_array().unwrap() {
         for _ in 0..2 {
             let response = app.clone().oneshot(make_request(entry)).await.unwrap();
-            if !response.status().is_success() {
-                let raw = base64::engine::general_purpose::STANDARD
-                    .decode(entry["body"].as_str().unwrap())
-                    .unwrap();
-                let sample = serde_json::from_slice::<Value>(&raw).unwrap_or_default();
-                panic!(
-                    "{} {} user={} header_names={:?}",
-                    entry["path"],
-                    response.status(),
-                    sample["user"],
-                    entry["headers"]
-                        .as_object()
-                        .unwrap()
-                        .keys()
-                        .collect::<Vec<_>>()
-                );
-            }
+            let expected = if entry["path"]
+                .as_str()
+                .unwrap()
+                .starts_with("/v1/initialize")
+            {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            assert_eq!(response.status(), expected, "{}", entry["path"]);
         }
     }
-    let logs = storage.desktop_diagnostics(i64::MAX).await.unwrap();
-    assert!(logs.iter().any(|v| v["source"] == "telemetry"));
-    assert!(logs.iter().any(|v| v["source"] == "sdk_exception"));
-    assert!(
-        logs.iter()
-            .filter(|v| v["source"] == "statsig_events")
-            .all(|v| v["owner"] == account.id)
-    );
-    assert!(
-        logs.iter()
-            .filter(|v| v["source"] != "statsig_events")
-            .all(|v| v["owner"].is_null())
-    );
-    assert!(logs.iter().all(|v| v["attempts"].as_u64().unwrap() >= 2));
-    assert!(!serde_json::to_string(&logs).unwrap().contains("PRIVATE_"));
+    assert!(storage.missing_endpoints().await.unwrap().is_empty());
+    let table_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='desktop_diagnostics')")
+        .fetch_one(storage.pool()).await.unwrap();
+    assert!(!table_exists);
     let config = storage
         .virtual_config(&account.id, "feature_bootstrap")
         .await
@@ -6428,35 +6410,6 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
         .unwrap();
     assert_eq!(records.status(), StatusCode::OK);
     assert_eq!(json_body(records).await["items"], environments);
-    let metrics = json!({"counters":[{"namespace":"desktop","metric":"ready","tags":{"account_id":other.id},"value":2}],"histograms":[{"namespace":"desktop","metric":"startup_ms","tags":{},"values":[123]}],"client_type":"web"});
-    let metrics_request = || {
-        Request::builder()
-            .method("POST")
-            .uri("/api/oauth/chatgpt/ces/statsc/flush")
-            .header("content-type", "application/json")
-            .body(Body::from(metrics.to_string()))
-            .unwrap()
-    };
-    let metrics_response = json_body(app.clone().oneshot(metrics_request()).await.unwrap()).await;
-    assert_eq!(metrics_response, json!({"success":true}));
-    assert_eq!(
-        app.clone()
-            .oneshot(metrics_request())
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::OK
-    );
-    let diagnostics = storage.desktop_diagnostics(i64::MAX).await.unwrap();
-    let metric = diagnostics
-        .iter()
-        .find(|item| item["source"] == "statsc_metrics")
-        .unwrap();
-    assert!(metric["owner"].is_null());
-    assert_eq!(metric["record_count"], 2);
-    assert_eq!(metric["attempts"], 2);
-    assert_eq!(metric["summaries"][0]["value"], 2);
-    assert!(!metric.to_string().contains(&other.id));
     if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
         use std::{
             io::Write,
@@ -6473,7 +6426,16 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(json!({"enabled":enabled,"disabled":disabled,"metrics_response":metrics_response,"environments":environments}).to_string().as_bytes()).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                json!({"enabled":enabled,"disabled":disabled,"environments":environments})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
         let result = child.wait_with_output().unwrap();
         assert!(
             result.status.success(),

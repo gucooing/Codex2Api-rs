@@ -158,15 +158,6 @@ async fn main() -> anyhow::Result<()> {
     sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin,updated_at_ms) VALUES(?, 'installed_plugins',?,1,'client',?) ON CONFLICT(virtual_account_id,state_key) DO UPDATE SET value_json=excluded.value_json").bind(&account.id).bind(json!({"plugins":[{"id":"review-plugin","name":"本地验收插件","status":"installed","description":"本地验收的客户端安装记录","version":"1.0.0"}]}).to_string()).bind(chrono::Utc::now().timestamp_millis()).execute(storage.pool()).await?;
     storage.save_virtual_resource(&account.id,"task","review-task",None,&json!({"task":{"id":"review-task","title":"本地验收记录（未调用上游）","status":"completed"}})).await?;
     storage
-        .record_desktop_diagnostic(
-            "review-diagnostic",
-            "fixture",
-            Some(&account.id),
-            1,
-            &json!([{"type":"review","count":1}]),
-        )
-        .await?;
-    storage
         .save_desktop_resource(
             "/review-fixture.txt",
             b"Local review fixture",
@@ -279,9 +270,6 @@ async fn main() -> anyhow::Result<()> {
                 200,
                 1,
             )
-            .await?;
-        storage
-            .record_desktop_diagnostic(&id, "pagination-fixture", Some(&account.id), 1, &json!([]))
             .await?;
     }
     storage.close().await;

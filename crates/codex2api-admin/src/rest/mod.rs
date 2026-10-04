@@ -131,7 +131,6 @@ pub(crate) fn router(state: AdminState) -> Router {
             "/settings/desktop",
             get(settings::desktop).put(settings::save_desktop),
         )
-        .route("/diagnostics", get(settings::diagnostics))
         .route("/resources", get(settings::resources))
         .route("/missing-endpoints", get(settings::missing))
         .route_layer(axum::middleware::from_fn_with_state(

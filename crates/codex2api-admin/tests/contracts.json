@@ -724,28 +724,6 @@
       }
     ]
   },
-  "diagnostics": {
-    "items": [
-      {
-        "id": 1,
-        "source": "ces",
-        "owner": "contract-consumer",
-        "record_count": 1,
-        "summaries": [
-          {
-            "type": "network",
-            "count": 1
-          }
-        ],
-        "attempts": 1,
-        "first_seen_at_ms": 1,
-        "last_seen_at_ms": 1
-      }
-    ],
-    "total": 1,
-    "page": 1,
-    "page_size": 20
-  },
   "client_state": {
     "key": "cloud_preferences",
     "value": {

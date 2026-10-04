@@ -4,6 +4,18 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use codex2api_upstream::strip_hop_by_hop_headers;
 
+/// An HTTP disconnect must not cancel a request while it awaits upstream headers.
+/// Dropping the join handle detaches the worker; an undelivered response body is
+/// then drained by the usage wrapper until its real upstream outcome is settled.
+pub(crate) async fn complete_on_disconnect(
+    work: impl std::future::Future<Output = crate::Result<Response>> + Send + 'static,
+) -> crate::Result<Response> {
+    tokio::spawn(work).await.map_err(|error| {
+        tracing::error!(%error, "upstream request worker failed");
+        crate::ApiError::internal("Upstream request worker failed.")
+    })?
+}
+
 pub(crate) fn forward_response(status: StatusCode, mut headers: HeaderMap, body: Body) -> Response {
     strip_hop_by_hop_headers(&mut headers);
     // Upstream cookies belong to the isolated account's HTTP client.
@@ -52,6 +64,27 @@ mod tests {
     use axum::http::HeaderValue;
     use futures::StreamExt;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn disconnect_while_waiting_for_headers_does_not_cancel_the_worker() {
+        let (started, start) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let (finished, finish) = tokio::sync::oneshot::channel();
+        let request = tokio::spawn(complete_on_disconnect(async move {
+            started.send(()).unwrap();
+            released.await.unwrap();
+            finished.send(()).unwrap();
+            Ok(Response::new(Body::empty()))
+        }));
+        start.await.unwrap();
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), finish)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn forwards_sse_bytes_before_upstream_finishes() {

@@ -338,11 +338,7 @@ test("table pagination supports totals, page input, first and last pages after f
   await logs.getByRole("button", { name: "末页", exact: true }).click();
   await expect(logs.getByRole("textbox", { name: "页码", exact: true })).toHaveValue("6");
   await page.goto("/admin/settings/");
-  await page.getByRole("tab", { name: "诊断记录", exact: true }).click();
-  const diagnostics = page.getByRole("navigation", { name: "记录分页", exact: true });
-  await expect(diagnostics).toContainText("共 106 条 · 6 页");
-  await diagnostics.getByRole("button", { name: "末页", exact: true }).click();
-  await expect(diagnostics.getByRole("textbox", { name: "页码", exact: true })).toHaveValue("6");
+  await expect(page.getByRole("tab", { name: "诊断记录", exact: true })).toHaveCount(0);
   await expect(page.locator("tbody > tr")).toHaveCount(6);
   expect(errors).toEqual([]);
 });

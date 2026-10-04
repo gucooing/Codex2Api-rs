@@ -161,6 +161,7 @@ async fn send(conn: &mut Connection, value: &Value, reviewer: bool) -> Result<()
 
 async fn deliver(
     client: &mut WebSocket,
+    connected: &mut bool,
     ledger: &tokio::sync::Mutex<WsLedger>,
     state: &ApiState,
     oauth: &VirtualAccess,
@@ -170,14 +171,16 @@ async fn deliver(
     let outcome = ledger
         .lock()
         .await
-        .observe_at(text.as_bytes(), true, at)
+        .observe_at(text.as_bytes(), *connected, at)
         .await?;
+    if !*connected {
+        return Ok(outcome);
+    }
     let text =
         super::super::identity::websocket_message(&state.storage, &oauth.token_hash, text).await?;
-    client
-        .send(Message::Text(text.into()))
-        .await
-        .map_err(super::websocket::relay_error)?;
+    if client.send(Message::Text(text.into())).await.is_err() {
+        *connected = false;
+    }
     Ok(outcome)
 }
 
@@ -201,8 +204,18 @@ async fn bridge(
     // In-memory connection context only; never written to logs or shared accounts.
     let mut history: Option<(String, Vec<Value>)> = None;
     let mut close_code = 1000;
+    let mut connected = true;
+    let mut idle = Box::pin(tokio::time::sleep(
+        codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
+    ));
     let result: Result<()> = async {
         loop {
+            if !connected {
+                queue.clear();
+                if pending.is_none() {
+                    return Ok(());
+                }
+            }
             if pending.is_none() && let Some(text) = queue.pop_front() {
                 let mut original: Value = serde_json::from_str(&text).map_err(|_| ApiError::bad_request("Invalid Responses frame."))?;
                 let selected = pool::select(&state,&oauth,&[]).await?;
@@ -226,12 +239,12 @@ async fn bridge(
                 }
                 crate::usage::ws_start(&ledger,&text).await?;
                 send(&mut conn,&original,reviewer).await?;
+                idle.as_mut().reset(tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT);
                 pending = Some(Pending { original, full_input, prelude:Vec::new(),prelude_bytes:0,committed:false,excluded:Vec::new(),refreshed:Default::default() });
             }
             tokio::select! {
-                incoming = client.next() => {
-                    let Some(message) = incoming else { ledger.lock().await.client_stopped().await?; return Ok(()); };
-                    let message = message.map_err(super::websocket::relay_error)?;
+                incoming = client.next(), if connected => {
+                    let Some(Ok(message)) = incoming else { connected = false; continue; };
                     match message {
                         Message::Text(_) | Message::Binary(_) => {
                             state.storage.virtual_access(&oauth.token_hash).await?.ok_or_else(ApiError::invalid_token)?;
@@ -244,11 +257,12 @@ async fn bridge(
                                 queue.push_back(text);
                             } else { send(&mut conn,&value,reviewer).await?; }
                         }
-                        Message::Close(_) => { ledger.lock().await.client_stopped().await?; let _=conn.socket.close(None).await; return Ok(()); }
+                        Message::Close(_) => { connected = false; }
                         Message::Ping(_) | Message::Pong(_) => {}
                     }
                 }
                 incoming = conn.socket.next() => {
+                    idle.as_mut().reset(tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT);
                     let Some(message) = incoming else { return Err(super::websocket::relay_error("Upstream WebSocket closed")); };
                     let message = message.map_err(super::websocket::relay_error)?;
                     let text = match message {
@@ -301,10 +315,10 @@ async fn bridge(
                         if !p.committed && pool::prelude_event(&value) && p.prelude_bytes+text.len()<=256*1024 {
                             p.prelude_bytes+=text.len(); p.prelude.push((text,at)); continue;
                         }
-                        for (text,at) in p.prelude.drain(..) { deliver(&mut client,&ledger,&state,&oauth,&text,at).await?; }
+                        for (text,at) in p.prelude.drain(..) { deliver(&mut client,&mut connected,&ledger,&state,&oauth,&text,at).await?; }
                         p.committed=true;
                     }
-                    let outcome=deliver(&mut client,&ledger,&state,&oauth,&text,at).await?;
+                    let outcome=deliver(&mut client,&mut connected,&ledger,&state,&oauth,&text,at).await?;
                     if let Some(outcome)=outcome {
                         if value["type"]=="response.completed" && let Some(p)=&pending && let Some(mut input)=p.full_input.clone() && let Some(id)=value.pointer("/response/id").and_then(Value::as_str) {
                             input.extend(value.pointer("/response/output").and_then(Value::as_array).cloned().unwrap_or_default());
@@ -317,6 +331,9 @@ async fn bridge(
                         }
                     }
                 }
+                _ = &mut idle, if pending.is_some() => {
+                    return Err(ApiError::openai(http::StatusCode::GATEWAY_TIMEOUT,"server_error","Timed out waiting for the upstream generation.",Some("upstream_timeout")));
+                }
             }
         }
     }.await;
@@ -328,11 +345,13 @@ async fn bridge(
         if let Err(error) = ledger.lock().await.fail_pending(failure).await {
             tracing::error!(%error,"failed to settle WebSocket generation");
         }
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            client.send(Message::Text(message.into())),
-        )
-        .await;
+        if connected {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                client.send(Message::Text(message.into())),
+            )
+            .await;
+        }
     }
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -342,12 +361,147 @@ async fn bridge(
         }))),
     )
     .await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.socket.close(None)).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn disconnected_clients_keep_the_active_generation_until_final_usage() {
+        for (read_output, clean_close, failure) in [
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            let (_dir, state, oauth, ids) = crate::pool_execution::tests::setup_pool().await;
+            state
+                .storage
+                .sync_supported_models(&codex2api_upstream::supported_models())
+                .await
+                .unwrap();
+            let (started, start) = tokio::sync::oneshot::channel();
+            let (finish, ready) = tokio::sync::oneshot::channel();
+            let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = upstream_listener.local_addr().unwrap();
+            let upstream_task = tokio::spawn(async move {
+                let (stream, _) = upstream_listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let request = socket.next().await.unwrap().unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&request.into_data()).unwrap()["type"],
+                    "response.create"
+                );
+                started.send(()).unwrap();
+                if read_output {
+                    for event in [
+                        json!({"type":"response.created","response":{"id":"active"}}),
+                        json!({"type":"response.output_text.delta","response_id":"active","delta":"partial"}),
+                    ] {
+                        socket
+                            .send(UpstreamMessage::Text(event.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                }
+                ready.await.unwrap();
+                let mut event = json!({"type":"response.completed","response":{"id":"active","usage":{"input_tokens":700,"output_tokens":30,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}});
+                if failure {
+                    event["type"] = "response.failed".into();
+                    event["response"]["error"] =
+                        json!({"code":"server_error","message":"actual upstream failure"});
+                }
+                socket
+                    .send(UpstreamMessage::Text(event.to_string().into()))
+                    .await
+                    .unwrap();
+                let close = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+                    .await
+                    .unwrap();
+                assert!(matches!(close, Some(Ok(UpstreamMessage::Close(_)))));
+            });
+            let fixture_state = state.clone();
+            let fixture_oauth = oauth.clone();
+            let first = ids[0].clone();
+            let app = axum::Router::new().route(
+                "/responses",
+                axum::routing::get(move |upgrade: WebSocketUpgrade| {
+                    let state = fixture_state.clone();
+                    let oauth = fixture_oauth.clone();
+                    let first = first.clone();
+                    async move {
+                        let connection = Connection {
+                            socket: fixture_socket(&format!("ws://{address}/responses")).await,
+                            ctx: state.accounts.load_context(&first).await.unwrap(),
+                            headers: HeaderMap::new(),
+                            revision: state.storage.supplier_auth_revision(&first).await.unwrap(),
+                            workspace: None,
+                        };
+                        upgrade.on_upgrade(move |client| {
+                            bridge(
+                                client,
+                                connection,
+                                state,
+                                oauth,
+                                Endpoint::Responses,
+                                HeaderMap::new(),
+                            )
+                        })
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let (mut client, _) =
+                tokio_tungstenite::connect_async(format!("ws://{address}/responses"))
+                    .await
+                    .unwrap();
+            client
+                .send(UpstreamMessage::Text(
+                    json!({"type":"response.create","model":"gpt-5.5","input":[]})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            start.await.unwrap();
+            if read_output {
+                for _ in 0..2 {
+                    client.next().await.unwrap().unwrap();
+                }
+            }
+            if clean_close {
+                client.close(None).await.unwrap();
+            }
+            drop(client);
+            let status: String = sqlx::query_scalar("SELECT status FROM usage_records")
+                .fetch_one(state.storage.pool())
+                .await
+                .unwrap();
+            assert_eq!(status, "in_progress");
+            finish.send(()).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), upstream_task)
+                .await
+                .unwrap()
+                .unwrap();
+            let rows: Vec<(String, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+                "SELECT status,input_tokens,output_tokens,cost_nano_usd FROM usage_records",
+            )
+            .fetch_all(state.storage.pool())
+            .await
+            .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].0, if failure { "failed" } else { "completed" });
+            assert_eq!((rows[0].1, rows[0].2), (Some(700), Some(30)));
+            assert!(rows[0].3.unwrap() > 0);
+            server.abort();
+        }
+    }
 
     pub(super) async fn fixture_socket(url: &str) -> UpstreamWebSocket {
         let parsed = reqwest::Url::parse(url).unwrap();

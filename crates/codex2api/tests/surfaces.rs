@@ -15,6 +15,7 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
         storage.clone(),
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8082",
+        "http://127.0.0.1:8081",
     )
     .unwrap();
     for (app, paths) in [

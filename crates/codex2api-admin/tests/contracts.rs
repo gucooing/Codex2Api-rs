@@ -111,16 +111,6 @@ async fn real_rest_contracts_match_frontend_fixture() {
         f.storage.save_virtual_resource(&consumer.id,"subscription_operation",operation,None,&json!({"operation":operation,"previous_plan_name":"Previous plan","plan_name":"Plus","expires_at":"2027-09-22T00:00:00Z","origin":"admin","created_at_ms":1})).await.unwrap();
     }
     f.storage
-        .record_desktop_diagnostic(
-            "fixture-batch",
-            "ces",
-            Some(&consumer.id),
-            1,
-            &json!([{"type":"network","count":1}]),
-        )
-        .await
-        .unwrap();
-    f.storage
         .save_virtual_client_state(
             &consumer.id,
             "cloud_preferences",
@@ -129,7 +119,7 @@ async fn real_rest_contracts_match_frontend_fixture() {
         )
         .await
         .unwrap();
-    let mut fixture = json!({"session":f.get("/admin/api/session").await,"overview":f.get("/admin/api/overview").await,"plans":f.get("/admin/api/plans").await,"models":f.get("/admin/api/models").await,"consumer":f.get("/admin/api/consumers/contract-consumer").await,"routing":f.get("/admin/api/consumers/contract-consumer/routing").await,"usage":f.get("/admin/api/usage").await,"task_records":f.get("/admin/api/consumers/contract-consumer/records?kind=task").await,"subscription_records":f.get("/admin/api/consumers/contract-consumer/records?kind=subscription_operation").await,"diagnostics":f.get("/admin/api/diagnostics").await,"client_state":f.get("/admin/api/consumers/contract-consumer/client-state/cloud_preferences").await,"consumer_usage":f.get("/admin/api/consumers/contract-consumer/usage").await});
+    let mut fixture = json!({"session":f.get("/admin/api/session").await,"overview":f.get("/admin/api/overview").await,"plans":f.get("/admin/api/plans").await,"models":f.get("/admin/api/models").await,"consumer":f.get("/admin/api/consumers/contract-consumer").await,"routing":f.get("/admin/api/consumers/contract-consumer/routing").await,"usage":f.get("/admin/api/usage").await,"task_records":f.get("/admin/api/consumers/contract-consumer/records?kind=task").await,"subscription_records":f.get("/admin/api/consumers/contract-consumer/records?kind=subscription_operation").await,"client_state":f.get("/admin/api/consumers/contract-consumer/client-state/cloud_preferences").await,"consumer_usage":f.get("/admin/api/consumers/contract-consumer/usage").await});
     normalize(&mut fixture, "");
     fixture["task_execution_records"] = f
         .get("/admin/api/consumers/contract-consumer/records?kind=task_execution")

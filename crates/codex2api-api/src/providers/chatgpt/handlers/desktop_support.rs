@@ -17,14 +17,6 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 
 const MAX_BODY: usize = 4 * 1024 * 1024;
-#[derive(Clone, Copy)]
-pub(crate) enum Intake {
-    Telemetry,
-    Events,
-    Metrics,
-    Exception,
-}
-
 fn json_response(value: Value) -> Response {
     let mut response = crate::providers::chatgpt::identity::json_response(value);
     response
@@ -89,119 +81,6 @@ async fn optional_access(
         return Err(crate::ApiError::invalid_token());
     }
     Ok(Some(access))
-}
-
-pub(crate) async fn intake(
-    State(state): State<crate::ApiState>,
-    Extension(kind): Extension<Intake>,
-    OriginalUri(uri): OriginalUri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> crate::Result<Response> {
-    let access = optional_access(&state, &headers).await?;
-    let bytes = decoded(&body, &headers, uri.query())?;
-    let records: Vec<Value> = match kind {
-        Intake::Telemetry => std::str::from_utf8(&bytes)
-            .map_err(|_| crate::ApiError::bad_request("Invalid telemetry text."))?
-            .lines()
-            .filter(|s| !s.trim().is_empty())
-            .map(serde_json::from_str)
-            .collect::<Result<_, _>>()
-            .map_err(|_| crate::ApiError::bad_request("Invalid telemetry JSON lines."))?,
-        Intake::Events => serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|v| v["events"].as_array().cloned())
-            .ok_or_else(|| crate::ApiError::bad_request("Expected SDK events."))?,
-        Intake::Exception => vec![
-            serde_json::from_slice(&bytes)
-                .map_err(|_| crate::ApiError::bad_request("Invalid SDK exception."))?,
-        ],
-        Intake::Metrics => metrics(&bytes)?,
-    };
-    if records.len() > 1000 || records.iter().any(|v| !v.is_object()) {
-        return Err(crate::ApiError::bad_request("Invalid SDK batch."));
-    }
-    let source = match kind {
-        Intake::Telemetry => "telemetry",
-        Intake::Events => "statsig_events",
-        Intake::Exception => "sdk_exception",
-        Intake::Metrics => "statsc_metrics",
-    };
-    // These senders also run before login. Body user IDs are untrusted claims,
-    // not evidence that a diagnostic belongs to a virtual account.
-    let token = |v: &Value| {
-        v.as_str()
-            .filter(|s| {
-                s.len() <= 160
-                    && s.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || "_:-./ ".contains(c))
-            })
-            .map(str::to_owned)
-    };
-    let summaries:Vec<_>=records.iter().map(|v|json!({
-        "event":token(&v["eventName"]),"level":token(&v["status"]),"logger":token(&v["logger"]["name"]),
-        "tag":token(&v["tag"]),"exception":token(&v["exception"]),"reason":token(&v["reason"]),"sdk_version":token(&v["sdkVersion"]),
-        "namespace":token(&v["namespace"]),"metric":token(&v["metric"]),"value":v.get("value"),"values":v.get("values")
-    })).collect();
-    if state
-        .storage
-        .desktop_support_settings()
-        .await?
-        .collect_diagnostics
-    {
-        let owner = access.as_ref().map(|a| a.virtual_account_id.as_str());
-        let mut digest = Sha256::new();
-        digest.update(source);
-        digest.update(owner.unwrap_or("anonymous"));
-        digest.update(&bytes);
-        state
-            .storage
-            .record_desktop_diagnostic(
-                &format!("{:x}", digest.finalize()),
-                source,
-                owner,
-                records.len(),
-                &json!(summaries),
-            )
-            .await?;
-    }
-    // The actual intake and exception readers ignore the success body. Statsig's
-    // event logger reads success, so return it only after the persistence above.
-    Ok(match kind {
-        Intake::Events | Intake::Metrics => json_response(json!({"success":true})),
-        _ => preflight().await,
-    })
-}
-
-fn metrics(bytes: &[u8]) -> crate::Result<Vec<Value>> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| crate::ApiError::bad_request("Invalid metrics JSON."))?;
-    let mut records = Vec::new();
-    for (key, histogram) in [("counters", false), ("histograms", true)] {
-        let items = value[key]
-            .as_array()
-            .filter(|items| items.len() <= 1000)
-            .ok_or_else(|| crate::ApiError::bad_request("Invalid metrics batch."))?;
-        for item in items {
-            let names_valid = ["namespace", "metric"].iter().all(|key| {
-                item[key].as_str().is_some_and(|text| {
-                    !text.is_empty() && text.len() <= 160 && !text.chars().any(char::is_control)
-                })
-            });
-            let values_valid = if histogram {
-                item["values"].as_array().is_some_and(|samples| {
-                    samples.len() <= 10000 && samples.iter().all(Value::is_number)
-                })
-            } else {
-                item["value"].is_number()
-            };
-            if !names_valid || !values_valid || !item["tags"].is_object() {
-                return Err(crate::ApiError::bad_request("Invalid metric."));
-            }
-            records.push(item.clone());
-        }
-    }
-    Ok(records)
 }
 
 #[derive(Serialize, Deserialize)]

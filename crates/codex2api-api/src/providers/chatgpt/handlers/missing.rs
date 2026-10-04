@@ -10,6 +10,18 @@ pub async fn endpoint(
     OriginalUri(uri): OriginalUri,
     method: Method,
 ) -> Response {
+    // Retired intake URLs must not create missing-endpoint records either.
+    if matches!(
+        uri.path().strip_prefix(super::oauth::PREFIX),
+        Some(
+            "/ces/v1/telemetry/intake"
+                | "/ces/v1/rgstr"
+                | "/ces/statsc/flush"
+                | "/v1/sdk_exception"
+        )
+    ) {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
     // Only path structure is retained; never query strings, headers or bodies.
     let path = uri
         .path()

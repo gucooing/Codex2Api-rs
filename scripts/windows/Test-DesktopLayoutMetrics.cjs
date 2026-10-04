@@ -42,30 +42,11 @@ const { renderer, between, statsigSdk } = require('./desktop-contract.cjs');
       assert.equal(resets({}).props.children[1]?.type === 'reset-cards', expected);
     } finally { client.shutdown(); }
   }
-  const metricsFactory = vm.runInNewContext(
-    between(source.text, 'function WSr(', 'var KSr,') + '; WSr',
-    { navigator: { doNotTrack: '0' }, window: { addEventListener() {}, removeEventListener() {} }, setTimeout, clearTimeout,
-      KSr: source.bindings.q({ success: source.bindings.j() }) }
-  );
-  const requests = [];
-  const collector = metricsFactory({ fetcher: async (path, options) => {
-    requests.push({ path, request: JSON.parse(options.body) });
-    return { ok: true, json: async () => sample.metrics_response };
-  } });
-  collector.count('desktop', 'ready', { app_version: 'fixture' }, 2);
-  collector.hist('desktop', 'startup_ms', {}, 123);
-  await collector.flush();
-  await collector.flush();
-  collector.dispose();
-  assert.equal(requests.length, 1, 'Successful metrics were retried');
-  assert.equal(requests[0].path, '/ces/statsc/flush');
-  assert.equal(requests[0].request.counters[0].value, 2);
-  assert.equal(requests[0].request.histograms[0].values[0], 123);
   const environmentReader = vm.runInNewContext(
     between(source.text, 'async function spn()', 'function cpn(') + '; spn',
     { Gc: { safeGet: async path => { assert.equal(path, '/wham/environments'); return sample.environments; } } }
   );
   assert.deepEqual(await environmentReader(), sample.environments);
   assert.equal(sample.environments[0].repo_map[sample.environments[0].repos[0]].clone_url, 'https://github.com/fixture/project.git');
-  console.log('PASS: installed Statsig SDK, navigation/tab/composer selection with auth checks, reset-card rendering branch, metrics and environment readers.');
+  console.log('PASS: installed Statsig SDK, navigation/tab/composer selection with auth checks, reset-card rendering branch and environment readers.');
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
