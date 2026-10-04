@@ -54,7 +54,13 @@ export default function DevicesPage() {
               )}
               {devicePage.rows.map((d) => (
                 <TableRow key={d.id}>
-                  <TableCell>{d.provider_id === "chatgpt" ? "ChatGPT" : d.provider_id}</TableCell>
+                  <TableCell>
+                    {d.provider_id === "chatgpt"
+                      ? "ChatGPT"
+                      : d.provider_id === "grok"
+                        ? "Grok"
+                        : d.provider_id}
+                  </TableCell>
                   <TableCell className="max-w-xs truncate">{d.user_agent}</TableCell>
                   <TableCell>{d.last_used_at ? date(d.last_used_at) : "尚未使用"}</TableCell>
                   <TableCell>

@@ -89,6 +89,7 @@ export type ConsumerWrite = Pick<
   "username" | "name" | "email" | "provider_id" | "plan_id" | "subscription_expires_at" | "enabled"
 > & { password: string };
 export type Plan = {
+  description: string;
   sale_price_usd: string | null;
   duration_days: number;
   supplier_tag_id: string | null;
@@ -124,8 +125,6 @@ export type Model = {
   kind: "text" | "image";
   enabled: boolean;
   revision: number | null;
-  codex_metadata_status?: "verified" | "unavailable" | "not_applicable";
-  codex_metadata_source?: string | null;
   token_prices: TokenPrice[];
   image_prices: ImagePrice[];
 };
@@ -176,7 +175,12 @@ export type OAuth =
       user_code?: string;
       interval?: number;
     }
-  | { status: "complete"; supplier_id: string };
+  | {
+      status: "complete";
+      supplier_id: string;
+      reused_existing?: boolean;
+      model_sync_error?: string | null;
+    };
 export type BusinessField = {
   path: string[];
   label: string;

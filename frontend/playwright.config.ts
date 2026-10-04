@@ -18,6 +18,7 @@ export default defineConfig({
   use: {
     baseURL,
     browserName: "chromium",
+    channel: process.env.CODEX2API_TEST_BROWSER_CHANNEL,
     headless: true,
     viewport: { width: 1440, height: 1100 },
     screenshot: "only-on-failure",

@@ -53,7 +53,9 @@ async fn preview(
     let subscription = storage
         .user_subscriptions(Some(&user.id), true)
         .await?
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     storage
         .checkout_preview(
             &user.id,
@@ -85,7 +87,9 @@ async fn grant(storage: &Storage, user: &User, plan: &str, expiry: &str) {
         .user_subscriptions(Some(&user.id), true)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     storage
         .save_user_subscription(SubscriptionChange {
             reissue: false,
@@ -517,7 +521,9 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
         .user_subscriptions(Some(&user.id), true)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["sale_price_usd"] = json!("40");
     storage
@@ -529,7 +535,9 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
         .user_subscriptions(Some(&user.id), true)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     assert!(refreshed.revision > subscription.revision);
     storage
         .save_user_subscription(SubscriptionChange {

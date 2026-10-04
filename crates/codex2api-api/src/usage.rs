@@ -29,7 +29,11 @@ pub(crate) fn billable(endpoint: Endpoint) -> bool {
     )
 }
 
+pub(crate) trait ProtocolObserver: Send + Sync {
+    fn observe(&mut self, bytes: &[u8]) -> Vec<serde_json::Value>;
+}
 pub(crate) struct RequestLog {
+    observer: Option<Box<dyn ProtocolObserver>>,
     record: Option<UsageRecord>,
     storage: Storage,
     start: Instant,
@@ -39,6 +43,9 @@ pub(crate) struct RequestLog {
     supplier_failure: Option<codex2api_upstream::SupplierFailure>,
 }
 impl RequestLog {
+    pub(crate) fn set_protocol_observer(&mut self, observer: impl ProtocolObserver + 'static) {
+        self.observer = Some(Box::new(observer));
+    }
     pub(crate) async fn rebind_supplier(
         &mut self,
         account: &codex2api_storage::SupplierAccount,
@@ -101,6 +108,7 @@ impl RequestLog {
         storage.insert_usage(&record).await?;
         let auth_revision = storage.supplier_auth_revision(&record.account_id).await?;
         Ok(Self {
+            observer: None,
             storage,
             record: Some(record),
             start,
@@ -331,7 +339,8 @@ impl RequestLog {
         let Some(record) = &mut self.record else {
             return;
         };
-        self.supplier_failure = codex2api_upstream::classify_supplier_failure(
+        self.supplier_failure = codex2api_upstream::classify_provider_failure(
+            &record.provider_id,
             record
                 .http_status
                 .and_then(|v| u16::try_from(v).ok())
@@ -509,6 +518,18 @@ impl RequestLog {
         self.parse_at(bytes, Instant::now());
     }
     fn parse_at(&mut self, bytes: &[u8], received_at: Instant) {
+        if let Some(observer) = &mut self.observer {
+            let events = observer.observe(bytes);
+            for value in events {
+                if let Ok(event) = serde_json::from_value::<Event>(value.clone()) {
+                    if event.generation_message() {
+                        self.first_message_at(received_at);
+                    }
+                    self.observe(&event, &value);
+                }
+            }
+            return;
+        }
         if bytes.trim_ascii() == b"[DONE]"
             && self
                 .record

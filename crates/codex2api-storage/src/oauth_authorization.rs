@@ -86,11 +86,14 @@ impl Storage {
         if !crate::users::confirmed_browser_identity(&mut tx, id, account).await? {
             return Ok(false);
         }
-        let expiry:Option<i64>=sqlx::query_scalar("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? RETURNING expires_at")
+        let flow:Option<(i64,String)>=sqlx::query_as("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? RETURNING expires_at,request_json")
             .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(now).fetch_optional(&mut *tx).await?;
-        let Some(expiry) = expiry else {
+        let Some((expiry, request_json)) = flow else {
             return Ok(false);
         };
+        let nonce = serde_json::from_str::<serde_json::Value>(&request_json)
+            .ok()
+            .and_then(|v| v["nonce"].as_str().map(str::to_owned));
         let inserted=sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms)
             SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM virtual_principals v
             WHERE v.id=? AND v.password_hash=? AND v.enabled=1")
@@ -98,6 +101,11 @@ impl Storage {
         if inserted.rows_affected() != 1 {
             return Ok(false);
         }
+        sqlx::query("UPDATE virtual_authorization_codes SET oidc_nonce=? WHERE code_hash=?")
+            .bind(nonce)
+            .bind(hash_token(code))
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(true)
     }

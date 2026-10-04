@@ -248,6 +248,51 @@ impl AuthService {
         proxy_id: Option<&str>,
         refresh_token: &str,
     ) -> Result<CompletedLogin> {
+        let http = self.draft_http(&identity, proxy_id).await?;
+        let auth = self
+            .auth_with_refresh_token(&http.authenticated, refresh_token)
+            .await?;
+        self.save_draft_auth(&identity, proxy_id.filter(|id| !id.is_empty()), auth)
+            .await
+    }
+
+    pub async fn relogin_with_refresh_token(
+        &self,
+        account_id: &str,
+        refresh_token: &str,
+    ) -> Result<CompletedLogin> {
+        let http = self.account_http(account_id).await?;
+        let _guard = http.refresh_lock.lock().await;
+        let ctx = self.accounts().load_context(account_id).await?;
+        if ctx.account.provider_id != codex2api_core::CHATGPT {
+            return Err(AuthError::AccountMismatch);
+        }
+        let auth = self
+            .auth_with_refresh_token(&http.authenticated, refresh_token)
+            .await?;
+        let claims =
+            parse_chatgpt_jwt_claims(&auth.tokens.as_ref().expect("validated tokens").id_token)?;
+        let pending = codex2api_accounts::PendingAccount {
+            account: ctx.account,
+            identity: ctx.identity,
+        };
+        let bound =
+            crate::persist::bind_completed_login(self.accounts(), &pending, &claims, &auth).await?;
+        Ok(CompletedLogin {
+            account: bound.account,
+            identity: bound.identity,
+            reused_existing: true,
+            claims,
+            tokens: token_set_from_auth(&auth),
+            auth,
+        })
+    }
+
+    async fn auth_with_refresh_token(
+        &self,
+        http: &reqwest::Client,
+        refresh_token: &str,
+    ) -> Result<AuthDotJson> {
         let refresh_token = refresh_token.trim();
         if refresh_token.is_empty() {
             return Err(AuthError::MissingRefreshToken);
@@ -257,8 +302,7 @@ impl AuthService {
                 "refresh token is too long"
             )));
         }
-        let http = self.draft_http(&identity, proxy_id).await?;
-        let refresh = refresh_tokens(&http.authenticated, self.config(), refresh_token).await?;
+        let refresh = refresh_tokens(http, self.config(), refresh_token).await?;
         let mut auth = chatgpt_auth(String::new(), String::new(), refresh_token.to_owned(), None);
         apply_refresh(&mut auth, &refresh)?;
         if auth
@@ -270,7 +314,6 @@ impl AuthService {
                 "刷新响应缺少 ID Token 或 Access Token".into(),
             ));
         }
-        self.save_draft_auth(&identity, proxy_id.filter(|id| !id.is_empty()), auth)
-            .await
+        Ok(auth)
     }
 }

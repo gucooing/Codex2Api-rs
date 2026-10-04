@@ -1,6 +1,6 @@
+use crate::pool_execution::SupplierContext;
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
-use codex2api_accounts::SupplierContext;
 use codex2api_storage::SupplierStatus;
 
 use crate::error::{ApiError, Result};

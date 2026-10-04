@@ -23,14 +23,28 @@ pub struct AuthorizationRequest {
     code_challenge_method: String,
     #[serde(default)]
     scope: String,
+    #[serde(default)]
+    nonce: Option<String>,
 }
 impl AuthorizationRequest {
+    pub fn provider(&self) -> &'static str {
+        crate::providers::by_client(&self.client_id).map_or("", |p| p.id)
+    }
+    fn allowed_scopes(&self) -> &'static str {
+        crate::providers::by_client(&self.client_id).map_or("", |p| p.scopes)
+    }
     pub fn valid(&self) -> bool {
         let Ok(uri) = url::Url::parse(&self.redirect_uri) else {
             return false;
         };
         self.response_type == "code"
-            && self.client_id == codex2api_version::OAUTH_CLIENT_ID
+            && crate::providers::by_client(&self.client_id).is_some_and(|p| {
+                (!p.requires_nonce
+                    || self.nonce.as_deref().is_some_and(|s| {
+                        !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control)
+                    }))
+                    && uri.path() == p.callback_path
+            })
             && self.code_challenge_method == "S256"
             && self.code_challenge.len() == 43
             && self
@@ -40,15 +54,13 @@ impl AuthorizationRequest {
             && !self.state.is_empty()
             && self.state.len() <= 1024
             && !self.state.chars().any(char::is_control)
-            && self.scope.split_whitespace().all(|s| {
-                codex2api_version::OAUTH_SCOPE
-                    .split_whitespace()
-                    .any(|a| s == a)
-            })
+            && self
+                .scope
+                .split_whitespace()
+                .all(|s| self.allowed_scopes().split_whitespace().any(|a| a == s))
             && uri.scheme() == "http"
             && matches!(uri.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
             && uri.port().is_some_and(|p| p != 0)
-            && uri.path() == "/auth/callback"
             && uri.username().is_empty()
             && uri.password().is_none()
             && uri.query().is_none()
@@ -60,7 +72,7 @@ impl AuthorizationRequest {
         } else {
             &self.scope
         };
-        codex2api_version::OAUTH_SCOPE
+        self.allowed_scopes()
             .split_whitespace()
             .filter(|s| requested.split_whitespace().any(|v| v == *s))
             .collect::<Vec<_>>()
@@ -96,6 +108,7 @@ async fn start(
     request: String,
     scope: String,
 ) -> Result<Response> {
+    let provider = flow_provider(&request)?;
     let flow = uuid::Uuid::new_v4().simple().to_string();
     let browser = oauth_secret();
     let csrf = oauth_secret();
@@ -109,7 +122,7 @@ async fn start(
     if let Some(session) = auth::load_session(&state, &headers).await? {
         if let Some(account) = state
             .storage
-            .user_platform_account(&session.user_id, codex2api_core::CHATGPT)
+            .user_platform_account(&session.user_id, provider)
             .await?
         {
             if state
@@ -135,7 +148,7 @@ async fn start(
             flow_cookie(&state, &flow, &browser, 600),
         )],
         Json(json!({"request_id":flow,
-        "csrf_token":csrf,"client_name":"Codex","scope":scope,"identity":identity,"user":user,
+        "csrf_token":csrf,"client_name":crate::providers::by_id(provider).map(|p|p.client_name),"provider_id":provider,"scope":scope,"identity":identity,"user":user,
         "account_unavailable":account_unavailable,"expires_in":600})),
     )
         .into_response())
@@ -160,15 +173,36 @@ pub(crate) async fn bootstrap(
 pub(crate) async fn device_bootstrap(
     State(state): State<UserState>,
     headers: HeaderMap,
+    Query(query): Query<DeviceBootstrap>,
 ) -> Result<Response> {
+    if !codex2api_core::supported_provider(&query.provider) {
+        return Err(failure());
+    }
+    let policy = crate::providers::by_id(&query.provider).ok_or_else(failure)?;
     start(
         state,
         headers,
-        "device".into(),
-        codex2api_version::OAUTH_SCOPE.into(),
+        policy.device_flow.into(),
+        policy.scopes.into(),
     )
     .await
 }
+#[derive(Deserialize)]
+pub(crate) struct DeviceBootstrap {
+    #[serde(default = "codex2api_core::default_provider")]
+    provider: String,
+}
+fn flow_provider(raw: &str) -> Result<&'static str> {
+    if let Some(policy) = crate::providers::by_device_flow(raw) {
+        return Ok(policy.id);
+    }
+    let request: AuthorizationRequest = serde_json::from_str(raw).map_err(|_| failure())?;
+    if !request.valid() {
+        return Err(failure());
+    }
+    Ok(request.provider())
+}
+
 async fn read_flow(
     state: &UserState,
     headers: &HeaderMap,
@@ -198,7 +232,7 @@ pub(crate) async fn cancel(
     Json(input): Json<Reset>,
 ) -> Result<Response> {
     let (browser, raw) = read_flow(&state, &headers, &input.request_id, &input.csrf_token).await?;
-    let result = if raw == "device" {
+    let result = if crate::providers::by_device_flow(&raw).is_some() {
         json!({"cancelled":true})
     } else {
         let request: AuthorizationRequest = serde_json::from_str(&raw).map_err(|_| failure())?;
@@ -254,7 +288,8 @@ pub(crate) async fn identify(
     headers: HeaderMap,
     Json(input): Json<Identify>,
 ) -> Result<Json<Value>> {
-    read_flow(&state, &headers, &input.request_id, &input.csrf_token).await?;
+    let (_, raw) = read_flow(&state, &headers, &input.request_id, &input.csrf_token).await?;
+    let provider = flow_provider(&raw)?;
     state
         .storage
         .clear_browser_identity(&input.request_id)
@@ -264,7 +299,7 @@ pub(crate) async fn identify(
             let user = auth::verify_user(&state, &input.username, input.password).await?;
             state
                 .storage
-                .user_platform_account(&user.id, codex2api_core::CHATGPT)
+                .user_platform_account(&user.id, provider)
                 .await?
                 .ok_or_else(|| UserError::bad("该平台账户已停用，请联系管理员"))?
         }
@@ -286,7 +321,7 @@ pub(crate) async fn identify(
                 .storage
                 .virtual_account_by_username(input.username.trim())
                 .await?;
-            let Some(account) = account.filter(|a| a.provider_id == codex2api_core::CHATGPT) else {
+            let Some(account) = account.filter(|a| a.provider_id == provider) else {
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 return Err(UserError::bad("用户名或密码错误，或账户已停用"));
             };
@@ -349,6 +384,9 @@ pub(crate) async fn approve(
         return Err(failure());
     }
     let account = approved_account(&state, &input).await?;
+    if account.provider_id != request.provider() {
+        return Err(failure());
+    }
     let code = oauth_secret();
     if !state
         .storage
@@ -387,10 +425,13 @@ pub(crate) async fn device_approve(
     Json(input): Json<Approve>,
 ) -> Result<Response> {
     let (browser, raw) = read_flow(&state, &headers, &input.request_id, &input.csrf_token).await?;
-    if raw != "device" {
+    if !crate::providers::by_device_flow(&raw).is_some() {
         return Err(failure());
     }
     let account = approved_account(&state, &input).await?;
+    if account.provider_id != flow_provider(&raw)? {
+        return Err(failure());
+    }
     let user_code = input
         .user_code
         .as_deref()
@@ -411,7 +452,9 @@ pub(crate) async fn device_approve(
                 csrf: &input.csrf_token,
                 account: &account,
                 code: &oauth_secret(),
-                scopes: codex2api_version::OAUTH_SCOPE,
+                scopes: crate::providers::by_id(&account.provider_id)
+                    .ok_or_else(failure)?
+                    .scopes,
             },
         )
         .await?

@@ -1,5 +1,5 @@
 use crate::{ModelPrice, Result, Storage, StorageError};
-use codex2api_core::{MODEL_PRESET_VERSION, SupportedModel};
+use codex2api_core::SupportedModel;
 
 pub fn preset_model_prices(provider: &str, model: &str) -> Option<Vec<ModelPrice>> {
     Some(
@@ -15,7 +15,7 @@ pub fn preset_model_prices(provider: &str, model: &str) -> Option<Vec<ModelPrice
                 cached_rate: price.cached_rate,
                 cache_write_rate: price.cache_write_rate,
                 output_rate: price.output_rate,
-                source: format!("preset:{MODEL_PRESET_VERSION}"),
+                source: format!("preset:{}", codex2api_core::model_preset_source(provider).1),
                 revision: 1,
             })
             .collect(),

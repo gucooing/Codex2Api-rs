@@ -24,6 +24,8 @@
 
 数据用 SQLite（默认 `data/codex2api.sqlite`）。管理端只有一个管理员，账户密码登录，首次启动默认 `admin` / `admin`。
 
+Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授权，支持本地套餐、钱包购买、模型计价和用量记录。`cgrok` 的默认服务根与 `ccodex` 同域，使用 `/api/oauth/grok`。模型可用性由管理端配置及套餐决定，自定义模型无需内置名单认证；官方数据仅作预设。接入方式及能力边界见 [Grok 渠道](docs/GROK.md)。
+
 ## 从源码构建
 
 管理前端 `frontend/` 和用户前端 `frontend-user/` 分别使用 Next.js 静态导出，OAuth 确认页面属于用户前端。先安装 Node.js 24，再执行：

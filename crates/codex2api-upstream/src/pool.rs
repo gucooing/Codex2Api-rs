@@ -17,6 +17,7 @@ use crate::stream::SseForwardStream;
 #[derive(Clone)]
 pub struct UpstreamPool {
     auth: AuthService,
+    grok: crate::grok::GrokUpstream,
     clients: Arc<tokio::sync::Mutex<HashMap<String, Arc<UpstreamClient>>>>,
     stream_idle_timeout: Option<Duration>,
 }
@@ -24,6 +25,9 @@ pub struct UpstreamPool {
 impl UpstreamPool {
     pub fn new(auth: AuthService) -> Self {
         Self {
+            grok: crate::grok::GrokUpstream::new(codex2api_auth::grok::GrokAuthService::new(
+                auth.storage().ok().cloned(),
+            )),
             auth,
             clients: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             stream_idle_timeout: None,
@@ -38,9 +42,53 @@ impl UpstreamPool {
     pub fn auth(&self) -> &AuthService {
         &self.auth
     }
+    pub fn grok(&self) -> &crate::grok::GrokUpstream {
+        &self.grok
+    }
+    pub fn with_grok(mut self, grok: crate::grok::GrokUpstream) -> Self {
+        self.grok = grok;
+        self
+    }
+    pub async fn refresh_supplier_auth(
+        &self,
+        account: &codex2api_storage::SupplierAccount,
+        rejected: &str,
+    ) -> Result<()> {
+        match account.provider_id.as_str() {
+            codex2api_core::CHATGPT => {
+                self.auth
+                    .refresh_rejected_token(&account.id, rejected)
+                    .await?;
+            }
+            codex2api_core::GROK => {
+                self.grok
+                    .auth()
+                    .refresh_grok(&account.id, true, Some(rejected))
+                    .await?;
+            }
+            _ => {
+                return Err(crate::UpstreamError::InvalidRequest(
+                    "Unsupported provider".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
 
     /// Return the isolated client for `account_id`, creating it on first use.
     pub async fn get(&self, account_id: &str) -> Result<Arc<UpstreamClient>> {
+        if self
+            .auth
+            .storage()?
+            .require_account(account_id)
+            .await?
+            .provider_id
+            != codex2api_core::CHATGPT
+        {
+            return Err(crate::UpstreamError::InvalidRequest(
+                "Supplier provider mismatch".into(),
+            ));
+        }
         let mut map = self.clients.lock().await;
         let clients = self.auth.account_http(account_id).await?;
         if let Some(existing) = map.get(account_id)
@@ -49,6 +97,11 @@ impl UpstreamPool {
             return Ok(existing.clone());
         }
         let ctx = self.auth.accounts().load_context(account_id).await?;
+        if ctx.account.provider_id != codex2api_core::CHATGPT {
+            return Err(crate::UpstreamError::InvalidRequest(
+                "Supplier provider mismatch".into(),
+            ));
+        }
         let mut client = UpstreamClient::from_context(ctx, Some(self.auth.clone()))?;
         client.use_account_http(clients);
         if let Some(timeout) = self.stream_idle_timeout {
@@ -61,6 +114,7 @@ impl UpstreamPool {
 
     pub async fn evict(&self, account_id: &str) {
         self.clients.lock().await.remove(account_id);
+        self.grok.auth().evict_account_http(account_id).await;
     }
 
     pub async fn stream_responses(

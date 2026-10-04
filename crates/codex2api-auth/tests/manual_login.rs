@@ -43,7 +43,7 @@ async fn mock_issuer() -> (String, Requests, tokio::task::JoinHandle<()>) {
                 capture.lock().unwrap().push(("refresh".into(), headers, request.clone()));
                 if request["refresh_token"] == "invalid-refresh" { return Json(json!({})); }
                 let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
-                    "email":"refresh@example.com", "https://api.openai.com/auth":{"chatgpt_user_id":"refresh-user","chatgpt_account_id":"refresh-account","chatgpt_plan_type":"plus"}
+                    "email":"refresh@example.com", "https://api.openai.com/auth":{"chatgpt_user_id":if request["refresh_token"]=="foreign-refresh"{"foreign-user"}else{"refresh-user"},"chatgpt_account_id":"refresh-account","chatgpt_plan_type":"plus"}
                 })).unwrap());
                 return Json(json!({"id_token":format!("header.{payload}.signature"),"access_token":"refreshed-access","refresh_token":"rotated-refresh"}));
             }
@@ -266,6 +266,40 @@ async fn refresh_token_login_uses_the_draft_identity_proxy_and_persists_only_the
     assert_eq!(
         done.tokens.refresh_token.as_deref(),
         Some("rotated-refresh")
+    );
+    assert_eq!(storage.list_accounts().await.unwrap().len(), 1);
+    let relogin = auth
+        .relogin_with_refresh_token(&done.account.id, "new-refresh")
+        .await
+        .unwrap();
+    assert_eq!(relogin.account.id, done.account.id);
+    assert_eq!(
+        relogin.account.installation_id,
+        done.account.installation_id
+    );
+    assert_eq!(
+        relogin.account.http_fingerprint_json,
+        done.account.http_fingerprint_json
+    );
+    assert!(relogin.reused_existing);
+    let before = storage
+        .load_supplier_tokens(&done.account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        auth.relogin_with_refresh_token(&done.account.id, "foreign-refresh")
+            .await,
+        Err(codex2api_auth::AuthError::AccountMismatch)
+    ));
+    assert_eq!(
+        storage
+            .load_supplier_tokens(&done.account.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .raw_auth_json,
+        before.raw_auth_json
     );
     assert_eq!(storage.list_accounts().await.unwrap().len(), 1);
     let captured = requests.lock().unwrap().clone();

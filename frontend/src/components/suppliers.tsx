@@ -1,8 +1,8 @@
 "use client";
 import { SupplierTagEditor, SupplierTagsBatchDialog } from "@/components/supplier-tags";
-import { toggleSupplierSelection } from "@/lib/supplier-selection";
+import { toggleSupplierSelection, selectedSupplierProvider } from "@/lib/supplier-selection";
 import { Checkbox } from "@/components/ui/checkbox";
-import { subscriptionLabel } from "@/lib/subscriptions";
+import { supplierSubscriptionLabel as subscriptionLabel } from "@/lib/subscriptions";
 import type { SupplierTag } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
@@ -12,8 +12,6 @@ import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from
 import { useDialogFocus, validateForm } from "@/lib/actions";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -44,7 +42,6 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -70,9 +67,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { date } from "@/lib/format";
+import { tokenCount } from "@/lib/usage-display";
 import { Separator } from "@/components/ui/separator";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSupplierQuotas, useQuotaClock } from "@/hooks/use-supplier-quotas";
 import {
   supplierStatusLabel,
@@ -82,7 +80,7 @@ import {
   cycleUsageTitle,
   percentLabel,
 } from "@/lib/supplier-state";
-import { duration, tokenCount } from "@/lib/usage-display";
+
 import { Plus, Search, RotateCcw, RefreshCw, ArrowRight } from "lucide-react";
 import {
   request,
@@ -91,17 +89,19 @@ import {
   type OAuth,
   type Proxy,
   type Supplier,
-  type SupplierQuota,
-  type Json,
 } from "@/lib/api";
 import { mergeOAuth } from "@/lib/domain";
+import { parseRefreshTokenLines } from "@/lib/refresh-tokens";
+import { supplierChannel } from "@/components/providers";
+import { toast } from "sonner";
 
 import { useQueryId, useResource } from "@/lib/hooks";
 import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
 import { useIsMobile } from "@/hooks/use-mobile";
 
-const validSupplierFilters = (value: { status: string }) =>
-  ["", "active", "disabled", "error", "quota_exhausted"].includes(value.status);
+const validSupplierFilters = (value: { status: string; provider_id: string }) =>
+  ["", "active", "disabled", "error", "quota_exhausted"].includes(value.status) &&
+  ["", "chatgpt", "grok"].includes(value.provider_id);
 
 export function SuppliersPage() {
   const tableColumns0 = useColumnVisibility(
@@ -120,7 +120,7 @@ export function SuppliersPage() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchAccounts, setBatchAccounts] = useState<Supplier[]>([]);
   useErrorToast(tags.error);
-  const empty = { search: "", status: "", tag: "" };
+  const empty = { search: "", provider_id: "", status: "", tag: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters(
     "suppliers.filters",
     empty,
@@ -139,11 +139,16 @@ export function SuppliersPage() {
       `${item.display_name ?? ""} ${item.email ?? ""} ${item.provider_id}`
         .toLowerCase()
         .includes(applied.search.trim().toLowerCase()) &&
+      (!applied.provider_id || item.provider_id === applied.provider_id) &&
       (!applied.status || item.status === applied.status) &&
       (!applied.tag || item.tag_ids?.includes(applied.tag)),
   );
   const pagination = useTablePagination(items, applied, resource.data !== undefined);
   const selectedAccounts = items.filter((item) => selected.includes(item.id));
+  const selectedProvider = selectedSupplierProvider(selectedAccounts);
+  const tagOptions = (tags.data?.items ?? []).filter(
+    (tag) => !filters.provider_id || tag.provider_id === filters.provider_id,
+  );
   const pageIds = pagination.rows.map((item) => item.id);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.includes(id));
   const somePageSelected = pageIds.some((id) => selected.includes(id));
@@ -243,228 +248,216 @@ export function SuppliersPage() {
   return (
     <>
       <Card>
-        <CardContent className="flex flex-wrap items-end gap-3">
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setApplied({ ...filters });
-              setSelected([]);
-              resource.reload();
-            }}
-          >
-            <Field className="w-44">
-              <FieldLabel
-                htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("搜索账户"))}
-              >
-                {"搜索账户"}
-              </FieldLabel>
-              <Input
-                id={fieldId + "-field-3" + "-" + encodeURIComponent(String("搜索账户"))}
-                aria-label={"搜索账户"}
-                value={filters.search}
-                onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-                placeholder="名称、邮箱或提供商"
-              />
-            </Field>
-            <Field className="w-44">
-              <FieldLabel
-                htmlFor={fieldId + "-field-4" + "-" + encodeURIComponent(String("账户状态"))}
-              >
-                {"账户状态"}
-              </FieldLabel>
-              <Select
-                value={filters.status}
-                onValueChange={(next) =>
-                  ((status) => setFilters({ ...filters, status }))(
-                    next ===
-                      fieldId + "-field-4" + "-" + encodeURIComponent(String("账户状态")) + "-empty"
-                      ? ""
-                      : next,
-                  )
-                }
-              >
-                <SelectTrigger
-                  id={fieldId + "-field-4" + "-" + encodeURIComponent(String("账户状态"))}
-                  aria-label={"账户状态"}
-                  data-required={false ? "true" : undefined}
-                  data-empty={String(filters.status) === "" ? "true" : undefined}
-                  className="w-full"
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <form
+              className="grid w-full grid-cols-2 items-end gap-3 sm:flex sm:w-auto sm:flex-wrap"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setApplied({ ...filters });
+                setSelected([]);
+                resource.reload();
+              }}
+            >
+              <Field className="min-w-0 sm:w-40">
+                <FieldLabel htmlFor={`${fieldId}-search`}>搜索账户</FieldLabel>
+                <Input
+                  id={`${fieldId}-search`}
+                  value={filters.search}
+                  placeholder="名称或邮箱"
+                  onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+                />
+              </Field>
+              <Field className="min-w-0 sm:w-40">
+                <FieldLabel htmlFor={`${fieldId}-platform`}>平台</FieldLabel>
+                <Select
+                  value={filters.provider_id || "all"}
+                  onValueChange={(value) =>
+                    setFilters({ ...filters, provider_id: value === "all" ? "" : value, tag: "" })
+                  }
                 >
-                  <SelectValue
-                    placeholder={
-                      [
-                        { value: "", label: "全部状态" },
-                        { value: "active", label: "启用" },
-                        { value: "disabled", label: "停用" },
-                        { value: "error", label: "授权失效" },
-                        { value: "quota_exhausted", label: "配额耗尽" },
-                      ].find((option) => option.value === "")?.label ?? "请选择"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  {[
-                    { value: "", label: "全部状态" },
-                    { value: "active", label: "启用" },
-                    { value: "disabled", label: "停用" },
-                    { value: "error", label: "授权失效" },
-                    { value: "quota_exhausted", label: "配额耗尽" },
-                  ].map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={
-                        option.value ||
-                        fieldId +
-                          "-field-4" +
-                          "-" +
-                          encodeURIComponent(String("账户状态")) +
-                          "-empty"
-                      }
-                      disabled={"disabled" in option && Boolean(option.disabled)}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <div className="flex flex-wrap items-center gap-2 self-end">
-              <Button type="submit">
-                <Search />
-                查询
-              </Button>
+                  <SelectTrigger id={`${fieldId}-platform`} className="w-full">
+                    <SelectValue placeholder="全部平台" />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    <SelectItem value="all">全部平台</SelectItem>
+                    <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                    <SelectItem value="grok">Grok</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="min-w-0 sm:w-40">
+                <FieldLabel htmlFor={`${fieldId}-status`}>状态</FieldLabel>
+                <Select
+                  value={filters.status || "all"}
+                  onValueChange={(value) =>
+                    setFilters({ ...filters, status: value === "all" ? "" : value })
+                  }
+                >
+                  <SelectTrigger id={`${fieldId}-status`} className="w-full">
+                    <SelectValue placeholder="全部状态" />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    <SelectItem value="all">全部状态</SelectItem>
+                    {[
+                      { value: "active", label: "启用" },
+                      { value: "disabled", label: "停用" },
+                      { value: "error", label: "授权失效" },
+                      { value: "quota_exhausted", label: "配额耗尽" },
+                    ].map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="min-w-0 sm:w-40">
+                <FieldLabel htmlFor={`${fieldId}-tag`}>标签</FieldLabel>
+                <Select
+                  value={filters.tag || "all"}
+                  onValueChange={(value) =>
+                    setFilters({ ...filters, tag: value === "all" ? "" : value })
+                  }
+                >
+                  <SelectTrigger id={`${fieldId}-tag`} className="w-full">
+                    <SelectValue placeholder="全部标签" />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    <SelectItem value="all">全部标签</SelectItem>
+                    {tagOptions.map((tag) => (
+                      <SelectItem key={tag.id} value={tag.id}>
+                        {tag.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <div className="col-span-2 flex items-center gap-2">
+                <Button type="submit">
+                  <Search />
+                  查询
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setFilters(empty);
+                    setApplied(empty);
+                    setSelected([]);
+                    resource.reload();
+                  }}
+                >
+                  <RotateCcw />
+                  重置
+                </Button>
+              </div>
+            </form>
+            <div className="ml-auto flex items-center gap-2">
               <Button
                 type="button"
-                variant="secondary"
-                onClick={() => {
-                  setFilters(empty);
-                  setApplied(empty);
-                  setSelected([]);
-                  resource.reload();
-                }}
+                variant="ghost"
+                size="icon-sm"
+                aria-label="刷新供应账户"
+                title="刷新"
+                onClick={resource.reload}
+                disabled={resource.refreshing}
               >
-                <RotateCcw />
-                重置
+                <RefreshCw />
               </Button>
-            </div>
-          </form>
-          <Field className="w-44">
-            <FieldLabel htmlFor={`${fieldId}-tag`}>标签号池</FieldLabel>
-            <Select
-              value={filters.tag || "all"}
-              onValueChange={(tag) => {
-                setFilters({ ...filters, tag: tag === "all" ? "" : tag });
-                setApplied({ ...applied, tag: tag === "all" ? "" : tag });
-                setSelected([]);
-              }}
-            >
-              <SelectTrigger id={`${fieldId}-tag`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部标签</SelectItem>
-                {(tags.data?.items ?? []).map((tag) => (
-                  <SelectItem key={tag.id} value={tag.id}>
-                    {tag.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
-            <span className="text-sm text-muted-foreground">
-              已选择 {selectedAccounts.length} 个
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!resource.ready || batchBusy || !items.length}
-              onClick={() => setSelected(items.map((item) => item.id))}
-            >
-              选择全部筛选结果（{items.length}）
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={!selectedAccounts.length || batchBusy}
-              onClick={() => setSelected([])}
-            >
-              取消选择
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!resource.ready || batchBusy || !selectedAccounts.length}
-              onClick={() => {
-                setBatchAccounts(selectedAccounts);
-                setBatchOpen(true);
-              }}
-            >
-              更新标签
-            </Button>
-
-            <Button type="button" variant="ghost" size="sm" onClick={resource.reload}>
-              <RefreshCw />
-              刷新
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="outline" size="sm" aria-label="显示列">
-                  <Columns3 />
-                  显示列
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>
-                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
-                </DropdownMenuLabel>
-                {tableColumns0.labels.map((label) => (
-                  <DropdownMenuCheckboxItem
-                    key={label}
-                    checked={tableColumns0.isVisible(label)}
-                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
-                    onSelect={(event) => event.preventDefault()}
-                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="显示列"
+                    title="显示列"
                   >
-                    {label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
-                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <ToggleGroup
-              className="hidden md:flex"
-              type="single"
-              variant="outline"
-              size="sm"
-              value={view}
-              onValueChange={(next) => {
-                if (next === "table" || next === "cards") setView(next);
-              }}
-              aria-label="视图切换"
-            >
-              <ToggleGroupItem value="table" aria-label="表格视图">
-                <Table2 />
-                表格
-              </ToggleGroupItem>
-              <ToggleGroupItem value="cards" aria-label="卡片视图">
-                <LayoutGrid />
-                卡片
-              </ToggleGroupItem>
-            </ToggleGroup>
-            {
+                    <Columns3 />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>
+                    {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                  </DropdownMenuLabel>
+                  {tableColumns0.labels.map((label) => (
+                    <DropdownMenuCheckboxItem
+                      key={label}
+                      checked={tableColumns0.isVisible(label)}
+                      disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) =>
+                        tableColumns0.setVisible(label, checked === true)
+                      }
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                className="hidden md:inline-flex"
+                aria-label={view === "table" ? "切换为卡片视图" : "切换为表格视图"}
+                title={view === "table" ? "切换为卡片视图" : "切换为表格视图"}
+                onClick={() => setView(view === "table" ? "cards" : "table")}
+              >
+                {view === "table" ? <LayoutGrid /> : <Table2 />}
+              </Button>
               <Button type="button" onClick={() => setAdd(true)}>
                 <Plus />
                 添加供应账户
               </Button>
-            }
+            </div>
           </div>
+          {selectedAccounts.length > 0 && (
+            <div
+              role="toolbar"
+              aria-label="已选账户操作"
+              className="flex flex-wrap items-center gap-2 border-t pt-3"
+            >
+              <Badge variant="secondary">已选 {selectedAccounts.length} 个账户</Badge>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!resource.ready || batchBusy || !selectedProvider}
+                onClick={() => {
+                  setBatchAccounts(selectedAccounts);
+                  setBatchOpen(true);
+                }}
+              >
+                更新标签
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={!resource.ready || batchBusy || selectedAccounts.length === items.length}
+                onClick={() => setSelected(items.map((item) => item.id))}
+              >
+                全选筛选结果（{items.length}）
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={batchBusy}
+                onClick={() => setSelected([])}
+              >
+                清除选择
+              </Button>
+              {!selectedProvider && (
+                <span className="text-xs text-muted-foreground">标签操作仅支持同平台账户</span>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
       {mobile || view === "table" ? (
@@ -521,7 +514,7 @@ export function SuppliersPage() {
                       >
                         <TableCell role="cell" className="w-9" data-label="选择">
                           <Checkbox
-                            aria-label={`选择供应账户 ${item.display_name || item.email || item.id}`}
+                            aria-label={`选择供应账户 ${item.email || item.display_name || item.id}`}
                             checked={selected.includes(item.id)}
                             disabled={!resource.ready || batchBusy}
                             onCheckedChange={(checked) =>
@@ -537,7 +530,7 @@ export function SuppliersPage() {
                         >
                           <div className="max-md:hidden">
                             <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
-                              <strong>{item.display_name || item.email || item.id}</strong>
+                              <strong>{item.email || item.display_name || item.id}</strong>
                             </Link>
                             <CardDescription>{item.email}</CardDescription>
                           </div>
@@ -548,15 +541,15 @@ export function SuppliersPage() {
                                 variant="ghost"
                                 className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
                                 aria-label={
-                                  "查看详情：" + String(item.display_name || item.email || item.id)
+                                  "查看详情：" + String(item.email || item.display_name || item.id)
                                 }
                               >
                                 <span className="min-w-0 flex-1">
                                   <span className="block truncate font-medium">
-                                    {item.display_name || item.email || item.id}
+                                    {item.email || item.display_name || item.id}
                                   </span>
                                   <span className="block truncate text-xs text-muted-foreground">
-                                    {subscriptionLabel(item.plan_type)}
+                                    {subscriptionLabel(item.plan_type, item.provider_id)}
                                   </span>
                                 </span>
                                 <ChevronRight className="size-3 shrink-0" />
@@ -574,7 +567,7 @@ export function SuppliersPage() {
                                     <Link
                                       href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}
                                     >
-                                      <strong>{item.display_name || item.email || item.id}</strong>
+                                      <strong>{item.email || item.display_name || item.id}</strong>
                                     </Link>
                                     <CardDescription>{item.email}</CardDescription>
                                   </div>
@@ -584,7 +577,7 @@ export function SuppliersPage() {
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
                                     {item.provider_id}
                                     <CardDescription>
-                                      {subscriptionLabel(item.plan_type)}
+                                      {subscriptionLabel(item.plan_type, item.provider_id)}
                                     </CardDescription>
                                   </div>
                                 </Field>
@@ -686,7 +679,9 @@ export function SuppliersPage() {
                           role="cell"
                         >
                           {item.provider_id}
-                          <CardDescription>{subscriptionLabel(item.plan_type)}</CardDescription>
+                          <CardDescription>
+                            {subscriptionLabel(item.plan_type, item.provider_id)}
+                          </CardDescription>
                         </TableCell>
                         <TableCell
                           hidden={!tableColumns0.isVisible("状态")}
@@ -809,14 +804,14 @@ export function SuppliersPage() {
               <CardContent className="space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <Checkbox
-                    aria-label={`选择供应账户 ${item.display_name || item.email || item.id}`}
+                    aria-label={`选择供应账户 ${item.email || item.display_name || item.id}`}
                     checked={selected.includes(item.id)}
                     disabled={!resource.ready || batchBusy}
                     onCheckedChange={(checked) => toggleSelection([item.id], checked === true)}
                   />
                   <div className="min-w-0 flex-1 break-words">
                     <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
-                      <strong>{item.display_name || item.email || item.id}</strong>
+                      <strong>{item.email || item.display_name || item.id}</strong>
                     </Link>
                     <CardDescription>{item.email || "未提供邮箱"}</CardDescription>
                   </div>
@@ -837,7 +832,10 @@ export function SuppliersPage() {
                 <FieldGroup className="grid grid-cols-2 gap-x-3 gap-y-2">
                   {[
                     { label: "提供商", value: item.provider_id },
-                    { label: "上游订阅", value: subscriptionLabel(item.plan_type) },
+                    {
+                      label: "上游订阅",
+                      value: subscriptionLabel(item.plan_type, item.provider_id),
+                    },
                     { label: "最近使用", value: date(item.last_used_at) },
                   ].map(({ label, value }) => (
                     <Field
@@ -1008,7 +1006,6 @@ export function SupplierDetail() {
   const resource = useResource<Supplier>(id ? `/suppliers/${encodeURIComponent(id)}` : null);
   const [tab, setTab] = useState("info");
   const [relogin, setRelogin] = useState(false);
-  const [officialUsername, setOfficialUsername] = useState<string>();
   useErrorToast(id === "" ? "缺少供应账户编号。" : undefined);
   useErrorToast(resource.error ? resource.error : undefined);
   if (id === "")
@@ -1022,12 +1019,29 @@ export function SupplierDetail() {
     );
 
   const account = resource.data;
+  const ChannelOfficialData = supplierChannel(account?.provider_id).OfficialData;
+  const ChannelModels = supplierChannel(account?.provider_id).Models;
+  const profileRefresh = supplierChannel(account?.provider_id).profileRefresh;
   return (
     <>
       <div className="flex items-center justify-end gap-2">
-        <CardDescription className="mr-auto truncate">
-          {officialUsername ?? account?.username ?? "—"}
-        </CardDescription>
+        <CardDescription className="mr-auto truncate">{account?.email ?? "—"}</CardDescription>
+        {profileRefresh && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!resource.ready || actions.isBusy("supplier-profile")}
+            onClick={() =>
+              void actions.run("supplier-profile", async () => {
+                await request(profileRefresh(id), { method: "POST" });
+                resource.reload();
+              })
+            }
+          >
+            刷新官方资料
+          </Button>
+        )}
+
         <Button
           variant="outline"
           size="sm"
@@ -1048,10 +1062,11 @@ export function SupplierDetail() {
               ["tags", "标签"],
               ["fingerprint", "指纹与网络"],
               ["quota", "官方额度"],
+              ...(ChannelModels ? [["models", "官方模型"]] : []),
               ["local-usage", "本地用量"],
-              ["usage", "官方用量"],
+              ["usage", supplierChannel(account?.provider_id).settingsLabel],
               ["details", "官方资料"],
-              ["credits", "重置额度"],
+              ["credits", supplierChannel(account?.provider_id).creditsLabel],
             ].map(([key, text]) => (
               <TabsTrigger key={key} value={key}>
                 {text}
@@ -1071,6 +1086,7 @@ export function SupplierDetail() {
                 <FieldGroup className="grid gap-4 sm:grid-cols-2 gap-3">
                   {[
                     { label: "提供商", value: account?.provider_id },
+                    { label: "邮箱", value: account?.email },
                     {
                       label: "状态",
                       value: (
@@ -1087,7 +1103,10 @@ export function SupplierDetail() {
                         </Badge>
                       ),
                     },
-                    { label: "上游订阅", value: subscriptionLabel(account?.plan_type) },
+                    {
+                      label: "上游订阅",
+                      value: subscriptionLabel(account?.plan_type, account?.provider_id),
+                    },
                     { label: "上游空间编号", value: account?.chatgpt_account_id },
                     { label: "上游用户编号", value: account?.chatgpt_user_id },
                     { label: "创建时间", value: date(account?.created_at) },
@@ -1157,19 +1176,16 @@ export function SupplierDetail() {
             />
           )}
           {tab === "local-usage" && <LocalUsage account={account} />}
+          {tab === "models" && ChannelModels && <ChannelModels id={id} />}
           {["quota", "usage", "details", "credits"].includes(tab) && (
-            <OfficialData
-              key={tab}
-              id={id}
-              section={tab}
-              onUsername={tab === "usage" ? setOfficialUsername : undefined}
-            />
+            <ChannelOfficialData key={tab} id={id} section={tab} />
           )}
         </TabsContent>
       </Tabs>
       {relogin && (
         <OAuthWizard
           supplierId={id}
+          supplierProvider={account?.provider_id}
           onClose={() => setRelogin(false)}
           onComplete={() => {
             setRelogin(false);
@@ -1181,7 +1197,6 @@ export function SupplierDetail() {
   );
 }
 function LocalUsage({ account }: { account?: Supplier }) {
-  const value = account?.usage ? ({ stats: account.usage } as unknown as Json) : null;
   const now = useQuotaClock();
   return (
     <Card>
@@ -1208,166 +1223,18 @@ function LocalUsage({ account }: { account?: Supplier }) {
             <FieldDescription>暂无官方额度周期，暂不能统计周期用量。</FieldDescription>
           )}
         </FieldGroup>
-        <OfficialFields section="usage" value={value} />
+        <FieldGroup className="grid gap-3 sm:grid-cols-2">
+          <Field>
+            <FieldTitle>累计 Token</FieldTitle>
+            <FieldDescription>{tokenCount(account?.usage?.lifetime_tokens)}</FieldDescription>
+          </Field>
+          <Field>
+            <FieldTitle>单日峰值 Token</FieldTitle>
+            <FieldDescription>{tokenCount(account?.usage?.peak_daily_tokens)}</FieldDescription>
+          </Field>
+        </FieldGroup>
       </CardContent>
     </Card>
-  );
-}
-export function FingerprintFields({
-  value,
-  onChange,
-  proxies,
-}: {
-  value: Fingerprint;
-  onChange: (value: Fingerprint) => void;
-  proxies: Proxy[];
-}) {
-  const fieldId = useId();
-  const actions = useActions();
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {(
-        [
-          ["os_type", "操作系统"],
-          ["os_version", "系统版本"],
-          ["arch", "架构"],
-          ["terminal", "终端标识"],
-        ] as const
-      ).map(([key, label], fieldIndex7) => (
-        <Field key={key}>
-          <FieldLabel
-            htmlFor={
-              fieldId +
-              "-field-8" +
-              "-" +
-              String(fieldIndex7) +
-              "-" +
-              encodeURIComponent(String(label))
-            }
-          >
-            {label}
-          </FieldLabel>
-          <Input
-            id={
-              fieldId +
-              "-field-8" +
-              "-" +
-              String(fieldIndex7) +
-              "-" +
-              encodeURIComponent(String(label))
-            }
-            aria-label={label}
-            required
-            maxLength={key === "terminal" ? 256 : 128}
-            value={value[key]}
-            onChange={(e) => onChange({ ...value, [key]: e.target.value })}
-          />
-        </Field>
-      ))}
-      <Field>
-        <FieldLabel htmlFor={fieldId + "-field-9" + "-" + encodeURIComponent(String("出站代理"))}>
-          {"出站代理"}
-        </FieldLabel>
-        <Select
-          value={value.proxy_id ?? ""}
-          onValueChange={(next) =>
-            ((proxy_id) => onChange({ ...value, proxy_id: proxy_id || null }))(
-              next ===
-                fieldId + "-field-9" + "-" + encodeURIComponent(String("出站代理")) + "-empty"
-                ? ""
-                : next,
-            )
-          }
-        >
-          <SelectTrigger
-            id={fieldId + "-field-9" + "-" + encodeURIComponent(String("出站代理"))}
-            aria-label={"出站代理"}
-            data-required={false ? "true" : undefined}
-            data-empty={String(value.proxy_id ?? "") === "" ? "true" : undefined}
-            className="w-full"
-          >
-            <SelectValue
-              placeholder={
-                [
-                  { value: "", label: "不使用代理" },
-                  ...proxies.map((proxy) => ({
-                    value: proxy.id,
-                    label: `${proxy.name} · ${proxy.display_url}`,
-                  })),
-                ].find((option) => option.value === "")?.label ?? "请选择"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent position="popper">
-            {[
-              { value: "", label: "不使用代理" },
-              ...proxies.map((proxy) => ({
-                value: proxy.id,
-                label: `${proxy.name} · ${proxy.display_url}`,
-              })),
-            ].map((option) => (
-              <SelectItem
-                key={option.value}
-                value={
-                  option.value ||
-                  fieldId + "-field-9" + "-" + encodeURIComponent(String("出站代理")) + "-empty"
-                }
-                disabled={"disabled" in option && Boolean(option.disabled)}
-              >
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-      <Field>
-        <FieldLabel htmlFor={fieldId + "-field-10" + "-" + encodeURIComponent(String("时区"))}>
-          {"时区"}
-        </FieldLabel>
-        <div className="flex items-center gap-2">
-          <Input
-            id={fieldId + "-field-10" + "-" + encodeURIComponent(String("时区"))}
-            aria-label={"时区"}
-            aria-describedby={
-              fieldId + "-field-10" + "-" + encodeURIComponent(String("时区")) + "-hint"
-            }
-            value={value.timezone}
-            onChange={(e) => onChange({ ...value, timezone: e.target.value })}
-            placeholder="Asia/Taipei"
-          />
-          {value.proxy_id && proxies.some((proxy) => proxy.id === value.proxy_id) && (
-            <Button
-              type="button"
-              variant={false ? "destructive" : "outline"}
-              className="shrink-0"
-              disabled={false || actions.isBusy("components\\suppliers.tsx:action:11")}
-              onClick={() =>
-                void actions.run(
-                  "components\\suppliers.tsx:action:11",
-                  async () => {
-                    const result = await request<{ timezone: string }>(
-                      `/proxies/${value.proxy_id}/check/timezone`,
-                      { method: "POST", body: {} },
-                    );
-                    onChange({ ...value, timezone: result.timezone });
-                  },
-                  { confirm: undefined, danger: false, success: undefined },
-                )
-              }
-            >
-              应用代理时区
-            </Button>
-          )}
-        </div>
-        {Boolean("留空保留请求中的时区。") && (
-          <FieldDescription
-            id={fieldId + "-field-10" + "-" + encodeURIComponent(String("时区")) + "-hint"}
-          >
-            {"用于对话和上下文压缩的日期与环境信息；留空保留请求中的时区。"}
-          </FieldDescription>
-        )}
-      </Field>
-    </div>
   );
 }
 function FingerprintEditor({
@@ -1394,6 +1261,7 @@ function FingerprintEditor({
     ...changes,
   };
   useErrorToast(proxies.error);
+  const ChannelFingerprintFields = supplierChannel(account?.provider_id).FingerprintFields;
   return (
     <Card>
       <CardHeader>
@@ -1448,7 +1316,7 @@ function FingerprintEditor({
                     </CardTitle>
                     <CardDescription>每个供应账户独立保存系统、终端和网络设置。</CardDescription>
                   </div>
-                  <FingerprintFields
+                  <ChannelFingerprintFields
                     value={value}
                     onChange={setChanges}
                     proxies={proxies.data?.items ?? []}
@@ -1477,18 +1345,23 @@ function FingerprintEditor({
 }
 export function OAuthWizard({
   supplierId,
+  supplierProvider = "chatgpt",
   onClose,
   onComplete,
 }: {
   supplierId?: string;
+  supplierProvider?: string;
   onClose: () => void;
   onComplete: () => void;
 }) {
   const dialogFocus = useDialogFocus();
   const fieldId = useId();
   const actions = useActions();
+  const [provider, setProvider] = useState(supplierProvider);
+  const channel = supplierChannel(provider);
+  const ChannelFingerprintFields = channel.FingerprintFields;
   const setup = useResource<{ fingerprint: Fingerprint }>(
-    supplierId ? null : "/suppliers/oauth/setup",
+    supplierId ? null : `${channel.oauthPrefix}/setup`,
   );
   const proxies = useResource<List<Proxy>>(supplierId ? null : "/proxies");
   useErrorToast(setup.error);
@@ -1497,6 +1370,14 @@ export function OAuthWizard({
   const [fingerprint, setFingerprint] = useState<Fingerprint>();
   const [method, setMethod] = useState<"callback" | "device" | "refresh_token">("callback");
   const [refreshToken, setRefreshToken] = useState("");
+  const [batchResults, setBatchResults] = useState<
+    {
+      line: number;
+      status: "pending" | "running" | "complete" | "failed" | "duplicate";
+      message: string;
+      supplierId?: string;
+    }[]
+  >([]);
   const [flow, setFlow] = useState<OAuth>();
   const [callback, setCallback] = useState("");
   const [pollAfter, setPollAfter] = useState(0);
@@ -1504,9 +1385,9 @@ export function OAuthWizard({
   const busy = actions.running.size > 0;
   const ready = Boolean(supplierId) || (setup.ready && proxies.ready);
   const methods = [
-    { value: "callback", label: "回调链接", description: "打开授权页面后提交完整回调链接" },
+    { value: "callback", label: channel.callbackLabel, description: channel.callbackDescription },
     { value: "device", label: "设备码", description: "在设备授权页面输入一次性代码" },
-    ...(!supplierId
+    ...(!supplierId || channel.rtRelogin
       ? [{ value: "refresh_token", label: "RT 授权", description: "使用 Refresh Token 完成授权" }]
       : []),
   ];
@@ -1518,12 +1399,17 @@ export function OAuthWizard({
   const accept = (response: OAuth | { status: "pending" }) => {
     const value = mergeOAuth(flow, response);
     setFlow(value);
-    if (value.status === "complete") onComplete();
-    else setPollAfter(Date.now() + (value.interval ?? 5) * 1000);
+    if (value.status === "complete") {
+      if (value.model_sync_error) toast.error(value.model_sync_error);
+      onComplete();
+    } else setPollAfter(Date.now() + (value.interval ?? 5) * 1000);
   };
   const cancelPending = async () => {
     if (pending) {
-      await request("/suppliers/oauth/cancel", { method: "POST", body: { state: pending.state } });
+      await request(`${channel.oauthPrefix}/cancel`, {
+        method: "POST",
+        body: { state: pending.state },
+      });
       setFlow(undefined);
       setCallback("");
     }
@@ -1534,7 +1420,8 @@ export function OAuthWizard({
       "supplier-oauth-close",
       async () => {
         await cancelPending();
-        onClose();
+        if (batchResults.some((row) => row.status === "complete")) onComplete();
+        else onClose();
       },
       { success: "" },
     );
@@ -1553,13 +1440,70 @@ export function OAuthWizard({
   };
   const start = async () => {
     if (!ready) throw new Error("请先加载授权资料");
+    if (method === "refresh_token" && !supplierId) {
+      const rows = parseRefreshTokenLines(refreshToken);
+      const previous = new Map(batchResults.map((row) => [row.line, row]));
+      setBatchResults(
+        rows.map((row) =>
+          previous.get(row.line)?.status === "complete"
+            ? previous.get(row.line)!
+            : {
+                line: row.line,
+                status: row.duplicateOf ? "duplicate" : "pending",
+                message: row.duplicateOf ? `与第 ${row.duplicateOf} 行重复，已跳过` : "等待授权",
+              },
+        ),
+      );
+      let failures = 0;
+      for (const row of rows) {
+        if (row.duplicateOf || previous.get(row.line)?.status === "complete") continue;
+        const updateResult = (
+          status: "running" | "complete" | "failed",
+          message: string,
+          supplierId?: string,
+        ) =>
+          setBatchResults((old) =>
+            old.map((item) =>
+              item.line === row.line ? { ...item, status, message, supplierId } : item,
+            ),
+          );
+        updateResult("running", "正在授权");
+        try {
+          const result = await request<OAuth>(`${channel.oauthPrefix}/start`, {
+            method: "POST",
+            body: {
+              method,
+              fingerprint: fingerprint ?? setup.data?.fingerprint,
+              independent_fingerprint: rows.length > 1,
+              refresh_token: row.token,
+            },
+          });
+          if (result.status !== "complete") throw new Error("授权未完成");
+          updateResult(
+            "complete",
+            result.model_sync_error
+              ? "授权成功，模型目录待同步"
+              : result.reused_existing
+                ? "已更新原账户，保留原指纹"
+                : "添加成功",
+            result.supplier_id,
+          );
+        } catch {
+          failures++;
+          updateResult("failed", "授权失败，请检查 RT 或网络后重试");
+        }
+      }
+      if (failures) toast.error(`${failures} 条 RT 授权失败，可检查后重试`);
+      else toast.success("RT 导入完成");
+      return;
+    }
     accept(
       await request<OAuth>(
-        supplierId ? `/suppliers/${supplierId}/relogin` : "/suppliers/oauth/start",
+        supplierId ? `/suppliers/${supplierId}/relogin` : `${channel.oauthPrefix}/start`,
         {
           method: "POST",
           body: supplierId
-            ? { method }
+            ? { method, refresh_token: method === "refresh_token" ? refreshToken : undefined }
             : {
                 method,
                 fingerprint: fingerprint ?? setup.data?.fingerprint,
@@ -1574,15 +1518,15 @@ export function OAuthWizard({
     if (!pending) return start();
     if (pending.method === "callback") {
       accept(
-        await request<OAuth>("/suppliers/oauth/callback", {
+        await request<OAuth>(`${channel.oauthPrefix}/callback`, {
           method: "POST",
-          body: { state: pending.state, callback_url: callback },
+          body: channel.callbackBody(pending.state, callback),
         }),
       );
     } else {
       if (Date.now() < pollAfter) throw new Error("请完成官方授权后稍等片刻再检查。");
       accept(
-        await request<OAuth>("/suppliers/oauth/poll", {
+        await request<OAuth>(`${channel.oauthPrefix}/poll`, {
           method: "POST",
           body: { state: pending.state },
         }),
@@ -1664,6 +1608,26 @@ export function OAuthWizard({
           >
             <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-14rem)]">
               <TabsContent value="0" className="space-y-3 pr-1">
+                <Field>
+                  <FieldLabel htmlFor={`${fieldId}-provider`}>提供商</FieldLabel>
+                  <Select
+                    value={provider}
+                    disabled={busy}
+                    onValueChange={(value) => {
+                      setProvider(value);
+                      setFingerprint(undefined);
+                      setBatchResults([]);
+                    }}
+                  >
+                    <SelectTrigger id={`${fieldId}-provider`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                      <SelectItem value="grok">Grok</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
                 {(!setup.ready || !proxies.ready) && (setup.error || proxies.error) && (
                   <Button
                     type="button"
@@ -1678,7 +1642,7 @@ export function OAuthWizard({
                   </Button>
                 )}
                 <FieldSet disabled={!ready || busy}>
-                  <FingerprintFields
+                  <ChannelFingerprintFields
                     value={
                       fingerprint ??
                       setup.data?.fingerprint ?? {
@@ -1703,6 +1667,7 @@ export function OAuthWizard({
                   onValueChange={(next) => {
                     setMethod(next as typeof method);
                     setRefreshToken("");
+                    setBatchResults([]);
                   }}
                 >
                   {methods.map((option) => (
@@ -1727,14 +1692,23 @@ export function OAuthWizard({
                   {method === "refresh_token" ? (
                     <Field>
                       <FieldLabel htmlFor={`${fieldId}-refresh-token`}>Refresh Token</FieldLabel>
-                      <Input
+                      <Textarea
                         id={`${fieldId}-refresh-token`}
-                        type="password"
                         autoComplete="off"
+                        spellCheck={false}
+                        rows={supplierId ? 2 : 6}
                         required
                         value={refreshToken}
-                        onChange={(event) => setRefreshToken(event.target.value)}
+                        onChange={(event) => {
+                          setRefreshToken(event.target.value);
+                          setBatchResults([]);
+                        }}
                       />
+                      <FieldDescription>
+                        {supplierId
+                          ? "输入此账户的新 RT"
+                          : "一行一个，最多 50 条。批量导入为每个新账户独立生成设备指纹与安装 ID，沿用所选代理和时区；重复账户保留原指纹。"}
+                      </FieldDescription>
                     </Field>
                   ) : pending ? (
                     <>
@@ -1792,7 +1766,7 @@ export function OAuthWizard({
                       {pending.method === "callback" && (
                         <Field>
                           <FieldLabel htmlFor={`${fieldId}-callback`}>
-                            授权后的完整回调地址
+                            {channel.callbackInputLabel}
                           </FieldLabel>
                           <Textarea
                             id={`${fieldId}-callback`}
@@ -1810,9 +1784,51 @@ export function OAuthWizard({
                     </CardDescription>
                   )}
                 </FieldSet>
+                {batchResults.length > 0 && (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>行号</TableHead>
+                        <TableHead>结果</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {batchResults.map((row) => (
+                        <TableRow key={row.line}>
+                          <TableCell>{row.line}</TableCell>
+                          <TableCell>
+                            {row.status === "running" && <Spinner />}
+                            {row.supplierId ? (
+                              <Link
+                                href={`/suppliers/detail/?id=${encodeURIComponent(row.supplierId)}`}
+                              >
+                                {row.message}
+                              </Link>
+                            ) : (
+                              row.message
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </TabsContent>
             </ScrollArea>
             <FieldGroup className="flex-row justify-end gap-2 border-t pt-3">
+              {batchResults.some((row) => row.status === "complete") && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    setRefreshToken("");
+                    onComplete();
+                  }}
+                >
+                  完成并刷新列表
+                </Button>
+              )}
               {step > (supplierId ? 1 : 0) && (
                 <Button
                   type="button"
@@ -1840,818 +1856,5 @@ export function OAuthWizard({
         </Tabs>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function OfficialData({
-  id,
-  section,
-  onUsername,
-}: {
-  id: string;
-  section: string;
-  onUsername?: (username: string | undefined) => void;
-}) {
-  const [refresh, setRefresh] = useState(0);
-  const resource = useResource<{
-    value: Json;
-    quota?: SupplierQuota;
-    observed_at?: string;
-    refresh_error?: string | null;
-    routing?: {
-      status: "not_observed" | "ready" | "stale" | "invalid";
-      backend_origin: string | null;
-      constraint: "NO_CONSTRAINT" | "us" | "us_cr" | null;
-      message: string | null;
-    };
-  }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
-  const root = resource.data?.value;
-  const value = root && typeof root === "object" && !Array.isArray(root) ? root : {};
-  const username =
-    value.profile && typeof value.profile === "object" && !Array.isArray(value.profile)
-      ? typeof value.profile.username === "string"
-        ? value.profile.username
-        : undefined
-      : undefined;
-  useEffect(() => {
-    if (section !== "usage") return;
-    onUsername?.(username);
-  }, [onUsername, section, username]);
-  useErrorToast(resource.error);
-  useErrorToast(resource.data?.refresh_error ?? undefined);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle
-          role="heading"
-          aria-level={2}
-        >{`官方${({ quota: "额度", usage: "用量", details: "资料", credits: "重置额度" } as Record<string, string>)[section]}`}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => setRefresh(Date.now())}>
-            从官方刷新
-          </Button>
-          {resource.data?.observed_at && (
-            <CardDescription>采集时间：{date(resource.data?.observed_at)}</CardDescription>
-          )}
-        </div>
-
-        {section === "details" && (
-          <FieldGroup className="grid gap-3 sm:grid-cols-3">
-            <Field>
-              <FieldTitle>官方执行地址</FieldTitle>
-              <FieldDescription>{resource.data?.routing?.backend_origin ?? "—"}</FieldDescription>
-            </Field>
-            <Field>
-              <FieldTitle>区域约束</FieldTitle>
-              <FieldDescription>
-                {resource.data?.routing?.constraint
-                  ? { NO_CONSTRAINT: "无区域约束", us: "美国", us_cr: "美国（us_cr）" }[
-                      resource.data.routing.constraint
-                    ]
-                  : "—"}
-              </FieldDescription>
-            </Field>
-            <Field>
-              <FieldTitle>路由状态</FieldTitle>
-              <FieldDescription>
-                {resource.data?.routing
-                  ? {
-                      not_observed: "尚未采集",
-                      ready: "可用",
-                      stale: "凭据已变更，待重新采集",
-                      invalid: "官方路由资料无效",
-                    }[resource.data.routing.status]
-                  : "—"}
-                {resource.data?.routing?.message && `：${resource.data.routing.message}`}
-              </FieldDescription>
-            </Field>
-          </FieldGroup>
-        )}
-
-        {
-          <>
-            {section === "quota" && (
-              <div className="grid gap-4 sm:grid-cols-2">
-                {resource.data?.quota?.windows?.map((window) => (
-                  <div key={window.id} className="space-y-3">
-                    <CardTitle role="heading" aria-level={3}>
-                      {quotaWindowLabel(window)}
-                    </CardTitle>
-                    <div>
-                      已用{" "}
-                      {window.used_percent != null ? percentLabel(window.used_percent) : "未知"}
-                    </div>
-                    {window.used_percent != null && (
-                      <Progress
-                        value={Math.min(100, window.used_percent)}
-                        aria-label={`官方额度已用 ${window.used_percent}%`}
-                      />
-                    )}
-                    <CardDescription>
-                      重置：
-                      {date(window.reset_at)}
-                    </CardDescription>
-                  </div>
-                ))}
-                {!resource.data?.quota?.windows?.length && (
-                  <CardDescription>
-                    {resource.data?.quota?.windows ? "官方未提供额度窗口" : "额度数据未加载"}
-                  </CardDescription>
-                )}
-              </div>
-            )}
-            {section === "credits" ? (
-              <OfficialCredits value={value} id={id} onRefresh={() => setRefresh(Date.now())} />
-            ) : (
-              section !== "quota" && (
-                <OfficialFields section={section} value={resource.data?.value ?? null} />
-              )
-            )}
-          </>
-        }
-      </CardContent>
-    </Card>
-  );
-}
-function OfficialFields({ value, section }: { value: Json; section: string }) {
-  const tableColumns1 = useColumnVisibility(
-    "components/suppliers.tsx:1",
-    ["账户", "类型", "订阅"],
-    ["账户", "类型", "订阅"],
-  );
-
-  const root = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const profile =
-    root.profile && typeof root.profile === "object" && !Array.isArray(root.profile)
-      ? root.profile
-      : root;
-  const statsValue =
-    root.stats && typeof root.stats === "object" && !Array.isArray(root.stats)
-      ? root.stats
-      : profile.stats && typeof profile.stats === "object" && !Array.isArray(profile.stats)
-        ? profile.stats
-        : {};
-  const stats =
-    statsValue.stats && typeof statsValue.stats === "object" && !Array.isArray(statsValue.stats)
-      ? statsValue.stats
-      : statsValue;
-  const rows = Array.isArray(root.accounts)
-    ? root.accounts
-    : root.accounts && typeof root.accounts === "object"
-      ? Object.values(root.accounts)
-      : [];
-  const pagination = useTablePagination(rows, section);
-  const days = Array.isArray(stats.daily_usage_buckets) ? stats.daily_usage_buckets : [];
-  const fields =
-    section === "usage"
-      ? [
-          {
-            label: "累计 Token",
-            value: tokenCount(
-              typeof stats.lifetime_tokens === "number" ? stats.lifetime_tokens : null,
-            ),
-          },
-          {
-            label: "单日最高 Token",
-            value: tokenCount(
-              typeof stats.peak_daily_tokens === "number" ? stats.peak_daily_tokens : null,
-            ),
-          },
-          {
-            label: "当前连续使用天数",
-            value:
-              typeof stats.current_streak_days === "number"
-                ? `${stats.current_streak_days}天`
-                : "—",
-          },
-          {
-            label: "最长连续使用天数",
-            value:
-              typeof stats.longest_streak_days === "number"
-                ? `${stats.longest_streak_days}天`
-                : "—",
-          },
-          {
-            label: "最长任务时长",
-            value:
-              typeof stats.longest_running_turn_sec === "number"
-                ? duration(stats.longest_running_turn_sec * 1000)
-                : "—",
-          },
-        ]
-      : [{ label: "默认账户", value: root.default_account_id }];
-  return (
-    <div className="space-y-4">
-      <FieldGroup className="grid gap-3 sm:grid-cols-2">
-        {fields.map((field) => (
-          <Field key={field.label}>
-            <FieldTitle>{field.label}</FieldTitle>
-            <FieldDescription>
-              {field.value == null
-                ? "—"
-                : typeof field.value === "string" || typeof field.value === "number"
-                  ? field.value
-                  : String(field.value)}
-            </FieldDescription>
-          </Field>
-        ))}
-      </FieldGroup>
-      {section === "usage" ? (
-        <ChartContainer
-          config={{ tokens: { label: "Token", color: "var(--primary)" } }}
-          className="h-60 w-full"
-        >
-          <BarChart accessibilityLayer data={days}>
-            <CartesianGrid vertical={false} />
-            <XAxis dataKey="start_date" tickLine={false} axisLine={false} />
-            <YAxis
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={(value: number) => tokenCount(value)}
-            />
-            <ChartTooltip
-              cursor={false}
-              content={
-                <ChartTooltipContent
-                  formatter={(value) => (
-                    <div className="flex flex-1 justify-between gap-3 leading-none">
-                      <span>Token</span>
-                      <span className="font-mono font-medium tabular-nums">
-                        {tokenCount(typeof value === "number" ? value : Number(value))}
-                      </span>
-                    </div>
-                  )}
-                />
-              }
-            />
-            <Bar
-              dataKey="tokens"
-              maxBarSize={48}
-              fill="var(--color-tokens)"
-              radius={[4, 4, 0, 0]}
-              isAnimationActive={false}
-            />
-          </BarChart>
-        </ChartContainer>
-      ) : (
-        <>
-          <>
-            <div className="mb-2 flex justify-end">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="outline" size="sm" aria-label="显示列">
-                    <Columns3 />
-                    显示列
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>
-                    {tableColumns1.mobile ? "手机显示列" : "桌面显示列"}
-                  </DropdownMenuLabel>
-                  {tableColumns1.labels.map((label) => (
-                    <DropdownMenuCheckboxItem
-                      key={label}
-                      checked={tableColumns1.isVisible(label)}
-                      disabled={tableColumns1.count === 1 && tableColumns1.isVisible(label)}
-                      onSelect={(event) => event.preventDefault()}
-                      onCheckedChange={(checked) =>
-                        tableColumns1.setVisible(label, checked === true)
-                      }
-                    >
-                      {label}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={tableColumns1.showAll}>显示全部列</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={tableColumns1.reset}>恢复默认列</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <Table
-              className={
-                tableColumns1.count > 4
-                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
-                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
-              }
-              role="table"
-            >
-              <TableHeader>
-                <TableRow role="row">
-                  {["账户", "类型", "订阅"].map((label) => (
-                    <TableHead
-                      hidden={!tableColumns1.isVisible(label)}
-                      className={
-                        ["账户", "类型", "订阅"].includes(label)
-                          ? label === "账户"
-                            ? ""
-                            : "max-md:w-16"
-                          : ""
-                      }
-                      key={label}
-                    >
-                      {label}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.length ? (
-                  pagination.rows.map((raw, index) => {
-                    const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-                    const account =
-                      item.account &&
-                      typeof item.account === "object" &&
-                      !Array.isArray(item.account)
-                        ? item.account
-                        : item;
-                    return (
-                      <TableRow role="row" key={index}>
-                        <TableCell
-                          hidden={!tableColumns1.isVisible("账户")}
-                          className=" max-md:overflow-hidden"
-                          data-label="账户"
-                          role="cell"
-                        >
-                          <div className="max-md:hidden">
-                            {String(account.name ?? account.account_id ?? account.id ?? "—")}
-                          </div>
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
-                                aria-label={
-                                  "查看详情：" +
-                                  String(
-                                    String(account.name ?? account.account_id ?? account.id ?? "—"),
-                                  )
-                                }
-                              >
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate font-medium">
-                                    {String(
-                                      account.name ?? account.account_id ?? account.id ?? "—",
-                                    )}
-                                  </span>
-                                </span>
-                                <ChevronRight className="size-3 shrink-0" />
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-                              <DialogHeader>
-                                <DialogTitle>记录详情</DialogTitle>
-                                <DialogDescription>当前记录的完整字段</DialogDescription>
-                              </DialogHeader>
-                              <FieldGroup className="gap-3">
-                                <Field>
-                                  <FieldTitle>账户</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {String(
-                                      account.name ?? account.account_id ?? account.id ?? "—",
-                                    )}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>类型</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {String(account.structure ?? "—")}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>订阅</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {subscriptionLabel(account.plan_type)}
-                                  </div>
-                                </Field>
-                              </FieldGroup>
-                            </DialogContent>
-                          </Dialog>
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns1.isVisible("类型")}
-                          className=" max-md:overflow-hidden"
-                          data-label="类型"
-                          data-compact="true"
-                          role="cell"
-                        >
-                          {String(account.structure ?? "—")}
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns1.isVisible("订阅")}
-                          className=" max-md:overflow-hidden"
-                          data-label="订阅"
-                          role="cell"
-                        >
-                          {subscriptionLabel(account.plan_type)}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                ) : (
-                  <TableRow role="row">
-                    <TableCell role="cell" colSpan={tableColumns1.count}>
-                      <Empty>
-                        <EmptyDescription>暂无账户资料</EmptyDescription>
-                      </Empty>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </>
-          <Pagination aria-label="记录分页" className="mt-3 justify-end">
-            <PaginationContent className="flex-wrap justify-end gap-1">
-              <PaginationItem>
-                <Select {...pagination.size}>
-                  <SelectTrigger aria-label="每页条数" className="h-7 w-24">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent position="popper" side="bottom" align="end">
-                    {[10, 20, 30, 50].map((size) => (
-                      <SelectItem key={size} value={String(size)}>
-                        {size} 条/页
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </PaginationItem>
-              <PaginationItem className="mr-2 text-xs text-muted-foreground">
-                共 {pagination.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
-              </PaginationItem>
-              <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="首页"
-                  {...pagination.first}
-                >
-                  <ChevronsLeft />
-                </Button>
-              </PaginationItem>
-              <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="上一页"
-                  {...pagination.previous}
-                >
-                  <ChevronLeft />
-                </Button>
-              </PaginationItem>
-              <PaginationItem>
-                <Input className="h-7 w-14 text-center tabular-nums" {...pagination.input} />
-              </PaginationItem>
-              <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="下一页"
-                  {...pagination.next}
-                >
-                  <ChevronRight />
-                </Button>
-              </PaginationItem>
-              <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="末页"
-                  {...pagination.last}
-                >
-                  <ChevronsRight />
-                </Button>
-              </PaginationItem>
-            </PaginationContent>
-          </Pagination>
-        </>
-      )}
-    </div>
-  );
-}
-function OfficialCredits({
-  value,
-  id,
-  onRefresh,
-}: {
-  value: { [key: string]: Json };
-  id: string;
-  onRefresh: () => void;
-}) {
-  const tableColumns2 = useColumnVisibility(
-    "components/suppliers.tsx:2",
-    ["名称", "类型", "状态", "到期时间", "操作"],
-    ["名称", "状态", "操作"],
-  );
-
-  const actions = useActions();
-  const credits = Array.isArray(value.credits)
-    ? value.credits.filter(
-        (credit): credit is { [key: string]: Json } =>
-          Boolean(credit) && typeof credit === "object" && !Array.isArray(credit),
-      )
-    : [];
-  const pagination = useTablePagination(credits, id);
-  const consume = async (creditId?: string) => {
-    await request(`/suppliers/${id}/credits/consume`, {
-      method: "POST",
-      body: creditId ? { credit_id: creditId } : {},
-    });
-    onRefresh();
-  };
-  return (
-    <div className="space-y-4">
-      <CardDescription>
-        可用次数：{typeof value.available_count === "number" ? value.available_count : "官方未提供"}
-      </CardDescription>
-      <>
-        <div className="mb-2 flex justify-end">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button type="button" variant="outline" size="sm" aria-label="显示列">
-                <Columns3 />
-                显示列
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>
-                {tableColumns2.mobile ? "手机显示列" : "桌面显示列"}
-              </DropdownMenuLabel>
-              {tableColumns2.labels.map((label) => (
-                <DropdownMenuCheckboxItem
-                  key={label}
-                  checked={tableColumns2.isVisible(label)}
-                  disabled={tableColumns2.count === 1 && tableColumns2.isVisible(label)}
-                  onSelect={(event) => event.preventDefault()}
-                  onCheckedChange={(checked) => tableColumns2.setVisible(label, checked === true)}
-                >
-                  {label}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={tableColumns2.showAll}>显示全部列</DropdownMenuItem>
-              <DropdownMenuItem onSelect={tableColumns2.reset}>恢复默认列</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        <Table
-          className={
-            tableColumns2.count > 4
-              ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
-              : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
-          }
-          role="table"
-        >
-          <TableHeader>
-            <TableRow role="row">
-              {["名称", "类型", "状态", "到期时间", "操作"].map((label) => (
-                <TableHead
-                  hidden={!tableColumns2.isVisible(label)}
-                  className={
-                    ["名称", "状态", "操作"].includes(label)
-                      ? label === "操作"
-                        ? "max-md:w-28"
-                        : label === "名称"
-                          ? ""
-                          : "max-md:w-16"
-                      : ""
-                  }
-                  key={label}
-                  scope="col"
-                >
-                  {label}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {credits.length ? (
-              <>
-                {pagination.rows.map((credit, index) => (
-                  <TableRow role="row" key={String(credit.id ?? index)}>
-                    <TableCell
-                      hidden={!tableColumns2.isVisible("名称")}
-                      className=" max-md:overflow-hidden"
-                      data-label="名称"
-                      role="cell"
-                    >
-                      <div className="max-md:hidden">
-                        {String(credit.title ?? credit.id ?? "—")}
-                      </div>
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
-                            aria-label={
-                              "查看详情：" + String(String(credit.title ?? credit.id ?? "—"))
-                            }
-                          >
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate font-medium">
-                                {String(credit.title ?? credit.id ?? "—")}
-                              </span>
-                            </span>
-                            <ChevronRight className="size-3 shrink-0" />
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-                          <DialogHeader>
-                            <DialogTitle>记录详情</DialogTitle>
-                            <DialogDescription>当前记录的完整字段</DialogDescription>
-                          </DialogHeader>
-                          <FieldGroup className="gap-3">
-                            <Field>
-                              <FieldTitle>名称</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {String(credit.title ?? credit.id ?? "—")}
-                              </div>
-                            </Field>
-                            <Field>
-                              <FieldTitle>类型</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {String(credit.reset_type ?? "—")}
-                              </div>
-                            </Field>
-                            <Field>
-                              <FieldTitle>状态</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {String(credit.status ?? "—")}
-                              </div>
-                            </Field>
-                            <Field>
-                              <FieldTitle>到期时间</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {date(
-                                  typeof credit.expires_at === "string" ? credit.expires_at : null,
-                                )}
-                              </div>
-                            </Field>
-                          </FieldGroup>
-                        </DialogContent>
-                      </Dialog>
-                    </TableCell>
-                    <TableCell
-                      hidden={!tableColumns2.isVisible("类型")}
-                      className=" "
-                      data-label="类型"
-                      data-compact="true"
-                      role="cell"
-                    >
-                      {String(credit.reset_type ?? "—")}
-                    </TableCell>
-                    <TableCell
-                      hidden={!tableColumns2.isVisible("状态")}
-                      className=" max-md:overflow-hidden"
-                      data-label="状态"
-                      data-compact="true"
-                      role="cell"
-                    >
-                      {String(credit.status ?? "—")}
-                    </TableCell>
-                    <TableCell
-                      hidden={!tableColumns2.isVisible("到期时间")}
-                      className=" "
-                      data-label="到期时间"
-                      role="cell"
-                    >
-                      {date(typeof credit.expires_at === "string" ? credit.expires_at : null)}
-                    </TableCell>
-                    <TableCell
-                      hidden={!tableColumns2.isVisible("操作")}
-                      className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
-                      data-label="操作"
-                      role="cell"
-                    >
-                      {credit.status === "available" && typeof credit.id === "string" ? (
-                        <Button
-                          type="button"
-                          variant={false ? "destructive" : "outline"}
-                          disabled={false || actions.isBusy("components\\suppliers.tsx:action:20")}
-                          onClick={() =>
-                            void actions.run(
-                              "components\\suppliers.tsx:action:20",
-                              () => consume(String(credit.id)),
-                              {
-                                confirm: "使用此供应账户的一次官方重置额度？",
-                                danger: false,
-                                success: undefined,
-                              },
-                            )
-                          }
-                        >
-                          使用重置额度
-                        </Button>
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </>
-            ) : (
-              <TableRow role="row">
-                <TableCell role="cell" colSpan={tableColumns2.count}>
-                  <Empty>
-                    <EmptyDescription>{"暂无记录"}</EmptyDescription>
-                  </Empty>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </>
-      <Pagination aria-label="记录分页" className="mt-3 justify-end">
-        <PaginationContent className="flex-wrap justify-end gap-1">
-          <PaginationItem>
-            <Select {...pagination.size}>
-              <SelectTrigger aria-label="每页条数" className="h-7 w-24">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper" side="bottom" align="end">
-                {[10, 20, 30, 50].map((size) => (
-                  <SelectItem key={size} value={String(size)}>
-                    {size} 条/页
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </PaginationItem>
-          <PaginationItem className="mr-2 text-xs text-muted-foreground">
-            共 {pagination.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              aria-label="首页"
-              {...pagination.first}
-            >
-              <ChevronsLeft />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              aria-label="上一页"
-              {...pagination.previous}
-            >
-              <ChevronLeft />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Input className="h-7 w-14 text-center tabular-nums" {...pagination.input} />
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              aria-label="下一页"
-              {...pagination.next}
-            >
-              <ChevronRight />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              aria-label="末页"
-              {...pagination.last}
-            >
-              <ChevronsRight />
-            </Button>
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
-      {typeof value.available_count === "number" && value.available_count > 0 && (
-        <Button
-          type="button"
-          variant={false ? "destructive" : "outline"}
-          disabled={false || actions.isBusy("components\\suppliers.tsx:action:21")}
-          onClick={() =>
-            void actions.run("components\\suppliers.tsx:action:21", () => consume(), {
-              confirm: "使用此供应账户的一次官方重置额度？",
-              danger: false,
-              success: undefined,
-            })
-          }
-        >
-          使用一次可用重置额度
-        </Button>
-      )}
-    </div>
   );
 }

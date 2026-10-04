@@ -76,7 +76,7 @@ export default function UsagePage() {
                 <SelectTrigger id={`${id}-days`}>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   <SelectItem value="1">今天</SelectItem>
                   <SelectItem value="7">最近 7 天</SelectItem>
                   <SelectItem value="30">最近 30 天</SelectItem>
@@ -89,9 +89,10 @@ export default function UsagePage() {
                 <SelectTrigger id={`${id}-provider`}>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   <SelectItem value="all">全部平台</SelectItem>
                   <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                  <SelectItem value="grok">Grok</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -110,7 +111,7 @@ export default function UsagePage() {
                 <SelectTrigger id={`${id}-status`}>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   <SelectItem value="all">全部结果</SelectItem>
                   <SelectItem value="completed">已完成</SelectItem>
                   <SelectItem value="failed">失败 / 中断</SelectItem>
@@ -171,7 +172,11 @@ export default function UsagePage() {
                 <TableRow key={record.id}>
                   <TableCell>{orderTime(record.requested_at_ms)}</TableCell>
                   <TableCell>
-                    {record.provider_id === "chatgpt" ? "ChatGPT" : record.provider_id}
+                    {record.provider_id === "chatgpt"
+                      ? "ChatGPT"
+                      : record.provider_id === "grok"
+                        ? "Grok"
+                        : record.provider_id}
                     <p className="text-xs text-muted-foreground">
                       {record.actual_model ?? record.model ?? "未记录模型"}
                     </p>
@@ -212,7 +217,7 @@ export default function UsagePage() {
                   <SelectTrigger aria-label="每页条数">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent position="popper">
                     {[10, 20, 30, 50].map((n) => (
                       <SelectItem key={n} value={String(n)}>
                         {n} 条

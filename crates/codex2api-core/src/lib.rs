@@ -4,13 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 mod model_presets;
+pub mod providers;
 pub use model_presets::{
-    MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset, model_price_preset,
+    MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset, model_preset_source, model_price_preset,
 };
 
 pub const CHATGPT: &str = "chatgpt";
+pub const GROK: &str = "grok";
 
-pub const PROVIDERS: &[(&str, &str)] = &[(CHATGPT, "ChatGPT")];
+pub const PROVIDERS: &[(&str, &str)] = &[(CHATGPT, "ChatGPT"), (GROK, "Grok")];
 
 pub fn default_provider() -> String {
     CHATGPT.into()
@@ -117,5 +119,13 @@ mod tests {
         assert!(ModelAccess::from_config("selected", []).is_err());
         assert!(!ModelAccess::None.permits(CHATGPT, "gpt-test"));
         assert!(ModelAccess::AllEnabled.permits(CHATGPT, "gpt-test"));
+    }
+}
+
+pub fn valid_subscription_tier(provider: &str, tier: &str) -> bool {
+    match provider {
+        CHATGPT => providers::chatgpt::SUBSCRIPTION_TIERS.contains(&tier),
+        GROK => providers::grok::SUBSCRIPTION_TIERS.contains(&tier),
+        _ => false,
     }
 }

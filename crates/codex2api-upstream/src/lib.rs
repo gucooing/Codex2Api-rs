@@ -12,28 +12,37 @@
 //! describe official outbound targets. Incoming HTTP routes belong to codex2api-api.
 //! Protocol construction lives in request/headers; transport lives in client/websocket/stream.
 
-mod backend;
-mod catalog;
-mod client;
-pub use catalog::{codex_model_descriptor, supported_models};
+pub(crate) use providers::chatgpt::backend;
+pub use providers::grok;
+pub mod providers;
+pub use catalog::{codex_model_descriptor, configured_model_descriptor};
+pub(crate) use providers::chatgpt::catalog;
+pub(crate) use providers::chatgpt::client;
+pub fn supported_models() -> Vec<codex2api_core::SupportedModel> {
+    catalog::supported_models()
+}
+
 mod availability;
-mod compat;
-mod endpoint;
+pub(crate) use providers::chatgpt::compat;
+pub(crate) use providers::chatgpt::endpoint;
+mod body;
 mod error;
 mod outcome;
-pub use availability::{SupplierFailure, classify_supplier_failure, quota_unavailable_until};
+pub use availability::{
+    SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_unavailable_until,
+};
 #[derive(Clone, Copy, Debug)]
 pub struct SupplierAuthRevision(pub i64);
 pub use outcome::{FailureKind, ResponseFailure, ResponseLifecycle, ResponseOutcome};
-mod headers;
+pub(crate) use providers::chatgpt::headers;
 mod pool;
-mod proxy;
-mod realtime;
-mod request;
-mod routing;
+pub(crate) use providers::chatgpt::proxy;
+pub(crate) use providers::chatgpt::realtime;
+pub(crate) use providers::chatgpt::request;
+pub(crate) use providers::chatgpt::routing;
 mod stream;
-mod timezone;
-mod websocket;
+pub(crate) use providers::chatgpt::timezone;
+pub(crate) use providers::chatgpt::websocket;
 
 #[cfg(test)]
 #[path = "../../codex2api-auth/tests/support/proxy.rs"]

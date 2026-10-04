@@ -179,7 +179,7 @@ export default function WalletEntriesPage() {
               <SelectTrigger id={`${id}-kind`}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 <SelectItem value="all">全部来源</SelectItem>
                 {Object.entries(walletSources).map(([value, label]) => (
                   <SelectItem key={value} value={value}>
@@ -323,7 +323,7 @@ export default function WalletEntriesPage() {
                   <SelectTrigger aria-label="每页条数">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent position="popper">
                     {[10, 20, 30, 50].map((n) => (
                       <SelectItem key={n} value={String(n)}>
                         {n} 条

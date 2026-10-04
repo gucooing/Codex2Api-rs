@@ -41,6 +41,10 @@ pub fn plan_owned_config(key: &str) -> bool {
 }
 
 impl VirtualPlan {
+    pub fn description(&self) -> &str {
+        self.config["description"].as_str().unwrap_or("")
+    }
+
     pub fn model_access(&self) -> Result<codex2api_core::ModelAccess> {
         let (mode, items) = ("model_access", "models");
         let models = self.config[items]
@@ -59,6 +63,15 @@ impl VirtualPlan {
     pub fn validate(&self) -> Result<()> {
         self.sale_price_cents()?;
         self.duration_days()?;
+        if self
+            .config
+            .get("description")
+            .is_some_and(|v| v.as_str().is_none_or(|s| s.chars().count() > 20_000))
+        {
+            return Err(StorageError::Constraint(
+                "套餐描述须为文本，长度不能超过 20000 字符".into(),
+            ));
+        }
         if self.plan_type == "free" && self.allow_purchase {
             return Err(StorageError::InvalidAdminUpdate(
                 "Free 套餐自动提供，无需开放购买",
@@ -69,27 +82,9 @@ impl VirtualPlan {
                 "请填写套餐名称，长度不能超过 128 字节".into(),
             ));
         }
-        if ![
-            "free",
-            "go",
-            "plus",
-            "prolite",
-            "pro",
-            "promax",
-            "team",
-            "business",
-            "enterprise",
-            "edu",
-            "edu_plus",
-            "edu_pro",
-            "self_serve_business_prolite",
-            "self_serve_business_usage_based",
-            "ent26",
-            "enterprise_cbp_automation",
-            "enterprise_cbp_usage_based",
-        ]
-        .contains(&self.plan_type.as_str())
-        {
+        let valid_tier =
+            codex2api_core::valid_subscription_tier(&self.provider_id, &self.plan_type);
+        if !valid_tier {
             return Err(StorageError::InvalidAdminUpdate(
                 "Invalid client subscription compatibility value",
             ));

@@ -197,7 +197,14 @@ async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
             .is_none()
     );
     assert_eq!(
-        storage.user_subscriptions(None, true).await.unwrap()[0].revision,
+        storage
+            .user_subscriptions(None, true)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.provider_id == "chatgpt")
+            .unwrap()
+            .revision,
         4
     );
     let sessions: i64 = sqlx::query_scalar(

@@ -22,52 +22,22 @@ pub struct TokenPricePreset {
     pub output_rate: i64,
 }
 
-/// Verified public Standard/Fast/Flex prices; unsupported prices remain absent.
 pub fn model_price_preset(provider: &str, model: &str) -> Option<Vec<TokenPricePreset>> {
-    if provider != crate::CHATGPT {
-        return None;
+    match provider {
+        crate::CHATGPT => crate::providers::chatgpt::model_price_preset(model),
+        crate::GROK => crate::providers::grok::model_price_preset(model),
+        _ => None,
     }
-    // Source: https://developers.openai.com/api/docs/pricing and each model page,
-    // checked 2026-10-03, including all expanded Standard/Fast/Flex tables.
-    // GPT-5.5 cache creation has no surcharge: its effective write rate equals
-    // uncached input (prompt-caching guide). Hidden aliases/image bands are absent.
-    let (input, cached, cache_write, output) = match model {
-        "gpt-6-astra" => (10_000_000, 1_000_000, 12_500_000, 50_000_000),
-        "gpt-6.1-sol" => (2_000_000, 100_000, 2_500_000, 10_000_000),
-        "gpt-6-sol" => (2_000_000, 200_000, 2_500_000, 10_000_000),
-        "gpt-6-luna" => (100_000, 10_000, 125_000, 500_000),
-        "gpt-5.6-sol" => (4_000_000, 400_000, 5_000_000, 20_000_000),
-        "gpt-5.6-terra" => (2_000_000, 200_000, 2_500_000, 12_000_000),
-        "gpt-5.6-luna" => (200_000, 20_000, 250_000, 1_200_000),
-        "gpt-5.5" => (5_000_000, 500_000, 5_000_000, 30_000_000),
-        _ => return None,
-    };
-    let mut prices = Vec::with_capacity(6);
-    for (tier, numerator, denominator) in [("standard", 1, 1), ("fast", 2, 1), ("flex", 1, 2)] {
-        let limited_fast = model == "gpt-5.5" && tier == "fast";
-        let (numerator, denominator) = if limited_fast {
-            (5, 2)
-        } else {
-            (numerator, denominator)
-        };
-        for (start, input_multiplier, output_numerator, output_denominator) in
-            [(0, 1, 1, 1), (272_001, 2, 3, 2)]
-        {
-            if limited_fast && start != 0 {
-                continue;
-            }
-            prices.push(TokenPricePreset {
-                tier,
-                min_input_tokens: start,
-                max_input_tokens: limited_fast.then_some(272_000),
-                input_rate: input * input_multiplier * numerator / denominator,
-                cached_rate: cached * input_multiplier * numerator / denominator,
-                cache_write_rate: cache_write * input_multiplier * numerator / denominator,
-                output_rate: output * output_numerator * numerator
-                    / output_denominator
-                    / denominator,
-            });
-        }
+}
+pub fn model_preset_source(provider: &str) -> (&'static str, &'static str) {
+    match provider {
+        crate::GROK => (
+            "https://docs.x.ai/developers/pricing",
+            crate::providers::grok::PRESET_VERSION,
+        ),
+        _ => (
+            "https://developers.openai.com/api/docs/pricing",
+            MODEL_PRESET_VERSION,
+        ),
     }
-    Some(prices)
 }

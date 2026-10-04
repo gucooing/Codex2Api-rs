@@ -19,6 +19,27 @@ use axum::{
 };
 pub(crate) fn router(state: AdminState) -> Router {
     let protected = Router::new()
+        .route(
+            "/suppliers/grok/{id}/profile",
+            post(crate::providers::grok::refresh_profile),
+        )
+        .nest(
+            "/suppliers/chatgpt/oauth",
+            crate::providers::chatgpt_oauth_routes(),
+        )
+        .nest(
+            "/suppliers/grok/oauth",
+            crate::providers::grok::oauth_routes(),
+        )
+        .route(
+            "/suppliers/grok/{id}/models",
+            get(crate::providers::grok::model_catalog)
+                .post(crate::providers::grok::sync_model_catalog),
+        )
+        .route(
+            "/models/grok/sync",
+            post(crate::providers::grok::sync_all_models),
+        )
         .route("/wallet-entries", get(wallet::list))
         .route("/coupons", get(coupons::list).post(coupons::create))
         .route("/coupons/{id}", put(coupons::update))
@@ -49,11 +70,26 @@ pub(crate) fn router(state: AdminState) -> Router {
             "/consumers/{id}/rate-limit",
             get(consumers::rate_limit).put(consumers::save_rate_limit),
         )
-        .route("/suppliers/oauth/setup", get(suppliers::setup))
-        .route("/suppliers/oauth/start", post(suppliers::start))
-        .route("/suppliers/oauth/callback", post(suppliers::callback))
-        .route("/suppliers/oauth/poll", post(suppliers::poll))
-        .route("/suppliers/oauth/cancel", post(suppliers::cancel))
+        .route(
+            "/suppliers/oauth/setup",
+            get(crate::providers::chatgpt::setup),
+        )
+        .route(
+            "/suppliers/oauth/start",
+            post(crate::providers::chatgpt::start),
+        )
+        .route(
+            "/suppliers/oauth/callback",
+            post(crate::providers::chatgpt::callback),
+        )
+        .route(
+            "/suppliers/oauth/poll",
+            post(crate::providers::chatgpt::poll),
+        )
+        .route(
+            "/suppliers/oauth/cancel",
+            post(crate::providers::chatgpt::cancel),
+        )
         .route(
             "/suppliers/{id}",
             get(suppliers::detail).delete(suppliers::delete),
@@ -61,10 +97,16 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/suppliers/{id}/status", post(suppliers::status))
         .route("/suppliers/{id}/recover", post(suppliers::recover))
         .route("/suppliers/{id}/quota", get(suppliers::quota))
-        .route("/suppliers/{id}/fingerprint", put(suppliers::fingerprint))
-        .route("/suppliers/{id}/official", get(suppliers::official))
-        .route("/suppliers/{id}/credits/consume", post(suppliers::credit))
-        .route("/suppliers/{id}/relogin", post(suppliers::relogin))
+        .route(
+            "/suppliers/{id}/fingerprint",
+            put(crate::providers::fingerprint),
+        )
+        .route("/suppliers/{id}/official", get(crate::providers::official))
+        .route(
+            "/suppliers/{id}/credits/consume",
+            post(crate::providers::credit),
+        )
+        .route("/suppliers/{id}/relogin", post(crate::providers::relogin))
         .route("/consumers", get(consumers::list).post(consumers::create))
         .route("/consumers/batch", post(consumers::batch))
         .route(

@@ -1,11 +1,13 @@
 //! Internal supplier failover before generation output is committed to the client.
 use crate::{ApiError, ApiState, Result};
 use axum::body::Bytes;
-use codex2api_accounts::SupplierContext;
+#[derive(Clone)]
+pub(crate) struct SupplierContext {
+    pub account: codex2api_storage::SupplierAccount,
+}
 use codex2api_storage::VirtualAccess;
-use codex2api_upstream::{Endpoint, SupplierFailure, UpstreamError};
+use codex2api_upstream::{SupplierFailure, UpstreamError};
 use futures::StreamExt;
-use http::HeaderMap;
 
 #[derive(Clone, Copy)]
 pub(crate) struct FirstEventAt(pub std::time::Instant);
@@ -35,7 +37,9 @@ pub(crate) async fn select(
         .select_pool_supplier(&access.virtual_account_id, &access.provider_id, excluded)
         .await?
         .ok_or_else(exhausted)?;
-    Ok(state.accounts.load_context(&id).await?)
+    Ok(SupplierContext {
+        account: state.storage.require_account(&id).await?,
+    })
 }
 
 pub(crate) async fn observe(
@@ -84,14 +88,14 @@ pub(crate) async fn recover_stream_auth(
     let token = snapshot.tokens.access_token.as_deref().unwrap_or("");
     match state
         .upstream
-        .auth()
-        .refresh_rejected_token(&ctx.account.id, token)
+        .refresh_supplier_auth(&ctx.account, token)
         .await
     {
         Ok(_) => Ok(None),
         Err(error) => {
-            let error = UpstreamError::Refresh(error);
-            match error.supplier_failure(chrono::Utc::now().timestamp()) {
+            match error
+                .supplier_failure_for(&ctx.account.provider_id, chrono::Utc::now().timestamp())
+            {
                 Some(failure) => Ok(Some(failure)),
                 None => Err(error.into()),
             }
@@ -108,7 +112,9 @@ pub(crate) fn prelude_event(value: &serde_json::Value) -> bool {
     )
 }
 
-async fn inspect(
+async fn inspect_for(
+    provider: &str,
+    is_prelude: fn(&serde_json::Value) -> bool,
     mut response: reqwest::Response,
 ) -> std::result::Result<reqwest::Response, UpstreamError> {
     let status = response.status();
@@ -177,7 +183,8 @@ async fn inspect(
             {
                 first_event.get_or_insert_with(std::time::Instant::now);
             }
-            if codex2api_upstream::classify_supplier_failure(
+            if codex2api_upstream::classify_provider_failure(
+                provider,
                 None,
                 &value,
                 &headers,
@@ -193,7 +200,7 @@ async fn inspect(
                     headers,
                 });
             }
-            if !prelude_event(&value) {
+            if !is_prelude(&value) {
                 break 'read;
             }
         }
@@ -212,41 +219,26 @@ async fn inspect(
     Ok(reqwest::Response::from(rebuilt))
 }
 
-pub(crate) async fn forward(
+pub(crate) async fn execute<F, Fut>(
     state: &ApiState,
     oauth: &VirtualAccess,
     ctx: SupplierContext,
-    endpoint: Endpoint,
-    subpath: Option<&str>,
-    body: Bytes,
-    headers: HeaderMap,
     log: &mut Option<crate::usage::RequestLog>,
-) -> Result<reqwest::Response> {
-    execute(state, oauth, ctx, log, |id: String| {
-        let body = body.clone();
-        let mut headers = headers.clone();
-        if oauth.account_id.as_deref() != Some(id.as_str()) {
-            headers.remove("x-codex-turn-state");
-        }
-        async move {
-            let upstream = state.upstream.get(&id).await?;
-            if let Some(subpath) = subpath {
-                upstream
-                    .forward_responses_subpath(subpath, body, headers)
-                    .await
-            } else {
-                upstream.forward_endpoint(endpoint, body, headers).await
-            }
-        }
-    })
-    .await
+    send: F,
+) -> Result<reqwest::Response>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<reqwest::Response, UpstreamError>>,
+{
+    execute_with_prelude(state, oauth, ctx, log, prelude_event, send).await
 }
 
-async fn execute<F, Fut>(
+pub(crate) async fn execute_with_prelude<F, Fut>(
     state: &ApiState,
     oauth: &VirtualAccess,
     mut ctx: SupplierContext,
     log: &mut Option<crate::usage::RequestLog>,
+    is_prelude: fn(&serde_json::Value) -> bool,
     mut send: F,
 ) -> Result<reqwest::Response>
 where
@@ -270,13 +262,14 @@ where
                 .get::<codex2api_upstream::SupplierAuthRevision>()
                 .map(|r| r.0)
                 .or(revision);
-            inspect(response).await
+            inspect_for(&ctx.account.provider_id, is_prelude, response).await
         }
         .await;
         match result {
             Ok(response) => return Ok(response),
             Err(error) => {
-                let Some(mut failure) = error.supplier_failure(chrono::Utc::now().timestamp())
+                let Some(mut failure) = error
+                    .supplier_failure_for(&ctx.account.provider_id, chrono::Utc::now().timestamp())
                 else {
                     if let Some(log) = log {
                         log.upstream_failure(&error);
@@ -316,6 +309,13 @@ where
             }
         }
     }
+}
+
+#[cfg(test)]
+async fn inspect(
+    response: reqwest::Response,
+) -> std::result::Result<reqwest::Response, UpstreamError> {
+    inspect_for(codex2api_core::CHATGPT, prelude_event, response).await
 }
 
 #[cfg(test)]

@@ -32,6 +32,7 @@ export type Subscription = {
   revision: number;
 };
 export type Plan = {
+  description: string;
   id: string;
   name: string;
   provider_id: string;
@@ -40,7 +41,7 @@ export type Plan = {
   duration_days: number;
   revision: number;
   model_access: string;
-  models: { model: string }[];
+  models: { provider_id: string; model: string; kind: string }[];
   spending_windows: { duration_seconds: number; cost_limit_usd: string | null }[];
 };
 export type Entry = {

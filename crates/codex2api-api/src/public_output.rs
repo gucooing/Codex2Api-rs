@@ -49,7 +49,7 @@ fn identifier(value: &Value) -> Option<&str> {
         !v.is_empty()
             && v.len() <= 80
             && v.bytes()
-                .all(|c| c.is_ascii_lowercase() || c == b'_' || c.is_ascii_digit())
+                .all(|c| c.is_ascii_lowercase() || b"_-:.".contains(&c) || c.is_ascii_digit())
     })
 }
 pub(crate) fn error(value: &Value) -> Value {
@@ -140,6 +140,14 @@ pub(crate) fn metadata(value: &mut Value) {
                         | "credits"
                         | "plan_type"
                         | "chatgpt_plan_type"
+                        | "teamid"
+                        | "team_id"
+                        | "teamname"
+                        | "principalid"
+                        | "principaltype"
+                        | "organizationid"
+                        | "organizationname"
+                        | "cost_in_usd_ticks"
                 )
             });
             for (key, item) in object.iter_mut() {

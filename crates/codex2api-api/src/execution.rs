@@ -53,7 +53,10 @@ impl ExecutionContext {
             ExecutionKind::InspectModel
         } else if self.endpoint.ends_with("/responses/compact") {
             ExecutionKind::Compact
-        } else if self.endpoint.ends_with("/responses") {
+        } else if self.endpoint.ends_with("/responses")
+            || self.endpoint.ends_with("/chat/completions")
+            || self.endpoint.ends_with("/messages")
+        {
             ExecutionKind::Responses
         } else if self.endpoint.ends_with("/images/generations")
             || self.endpoint.ends_with("/images/edits")

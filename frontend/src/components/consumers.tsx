@@ -96,7 +96,7 @@ import { ResourceRefreshContext, useQueryId, useResource } from "@/lib/hooks";
 
 import { ConsumerUsage } from "./usage";
 import { ConfigPanel, ClientStatePanel } from "./config";
-import { accountConfigGroups } from "@/lib/account-fields";
+import { supplierChannel } from "@/components/providers";
 import { recordColumns, recordRows, mobileRecordColumns } from "@/lib/records";
 import { usePreference, useSavedFilters, validView, validPageSize } from "@/lib/preferences";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -305,7 +305,7 @@ export function ConsumersPage() {
               resource.reload();
             }}
           >
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("搜索账户"))}
               >
@@ -319,7 +319,7 @@ export function ConsumersPage() {
                 placeholder="名称、用户名或邮箱"
               />
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("登录状态"))}
               >
@@ -377,7 +377,7 @@ export function ConsumersPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-4" + "-" + encodeURIComponent(String("订阅状态"))}
               >
@@ -1145,7 +1145,7 @@ export function ConsumersPage() {
                       <SelectTrigger id={`${fieldId}-batch-mode`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="now">立即启用</SelectItem>
                         <SelectItem value="scheduled">定时启用</SelectItem>
                       </SelectContent>
@@ -1341,6 +1341,7 @@ export function ConsumerForm({
             </SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value="chatgpt">ChatGPT</SelectItem>
+              <SelectItem value="grok">Grok</SelectItem>
             </SelectContent>
           </Select>
         </Field>
@@ -1535,7 +1536,7 @@ export function ConsumerDetail() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent position="popper">
-                    {accountConfigGroups.map((item) => (
+                    {supplierChannel(account?.provider_id).configGroups.map((item) => (
                       <SelectItem key={item.key} value={item.key}>
                         {item.label}
                       </SelectItem>
@@ -1738,7 +1739,7 @@ function ConsumerResetCredits({ id }: { id: string }) {
                 <SelectTrigger id={`${fieldId}-start-mode`}>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   <SelectItem value="now">立即启用</SelectItem>
                   <SelectItem value="scheduled">定时启用</SelectItem>
                 </SelectContent>

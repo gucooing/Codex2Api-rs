@@ -162,7 +162,7 @@ pub(crate) async fn codex_model_catalog(storage: &Storage, owner: &str) -> crate
     let descriptors = models
         .iter()
         .filter(|m| m.kind == "text")
-        .filter_map(|model| codex2api_upstream::codex_model_descriptor(&model.model))
+        .map(|model| codex2api_upstream::configured_model_descriptor(&model.model))
         .collect::<Vec<_>>();
     Ok(json!({"models":descriptors}))
 }

@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 fn plan_dto(p: &VirtualPlan) -> dto::Plan {
     dto::Plan {
+        description: p.description().into(),
         id: p.id.clone(),
         provider_id: p.provider_id.clone(),
         name: p.name.clone(),
@@ -59,6 +60,7 @@ pub async fn plans(State(s): State<AdminState>) -> ApiResult {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanInput {
+    description: Option<String>,
     plan_type: String,
     name: String,
     provider_id: String,
@@ -129,7 +131,10 @@ async fn save_plan(s: AdminState, id: Option<String>, f: PlanInput) -> ApiResult
     if old.is_some() && f.revision.is_none() {
         return Err(ApiError::bad("缺少套餐版本"));
     }
-    let config = json!({"model_access":f.model_access,"models":if f.model_access=="selected"{f.models}else{vec![]},"spending_windows":f.spending_windows,
+    let description = f
+        .description
+        .unwrap_or_else(|| old.as_ref().map_or("", VirtualPlan::description).to_owned());
+    let config = json!({"description":description,"model_access":f.model_access,"models":if f.model_access=="selected"{f.models}else{vec![]},"spending_windows":f.spending_windows,
         "sale_price_usd":if f.plan_type=="free"{None}else{f.sale_price_usd.filter(|v|!v.trim().is_empty())},"duration_days":f.duration_days,
         "supplier_tag_id":f.supplier_tag_id.filter(|v|!v.is_empty())});
     let plan = VirtualPlan {
@@ -179,9 +184,14 @@ fn token_dto(p: &ModelPrice) -> dto::TokenPrice {
     }
 }
 pub async fn models(State(s): State<AdminState>) -> ApiResult {
-    let models = s.storage.model_configs("chatgpt").await?;
-    let tokens = s.storage.model_prices("chatgpt").await?;
-    let images = s.storage.image_prices("chatgpt").await?;
+    let mut models = Vec::new();
+    let mut tokens = Vec::new();
+    let mut images = Vec::new();
+    for (provider, _) in codex2api_core::PROVIDERS {
+        models.extend(s.storage.model_configs(provider).await?);
+        tokens.extend(s.storage.model_prices(provider).await?);
+        images.extend(s.storage.image_prices(provider).await?);
+    }
     Ok(Json(dto::value(dto::Items {
         items: models
             .iter()
@@ -191,28 +201,14 @@ pub async fn models(State(s): State<AdminState>) -> ApiResult {
                 kind: m.kind.clone(),
                 enabled: m.enabled,
                 revision: m.revision,
-                codex_metadata_status: if m.kind == "image" {
-                    "not_applicable"
-                } else if codex2api_upstream::codex_model_descriptor(&m.model).is_some() {
-                    "verified"
-                } else {
-                    "unavailable"
-                },
-                codex_metadata_source: if codex2api_upstream::codex_model_descriptor(&m.model)
-                    .is_some()
-                {
-                    Some(codex2api_version::CODEX_REF_COMMIT)
-                } else {
-                    None
-                },
                 token_prices: tokens
                     .iter()
-                    .filter(|p| p.model == m.model)
+                    .filter(|p| p.model == m.model && p.provider_id == m.provider_id)
                     .map(token_dto)
                     .collect(),
                 image_prices: images
                     .iter()
-                    .filter(|p| p.model == m.model)
+                    .filter(|p| p.model == m.model && p.provider_id == m.provider_id)
                     .map(|p| dto::ImagePrice {
                         resolution: p.resolution.clone(),
                         price: format_units(p.price_nano_usd, 9),
@@ -223,26 +219,44 @@ pub async fn models(State(s): State<AdminState>) -> ApiResult {
     })))
 }
 
-pub async fn model_presets() -> ApiResult {
-    let items = codex2api_upstream::supported_models()
+pub async fn model_presets(State(s): State<AdminState>) -> ApiResult {
+    let mut models = codex2api_upstream::supported_models();
+    models.extend(
+        codex2api_core::providers::grok::PRICED_MODELS
+            .iter()
+            .map(|model| codex2api_core::SupportedModel {
+                provider_id: codex2api_core::GROK.into(),
+                model: (*model).into(),
+                kind: "text".into(),
+            }),
+    );
+    models.extend(
+        s.storage
+            .grok_model_descriptors()
+            .await?
+            .iter()
+            .filter_map(|v| v["model"].as_str())
+            .map(|model| codex2api_core::SupportedModel {
+                provider_id: codex2api_core::GROK.into(),
+                model: model.into(),
+                kind: "text".into(),
+            }),
+    );
+    models.sort_by(|a, b| (&a.provider_id, &a.model).cmp(&(&b.provider_id, &b.model)));
+    models.dedup_by(|a, b| a.provider_id == b.provider_id && a.model == b.model);
+    let items = models
         .into_iter()
         .map(|model| {
             let prices = codex2api_storage::preset_model_prices(&model.provider_id, &model.model);
+            let (source, version) = codex2api_core::model_preset_source(&model.provider_id);
             dto::ModelPreset {
-                source_url: prices.as_ref().map(|_| {
-                    format!(
-                        "https://developers.openai.com/api/docs/models/{}",
-                        model.model
-                    )
-                }),
-                verified_at: prices
-                    .as_ref()
-                    .map(|_| codex2api_core::MODEL_PRESET_VERSION),
+                source_url: prices.as_ref().map(|_| source.to_owned()),
+                verified_at: prices.as_ref().map(|_| version),
                 token_prices: prices.unwrap_or_default().iter().map(token_dto).collect(),
                 provider_id: model.provider_id,
                 model: model.model,
                 kind: model.kind,
-                version: codex2api_core::MODEL_PRESET_VERSION,
+                version,
             }
         })
         .collect::<Vec<_>>();
@@ -286,7 +300,7 @@ pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) 
         return Err(ApiError::bad("提供商尚未接入"));
     }
     let mut tokens = if let Some(version) = f.pricing_preset.as_deref() {
-        if version != codex2api_core::MODEL_PRESET_VERSION {
+        if version != codex2api_core::model_preset_source(&f.provider_id).1 {
             return Err(ApiError::conflict());
         }
         if f.kind != "text" || !f.token_prices.is_empty() || !f.image_prices.is_empty() {

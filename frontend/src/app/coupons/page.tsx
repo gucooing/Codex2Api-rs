@@ -341,7 +341,7 @@ export default function CouponsPage() {
                     <SelectTrigger id={`${id}-plan`}>
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       <SelectItem value="all">全部付费套餐</SelectItem>
                       {plans.data?.items
                         .filter((p) => p.plan_type !== "free")

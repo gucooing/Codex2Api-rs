@@ -463,10 +463,8 @@ impl Storage {
         tokens: SupplierTokens,
         proxy_id: Option<&str>,
     ) -> Result<SupplierAccount> {
-        if new.provider_id != codex2api_core::CHATGPT {
-            return Err(StorageError::Constraint(
-                "ChatGPT supplier adapter cannot persist another provider".into(),
-            ));
+        if !codex2api_core::supported_provider(&new.provider_id) {
+            return Err(StorageError::Constraint("Unknown supplier provider".into()));
         }
         if new
             .chatgpt_account_id
@@ -487,8 +485,8 @@ impl Storage {
             "INSERT INTO supplier_accounts (
                 id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                 installation_id, originator, user_agent, os_type, os_version, arch, home_dir,
-                http_fingerprint_json, proxy_id, created_at, updated_at
-             ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                http_fingerprint_json, proxy_id, created_at, updated_at, provider_id
+             ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(provider_id,chatgpt_account_id,chatgpt_user_id) DO UPDATE SET
                 status = 'active',
                 display_name = COALESCE(excluded.display_name, supplier_accounts.display_name),
@@ -497,7 +495,7 @@ impl Storage {
                 plan_type = COALESCE(excluded.plan_type, supplier_accounts.plan_type),
                 proxy_id = excluded.proxy_id,
                 updated_at = excluded.updated_at
-             WHERE supplier_accounts.provider_id='chatgpt'
+             WHERE supplier_accounts.provider_id=excluded.provider_id
              RETURNING {ACCOUNT_COLUMNS}"
         );
         let row = sqlx::query_as::<_, AccountRow>(&sql)
@@ -518,6 +516,7 @@ impl Storage {
             .bind(proxy_id)
             .bind(&now)
             .bind(&now)
+            .bind(&new.provider_id)
             .fetch_one(&mut *tx)
             .await?;
         let account = SupplierAccount::try_from(row)?;

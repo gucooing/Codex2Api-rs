@@ -151,7 +151,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
               if (validateForm(event.currentTarget)) apply(filters);
             }}
           >
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel htmlFor="overview-consumer">虚拟账户</FieldLabel>
               <Combobox<Pick<Consumer, "id" | "username">>
                 items={consumers.data?.items ?? []}
@@ -210,7 +210,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 </ComboboxContent>
               </Combobox>
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel htmlFor="overview-model">模型</FieldLabel>
               <Input
                 id="overview-model"
@@ -236,7 +236,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 <SelectTrigger id="overview-range" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   {[
                     ["today", "今天"],
                     ["1", "最近 24 小时"],
@@ -284,7 +284,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 <SelectTrigger id="overview-status" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   <SelectItem value="all">全部状态</SelectItem>
                   {usageStatuses.map((status) => (
                     <SelectItem key={status.value} value={status.value}>
@@ -300,7 +300,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 <SelectTrigger id="overview-group" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   {Object.entries(usageGroups).map(([value, label]) => (
                     <SelectItem key={value} value={value}>
                       {label}

@@ -94,7 +94,6 @@ async fn model_prices_and_lifecycle_share_revision_checked_persisted_configurati
         .find(|v| v["model"] == "test-model")
         .unwrap();
     assert_eq!(item["token_prices"][0]["input_rate"], "2.5");
-    assert_eq!(item["codex_metadata_status"], "unavailable");
     let revision = item["revision"].as_i64().unwrap();
     let mut changed = input;
     changed["revision"] = revision.into();
@@ -147,7 +146,7 @@ async fn model_prices_and_lifecycle_share_revision_checked_persisted_configurati
             .any(|m| m.model == "test-model")
     );
     let mut grok = model_input("grok");
-    grok["provider_id"] = "grok".into();
+    grok["provider_id"] = "unsupported-provider".into();
     assert_eq!(
         f.request("POST", "/admin/api/models", grok).await.status(),
         StatusCode::BAD_REQUEST

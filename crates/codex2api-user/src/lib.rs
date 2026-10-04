@@ -2,6 +2,7 @@
 mod auth;
 mod error;
 mod oauth;
+mod providers;
 mod rest;
 use axum::{
     Router,

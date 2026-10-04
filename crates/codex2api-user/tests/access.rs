@@ -109,7 +109,9 @@ async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amoun
         .user_subscriptions(Some(&user.id), true)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     storage
         .save_user_subscription(SubscriptionChange {
             reissue: false,
@@ -138,7 +140,9 @@ async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amoun
         .user_subscriptions(Some(&user.id), true)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     sqlx::query("UPDATE users SET wallet_cents=5000 WHERE id=?")
         .bind(&user.id)
         .execute(storage.pool())

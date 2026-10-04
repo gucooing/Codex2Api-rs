@@ -80,7 +80,7 @@ pub async fn forward(
         } else {
             None
         };
-        let response = crate::pool_execution::forward(
+        let response = crate::providers::chatgpt::execution::forward(
             &state,
             &oauth,
             ctx,

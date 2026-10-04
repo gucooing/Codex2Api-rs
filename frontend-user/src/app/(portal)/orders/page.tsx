@@ -109,7 +109,7 @@ export default function OrdersPage() {
             plans.reload();
           }}
         >
-          <Field className="w-44">
+          <Field className="w-40">
             <FieldLabel className="sr-only" htmlFor={`${id}-search`}>
               订单号
             </FieldLabel>
@@ -121,7 +121,7 @@ export default function OrdersPage() {
               onChange={(event) => setFilters((v) => ({ ...v, search: event.target.value }))}
             />
           </Field>
-          <Field className="w-44">
+          <Field className="w-40">
             <FieldLabel className="sr-only" htmlFor={`${id}-filter-plan`}>
               套餐
             </FieldLabel>
@@ -132,7 +132,7 @@ export default function OrdersPage() {
               <SelectTrigger id={`${id}-filter-plan`}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 <SelectItem value="all">全部套餐</SelectItem>
                 {plans.data?.items.map((plan) => (
                   <SelectItem key={plan.id} value={plan.id}>
@@ -153,7 +153,7 @@ export default function OrdersPage() {
               <SelectTrigger id={`${id}-status`}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 <SelectItem value="all">全部状态</SelectItem>
                 {Object.entries(orderStatuses).map(([value, label]) => (
                   <SelectItem key={value} value={value}>
@@ -231,7 +231,7 @@ export default function OrdersPage() {
                   <SelectTrigger aria-label="每页条数">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent position="popper">
                     {[10, 20, 30, 50].map((value) => (
                       <SelectItem key={value} value={String(value)}>
                         {value} 条

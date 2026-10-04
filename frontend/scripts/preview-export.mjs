@@ -4,7 +4,10 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve, sep, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../out");
+const roots = {
+  admin: resolve(dirname(fileURLToPath(import.meta.url)), "../out"),
+  user: resolve(dirname(fileURLToPath(import.meta.url)), "../../frontend-user/out"),
+};
 const types = {
   ".html": "text/html",
   ".js": "application/javascript",
@@ -19,11 +22,13 @@ const types = {
 createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (!url.pathname.startsWith("/admin/")) {
+    const prefix = url.pathname.split("/")[1];
+    const root = Object.hasOwn(roots, prefix) ? roots[prefix] : undefined;
+    if (!root || !url.pathname.startsWith(`/${prefix}/`)) {
       response.writeHead(404).end();
       return;
     }
-    let path = decodeURIComponent(url.pathname.slice("/admin".length));
+    let path = decodeURIComponent(url.pathname.slice(prefix.length + 1));
     if (path.endsWith("/")) path += "index.html";
     const file = resolve(root, `.${path}`);
     if (!file.startsWith(root + sep)) {
@@ -39,4 +44,4 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(404).end();
   }
-}).listen(8793, "127.0.0.1");
+}).listen(Number(process.env.CODEX2API_PREVIEW_PORT ?? 8793), "127.0.0.1");

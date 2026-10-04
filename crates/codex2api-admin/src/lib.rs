@@ -1,8 +1,8 @@
 //! Administrator JSON API. Cookie sessions and CSRF checks are independent of consumer OAuth.
+mod providers;
 mod proxy_checks;
 mod quota;
 mod rest;
-mod services;
 mod session;
 mod state;
 pub use state::AdminState;

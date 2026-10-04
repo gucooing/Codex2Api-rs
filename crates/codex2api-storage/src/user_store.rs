@@ -88,9 +88,15 @@ impl UserStore {
             let price = plan
                 .sale_price_cents()?
                 .map(|value| crate::format_units(value, 2));
+            let access = plan.model_access()?;
+            let models: Vec<Value> = self.storage.model_configs(&plan.provider_id).await?
+                .into_iter()
+                .filter(|model| model.enabled && access.permits(&plan.provider_id, &model.model))
+                .map(|model| json!({"provider_id":plan.provider_id,"model":model.model,"kind":model.kind}))
+                .collect();
             items.push(json!({"id":plan.id,"name":plan.name,"provider_id":plan.provider_id,"plan_type":plan.plan_type,
-                "sale_price_usd":price,"duration_days":plan.duration_days()?,"revision":plan.revision,
-                "model_access":plan.config["model_access"],"models":plan.config["models"],"spending_windows":crate::plan_spending_windows(&plan.config)?}));
+                "description":plan.description(),"sale_price_usd":price,"duration_days":plan.duration_days()?,"revision":plan.revision,
+                "model_access":plan.config["model_access"],"models":models,"spending_windows":crate::plan_spending_windows(&plan.config)?}));
         }
         Ok(items)
     }

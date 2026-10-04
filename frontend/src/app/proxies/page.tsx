@@ -98,7 +98,7 @@ export default function ProxiesPage() {
               resource.reload();
             }}
           >
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-1" + "-" + encodeURIComponent(String("搜索代理"))}
               >
@@ -112,7 +112,7 @@ export default function ProxiesPage() {
                 placeholder="名称或主机地址"
               />
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("代理协议"))}
               >
@@ -174,7 +174,7 @@ export default function ProxiesPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("连接检查结果"))}
               >

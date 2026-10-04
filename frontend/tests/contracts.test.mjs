@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { planWrite, modelWrite, canEditConfig } from "../src/lib/domain.ts";
+import { planWrite, canEditConfig } from "../src/lib/domain.ts";
 import { taskRecord, subscriptionRecord } from "../src/lib/record-selectors.ts";
 
 // This fixture is emitted by the real Rust REST handlers over a temporary SQLite database.
@@ -28,6 +28,7 @@ test("actual session, overview, consumer and route DTOs match their consumers", 
   string(fixture.session.csrf_token);
   string(fixture.session.app_version);
   string(fixture.session.codex_cli_version);
+  string(fixture.session.grok_build_version);
   for (const key of [
     "supplier_count",
     "consumer_count",
@@ -85,12 +86,9 @@ test("plan writes select model identity fields from independent model list DTOs"
 test("actual model metadata does not leak into write requests", () => {
   for (const item of fixture.models.items) {
     modelRef(item);
-    assert.ok(["verified", "unavailable", "not_applicable"].includes(item.codex_metadata_status));
     for (const price of item.token_prices)
       for (const key of ["input_rate", "cached_rate", "cache_write_rate", "output_rate"])
         decimal(price[key]);
-    assert.equal("codex_metadata_status" in modelWrite(item), false);
-    assert.equal("codex_metadata_source" in modelWrite(item), false);
   }
 });
 test("actual usage distinguishes billed cost, unknown billing, and both windows", () => {

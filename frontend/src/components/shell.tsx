@@ -96,6 +96,7 @@ type Session = {
   csrf_token: string;
   app_version: string;
   codex_cli_version: string;
+  grok_build_version: string;
 };
 const signedOut: Session = {
   authenticated: false,
@@ -103,6 +104,7 @@ const signedOut: Session = {
   csrf_token: "",
   app_version: "",
   codex_cli_version: "",
+  grok_build_version: "",
 };
 async function readSession(signal?: AbortSignal): Promise<Session> {
   try {
@@ -403,7 +405,7 @@ function AdminShell({ children }: { children: ReactNode }) {
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className="min-w-0">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <header className="flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-1">
           <SidebarTrigger
             className="-ml-1"
             aria-label={
@@ -440,6 +442,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               className="mr-2 flex flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground sm:flex-row sm:gap-3"
             >
               <span>Codex CLI {session.codex_cli_version || "—"}</span>
+              <span>Grok Build {session.grok_build_version || "—"}</span>
               <span>Codex2API {session.app_version || "—"}</span>
             </div>
             <Dialog open={searchOpen} onOpenChange={setSearchOpen}>

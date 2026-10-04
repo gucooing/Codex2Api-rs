@@ -9,7 +9,7 @@ async fn consumer(storage: &Storage, id: &str, provider: &str, plan: &str) -> Vi
         password_hash: "fixture".into(),
         name: id.into(),
         email: format!("{id}@example.test"),
-        plan_type: "plus".into(),
+        plan_type: storage.virtual_plan(plan).await.unwrap().unwrap().plan_type,
         plan_id: plan.into(),
         subscription_expires_at: None,
         enabled: true,
@@ -25,18 +25,16 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     let storage = Storage::open(temp.path().join("separation.sqlite"))
         .await
         .unwrap();
-    sqlx::query("INSERT INTO providers(id,name) VALUES('test-provider','Test adapter fixture')")
-        .execute(storage.pool())
-        .await
-        .unwrap();
     let mut other_plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    other_plan.id = "test-provider-plan".into();
-    other_plan.provider_id = "test-provider".into();
+    other_plan.id = "grok-plan".into();
+    other_plan.provider_id = "grok".into();
     other_plan.name = "Test".into();
+    other_plan.plan_type = "supergrok".into();
     storage.save_virtual_plan(&other_plan, None).await.unwrap();
     let mut crossed = storage.virtual_plan("plus").await.unwrap().unwrap();
     let original = crossed.config.clone();
-    crossed.provider_id = "test-provider".into();
+    crossed.provider_id = "grok".into();
+    crossed.plan_type = "supergrok".into();
     crossed.config["spending_windows"] =
         json!([{"duration_seconds":604800,"cost_limit_usd":"123"}]);
     assert!(
@@ -50,8 +48,8 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         original
     );
     let mut a = consumer(&storage, "a", "chatgpt", "plus").await;
-    let b = consumer(&storage, "b", "test-provider", &other_plan.id).await;
-    a.provider_id = "test-provider".into();
+    let b = consumer(&storage, "b", "grok", &other_plan.id).await;
+    a.provider_id = "grok".into();
     a.plan_id = other_plan.id.clone();
     assert!(storage.save_virtual_account(&a).await.is_err());
     assert_eq!(
@@ -73,19 +71,19 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         "",
         "{}",
     );
-    new.provider_id = "test-provider".into();
+    new.provider_id = "grok".into();
     let supplier = storage.create_account(new).await.unwrap();
     assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'chatgpt',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
-    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'test-provider',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
+    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'grok',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
     storage
-        .save_supplier_tag("other-pool", "test-provider", "Other pool")
+        .save_supplier_tag("other-pool", "grok", "Other pool")
         .await
         .unwrap();
     storage
         .edit_supplier_tags(&[supplier.id.clone()], &["other-pool".into()], false)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id,tag_id) VALUES(?,'test-provider',?,'other-pool')").bind(&b.id).bind(&supplier.id).execute(storage.pool()).await.unwrap();
+    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id,tag_id) VALUES(?,'grok',?,'other-pool')").bind(&b.id).bind(&supplier.id).execute(storage.pool()).await.unwrap();
     storage
         .save_virtual_resource(
             &b.id,
@@ -107,7 +105,7 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     assert!(storage.virtual_account(&b.id).await.unwrap().is_some());
     assert!(
         storage
-            .execution_route(&b.id, "test-provider")
+            .execution_route(&b.id, "grok")
             .await
             .unwrap()
             .unwrap()
@@ -214,7 +212,7 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
     let storage = Storage::open(temp.path().join("supplier-isolation.sqlite"))
         .await
         .unwrap();
-    sqlx::query("INSERT INTO providers(id,name) VALUES('test-provider','Test')")
+    sqlx::query("INSERT OR IGNORE INTO providers(id,name) VALUES('grok','Test')")
         .execute(storage.pool())
         .await
         .unwrap();
@@ -228,7 +226,7 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
         "",
         "{}",
     );
-    other.provider_id = "test-provider".into();
+    other.provider_id = "grok".into();
     other.chatgpt_account_id = Some("official".into());
     assert!(storage.create_account(other.clone()).await.is_err());
     other.chatgpt_account_id = None;

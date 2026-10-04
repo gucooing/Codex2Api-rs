@@ -1,3 +1,4 @@
+use crate::pool_execution::SupplierContext;
 use crate::{
     ApiError, ApiState, Result, execution::ExecutionContext, pool_execution as pool,
     usage::WsLedger,
@@ -9,7 +10,6 @@ use axum::{
     },
     response::Response,
 };
-use codex2api_accounts::SupplierContext;
 use codex2api_storage::VirtualAccess;
 use codex2api_upstream::{Endpoint, ResponseOutcome, UpstreamWebSocket};
 use futures::{SinkExt, StreamExt};
@@ -149,8 +149,11 @@ async fn send(conn: &mut Connection, value: &Value, reviewer: bool) -> Result<()
     }
     let text = super::websocket::prepare_message(
         &value.to_string(),
-        &conn.ctx.identity.installation_id,
-        conn.ctx.identity.http_fingerprint.timezone.as_deref(),
+        &conn.ctx.account.installation_id,
+        codex2api_accounts::AccountIdentity::from_account(&conn.ctx.account)
+            .http_fingerprint
+            .timezone
+            .as_deref(),
         reviewer,
     )?;
     conn.socket
@@ -434,7 +437,9 @@ mod tests {
                     async move {
                         let connection = Connection {
                             socket: fixture_socket(&format!("ws://{address}/responses")).await,
-                            ctx: state.accounts.load_context(&first).await.unwrap(),
+                            ctx: SupplierContext {
+                                account: state.storage.require_account(&first).await.unwrap(),
+                            },
                             headers: HeaderMap::new(),
                             revision: state.storage.supplier_auth_revision(&first).await.unwrap(),
                             workspace: None,
@@ -615,7 +620,9 @@ mod tests {
                 let first = first.clone();
                 async move {
                     let socket = fixture_socket(&format!("ws://{upstream_addr}/responses")).await;
-                    let ctx = state.accounts.load_context(&first).await.unwrap();
+                    let ctx = SupplierContext {
+                        account: state.storage.require_account(&first).await.unwrap(),
+                    };
                     let revision = state.storage.supplier_auth_revision(&first).await.unwrap();
                     let connection = Connection {
                         socket,

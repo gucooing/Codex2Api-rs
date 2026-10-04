@@ -1,4 +1,5 @@
 "use client";
+import { GrokModelSync } from "@/components/providers/grok/models";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
@@ -131,7 +132,7 @@ export default function ModelsPage() {
               resource.reload();
             }}
           >
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-1" + "-" + encodeURIComponent(String("搜索模型"))}
               >
@@ -145,7 +146,7 @@ export default function ModelsPage() {
                 placeholder="模型名称或提供商"
               />
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("模型类型"))}
               >
@@ -203,7 +204,7 @@ export default function ModelsPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field className="w-44">
+            <Field className="w-40">
               <FieldLabel
                 htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("模型状态"))}
               >
@@ -308,6 +309,12 @@ export default function ModelsPage() {
             </DropdownMenu>
           </form>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
+            <GrokModelSync
+              onSynced={() => {
+                resource.reload();
+                presets.reload();
+              }}
+            />
             {(resource.error || presets.error) && (
               <Button
                 type="button"
@@ -378,11 +385,6 @@ export default function ModelsPage() {
                           <div className="max-md:hidden">
                             <strong>{model.model}</strong>
                             <CardDescription>{model.provider_id}</CardDescription>
-                            {model.codex_metadata_status === "unavailable" && (
-                              <CardDescription className="text-sm text-muted-foreground text-xs">
-                                缺少已验证的 Codex 模型描述，暂不显示在 Codex 模型选择器。
-                              </CardDescription>
-                            )}
                           </div>
                           <Dialog>
                             <DialogTrigger asChild>
@@ -412,11 +414,6 @@ export default function ModelsPage() {
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
                                     <strong>{model.model}</strong>
                                     <CardDescription>{model.provider_id}</CardDescription>
-                                    {model.codex_metadata_status === "unavailable" && (
-                                      <CardDescription className="text-sm text-muted-foreground text-xs">
-                                        缺少已验证的 Codex 模型描述，暂不显示在 Codex 模型选择器。
-                                      </CardDescription>
-                                    )}
                                   </div>
                                 </Field>
                                 <Field>
@@ -884,14 +881,18 @@ function ModelEditor({
                         >
                           <SelectValue
                             placeholder={
-                              [{ value: "chatgpt", label: "ChatGPT" }].find(
-                                (option) => option.value === "",
-                              )?.label ?? "请选择"
+                              [
+                                { value: "chatgpt", label: "ChatGPT" },
+                                { value: "grok", label: "Grok" },
+                              ].find((option) => option.value === "")?.label ?? "请选择"
                             }
                           />
                         </SelectTrigger>
                         <SelectContent position="popper">
-                          {[{ value: "chatgpt", label: "ChatGPT" }].map((option) => (
+                          {[
+                            { value: "chatgpt", label: "ChatGPT" },
+                            { value: "grok", label: "Grok" },
+                          ].map((option) => (
                             <SelectItem
                               key={option.value}
                               value={
@@ -1165,7 +1166,7 @@ function ModelEditor({
                                 <SelectTrigger id={`${fieldId}-${tier}-mode`}>
                                   <SelectValue />
                                 </SelectTrigger>
-                                <SelectContent>
+                                <SelectContent position="popper">
                                   <SelectItem value="off">未定价</SelectItem>
                                   <SelectItem value="multiplier">按倍率计价</SelectItem>
                                   {pricing[tier].rows.length > 0 && (

@@ -20,6 +20,22 @@ pub fn codex_model_descriptor(model: &str) -> Option<Value> {
         .cloned()
 }
 
+/// Administration, not the pinned metadata file, decides which models are offered.
+/// Unknown slugs use the official ModelInfo wire fields without inventing a context limit.
+pub fn configured_model_descriptor(model: &str) -> Value {
+    let mut descriptor=codex_model_descriptor(model).unwrap_or_else(||serde_json::json!({
+        "slug":model,"display_name":model,"description":null,"default_reasoning_level":null,
+        "supported_reasoning_levels":[],"shell_type":"unified_exec","visibility":"list",
+        "supported_in_api":true,"priority":99,"additional_speed_tiers":[],"service_tiers":[],
+        "availability_nux":null,"upgrade":null,"support_verbosity":false,"default_verbosity":null,
+        "apply_patch_tool_type":null,"truncation_policy":{"mode":"bytes","limit":10000},
+        "experimental_supported_tools":[],"input_modalities":["text"],"supports_search_tool":false
+    }));
+    descriptor["visibility"] = "list".into();
+    descriptor["supported_in_api"] = true.into();
+    descriptor
+}
+
 /// Public models actually described by the pinned provider adapter.
 /// Internal/hidden aliases do not become public service entitlements.
 pub fn supported_models() -> Vec<codex2api_core::SupportedModel> {

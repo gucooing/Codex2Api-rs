@@ -219,7 +219,12 @@ async fn closing_purchases_does_not_restrict_administrator_assignments() {
     assert_eq!(f.consumer("closed-plan-consumer").await["plan_id"], "plus");
     let user=body(f.request("POST","/admin/api/users",json!({"username":"closed-plan-user","password":"password","name":"User","email":"u@example.test","enabled":true,"revision":null})).await).await;
     let subs = f.get("/admin/api/subscriptions").await;
-    let sub = &subs["items"][0];
+    let sub = subs["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["provider_id"] == "chatgpt")
+        .unwrap();
     assert_eq!(f.request("PUT",&format!("/admin/api/subscriptions/{}",sub["virtual_account_id"].as_str().unwrap()),json!({"user_id":user["id"],"plan_id":"plus","expires_at":"2099-01-01T00:00:00Z","reissue":false,"enabled":true,"revision":sub["revision"]})).await.status(),axum::http::StatusCode::OK);
     let plans = f.get("/admin/api/plans").await;
     let plus = plans["items"]
@@ -247,7 +252,12 @@ async fn users_and_subscription_expiry_share_free_policy_without_migrating_stand
     assert_eq!(consumers["items"].as_array().unwrap().len(), 1);
     assert_eq!(consumers["items"][0]["id"], standalone["id"]);
     let subscriptions = f.get("/admin/api/subscriptions").await;
-    let current = &subscriptions["items"][0];
+    let current = subscriptions["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["provider_id"] == "chatgpt")
+        .unwrap();
     assert_eq!(current["plan_type"], "free");
     let id = current["virtual_account_id"].as_str().unwrap();
     let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
@@ -257,10 +267,19 @@ async fn users_and_subscription_expiry_share_free_policy_without_migrating_stand
         f.get("/admin/api/subscriptions").await["items"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|s| s["provider_id"] != "chatgpt")
     );
     let historical = f.get("/admin/api/subscriptions?include_expired=true").await;
-    assert_eq!(historical["items"][0]["expired"], true);
+    assert_eq!(
+        historical["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["provider_id"] == "chatgpt")
+            .unwrap()["expired"],
+        true
+    );
     let effective = f
         .storage
         .effective_virtual_account(id)

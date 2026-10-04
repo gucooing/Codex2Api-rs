@@ -430,7 +430,12 @@ pub async fn client_state(
     Ok(Json(response))
 }
 pub async fn configs(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
-    require(&s, &id).await?;
+    let account = require(&s, &id).await?;
+    if account.provider_id != codex2api_core::CHATGPT {
+        // This channel's service settings are its identity, plan and execution route.
+        // Do not materialize another channel's Desktop configuration defaults.
+        return Ok(Json(json!({"items":[]})));
+    }
     let mut items = Vec::new();
     for spec in virtual_config_specs() {
         if codex2api_storage::plan_owned_config(spec.key) {
@@ -460,7 +465,9 @@ pub async fn save_config(
     Path((id, key)): Path<(String, String)>,
     Json(mut f): Json<ConfigInput>,
 ) -> ApiResult {
-    require(&s, &id).await?;
+    if require(&s, &id).await?.provider_id != codex2api_core::CHATGPT {
+        return Err(ApiError::bad("该渠道的配置在账户、套餐和供应路由中维护"));
+    }
     if key == "models"
         || codex2api_storage::plan_owned_config(&key)
         || codex2api_storage::client_state_only(&key)

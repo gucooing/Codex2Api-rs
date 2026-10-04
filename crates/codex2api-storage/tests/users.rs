@@ -284,7 +284,9 @@ async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_sta
         .user_subscriptions(None, true)
         .await
         .unwrap()
-        .remove(0);
+        .into_iter()
+        .find(|s| s.provider_id == "chatgpt")
+        .unwrap();
     let expired = (Utc::now() - Duration::hours(1)).to_rfc3339();
     storage
         .save_user_subscription(SubscriptionChange {
@@ -302,7 +304,8 @@ async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_sta
             .user_subscriptions(None, false)
             .await
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|s| s.provider_id != "chatgpt")
     );
     assert_eq!(
         storage

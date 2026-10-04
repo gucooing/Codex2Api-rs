@@ -309,11 +309,11 @@ mod tests {
         };
         crate::proxy_fixture::server_tls();
         let cert = CertificateDer::from_pem_slice(include_bytes!(
-            "../../codex2api-auth/tests/fixtures/proxy-chatgpt-server.pem"
+            "../../../../codex2api-auth/tests/fixtures/proxy-chatgpt-server.pem"
         ))
         .unwrap();
         let key = PrivateKeyDer::from_pem_slice(include_bytes!(
-            "../../codex2api-auth/tests/fixtures/proxy-server-key.pem"
+            "../../../../codex2api-auth/tests/fixtures/proxy-server-key.pem"
         ))
         .unwrap();
         let tls = tokio_rustls::TlsAcceptor::from(Arc::new(
@@ -372,7 +372,7 @@ mod tests {
             .proxy(reqwest::Proxy::all(proxy).unwrap())
             .add_root_certificate(
                 reqwest::Certificate::from_pem(include_bytes!(
-                    "../../codex2api-auth/tests/fixtures/proxy-chatgpt-ca.pem"
+                    "../../../../codex2api-auth/tests/fixtures/proxy-chatgpt-ca.pem"
                 ))
                 .unwrap(),
             )

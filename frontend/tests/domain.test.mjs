@@ -149,8 +149,6 @@ test("mutation DTOs exclude read only metadata", () => {
     revision: 5,
     token_prices: [],
     image_prices: [{ resolution: "2K", price: "1" }],
-    codex_metadata_source: "reference",
-    codex_metadata_status: "verified",
   };
   assert.deepEqual(
     Object.keys(modelWrite(model)).sort(),

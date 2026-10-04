@@ -1,27 +1,34 @@
 {
   "session": {
     "authenticated": true,
-    "app_version": "v0.0.9",
-    "codex_cli_version": "0.159.3",
+    "app_version": "v0.0.26",
+    "codex_cli_version": "0.160.0",
+    "grok_build_version": "1.0.45",
     "username": "admin",
     "csrf_token": "session-csrf-token"
   },
   "overview": {
     "supplier_count": 1,
     "consumer_count": 1,
-    "models_count": 7,
     "normal_consumer_count": 1,
     "user_count": 0,
     "active_user_count": 0,
-    "activity_from_ms": 0,
+    "models_count": 9,
+    "activity_from_ms": 1,
     "activity_until_ms": 1
   },
   "plans": {
     "items": [
       {
+        "description": "",
+        "supplier_tag_id": null,
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "plan_type": "free",
         "id": "free",
         "provider_id": "chatgpt",
-        "name": "free",
+        "name": "ChatGPT Free",
+        "allow_purchase": false,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "none",
@@ -35,17 +42,18 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "0"
           }
-        ],
-        "plan_type": "free",
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "supplier_tag_id": null,
-        "allow_purchase": false
+        ]
       },
       {
+        "description": "",
+        "supplier_tag_id": null,
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "plan_type": "plus",
         "id": "plus",
         "provider_id": "chatgpt",
-        "name": "plus",
+        "name": "ChatGPT Plus",
+        "allow_purchase": true,
         "revision": 1,
         "updated_at_ms": 1,
         "model_access": "all",
@@ -59,72 +67,92 @@
             "duration_seconds": 18000,
             "cost_limit_usd": "2"
           }
-        ],
-        "plan_type": "plus",
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "supplier_tag_id": null,
-        "allow_purchase": true
+        ]
       },
       {
+        "description": "",
+        "supplier_tag_id": null,
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "plan_type": "pro",
         "id": "pro",
         "provider_id": "chatgpt",
-        "name": "pro",
+        "name": "ChatGPT Pro 200",
+        "allow_purchase": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "spending_windows": [],
-        "plan_type": "pro",
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "supplier_tag_id": null,
-        "allow_purchase": true
+        "spending_windows": []
       },
       {
+        "description": "",
+        "supplier_tag_id": null,
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "plan_type": "business",
         "id": "business",
         "provider_id": "chatgpt",
-        "name": "business",
+        "name": "ChatGPT Business",
+        "allow_purchase": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "spending_windows": [],
-        "plan_type": "business",
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "supplier_tag_id": null,
-        "allow_purchase": true
+        "spending_windows": []
       },
       {
+        "description": "",
+        "supplier_tag_id": null,
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "plan_type": "enterprise",
         "id": "enterprise",
         "provider_id": "chatgpt",
-        "name": "enterprise",
+        "name": "ChatGPT Enterprise",
+        "allow_purchase": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "spending_windows": [],
-        "plan_type": "enterprise",
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "supplier_tag_id": null,
-        "allow_purchase": true
+        "spending_windows": []
       },
       {
+        "description": "",
+        "supplier_tag_id": null,
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "plan_type": "edu",
         "id": "edu",
         "provider_id": "chatgpt",
-        "name": "edu",
+        "name": "ChatGPT Edu",
+        "allow_purchase": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "spending_windows": [],
-        "plan_type": "edu",
+        "spending_windows": []
+      },
+      {
+        "description": "",
+        "supplier_tag_id": null,
         "sale_price_usd": null,
         "duration_days": 30,
-        "supplier_tag_id": null,
-        "allow_purchase": true
+        "plan_type": "free",
+        "id": "platform-free-grok",
+        "provider_id": "grok",
+        "name": "Grok Free",
+        "allow_purchase": false,
+        "revision": 0,
+        "updated_at_ms": 1,
+        "model_access": "none",
+        "models": [],
+        "spending_windows": [
+          {
+            "duration_seconds": 2592000,
+            "cost_limit_usd": "0"
+          }
+        ]
       }
     ]
   },
@@ -136,8 +164,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "unavailable",
-        "codex_metadata_source": null,
         "token_prices": [
           {
             "tier": "fast",
@@ -196,8 +222,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "verified",
-        "codex_metadata_source": "01fc69f4026735edfdf6789820549727a4867b11",
         "token_prices": [
           {
             "tier": "fast",
@@ -256,8 +280,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "verified",
-        "codex_metadata_source": "01fc69f4026735edfdf6789820549727a4867b11",
         "token_prices": [
           {
             "tier": "fast",
@@ -316,8 +338,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "verified",
-        "codex_metadata_source": "01fc69f4026735edfdf6789820549727a4867b11",
         "token_prices": [
           {
             "tier": "fast",
@@ -376,8 +396,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "verified",
-        "codex_metadata_source": "01fc69f4026735edfdf6789820549727a4867b11",
         "token_prices": [
           {
             "tier": "fast",
@@ -436,8 +454,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "verified",
-        "codex_metadata_source": "01fc69f4026735edfdf6789820549727a4867b11",
         "token_prices": [
           {
             "tier": "fast",
@@ -496,8 +512,6 @@
         "kind": "text",
         "enabled": true,
         "revision": 1,
-        "codex_metadata_status": "verified",
-        "codex_metadata_source": "01fc69f4026735edfdf6789820549727a4867b11",
         "token_prices": [
           {
             "tier": "fast",
@@ -549,10 +563,29 @@
           }
         ],
         "image_prices": []
+      },
+      {
+        "provider_id": "grok",
+        "model": "grok-4.5",
+        "kind": "text",
+        "enabled": false,
+        "revision": 1,
+        "token_prices": [],
+        "image_prices": []
+      },
+      {
+        "provider_id": "grok",
+        "model": "grok-4.6",
+        "kind": "text",
+        "enabled": false,
+        "revision": 1,
+        "token_prices": [],
+        "image_prices": []
       }
     ]
   },
   "consumer": {
+    "user_id": null,
     "id": "contract-consumer",
     "provider_id": "chatgpt",
     "username": "contract-consumer",
@@ -564,18 +597,17 @@
     "enabled": true,
     "created_at": "2026-09-22T00:00:00+00:00",
     "effective_plan": "plus",
-    "plan_name": "plus",
-    "subscription_status": "active",
-    "user_id": null
+    "plan_name": "ChatGPT Plus",
+    "subscription_status": "active"
   },
   "routing": {
     "items": [
       {
+        "tag_id": null,
         "virtual_account_id": "contract-consumer",
         "provider_id": "chatgpt",
         "supplier_account_id": null,
-        "revision": 1,
-        "tag_id": null
+        "revision": 1
       }
     ]
   },
@@ -610,14 +642,14 @@
         "requested_at_ms": 1,
         "status": "completed",
         "http_status": 200,
+        "failure_kind": null,
+        "failure_status": null,
         "error_code": null,
         "error_message": null,
         "cost_nano_usd": 14100000,
         "billing_status": "priced",
         "billing_model": "gpt-6-astra",
-        "billing_tier": "standard",
-        "failure_kind": null,
-        "failure_status": null
+        "billing_tier": "standard"
       }
     ],
     "total": 1,
@@ -629,7 +661,7 @@
       {
         "id": "contract-task",
         "owner": "contract-consumer",
-        "source": "d8fa7d24-8fd0-47ca-8ad6-50902249d93a",
+        "source": "6df1e32e-ec1e-48f9-ac93-9d6d2b7d9dea",
         "value": {
           "task": {
             "id": "contract-task",
@@ -675,21 +707,6 @@
         "updated_at_ms": 1
       },
       {
-        "id": "renew",
-        "owner": "contract-consumer",
-        "source": null,
-        "value": {
-          "operation": "renew",
-          "previous_plan_name": "Previous plan",
-          "plan_name": "Plus",
-          "expires_at": "2027-09-22T00:00:00Z",
-          "origin": "admin",
-          "created_at_ms": 1
-        },
-        "created_at_ms": 1,
-        "updated_at_ms": 1
-      },
-      {
         "id": "grant",
         "owner": "contract-consumer",
         "source": null,
@@ -705,7 +722,22 @@
         "updated_at_ms": 1
       },
       {
-        "id": "1496b419-8e0f-42b3-9ef4-2772a576ccc3",
+        "id": "renew",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "renew",
+          "previous_plan_name": "Previous plan",
+          "plan_name": "Plus",
+          "expires_at": "2027-09-22T00:00:00Z",
+          "origin": "admin",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      },
+      {
+        "id": "43fe5471-7530-4ee0-aa08-4d3c4a3cba38",
         "owner": "contract-consumer",
         "source": null,
         "value": {
@@ -713,7 +745,7 @@
           "origin": "system",
           "plan_type": "plus",
           "plan_id": "plus",
-          "plan_name": "plus",
+          "plan_name": "ChatGPT Plus",
           "previous_plan_name": null,
           "previous_plan_id": null,
           "expires_at": null,
@@ -746,7 +778,7 @@
       "longest_running_turn_sec": null,
       "daily_usage_buckets": [
         {
-          "start_date": "2026-09-24",
+          "start_date": "2026-10-04",
           "tokens": 1100
         }
       ]
@@ -761,7 +793,7 @@
         "primary_window": {
           "depth": 1,
           "limit_window_seconds": 18000,
-          "started_at": 1790220648,
+          "started_at": 1791137537,
           "reset_at": 1,
           "reset_after_seconds": 1,
           "used_percent": 0,
@@ -774,7 +806,7 @@
         "secondary_window": {
           "depth": 0,
           "limit_window_seconds": 604800,
-          "started_at": 1790035200,
+          "started_at": 1790640000,
           "reset_at": 1,
           "reset_after_seconds": 1,
           "used_percent": 0,
@@ -788,7 +820,7 @@
           {
             "depth": 0,
             "limit_window_seconds": 604800,
-            "started_at": 1790035200,
+            "started_at": 1790640000,
             "reset_at": 1,
             "reset_after_seconds": 1,
             "used_percent": 0,
@@ -801,7 +833,7 @@
           {
             "depth": 1,
             "limit_window_seconds": 18000,
-            "started_at": 1790220648,
+            "started_at": 1791137537,
             "reset_at": 1,
             "reset_after_seconds": 1,
             "used_percent": 0,
@@ -828,7 +860,7 @@
         "pending_requests": 0,
         "unpriced_requests": 0,
         "legacy_requests": 0,
-        "started_at": "2026-09-24T03:30:47Z"
+        "started_at": "2026-10-04T18:12:12Z"
       }
     }
   },
@@ -837,7 +869,7 @@
       {
         "id": "contract-task",
         "owner": "contract-consumer",
-        "source": "d8fa7d24-8fd0-47ca-8ad6-50902249d93a",
+        "source": "6df1e32e-ec1e-48f9-ac93-9d6d2b7d9dea",
         "value": {
           "task_id": "contract-task",
           "model": "gpt-6-astra"
@@ -852,7 +884,7 @@
       {
         "id": "operation-fixture",
         "owner": "contract-consumer",
-        "source": "d8fa7d24-8fd0-47ca-8ad6-50902249d93a",
+        "source": "6df1e32e-ec1e-48f9-ac93-9d6d2b7d9dea",
         "value": {
           "task_id": "contract-task",
           "operation": "follow_up",

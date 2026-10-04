@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - name: Check provider module boundaries
+        run: python3 scripts/check-provider-boundaries.py
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -54,7 +56,7 @@ jobs:
             if curl --fail --silent http://127.0.0.1:8793/admin/suppliers/ > /dev/null; then break; fi
             sleep 1
           done
-          npx playwright test supplier-management.spec.ts
+          npx playwright test supplier-management.spec.ts plan-details.spec.ts
       - name: Upload supplier administration screenshots
         if: always()
         uses: actions/upload-artifact@v7

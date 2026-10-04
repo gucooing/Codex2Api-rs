@@ -531,7 +531,7 @@ mod tests {
         .unwrap();
         client.discovery_url = Some(format!("{origin}/accounts/check"));
         let ca = reqwest::Certificate::from_pem(include_bytes!(
-            "../../codex2api-auth/tests/fixtures/proxy-ca.pem"
+            "../../../../codex2api-auth/tests/fixtures/proxy-ca.pem"
         ))
         .unwrap();
         let builder = || {

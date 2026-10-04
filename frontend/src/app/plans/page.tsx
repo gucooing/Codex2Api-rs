@@ -25,11 +25,17 @@ import { useResource } from "@/lib/hooks";
 import { useActions, useDialogFocus, useErrorToast } from "@/lib/actions";
 import { useTablePagination } from "@/lib/pagination";
 import { planWrite, modelKey } from "@/lib/domain";
-import { subscriptionChoices, subscriptionLabel } from "@/lib/subscriptions";
+import {
+  subscriptionChoices,
+  grokSubscriptionChoices,
+  subscriptionLabel,
+  subscriptionValue,
+} from "@/lib/subscriptions";
 import { money } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldLabel, FieldDescription, FieldSet, FieldGroup } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -62,6 +68,7 @@ import {
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 
 const emptyPlan: Plan = {
+  description: "",
   id: "",
   provider_id: "chatgpt",
   name: "",
@@ -95,7 +102,7 @@ export default function PlansPage() {
   const id = useId();
   const rows =
     resource.data?.items.filter((p) =>
-      `${p.name} ${p.provider_id} ${subscriptionLabel(p.plan_type)}`
+      `${p.name} ${p.provider_id} ${subscriptionLabel(p.plan_type, p.provider_id)}`
         .toLowerCase()
         .includes(applied.toLowerCase()),
     ) ?? [];
@@ -186,7 +193,7 @@ export default function PlansPage() {
                   <TableCell hidden={!columns.isVisible("套餐")}>
                     <span className="font-medium">{plan.name}</span>
                     <p className="text-xs text-muted-foreground">
-                      {plan.provider_id} · {subscriptionLabel(plan.plan_type)}
+                      {plan.provider_id} · {subscriptionLabel(plan.plan_type, plan.provider_id)}
                     </p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("售价 / 有效期")}>
@@ -335,7 +342,11 @@ function PlanEditor({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [value, setValue] = useState(plan);
+  const [value, setValue] = useState(() => ({
+    ...plan,
+    description: plan.description ?? "",
+    plan_type: subscriptionValue(plan.plan_type, plan.provider_id),
+  }));
   const [search, setSearch] = useState("");
   const models = useResource<List<Model>>("/models");
   const tags = useResource<List<SupplierTag>>("/supplier-tags");
@@ -343,6 +354,7 @@ function PlanEditor({
   const focus = useDialogFocus();
   const id = useId();
   const busy = actions.isBusy("plan-save");
+  const tiers = value.provider_id === "grok" ? grokSubscriptionChoices : subscriptionChoices;
   const update = <K extends keyof Plan>(key: K, next: Plan[K]) =>
     setValue((v) => ({ ...v, [key]: next }));
   const outer = value.spending_windows[0];
@@ -368,7 +380,17 @@ function PlanEditor({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogContent {...focus} className="flex max-h-[90dvh] flex-col sm:max-w-2xl">
+      <DialogContent
+        {...focus}
+        showCloseButton={false}
+        className="flex max-h-[90dvh] flex-col sm:max-w-2xl"
+        onEscapeKeyDown={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (busy) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{plan.id ? "编辑套餐" : "添加套餐"}</DialogTitle>
           <DialogDescription>
@@ -423,18 +445,28 @@ function PlanEditor({
                     <Select
                       value={value.provider_id}
                       disabled={!!plan.id}
-                      onValueChange={(v) => update("provider_id", v)}
+                      onValueChange={(v) =>
+                        setValue((old) => ({
+                          ...old,
+                          provider_id: v,
+                          plan_type: "free",
+                          models: [],
+                          supplier_tag_id: null,
+                          allow_purchase: false,
+                        }))
+                      }
                     >
                       <SelectTrigger id={`${id}-provider`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                        <SelectItem value="grok">Grok</SelectItem>
                       </SelectContent>
                     </Select>
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor={`${id}-tier`}>客户端展示的官方订阅</FieldLabel>
+                    <FieldLabel htmlFor={`${id}-tier`}>官方客户端订阅档位</FieldLabel>
                     <Select
                       value={value.plan_type}
                       disabled={plan.plan_type === "free"}
@@ -449,14 +481,33 @@ function PlanEditor({
                       <SelectTrigger id={`${id}-tier`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
-                        {subscriptionChoices.map((v) => (
+                      <SelectContent position="popper">
+                        {!tiers.some((tier) => tier.value === value.plan_type) && (
+                          <SelectItem value={value.plan_type}>
+                            原有档位：{subscriptionLabel(value.plan_type, value.provider_id)}
+                          </SelectItem>
+                        )}
+                        {tiers.map((v) => (
                           <SelectItem value={v.value} key={v.value}>
                             {v.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                  </Field>
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor={`${id}-description`}>套餐描述</FieldLabel>
+                    <Textarea
+                      id={`${id}-description`}
+                      value={value.description}
+                      maxLength={20000}
+                      rows={5}
+                      onChange={(event) => update("description", event.target.value)}
+                      placeholder="介绍套餐的特点、适用场景和权益"
+                    />
+                    <FieldDescription>
+                      支持 Markdown，卡片显示前三行，详情显示完整内容。
+                    </FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor={`${id}-price`}>售价（USD）</FieldLabel>
@@ -491,7 +542,7 @@ function PlanEditor({
                       <SelectTrigger id={`${id}-pool`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="none">未设置</SelectItem>
                         {tags.data?.items
                           .filter((t) => t.provider_id === value.provider_id)
@@ -513,7 +564,7 @@ function PlanEditor({
                       <SelectTrigger id={`${id}-model-access`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="none">无模型</SelectItem>
                         <SelectItem value="all">全部已启用模型</SelectItem>
                         <SelectItem value="selected">指定模型</SelectItem>
@@ -628,7 +679,7 @@ function PlanEditor({
                       <SelectTrigger id={`${id}-outer`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="604800">7 天</SelectItem>
                         <SelectItem value="2592000">30 天</SelectItem>
                       </SelectContent>

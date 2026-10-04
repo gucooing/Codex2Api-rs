@@ -11,6 +11,29 @@ pub struct SupplierAuthSnapshot {
 }
 
 impl Storage {
+    pub async fn update_supplier_profile(
+        &self,
+        id: &str,
+        revision: i64,
+        email: Option<&str>,
+        plan: Option<&str>,
+    ) -> Result<bool> {
+        Ok(sqlx::query("UPDATE supplier_accounts SET email=COALESCE(?,email),plan_type=COALESCE(?,plan_type),updated_at=? WHERE id=? AND auth_revision=?")
+            .bind(email.filter(|s|!s.trim().is_empty())).bind(plan.filter(|s|!s.trim().is_empty())).bind(Utc::now().to_rfc3339()).bind(id).bind(revision)
+            .execute(self.pool()).await?.rows_affected()==1)
+    }
+    /// A late refresh must never overwrite a newer login or administrator revocation.
+    pub async fn replace_supplier_tokens(
+        &self,
+        id: &str,
+        revision: i64,
+        tokens: SupplierTokens,
+    ) -> Result<bool> {
+        Ok(sqlx::query("UPDATE supplier_tokens SET auth_mode=?,id_token=?,access_token=?,refresh_token=?,last_refresh=?,raw_auth_json=?,updated_at=? WHERE account_id=? AND EXISTS(SELECT 1 FROM supplier_accounts WHERE id=? AND auth_revision=?)")
+            .bind(tokens.auth_mode).bind(tokens.id_token).bind(tokens.access_token).bind(tokens.refresh_token)
+            .bind(tokens.last_refresh).bind(tokens.raw_auth_json).bind(Utc::now().to_rfc3339()).bind(id).bind(id).bind(revision)
+            .execute(self.pool()).await?.rows_affected()==1)
+    }
     pub async fn supplier_auth_snapshot(&self, id: &str) -> Result<Option<SupplierAuthSnapshot>> {
         Ok(sqlx::query_as("SELECT t.*, a.auth_revision, a.chatgpt_account_id FROM supplier_tokens t JOIN supplier_accounts a ON a.id=t.account_id WHERE a.id=?")
             .bind(id).fetch_optional(self.pool()).await?)

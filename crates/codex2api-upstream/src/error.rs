@@ -45,6 +45,8 @@ pub enum UpstreamError {
     #[error(transparent)]
     Auth(#[from] AuthError),
     #[error(transparent)]
+    GrokAuth(#[from] codex2api_auth::grok::GrokAuthError),
+    #[error(transparent)]
     SupplierAccount(#[from] AccountError),
     #[error(transparent)]
     Http(#[from] reqwest::Error),

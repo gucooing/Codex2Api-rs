@@ -1,6 +1,8 @@
 "use client";
 import { useId, useState } from "react";
 import Link from "next/link";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -23,6 +25,14 @@ import {
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { request, money, type Plan, type Subscription } from "@/lib/api";
 import {
   cents,
@@ -43,6 +53,8 @@ export default function PlansPage() {
   const wallet = useResource<{ balance_usd: string }>("/wallet", 0);
   const actions = useActions();
   const [selected, setSelected] = useState<Plan>();
+  const [viewedId, setViewedId] = useState<string>();
+  const viewed = plans.data?.items.find((plan) => plan.id === viewedId);
   const [preview, setPreview] = useState<CheckoutPreview>();
   const [order, setOrder] = useState<Order>();
   const [coupon, setCoupon] = useState("");
@@ -74,6 +86,51 @@ export default function PlansPage() {
       payment !== preview.payment_method);
   const previewExpired = !!preview && preview.expires_at_ms <= now;
   const walletBalance = wallet.data ? `${money(wallet.data.balance_usd)} USD` : "—";
+  function purchaseStatus(plan: Plan) {
+    const current = subscriptions.data?.items.find((item) => item.provider_id === plan.provider_id);
+    const paid =
+      !!current &&
+      current.plan_type !== "free" &&
+      !current.expired &&
+      (current.expires_at === null || Date.parse(current.expires_at) > now);
+    const same = paid && current.plan_id === plan.id;
+    const lower =
+      paid &&
+      !same &&
+      current.current_price_cents != null &&
+      current.current_duration_days != null &&
+      plan.sale_price_usd !== null &&
+      Number(plan.sale_price_usd) * 100 * current.current_duration_days <=
+        current.current_price_cents * plan.duration_days;
+    const unavailable = !!current && (!current.enabled || (paid && current.expires_at === null));
+    return {
+      disabled:
+        !plans.ready ||
+        !subscriptions.ready ||
+        plan.sale_price_usd === null ||
+        unavailable ||
+        lower ||
+        busy,
+      label: unavailable
+        ? "请联系管理员"
+        : lower
+          ? "到期后可更换"
+          : same
+            ? "续订"
+            : paid
+              ? "升级套餐"
+              : "下单",
+    };
+  }
+  function beginCheckout(plan: Plan) {
+    setViewedId(undefined);
+    setSelected(plan);
+    setPreview(undefined);
+    setOrder(undefined);
+    setCoupon("");
+    setPayment("wallet");
+    void actions.run("preview", () => loadPreview(plan, "", "wallet"), { success: "" });
+  }
   async function loadPreview(
     selectedPlan: Plan,
     code: string,
@@ -128,81 +185,52 @@ export default function PlansPage() {
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {plans.data?.items.map((plan) => {
-          const current = subscriptions.data?.items.find(
-            (item) => item.provider_id === plan.provider_id,
-          );
-          const paid =
-            !!current &&
-            current.plan_type !== "free" &&
-            !current.expired &&
-            (current.expires_at === null || Date.parse(current.expires_at) > now);
-          const same = paid && current?.plan_id === plan.id;
-          const lower =
-            paid &&
-            !same &&
-            current?.current_price_cents != null &&
-            current?.current_duration_days != null &&
-            plan.sale_price_usd !== null &&
-            Number(plan.sale_price_usd) * 100 * current.current_duration_days <=
-              current.current_price_cents * plan.duration_days;
-          const unavailable =
-            !!current && (!current.enabled || (paid && current.expires_at === null));
+          const purchase = purchaseStatus(plan);
           return (
-            <Card key={plan.id}>
+            <Card
+              key={plan.id}
+              className="cursor-pointer"
+              onClick={(event) => {
+                if (!(event.target as HTMLElement).closest("a, button")) setViewedId(plan.id);
+              }}
+            >
               <CardHeader>
-                <CardTitle>{plan.name}</CardTitle>
+                <CardTitle>
+                  <Button
+                    variant="link"
+                    className="h-auto p-0 text-base text-foreground"
+                    onClick={() => setViewedId(plan.id)}
+                  >
+                    {plan.name}
+                  </Button>
+                </CardTitle>
                 <CardDescription>
-                  {plan.provider_id === "chatgpt" ? "ChatGPT" : plan.provider_id} ·{" "}
-                  {plan.duration_days} 天 ·{" "}
+                  {plan.provider_id === "chatgpt"
+                    ? "ChatGPT"
+                    : plan.provider_id === "grok"
+                      ? "Grok"
+                      : plan.provider_id}{" "}
+                  · {plan.duration_days} 天 ·{" "}
                   {plan.sale_price_usd === null ? "暂未定价" : money(plan.sale_price_usd)}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="text-sm">
-                  {plan.model_access === "all"
-                    ? "全部已启用模型"
-                    : plan.model_access === "none"
-                      ? "无模型"
-                      : plan.models.map((model) => model.model).join("、")}
-                </p>
-                {plan.spending_windows.map((window) => (
-                  <p className="text-sm text-muted-foreground" key={window.duration_seconds}>
-                    {window.duration_seconds >= 86400
-                      ? `${window.duration_seconds / 86400} 天`
-                      : `${window.duration_seconds / 3600} 小时`}
-                    额度：{window.cost_limit_usd === null ? "不限额" : money(window.cost_limit_usd)}
-                  </p>
-                ))}
-                <Button
-                  disabled={
-                    !plans.ready ||
-                    !subscriptions.ready ||
-                    plan.sale_price_usd === null ||
-                    unavailable ||
-                    lower ||
-                    busy
-                  }
-                  onClick={() => {
-                    setSelected(plan);
-                    setPreview(undefined);
-                    setOrder(undefined);
-                    setCoupon("");
-                    setPayment("wallet");
-                    void actions.run("preview", () => loadPreview(plan, "", "wallet"), {
-                      success: "",
-                    });
-                  }}
+                <div
+                  className="prose prose-sm prose-neutral dark:prose-invert line-clamp-3 max-h-16 max-w-none break-words [&_*]:my-0 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm [&_pre]:whitespace-pre-wrap"
+                  aria-label="套餐描述摘要"
                 >
-                  {unavailable
-                    ? "请联系管理员"
-                    : lower
-                      ? "到期后可更换"
-                      : same
-                        ? "续订"
-                        : paid
-                          ? "升级套餐"
-                          : "下单"}
-                </Button>
+                  <Markdown remarkPlugins={[remarkGfm]} skipHtml components={{ img: () => null }}>
+                    {plan.description}
+                  </Markdown>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={() => setViewedId(plan.id)}>
+                    查看详情
+                  </Button>
+                  <Button disabled={purchase.disabled} onClick={() => beginCheckout(plan)}>
+                    {purchase.label}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           );
@@ -211,6 +239,132 @@ export default function PlansPage() {
       {plans.data?.items.length === 0 && (
         <p className="text-sm text-muted-foreground">暂无可购买的套餐</p>
       )}
+      <Dialog
+        open={!!viewedId}
+        onOpenChange={(open) => {
+          if (!open) setViewedId(undefined);
+        }}
+      >
+        <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{viewed?.name ?? "套餐详情"}</DialogTitle>
+            <DialogDescription>套餐介绍、订阅权益与可用模型</DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-12rem)]">
+            <div className="space-y-5 pr-3">
+              <dl className="grid grid-cols-[auto_1fr_auto_1fr] gap-x-4 gap-y-2 text-sm">
+                <dt className="text-muted-foreground">平台</dt>
+                <dd>
+                  {viewed?.provider_id === "chatgpt"
+                    ? "ChatGPT"
+                    : viewed?.provider_id === "grok"
+                      ? "Grok"
+                      : (viewed?.provider_id ?? "—")}
+                </dd>
+                <dt className="text-muted-foreground">售价</dt>
+                <dd>
+                  {viewed?.sale_price_usd == null
+                    ? "暂未定价"
+                    : `${money(viewed.sale_price_usd)} USD`}
+                </dd>
+                <dt className="text-muted-foreground">有效期</dt>
+                <dd>{viewed ? `${viewed.duration_days} 天` : "—"}</dd>
+                <dt className="text-muted-foreground">可用模型</dt>
+                <dd>{viewed?.models.length ?? "—"}</dd>
+              </dl>
+              <section className="space-y-2" aria-label="套餐描述">
+                <h3 className="text-sm font-medium">套餐描述</h3>
+                <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words [&_table]:block [&_table]:overflow-x-auto">
+                  <Markdown remarkPlugins={[remarkGfm]} skipHtml>
+                    {viewed?.description}
+                  </Markdown>
+                </div>
+                {viewed && !viewed.description?.trim() && (
+                  <p className="text-sm text-muted-foreground">暂无描述</p>
+                )}
+              </section>
+              <section className="space-y-2" aria-label="额度规则">
+                <h3 className="text-sm font-medium">额度规则</h3>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>周期</TableHead>
+                      <TableHead>额度（USD）</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {viewed?.spending_windows.map((window) => (
+                      <TableRow key={window.duration_seconds}>
+                        <TableCell>
+                          {window.duration_seconds >= 86400
+                            ? `${window.duration_seconds / 86400} 天`
+                            : `${window.duration_seconds / 3600} 小时`}
+                        </TableCell>
+                        <TableCell>
+                          {window.cost_limit_usd === null ? "不限额" : money(window.cost_limit_usd)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {viewed?.spending_windows.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={2}>不限额</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+                {(viewed?.spending_windows.length ?? 0) > 1 && (
+                  <p className="text-xs text-muted-foreground">
+                    各周期额度同时生效，短周期用量也计入长周期。
+                  </p>
+                )}
+              </section>
+              <section className="space-y-2" aria-label="可用模型">
+                <h3 className="text-sm font-medium">可用模型</h3>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>模型</TableHead>
+                      <TableHead>类型</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {viewed?.models.map((model) => (
+                      <TableRow key={`${model.provider_id}/${model.model}`}>
+                        <TableCell className="break-all whitespace-normal">{model.model}</TableCell>
+                        <TableCell>
+                          {model.kind === "text"
+                            ? "文本"
+                            : model.kind === "image"
+                              ? "图像"
+                              : model.kind}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {viewed?.models.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={2}>暂无可用模型</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </section>
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewedId(undefined)}>
+              关闭
+            </Button>
+            <Button
+              disabled={!viewed || purchaseStatus(viewed).disabled}
+              onClick={() => {
+                if (viewed) beginCheckout(viewed);
+              }}
+            >
+              {viewed ? purchaseStatus(viewed).label : "下单"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={!!selected}
         onOpenChange={(open) => {
@@ -244,8 +398,12 @@ export default function PlansPage() {
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                 <dt className="text-muted-foreground">平台 / 套餐</dt>
                 <dd>
-                  {selected?.provider_id === "chatgpt" ? "ChatGPT" : selected?.provider_id} /{" "}
-                  {selected?.name ?? "—"}
+                  {selected?.provider_id === "chatgpt"
+                    ? "ChatGPT"
+                    : selected?.provider_id === "grok"
+                      ? "Grok"
+                      : selected?.provider_id}{" "}
+                  / {selected?.name ?? "—"}
                 </dd>
                 <dt className="text-muted-foreground">业务类型</dt>
                 <dd>{detail ? orderKinds[detail.kind] : "—"}</dd>
@@ -316,7 +474,7 @@ export default function PlansPage() {
                       <SelectTrigger id={`${id}-payment`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="wallet">钱包余额（可用 {walletBalance}）</SelectItem>
                       </SelectContent>
                     </Select>

@@ -5,10 +5,11 @@
 //! row so upstream behavior matches a logged-in Codex CLI. Official `$CODEX_HOME`
 //! files are not used.
 
-mod auth_json;
+use providers::chatgpt::auth_json;
 mod error;
-mod identity;
-mod store;
+pub mod providers;
+use providers::chatgpt::identity;
+use providers::chatgpt::store;
 
 pub use auth_json::{AuthDotJson, TokenData};
 pub use error::{AccountError, Result};
@@ -19,6 +20,3 @@ pub use identity::{
 pub use store::{
     BoundAccount, OauthIdentity, PendingAccount, SupplierAccountStore, SupplierContext,
 };
-
-#[cfg(test)]
-mod tests;

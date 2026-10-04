@@ -104,7 +104,7 @@ export function RoutingForm({
               <SelectTrigger id={`${id}-tag`}>
                 <SelectValue placeholder="选择标签号池" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 <SelectItem value="none">不绑定号池</SelectItem>
                 {(tags.data?.items ?? [])
                   .filter((t) => t.provider_id === account?.provider_id)
@@ -137,7 +137,7 @@ export function RoutingForm({
               <SelectTrigger id={`${id}-supplier`}>
                 <SelectValue placeholder={disabled ? "加载中…" : "暂未分配"} />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 <SelectItem value="unassigned" disabled>
                   暂未分配
                 </SelectItem>

@@ -109,6 +109,29 @@ validation are complete.
 
 ## Coding rules
 
+### Provider boundaries
+
+- Keep channel code in each relevant crate's `src/providers/chatgpt/` or
+  `src/providers/grok/`. Frontend channel forms, labels and protocol views belong
+  in `frontend/src/components/providers/chatgpt/` or `providers/grok/`.
+- A channel may not import another channel or add branches to the other channel's
+  authentication, transport or handlers. Root modules may dispatch by provider;
+  shared SQLite, supplier pools, billing, sessions and UI layout stay protocol-neutral.
+- Grok supplier credentials, PKCE/device/RT flows, frozen identity, clients and
+  version constants are independent of ChatGPT. Never interpret Grok tokens as
+  Codex auth.json or send Codex headers to Grok.
+- The administrator's enabled model catalog determines availability, subject to
+  the consumer's plan. Official catalogs and price presets are references, never
+  model allowlists. Custom models must remain addable and usable. Missing prices
+  stay unknown; known prices snapshot at request start.
+- RT creation accepts one token per line. New accounts independently generate
+  device fingerprints and installation IDs; reauthorization preserves the existing
+  account identity. Never print, persist in browser preferences, or echo RT values
+  in batch results.
+- Filter dropdowns follow the administrator usage-record filter form: official
+  shadcn Select/Combobox, compact labelled fields, full-width triggers and popper
+  dropdowns. Do not introduce alternate filter controls or visual wrappers.
+
 ### Documentation lifecycle (user-confirmed 2026-10-03)
 
 - Keep documentation focused on the current architecture, behavior, contracts and maintenance rules.

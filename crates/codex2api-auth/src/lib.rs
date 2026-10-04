@@ -13,14 +13,16 @@
 //! `transport` owns isolated account HTTP clients and cookie/TLS policy.
 //! Admin HTTP routes are registered in codex2api-admin, not here.
 
-mod draft;
+use providers::chatgpt::draft;
+pub use providers::grok;
 pub mod error;
-pub mod flow;
-pub mod manual;
-pub mod oauth;
-pub mod persist;
-pub mod tokens;
-pub mod transport;
+pub mod providers;
+pub use providers::chatgpt::flow;
+pub use providers::chatgpt::manual;
+pub use providers::chatgpt::oauth;
+pub use providers::chatgpt::persist;
+pub use providers::chatgpt::tokens;
+pub use providers::chatgpt::transport;
 
 pub use codex2api_accounts::{AuthDotJson, TokenData};
 pub use error::{AuthError, Result};

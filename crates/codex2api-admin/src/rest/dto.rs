@@ -30,6 +30,7 @@ pub struct Session {
     pub authenticated: bool,
     pub app_version: &'static str,
     pub codex_cli_version: &'static str,
+    pub grok_build_version: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +88,7 @@ pub struct ModelRef {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    pub description: String,
     pub supplier_tag_id: Option<String>,
     pub sale_price_usd: Option<String>,
     pub duration_days: i64,
@@ -143,8 +145,6 @@ pub struct Model {
     pub kind: String,
     pub enabled: bool,
     pub revision: i64,
-    pub codex_metadata_status: &'static str,
-    pub codex_metadata_source: Option<&'static str>,
     pub token_prices: Vec<TokenPrice>,
     pub image_prices: Vec<ImagePrice>,
 }

@@ -53,7 +53,13 @@ export default function SubscriptionsPage() {
             <TableBody>
               {subscriptionPage.rows.map((s) => (
                 <TableRow key={s.id}>
-                  <TableCell>{s.provider_id === "chatgpt" ? "ChatGPT" : s.provider_id}</TableCell>
+                  <TableCell>
+                    {s.provider_id === "chatgpt"
+                      ? "ChatGPT"
+                      : s.provider_id === "grok"
+                        ? "Grok"
+                        : s.provider_id}
+                  </TableCell>
                   <TableCell>{s.plan_name}</TableCell>
                   <TableCell>{date(s.expires_at)}</TableCell>
                   <TableCell>

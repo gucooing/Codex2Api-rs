@@ -54,6 +54,7 @@ pub async fn login(
             authenticated: true,
             app_version: codex2api_version::APP_VERSION,
             codex_cli_version: codex2api_version::CODEX_PACKAGE_VERSION,
+            grok_build_version: codex2api_version::grok::VERSION,
             username: Some(form.username.trim().into()),
             csrf_token: Some(session::csrf_token(&value.id)),
         }),
@@ -69,6 +70,7 @@ pub async fn current(State(state): State<AdminState>, headers: HeaderMap) -> Api
         authenticated: true,
         app_version: codex2api_version::APP_VERSION,
         codex_cli_version: codex2api_version::CODEX_PACKAGE_VERSION,
+        grok_build_version: codex2api_version::grok::VERSION,
         username: Some(user.username),
         csrf_token: Some(session::csrf_token(&value.id)),
     })))

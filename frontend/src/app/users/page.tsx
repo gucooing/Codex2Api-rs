@@ -352,7 +352,7 @@ export default function UsersPage() {
                     <SelectTrigger id={`${id}-wallet-direction`}>
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       <SelectItem value="increase">增加余额</SelectItem>
                       <SelectItem value="decrease">减少余额</SelectItem>
                     </SelectContent>
@@ -533,7 +533,7 @@ function UserRecords({ id, close }: { id: string; close: () => void }) {
                     <SelectTrigger aria-label="每页条数">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       {[10, 20, 30, 50].map((n) => (
                         <SelectItem key={n} value={String(n)}>
                           {n} 条

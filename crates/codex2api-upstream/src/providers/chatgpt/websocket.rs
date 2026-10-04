@@ -258,11 +258,11 @@ mod tests {
         };
         codex2api_auth::transport::ensure_tls_provider();
         let cert = CertificateDer::from_pem_slice(include_bytes!(
-            "../../codex2api-auth/tests/fixtures/proxy-chatgpt-server.pem"
+            "../../../../codex2api-auth/tests/fixtures/proxy-chatgpt-server.pem"
         ))
         .unwrap();
         let key = PrivateKeyDer::from_pem_slice(include_bytes!(
-            "../../codex2api-auth/tests/fixtures/proxy-server-key.pem"
+            "../../../../codex2api-auth/tests/fixtures/proxy-server-key.pem"
         ))
         .unwrap();
         let config = rustls::ServerConfig::builder()

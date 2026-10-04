@@ -84,7 +84,7 @@ export default function OverviewPage() {
           <SelectTrigger className="w-36" aria-label="使用统计时间">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper">
             <SelectItem value="1">今天</SelectItem>
             <SelectItem value="7">最近 7 天</SelectItem>
             <SelectItem value="30">最近 30 天</SelectItem>
@@ -136,7 +136,11 @@ export default function OverviewPage() {
               {subscriptions.data?.items.map((item) => (
                 <TableRow key={item.id}>
                   <TableCell>
-                    {item.provider_id === "chatgpt" ? "ChatGPT" : item.provider_id}
+                    {item.provider_id === "chatgpt"
+                      ? "ChatGPT"
+                      : item.provider_id === "grok"
+                        ? "Grok"
+                        : item.provider_id}
                   </TableCell>
                   <TableCell>{item.plan_name}</TableCell>
                   <TableCell>{date(item.expires_at)}</TableCell>

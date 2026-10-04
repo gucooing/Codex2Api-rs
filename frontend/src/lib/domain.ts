@@ -39,6 +39,7 @@ export function sameProviderModels(models: ModelRef[], provider: string) {
 }
 export function planWrite(value: Plan) {
   return {
+    description: value.description,
     sale_price_usd: value.sale_price_usd,
     duration_days: value.duration_days,
     supplier_tag_id: value.supplier_tag_id,

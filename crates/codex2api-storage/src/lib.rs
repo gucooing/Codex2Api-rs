@@ -25,9 +25,10 @@ mod desktop_support;
 mod oauth;
 mod oauth_authorization;
 mod oauth_device;
+mod providers;
 pub use oauth_device::{
     DeviceAuthorization, DeviceAuthorizationApproval, DeviceAuthorizationCode,
-    DeviceAuthorizationPoll,
+    DeviceAuthorizationPoll, GrokDevicePoll,
 };
 mod password;
 mod proxy;

@@ -28,7 +28,7 @@ One Rust process runs three listeners: AI API (8080), administration (8081), and
 | codex2api-auth | Supplier OAuth, token refresh/revoke and isolated account transports |
 | codex2api-upstream | Official outbound endpoints, headers, body normalization, HTTP/SSE/WS |
 | codex2api-service | Shared execution authorization and effective entitlement policy |
-| codex2api-api | Consumer OAuth and ChatGPT client protocol adapters |
+| codex2api-api | Consumer OAuth and independently scoped client protocol adapters |
 | codex2api-admin | Administrator session, CSRF, typed REST contracts and operations |
 | codex2api-user | User browser sessions, wallet purchases, own subscriptions/devices and OAuth consent |
 | codex2api-web | Embedded static assets and source freshness validation |
@@ -64,7 +64,8 @@ quota snapshots and historical attribution survive upgrades.
 User identities, standalone virtual accounts, supplier accounts and administrator sessions are separate entities. Existing virtual accounts are never converted to users. `users` owns browser credentials and an integer-cent USD wallet. `user_subscriptions` uniquely maps `(user_id, provider_id)` to a generated platform virtual identity; existing virtual account administration lists only standalone accounts. User subscription configuration and history reuse the established virtual-account persistence and execution services without exposing their supplier binding to users.
 
  A consumer's provider is fixed at creation; execution routes may bind
-only suppliers of that provider. Currently only ChatGPT has a protocol adapter.
+only suppliers of that provider. ChatGPT and Grok have independent protocol adapters.
+See [Grok](GROK.md) for its authentication, model and client contracts.
 
 ## Upstream identity and transport
 
@@ -282,8 +283,10 @@ device list and revoke operation manage both browser and device-code logins.
 
 ### Supported models and price presets
 
-The provider adapter's public, API-supported descriptors define the supported
-business model registry. Hidden internal aliases are not automatically published.
+The administrator's enabled model catalog is the model availability policy.
+Both provider adapters expose configured models within each consumer's entitlement,
+including model names absent from bundled or discovered metadata. Official
+descriptors and verified prices are defaults, never an admission allowlist.
 Startup calls `sync_supported_models` before listening. It atomically registers
 missing models and their verified presets; complete presets enable new models by
 default. All-enabled plans then use their existing entitlement rule, while selected
@@ -296,7 +299,7 @@ models, deleted tombstones, billing kinds and deliberately omitted tiers are
 preserved. Startup does not reprice history or overwrite administrator decisions.
 
 The administrator's model editor loads `GET /admin/api/models/presets`.
-Entering an exact supported name fills the known price rules; administrators can
+Entering an exact preset name fills the known price rules; administrators can
 apply a preset explicitly or edit prices. Saved configuration remains the source
 of truth. Preset requests carry a version; stale versions and mixed preset/custom
 writes are rejected. Frontend fields are defined in code, not generated from
@@ -449,3 +452,14 @@ compatibility boundaries and is maintained separately.
 Order and subscription filters use exact plan/user IDs. `/admin/api/users/options` searches usernames, names and emails and returns at most five minimal choices; it is never mounted on the user listener. Subscription filters retain the default exclusion of expired records. Administrative usage filtering applies the chosen user to every count and record query through stable subscription ownership, including all of that user's platforms.
 
 Overview virtual counts include only standalone virtual accounts; normal means enabled with no expiry or a future expiry. User totals include all user profiles. Daily active users are distinct users with any actual ledger record in the administrator browser's local day, including failed/in-progress requests, never device/session counts. The browser supplies its UTC offset; server-generated day boundaries exclude future records. Changing filters never calls a supplier.
+
+## Provider module boundaries
+
+Channel-specific code belongs in `src/providers/chatgpt/` or `src/providers/grok/`
+in the identity, auth, version, core, upstream, API and admin crates. Root modules
+compose adapters and retain compatibility exports. One adapter must not import or
+patch the other. Generic storage rows retain their historic column names without
+sharing channel credentials or protocols. Frontend channel forms and official
+record readers follow the same `components/providers/<provider>/` boundary.
+`check-provider-boundaries.py` runs in CI. User consent shares account verification
+and confirmation mechanics but reads each channel's independent OAuth policy.

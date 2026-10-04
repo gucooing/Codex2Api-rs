@@ -75,7 +75,10 @@ export function SupplierTagEditor({
     >
       <FieldSet disabled={!ready || busy}>
         <FieldLegend>
-          所属标签{provider ? ` · ${provider === "chatgpt" ? "ChatGPT" : provider}` : ""}
+          所属标签
+          {provider
+            ? ` · ${provider === "chatgpt" ? "ChatGPT" : provider === "grok" ? "Grok" : provider}`
+            : ""}
         </FieldLegend>
         {batch && (
           <FieldDescription>

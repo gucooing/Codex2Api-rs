@@ -178,7 +178,7 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
               </ComboboxContent>
             </Combobox>
           </Field>
-          <Field className="w-44">
+          <Field className="w-40">
             <FieldLabel className="sr-only" htmlFor={`${id}-filter-plan`}>
               套餐
             </FieldLabel>
@@ -189,7 +189,7 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
               <SelectTrigger id={`${id}-filter-plan`}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 <SelectItem value="all">全部套餐</SelectItem>
                 {plans.data?.items.map((plan) => (
                   <SelectItem key={plan.id} value={plan.id}>
@@ -436,7 +436,7 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
                     <SelectTrigger id={`${id}-user`}>
                       <SelectValue placeholder="请选择用户" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       {users.data?.items.map((u) => (
                         <SelectItem key={u.id} value={u.id}>
                           {u.username} · {u.name}
@@ -454,7 +454,7 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
                     <SelectTrigger id={`${id}-plan`}>
                       <SelectValue placeholder="请选择套餐" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       {plans.data?.items
                         .filter((p) => !editing?.id || p.provider_id === editing.provider_id)
                         .map((p) => (

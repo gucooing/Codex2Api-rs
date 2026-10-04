@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-async function fixture(page: Page) {
+async function fixture(page: Page, includeGrok = false) {
   const contracts = JSON.parse(
     await readFile(resolve("../crates/codex2api-admin/tests/contracts.json"), "utf8"),
   );
@@ -11,7 +11,7 @@ async function fixture(page: Page) {
     { id: "b", provider_id: "chatgpt", name: "高级池", supplier_count: 1, binding_count: 0 },
     {
       id: "foreign",
-      provider_id: "other",
+      provider_id: "grok",
       name: "其他平台标签",
       supplier_count: 0,
       binding_count: 0,
@@ -49,6 +49,16 @@ async function fixture(page: Page) {
       ],
     },
   }));
+  if (includeGrok)
+    suppliers.push({
+      ...suppliers[1],
+      id: "g1",
+      provider_id: "grok",
+      email: "grok@example.test",
+      display_name: "Grok account",
+      plan_type: "Free",
+      tag_ids: ["foreign"],
+    });
   const writes: { account_ids: string[]; tag_ids: string[] }[] = [];
   const state = { assigned: "s1" as string | null, tag: "b", revision: 1 };
   const allocations: { supplier_id: string | null; tag_id: string | null; revision: number }[] = [];
@@ -64,6 +74,7 @@ async function fixture(page: Page) {
         csrf_token: "test-only",
         app_version: "test",
         codex_cli_version: "0.160.0",
+        grok_build_version: "1.0.45",
       };
     else if (path === "/suppliers/tags" && method === "POST") {
       const input = route.request().postDataJSON();
@@ -143,18 +154,20 @@ test("left-side cross-page selection updates complete tag sets and tag managemen
   await expect(first.locator("td").first().getByRole("checkbox")).toBeVisible();
   await expect(first.locator("td").last().getByRole("checkbox")).toHaveCount(0);
   await expect(page.getByText(/后可重试/)).toHaveCount(0);
-  await page.getByRole("combobox", { name: "账户状态", exact: true }).click();
+  await page.getByRole("combobox", { name: "状态", exact: true }).click();
   await expect(page.getByRole("option", { name: "请求限流中", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("progressbar").first()).toBeVisible();
   await expect(page.getByRole("button", { name: "标签管理", exact: true })).toHaveCount(0);
   await page.screenshot({ path: info.outputPath("suppliers.png"), fullPage: true });
   await page.getByRole("checkbox", { name: "选择当前页供应账户", exact: true }).check();
-  await expect(page.getByText("已选择 20 个", { exact: true })).toBeVisible();
+  await expect(page.getByText("已选 20 个账户", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "下一页", exact: true }).click();
-  await page.getByRole("checkbox", { name: "选择供应账户 账户20", exact: true }).check();
-  await expect(page.getByText("已选择 21 个", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "选择全部筛选结果（23）", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "选择供应账户 supplier20@example.test", exact: true })
+    .check();
+  await expect(page.getByText("已选 21 个账户", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "全选筛选结果（23）", exact: true }).click();
   await page.getByRole("button", { name: "更新标签", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "批量更新标签", exact: true });
   await expect(dialog.getByRole("button", { name: "更新标签", exact: true })).toBeDisabled();
@@ -168,16 +181,24 @@ test("left-side cross-page selection updates complete tag sets and tag managemen
 
   await page.getByRole("link", { name: "标签管理", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/supplier-tags\/$/);
-  await page.getByLabel("标签名称", { exact: true }).fill("新标签");
-  await page.getByRole("button", { name: "创建标签", exact: true }).click();
-  await expect(page.getByLabel("标签名称 新标签", { exact: true })).toBeVisible();
-  await page.getByLabel("标签名称 新标签", { exact: true }).fill("已改名标签");
+  await expect(page.getByRole("table").getByRole("textbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "添加标签", exact: true }).click();
+  const createTag = page.getByRole("dialog", { name: "添加标签", exact: true });
+  await createTag.getByLabel("标签名称", { exact: true }).fill("新标签");
+  await createTag.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(createTag).toHaveCount(0);
   await page
     .getByRole("row")
-    .filter({ has: page.getByLabel("标签名称 新标签", { exact: true }) })
-    .getByRole("button", { name: "保存", exact: true })
+    .filter({ has: page.getByRole("cell", { name: "新标签", exact: true }) })
+    .getByRole("button", { name: "编辑", exact: true })
     .click();
-  await expect(page.getByLabel("标签名称 已改名标签", { exact: true })).toBeVisible();
+  const editTag = page.getByRole("dialog", { name: "编辑标签", exact: true });
+  await expect(editTag.getByRole("button", { name: "取消", exact: true })).toHaveCount(1);
+  await expect(editTag.getByLabel("标签名称", { exact: true })).toHaveValue("新标签");
+  await editTag.getByLabel("标签名称", { exact: true }).fill("已改名标签");
+  await editTag.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(editTag).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "已改名标签", exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath("tag-management.png"), fullPage: true });
 
   await page.goto("/admin/suppliers/detail/?id=s1");
@@ -227,4 +248,66 @@ test("allocation shows the assigned account or unassigned state without operatio
     "暂未分配",
   );
   await page.screenshot({ path: info.outputPath("unassigned-account.png"), fullPage: true });
+});
+
+test("supplier filters, one view toggle and contextual bulk actions stay consistent", async ({
+  page,
+}, info) => {
+  await fixture(page, true);
+  await page.goto("/admin/suppliers/");
+  await expect(page.getByLabel("版本信息")).toContainText("Grok Build 1.0.45");
+  await expect(page.getByRole("toolbar", { name: "已选账户操作" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "更新标签", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "标签", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "标签号池", exact: true })).toHaveCount(0);
+  const form = page
+    .locator("form")
+    .filter({ has: page.getByRole("button", { name: "查询", exact: true }) });
+  await expect(form.getByRole("combobox", { name: "平台", exact: true })).toBeVisible();
+  await expect(form.getByRole("combobox", { name: "标签", exact: true })).toBeVisible();
+  const tableButton = page.getByRole("button", { name: "切换为卡片视图", exact: true });
+  await expect(tableButton).toHaveCount(1);
+  await tableButton.click();
+  await expect(page.getByRole("button", { name: "切换为表格视图", exact: true })).toHaveCount(1);
+  await page.getByRole("button", { name: "切换为表格视图", exact: true }).click();
+  await page.getByRole("combobox", { name: "平台", exact: true }).click();
+  await page.getByRole("option", { name: "Grok", exact: true }).click();
+  await page.getByRole("combobox", { name: "标签", exact: true }).click();
+  await expect(page.getByRole("option", { name: "标准池", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "其他平台标签", exact: true }).click();
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(21);
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(2);
+  await expect(page.getByRole("table")).toContainText("grok@example.test");
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "平台", exact: true })).toContainText("Grok");
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(2);
+  await page.getByRole("checkbox", { name: "选择当前页供应账户", exact: true }).check();
+  await expect(page.getByRole("toolbar", { name: "已选账户操作" })).toBeVisible();
+  await page.getByRole("button", { name: "清除选择", exact: true }).click();
+  await expect(page.getByRole("toolbar", { name: "已选账户操作" })).toHaveCount(0);
+  await page.getByRole("combobox", { name: "平台", exact: true }).click();
+  await page.getByRole("option", { name: "ChatGPT", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "标签", exact: true })).toContainText("全部标签");
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(21);
+  await page.getByRole("button", { name: "重置", exact: true }).click();
+  await page.getByRole("checkbox", { name: "选择当前页供应账户", exact: true }).check();
+  await page.getByRole("button", { name: "全选筛选结果（24）", exact: true }).click();
+  await expect(page.getByRole("button", { name: "更新标签", exact: true })).toBeDisabled();
+  await page.screenshot({ path: info.outputPath("supplier-filters-selected.png"), fullPage: true });
+  await page.getByRole("button", { name: "清除选择", exact: true }).click();
+  await page.screenshot({ path: info.outputPath("supplier-filters.png"), fullPage: true });
+});
+
+test("plan edit has exactly one cancel and one close control", async ({ page }, info) => {
+  await fixture(page);
+  await page.goto("/admin/plans/");
+  await page.getByRole("button", { name: "编辑", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "编辑套餐", exact: true });
+  await expect(dialog.getByRole("button", { name: "取消", exact: true })).toHaveCount(1);
+  await expect(dialog.getByRole("button", { name: /^(关闭|Close)$/ })).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath("plan-edit.png"), fullPage: true });
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });

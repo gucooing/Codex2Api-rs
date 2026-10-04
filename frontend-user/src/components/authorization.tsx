@@ -21,6 +21,12 @@ const scopeLabels: Record<string, string> = {
   profile: "本人资料",
   email: "本人邮箱",
   offline_access: "保持登录",
+  "grok-cli:access": "使用 Grok Build",
+  "api:access": "调用本账户模型",
+  "conversations:read": "读取本账户会话",
+  "conversations:write": "保存本账户会话",
+  "workspaces:read": "读取本账户工作区",
+  "workspaces:write": "保存本账户工作区",
   "api.connectors.read": "读取本账户连接器",
   "api.connectors.invoke": "调用本账户连接器",
 };
@@ -35,6 +41,7 @@ type Flow = {
   request_id: string;
   csrf_token: string;
   client_name: string;
+  provider_id: string;
   scope: string;
   identity: Identity | null;
   user: { name: string; username: string; email: string } | null;
@@ -56,12 +63,17 @@ export function Authorization({ device = false }: { device?: boolean }) {
   useErrorToast(error);
   useEffect(() => {
     const controller = new AbortController();
-    request<Flow>(`${prefix}/bootstrap${device ? "" : window.location.search}`, {
+    request<Flow>(`${prefix}/bootstrap${window.location.search}`, {
       signal: controller.signal,
     })
       .then((value) => {
         if (!controller.signal.aborted) {
           setFlow(value);
+          if (device)
+            setCode(
+              (previous) =>
+                previous || new URLSearchParams(window.location.search).get("user_code") || "",
+            );
           setError("");
         }
       })
@@ -107,7 +119,7 @@ export function Authorization({ device = false }: { device?: boolean }) {
               ? "没有授权客户端登录，可关闭此页面。"
               : completed
                 ? "请回到客户端继续。"
-                : `授权 ${flow?.client_name ?? "Codex"} 登录你的 ChatGPT 平台账户。`}
+                : `授权 ${flow?.client_name ?? "Codex"} 登录你的 ${flow?.provider_id === "grok" ? "Grok" : "ChatGPT"} 平台账户。`}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -177,7 +189,7 @@ export function Authorization({ device = false }: { device?: boolean }) {
                       <SelectTrigger id={`${id}-kind`}>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper">
                         <SelectItem value="user">用户账户</SelectItem>
                         <SelectItem value="virtual">独立虚拟账户</SelectItem>
                       </SelectContent>
