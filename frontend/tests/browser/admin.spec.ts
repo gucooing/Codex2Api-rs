@@ -29,7 +29,9 @@ async function expectModalRegions(dialog: Locator) {
   const body = await dialog
     .locator("form > [data-slot=scroll-area] [data-slot=scroll-area-viewport]")
     .boundingBox();
-  const footer = await dialog.locator("form > [data-slot=field-group], form > [data-slot=dialog-footer]").boundingBox();
+  const footer = await dialog
+    .locator("form > [data-slot=field-group], form > [data-slot=dialog-footer]")
+    .boundingBox();
   expect(header).not.toBeNull();
   expect(body).not.toBeNull();
   expect(footer).not.toBeNull();
@@ -316,9 +318,13 @@ test("real admin actions, isolation and public consumer authorization", async ({
   const apiURL = process.env.CODEX2API_TEST_API_URL;
   for (const value of [userURL, apiURL]) {
     if (!value || !["127.0.0.1", "localhost", "[::1]"].includes(new URL(value).hostname))
-      throw new Error("Set separate local CODEX2API_TEST_USER_URL and CODEX2API_TEST_API_URL endpoints.");
+      throw new Error(
+        "Set separate local CODEX2API_TEST_USER_URL and CODEX2API_TEST_API_URL endpoints.",
+      );
   }
-  const publicContext = await context.browser()!.newContext({ baseURL: userURL, viewport: { width: 1200, height: 1000 } });
+  const publicContext = await context
+    .browser()!
+    .newContext({ baseURL: userURL, viewport: { width: 1200, height: 1000 } });
   const publicPage = await publicContext.newPage();
   await publicPage.goto(`/user/authorize/?${oauthQuery}`);
   await expect(
@@ -341,29 +347,34 @@ test("real admin actions, isolation and public consumer authorization", async ({
     path: resolve(evidence, "18-public-authorization-mobile.png"),
     fullPage: true,
   });
-  await selectOption(publicPage, publicPage.getByLabel("登录身份", { exact: true }), "独立虚拟账户");
+  await selectOption(
+    publicPage,
+    publicPage.getByLabel("登录身份", { exact: true }),
+    "独立虚拟账户",
+  );
   await publicPage.getByLabel("用户名", { exact: true }).fill(`test-a-${suffix}`);
   await publicPage.getByLabel("密码", { exact: true }).fill("wrong-password");
   await publicPage.getByRole("button", { name: "验证身份", exact: true }).click();
   await expect(publicPage.locator('[data-sonner-toast][data-type="error"]').last()).toBeVisible();
-  await expect(publicPage.getByLabel("用户名", { exact: true })).toHaveValue(
-    `test-a-${suffix}`,
-  );
+  await expect(publicPage.getByLabel("用户名", { exact: true })).toHaveValue(`test-a-${suffix}`);
   await publicPage.getByLabel("密码", { exact: true }).fill("test-only-password");
   await publicPage.getByRole("button", { name: "验证身份", exact: true }).click();
   await publicPage.getByRole("button", { name: "确认登录", exact: true }).click();
   await expect(publicPage.getByText("本地测试授权回调已接收", { exact: true })).toBeVisible();
   expect(callbackUrl?.searchParams.get("state")).toBe("frontend-regression");
   expect(callbackUrl?.searchParams.has("code")).toBe(true);
-  const tokenResponse = await publicContext.request.post(`${apiURL}/api/oauth/chatgpt/oauth/token`, {
-    form: {
-      grant_type: "authorization_code",
-      code: callbackUrl!.searchParams.get("code")!,
-      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-      redirect_uri: callbackAddress,
-      code_verifier: verifier,
+  const tokenResponse = await publicContext.request.post(
+    `${apiURL}/api/oauth/chatgpt/oauth/token`,
+    {
+      form: {
+        grant_type: "authorization_code",
+        code: callbackUrl!.searchParams.get("code")!,
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        redirect_uri: callbackAddress,
+        code_verifier: verifier,
+      },
     },
-  });
+  );
   expect(tokenResponse.ok()).toBe(true);
   const tokens = await tokenResponse.json();
   expect(typeof tokens.access_token).toBe("string");

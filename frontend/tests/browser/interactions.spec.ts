@@ -544,7 +544,9 @@ test("desktop navigation, mobile drawer and long forms respect viewport and redu
   });
   const header = await dialog.locator("[data-slot=dialog-header]").boundingBox();
   const scroll = await body.boundingBox();
-  const footer = await dialog.locator("form > [data-slot=field-group], form > [data-slot=dialog-footer]").boundingBox();
+  const footer = await dialog
+    .locator("form > [data-slot=field-group], form > [data-slot=dialog-footer]")
+    .boundingBox();
   expect(header!.y + header!.height).toBeLessThanOrEqual(scroll!.y + 1);
   expect(scroll!.y + scroll!.height).toBeLessThanOrEqual(footer!.y + 1);
   await page.screenshot({ path: resolve(evidence, "17-plan-form-mobile.png"), fullPage: true });
