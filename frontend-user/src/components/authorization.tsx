@@ -17,8 +17,12 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 
 const scopeLabels: Record<string, string> = {
-  openid: "本人登录身份", profile: "本人资料", email: "本人邮箱", offline_access: "保持登录",
-  "api.connectors.read": "读取本账户连接器", "api.connectors.invoke": "调用本账户连接器",
+  openid: "本人登录身份",
+  profile: "本人资料",
+  email: "本人邮箱",
+  offline_access: "保持登录",
+  "api.connectors.read": "读取本账户连接器",
+  "api.connectors.invoke": "调用本账户连接器",
 };
 type Identity = {
   account_id: string;
@@ -78,10 +82,13 @@ export function Authorization({ device = false }: { device?: boolean }) {
   };
   const cancel = async () => {
     if (!flow) return;
-    const result = await request<{ redirect_uri?: string; cancelled?: boolean }>(`${prefix}/cancel`, {
-      method: "POST",
-      body: { request_id: flow.request_id, csrf_token: flow.csrf_token },
-    });
+    const result = await request<{ redirect_uri?: string; cancelled?: boolean }>(
+      `${prefix}/cancel`,
+      {
+        method: "POST",
+        body: { request_id: flow.request_id, csrf_token: flow.csrf_token },
+      },
+    );
     setPassword("");
     setFlow(undefined);
     if (result.redirect_uri) window.location.assign(result.redirect_uri);
@@ -92,11 +99,15 @@ export function Authorization({ device = false }: { device?: boolean }) {
     <main className="flex min-h-svh items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>{cancelled ? "已取消授权" : completed ? "授权完成" : "确认客户端登录"}</CardTitle>
+          <CardTitle>
+            {cancelled ? "已取消授权" : completed ? "授权完成" : "确认客户端登录"}
+          </CardTitle>
           <CardDescription>
-            {cancelled ? "没有授权客户端登录，可关闭此页面。" : completed
-              ? "请回到客户端继续。"
-              : `授权 ${flow?.client_name ?? "Codex"} 登录你的 ChatGPT 平台账户。`}
+            {cancelled
+              ? "没有授权客户端登录，可关闭此页面。"
+              : completed
+                ? "请回到客户端继续。"
+                : `授权 ${flow?.client_name ?? "Codex"} 登录你的 ChatGPT 平台账户。`}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -216,7 +227,13 @@ export function Authorization({ device = false }: { device?: boolean }) {
                 </div>
               </dl>
               <CardDescription>
-                授权范围：{flow.scope.split(/\s+/).filter(Boolean).map(scope => scopeLabels[scope] ?? scope).join("、")}。
+                授权范围：
+                {flow.scope
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .map((scope) => scopeLabels[scope] ?? scope)
+                  .join("、")}
+                。
               </CardDescription>
               <form
                 noValidate
@@ -279,8 +296,12 @@ export function Authorization({ device = false }: { device?: boolean }) {
             </>
           )}
           {!completed && !cancelled && (
-            <Button type="button" variant="ghost" disabled={!flow || actions.running.size > 0}
-              onClick={() => void actions.run("cancel-authorization", cancel, { success: "" })}>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={!flow || actions.running.size > 0}
+              onClick={() => void actions.run("cancel-authorization", cancel, { success: "" })}
+            >
               取消授权
             </Button>
           )}
