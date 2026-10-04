@@ -4,6 +4,15 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("{message}")]
+    Checkout {
+        code: &'static str,
+        message: &'static str,
+    },
+    #[error("invalid or inappropriate JWT")]
+    InvalidJwt,
+    #[error("JWT operation failed: {0}")]
+    Jwt(String),
     #[error("invalid admin credentials")]
     InvalidCredentials,
     #[error("{0}")]

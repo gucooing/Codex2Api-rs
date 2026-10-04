@@ -136,7 +136,7 @@ pub(crate) async fn forward(
         }
         let account = state
             .storage
-            .virtual_account(&access.virtual_account_id)
+            .effective_virtual_account(&access.virtual_account_id)
             .await?
             .ok_or_else(crate::ApiError::invalid_token)?;
         crate::providers::chatgpt::identity::mask(&mut value, &account, &ctx.account);

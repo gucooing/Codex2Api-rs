@@ -23,6 +23,16 @@ pub struct CodeRedemption<'a> {
 }
 
 impl Storage {
+    pub async fn cancel_oauth_browser_flow(
+        &self,
+        id: &str,
+        cookie: &str,
+        csrf: &str,
+    ) -> Result<bool> {
+        Ok(sqlx::query("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>?")
+            .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(chrono::Utc::now().timestamp())
+            .execute(self.pool()).await?.rows_affected() == 1)
+    }
     pub async fn create_oauth_browser_flow(
         &self,
         id: &str,
@@ -72,14 +82,17 @@ impl Storage {
             scopes,
         } = request;
         let now = chrono::Utc::now().timestamp();
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        if !crate::users::confirmed_browser_identity(&mut tx, id, account).await? {
+            return Ok(false);
+        }
         let expiry:Option<i64>=sqlx::query_scalar("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? RETURNING expires_at")
             .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(now).fetch_optional(&mut *tx).await?;
         let Some(expiry) = expiry else {
             return Ok(false);
         };
         let inserted=sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms)
-            SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM virtual_accounts v
+            SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM virtual_principals v
             WHERE v.id=? AND v.password_hash=? AND v.enabled=1")
             .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(now+120).bind(scopes).bind(chrono::Utc::now().timestamp_millis()).bind((expiry-600)*1000).bind(&account.id).bind(&account.password_hash).execute(&mut *tx).await?;
         if inserted.rows_affected() != 1 {
@@ -110,7 +123,7 @@ impl Storage {
             return Ok(None);
         };
         let account: Option<crate::VirtualAccount> =
-            sqlx::query_as("SELECT * FROM virtual_accounts WHERE id=? AND enabled=1")
+            sqlx::query_as("SELECT * FROM virtual_principals WHERE id=? AND enabled=1")
                 .bind(&owner)
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -123,6 +136,9 @@ impl Storage {
         sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,installation_id,user_agent,created_at,last_login_at,provider_id,scopes,authenticated_at_ms,requested_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
             .bind(&id).bind(&owner).bind(hash_token(refresh)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(provider).bind(scopes).bind(authenticated_at_ms).bind(requested_at_ms).execute(&mut *tx).await?;
         tx.commit().await?;
-        Ok(Some((account, id)))
+        Ok(self
+            .effective_virtual_account(&account.id)
+            .await?
+            .map(|account| (account, id)))
     }
 }

@@ -14,4 +14,8 @@
 /frontend/.next/
 /frontend/out/
 /frontend/*.tsbuildinfo
+/frontend-user/node_modules/
+/frontend-user/.next/
+/frontend-user/out/
+/frontend-user/*.tsbuildinfo
 __pycache__/

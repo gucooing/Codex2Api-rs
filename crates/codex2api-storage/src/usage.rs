@@ -85,6 +85,7 @@ impl Default for UsageRecord {
 
 #[derive(Clone, Debug, Default)]
 pub struct UsageFilter {
+    pub user_id: Option<String>,
     pub account: Option<String>,
     pub account_id: Option<String>,
     pub subject_id: Option<String>,
@@ -155,6 +156,10 @@ pub struct VirtualDailyModelTokens {
 
 pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFilter) {
     query.push(" WHERE 1=1");
+    if let Some(user) = filter.user_id.as_deref().filter(|s| !s.is_empty()) {
+        query.push(" AND subject_kind='virtual_account' AND subject_id IN (SELECT virtual_account_id FROM user_subscriptions WHERE user_id=")
+            .push_bind(user.to_owned()).push(")");
+    }
     if let Some(id) = filter.account_id.as_deref().filter(|s| !s.is_empty()) {
         query.push(" AND account_id = ").push_bind(id.to_string());
     }

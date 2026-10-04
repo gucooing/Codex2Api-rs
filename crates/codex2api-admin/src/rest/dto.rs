@@ -36,14 +36,8 @@ pub struct Session {
     pub csrf_token: Option<String>,
 }
 #[derive(Serialize)]
-pub struct Overview {
-    pub supplier_count: usize,
-    pub consumer_count: usize,
-    pub enabled_consumers: usize,
-    pub models_count: usize,
-}
-#[derive(Serialize)]
 pub struct Consumer {
+    pub user_id: Option<String>,
     pub id: String,
     pub provider_id: String,
     pub username: String,
@@ -61,6 +55,7 @@ pub struct Consumer {
 impl From<&codex2api_storage::VirtualAccount> for Consumer {
     fn from(a: &codex2api_storage::VirtualAccount) -> Self {
         Self {
+            user_id: None,
             id: a.id.clone(),
             provider_id: a.provider_id.clone(),
             username: a.username.clone(),
@@ -92,24 +87,19 @@ pub struct ModelRef {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    pub supplier_tag_id: Option<String>,
+    pub sale_price_usd: Option<String>,
+    pub duration_days: i64,
     pub plan_type: String,
     pub id: String,
     pub provider_id: String,
     pub name: String,
-    pub enabled: bool,
+    pub allow_purchase: bool,
     pub revision: i64,
     pub updated_at_ms: i64,
     pub model_access: String,
     pub models: Vec<ModelRef>,
-    pub free_model_access: String,
-    pub free_models: Vec<ModelRef>,
-    pub free_access_enabled: bool,
-    pub primary_cost_limit_usd: Option<String>,
-    pub weekly_cost_limit_usd: Option<String>,
-    pub free_primary_cost_limit_usd: Option<String>,
-    pub free_weekly_cost_limit_usd: Option<String>,
     pub spending_windows: Vec<SpendingWindow>,
-    pub free_spending_windows: Vec<SpendingWindow>,
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SpendingWindow {

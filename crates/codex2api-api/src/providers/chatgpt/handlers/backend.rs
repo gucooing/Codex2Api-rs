@@ -17,7 +17,7 @@ pub async fn forward(
 ) -> Result<Response> {
     let account = state
         .storage
-        .virtual_account(&access.virtual_account_id)
+        .effective_virtual_account(&access.virtual_account_id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     for (key, value) in url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()) {

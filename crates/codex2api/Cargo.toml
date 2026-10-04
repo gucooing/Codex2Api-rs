@@ -6,9 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 description = "Codex subscription to Codex-compatible Responses API proxy"
 
+[features]
+dev-frontend = ["codex2api-web/dev-frontend"]
+
 [dependencies]
+codex2api-user.workspace = true
 codex2api-web.workspace = true
 anyhow.workspace = true
+url.workspace = true
 axum.workspace = true
 codex2api-accounts.workspace = true
 codex2api-admin.workspace = true

@@ -104,5 +104,5 @@ pub fn model_input(model: &str) -> Value {
     json!({"provider_id":"chatgpt","model":model,"kind":"text","enabled":true,"revision":null,"token_prices":[{"tier":"standard","min_input_tokens":0,"input_rate":"2.5","cached_rate":"0.5","cache_write_rate":"1","output_rate":"10"}],"image_prices":[]})
 }
 pub fn plan_input() -> Value {
-    json!({"provider_id":"chatgpt","name":"Integration Plan","model_access":"all","models":[],"free_model_access":"none","free_models":[],"free_access_enabled":false,"primary_cost_limit_usd":"2","weekly_cost_limit_usd":"10","free_primary_cost_limit_usd":"0","free_weekly_cost_limit_usd":"0","enabled":true,"revision":null})
+    json!({"sale_price_usd":null,"duration_days":30,"supplier_tag_id":null,"plan_type":"plus","provider_id":"chatgpt","name":"Integration Plan","model_access":"all","models":[],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}],"allow_purchase":true,"revision":null})
 }

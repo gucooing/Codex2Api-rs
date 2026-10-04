@@ -8,6 +8,37 @@ pub(crate) fn forward_response(status: StatusCode, mut headers: HeaderMap, body:
     strip_hop_by_hop_headers(&mut headers);
     // Upstream cookies belong to the isolated account's HTTP client.
     headers.remove(axum::http::header::SET_COOKIE);
+    crate::public_output::headers(&mut headers);
+    let is_json = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+    let body = if status.is_client_error() || status.is_server_error() || is_json {
+        use futures::StreamExt;
+        let encoded_headers = headers.clone();
+        let stream=futures::stream::once(async move {
+            // Drain through the usage wrapper so real settlement is retained, while
+            // returning only the reviewed public error contract.
+            let bytes=axum::body::to_bytes(body,codex2api_upstream::MAX_REQUEST_BYTES).await.map_err(std::io::Error::other)?;
+            let mut value=codex2api_upstream::decode_body(&bytes,&encoded_headers).unwrap_or_default();
+            if !status.is_success() {
+                value=serde_json::json!({"error":crate::public_output::error(value.get("error").unwrap_or(&value))});
+            } else {
+                if value.is_null() {return Err(std::io::Error::other("Invalid service response"));}
+                crate::public_output::metadata(&mut value);
+            }
+            Ok::<_,std::io::Error>(axum::body::Bytes::from(value.to_string()))
+        }).boxed();
+        headers.remove(axum::http::header::CONTENT_LENGTH);
+        headers.remove(axum::http::header::CONTENT_ENCODING);
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        Body::from_stream(stream)
+    } else {
+        body
+    };
     let mut response = Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = headers;
@@ -69,44 +100,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preserves_upstream_status_encoding_and_error_body() {
-        for (status, content_type, body) in [
-            (
-                StatusCode::OK,
-                "application/json",
-                b"{ \"id\": \"response\" }\n".as_slice(),
+    async fn errors_keep_status_and_retry_but_not_supplier_diagnostics() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("retry-after", "7".parse().unwrap());
+        headers.insert("x-openai-organization", "supplier-secret".parse().unwrap());
+        headers.insert("x-debug-account", "supplier-secret".parse().unwrap());
+        headers.insert("set-cookie", "session=supplier-secret".parse().unwrap());
+        let response = forward_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            headers,
+            Body::from(
+                r#"{"error":{"code":"rate_limit_exceeded","message":"supplier-secret","retry_after_ms":7000}}"#,
             ),
-            (
-                StatusCode::BAD_REQUEST,
-                "application/json",
-                b"{\"error\":{\"message\":\"exact upstream error\"}}".as_slice(),
-            ),
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                "text/plain",
-                b"upstream rate limit\r\n".as_slice(),
-            ),
-            (
-                StatusCode::BAD_GATEWAY,
-                "application/octet-stream",
-                b"\x28\xb5\x2f\xfd\x00\xff".as_slice(),
-            ),
-        ] {
-            let mut headers = HeaderMap::new();
-            headers.insert("content-type", HeaderValue::from_static(content_type));
-            headers.insert("retry-after", HeaderValue::from_static("7"));
-            headers.insert("content-length", HeaderValue::from(body.len()));
-            headers.insert("content-encoding", HeaderValue::from_static("zstd"));
-            let response = forward_response(status, headers.clone(), Body::from(body));
-            assert_eq!(response.status(), status);
-            assert_eq!(response.headers(), &headers);
-            assert_eq!(
-                to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .unwrap()
-                    .as_ref(),
-                body
-            );
-        }
+        );
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()["retry-after"], "7");
+        assert!(!response.headers().contains_key("x-debug-account"));
+        assert!(!response.headers().contains_key("set-cookie"));
+        assert!(!response.headers().contains_key("x-openai-organization"));
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "rate_limit_exceeded");
+        assert_eq!(value["error"]["retry_after_ms"], 7000);
+        assert!(!String::from_utf8_lossy(&bytes).contains("supplier-secret"));
     }
 }

@@ -315,6 +315,7 @@ dependencies = [
  "codex2api-auth",
  "codex2api-storage",
  "codex2api-upstream",
+ "codex2api-user",
  "codex2api-version",
  "codex2api-web",
  "serde_json",
@@ -324,6 +325,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -388,6 +390,7 @@ dependencies = [
  "codex2api-service",
  "codex2api-storage",
  "codex2api-upstream",
+ "codex2api-user",
  "codex2api-version",
  "flate2",
  "futures",
@@ -466,10 +469,12 @@ name = "codex2api-storage"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "base64",
  "chrono",
  "codex2api-core",
  "codex2api-version",
  "rand 0.9.5",
+ "rsa",
  "serde",
  "serde_json",
  "sha2",
@@ -515,6 +520,26 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zstd",
+]
+
+[[package]]
+name = "codex2api-user"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "codex2api-core",
+ "codex2api-storage",
+ "codex2api-version",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

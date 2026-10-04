@@ -22,7 +22,7 @@ import {
   dismissConfirmation,
   restoreConfirmationFocus,
 } from "@/lib/actions";
-import { isCurrentPage, navigation } from "./navigation";
+import { isCurrentPage, navigation, navigationGroups } from "./navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
@@ -134,13 +134,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [pathname]);
   return (
     <>
-      {pathname.startsWith("/authorize") || pathname.startsWith("/device") ? (
-        children
-      ) : (
-        <SidebarProvider>
-          <AdminShell>{children}</AdminShell>
-        </SidebarProvider>
-      )}
+      <SidebarProvider>
+        <AdminShell>{children}</AdminShell>
+      </SidebarProvider>
       <AlertDialog
         open={Boolean(actions.pending)}
         onOpenChange={(open) => {
@@ -349,7 +345,7 @@ function AdminShell({ children }: { children: ReactNode }) {
         </SidebarHeader>
         <SidebarContent>
           <nav aria-label="主导航">
-            {["工作台", "账户管理", "服务配置"].map((group) => (
+            {navigationGroups.map((group) => (
               <SidebarGroup key={group}>
                 <SidebarGroupLabel>{group}</SidebarGroupLabel>
                 <SidebarGroupContent>
@@ -461,7 +457,7 @@ function AdminShell({ children }: { children: ReactNode }) {
                   <CommandInput aria-label="搜索管理页面" placeholder="搜索页面…" />
                   <CommandList>
                     <CommandEmpty>没有匹配的页面</CommandEmpty>
-                    {["工作台", "账户管理", "服务配置"].map((group) => (
+                    {navigationGroups.map((group) => (
                       <CommandGroup key={group} heading={group}>
                         {navigation
                           .filter((item) => item.group === group)

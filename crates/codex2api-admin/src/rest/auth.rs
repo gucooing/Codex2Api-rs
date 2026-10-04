@@ -28,6 +28,7 @@ pub async fn login(
     if form.username.len() > 128 || form.password.len() > 1024 {
         return Err(ApiError::bad("用户名或密码过长"));
     }
+    let old = session::load_session(&state.storage, &headers).await?;
     let ttl = codex2api_storage::DEFAULT_ADMIN_SESSION_TTL;
     let value = state
         .storage
@@ -40,14 +41,12 @@ pub async fn login(
                 "用户名或密码错误".into(),
             )
         })?;
-    if let Some(old) = session::session_id_from_headers(&headers) {
-        state.storage.delete_admin_session(&old).await?;
+    let token = state.storage.admin_session_token(&value).await?;
+    if let Some(old) = old {
+        state.storage.delete_admin_session(&old.id).await?;
     }
     Ok((
-        [(
-            header::SET_COOKIE,
-            session::set_session_cookie(&value.id, ttl),
-        )],
+        [(header::SET_COOKIE, session::set_session_cookie(&token, ttl))],
         Json(dto::Session {
             authenticated: true,
             app_version: codex2api_version::APP_VERSION,
@@ -75,8 +74,8 @@ pub async fn logout(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if let Some(id) = session::session_id_from_headers(&headers) {
-        state.storage.delete_admin_session(&id).await?;
+    if let Some(session) = session::load_session(&state.storage, &headers).await? {
+        state.storage.delete_admin_session(&session.id).await?;
     }
     Ok((
         [(header::SET_COOKIE, session::clear_session_cookie())],

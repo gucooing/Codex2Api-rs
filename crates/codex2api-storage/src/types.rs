@@ -47,6 +47,7 @@ impl FromStr for SupplierStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AdminUser {
     pub id: i64,
+    pub account_id: String,
     pub username: String,
     #[serde(skip_serializing)]
     pub password_hash: String,

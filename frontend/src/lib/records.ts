@@ -181,9 +181,17 @@ const statusLabels: Record<string, string> = {
   changed: "调整",
   expired: "到期",
   grant: "发放",
+  reissue: "重新发放",
+  admin_reissue: "管理员重新发放",
+  order: "订单支付",
+  order_upgrade: "订单升级",
   renew: "续期",
   change_plan: "调整套餐",
   change_expiry: "调整期限",
+  enable: "启用",
+  disable: "停用",
+  wallet: "钱包购买",
+  free: "Free",
 };
 function object(value: Json): Record<string, Json> {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};

@@ -9,8 +9,10 @@
   "overview": {
     "supplier_count": 1,
     "consumer_count": 1,
-    "enabled_consumers": 1,
-    "models_count": 7
+    "models_count": 7,
+    "normal_consumer_count": 1,
+    "user_count": 0,
+    "active_user_count": 0
   },
   "plans": {
     "items": [
@@ -18,18 +20,10 @@
         "id": "free",
         "provider_id": "chatgpt",
         "name": "free",
-        "enabled": true,
         "revision": 0,
         "updated_at_ms": 1,
-        "model_access": "all",
+        "model_access": "none",
         "models": [],
-        "free_model_access": "none",
-        "free_models": [],
-        "free_access_enabled": false,
-        "primary_cost_limit_usd": "0",
-        "weekly_cost_limit_usd": "0",
-        "free_primary_cost_limit_usd": "0",
-        "free_weekly_cost_limit_usd": "0",
         "spending_windows": [
           {
             "duration_seconds": 604800,
@@ -40,34 +34,20 @@
             "cost_limit_usd": "0"
           }
         ],
-        "free_spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ],
-        "plan_type": "free"
+        "plan_type": "free",
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "supplier_tag_id": null,
+        "allow_purchase": false
       },
       {
         "id": "plus",
         "provider_id": "chatgpt",
         "name": "plus",
-        "enabled": true,
         "revision": 1,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "free_model_access": "none",
-        "free_models": [],
-        "free_access_enabled": false,
-        "primary_cost_limit_usd": "2",
-        "weekly_cost_limit_usd": "10",
-        "free_primary_cost_limit_usd": "0",
-        "free_weekly_cost_limit_usd": "0",
         "spending_windows": [
           {
             "duration_seconds": 604800,
@@ -78,133 +58,71 @@
             "cost_limit_usd": "2"
           }
         ],
-        "free_spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ],
-        "plan_type": "plus"
+        "plan_type": "plus",
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "supplier_tag_id": null,
+        "allow_purchase": true
       },
       {
         "id": "pro",
         "provider_id": "chatgpt",
         "name": "pro",
-        "enabled": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "free_model_access": "none",
-        "free_models": [],
-        "free_access_enabled": false,
-        "primary_cost_limit_usd": null,
-        "weekly_cost_limit_usd": null,
-        "free_primary_cost_limit_usd": "0",
-        "free_weekly_cost_limit_usd": "0",
         "spending_windows": [],
-        "free_spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ],
-        "plan_type": "pro"
+        "plan_type": "pro",
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "supplier_tag_id": null,
+        "allow_purchase": true
       },
       {
         "id": "business",
         "provider_id": "chatgpt",
         "name": "business",
-        "enabled": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "free_model_access": "none",
-        "free_models": [],
-        "free_access_enabled": false,
-        "primary_cost_limit_usd": null,
-        "weekly_cost_limit_usd": null,
-        "free_primary_cost_limit_usd": "0",
-        "free_weekly_cost_limit_usd": "0",
         "spending_windows": [],
-        "free_spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ],
-        "plan_type": "business"
+        "plan_type": "business",
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "supplier_tag_id": null,
+        "allow_purchase": true
       },
       {
         "id": "enterprise",
         "provider_id": "chatgpt",
         "name": "enterprise",
-        "enabled": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "free_model_access": "none",
-        "free_models": [],
-        "free_access_enabled": false,
-        "primary_cost_limit_usd": null,
-        "weekly_cost_limit_usd": null,
-        "free_primary_cost_limit_usd": "0",
-        "free_weekly_cost_limit_usd": "0",
         "spending_windows": [],
-        "free_spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ],
-        "plan_type": "enterprise"
+        "plan_type": "enterprise",
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "supplier_tag_id": null,
+        "allow_purchase": true
       },
       {
         "id": "edu",
         "provider_id": "chatgpt",
         "name": "edu",
-        "enabled": true,
         "revision": 0,
         "updated_at_ms": 1,
         "model_access": "all",
         "models": [],
-        "free_model_access": "none",
-        "free_models": [],
-        "free_access_enabled": false,
-        "primary_cost_limit_usd": null,
-        "weekly_cost_limit_usd": null,
-        "free_primary_cost_limit_usd": "0",
-        "free_weekly_cost_limit_usd": "0",
         "spending_windows": [],
-        "free_spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ],
-        "plan_type": "edu"
+        "plan_type": "edu",
+        "sale_price_usd": null,
+        "duration_days": 30,
+        "supplier_tag_id": null,
+        "allow_purchase": true
       }
     ]
   },
@@ -645,7 +563,8 @@
     "created_at": "2026-09-22T00:00:00+00:00",
     "effective_plan": "plus",
     "plan_name": "plus",
-    "subscription_status": "active"
+    "subscription_status": "active",
+    "user_id": null
   },
   "routing": {
     "items": [

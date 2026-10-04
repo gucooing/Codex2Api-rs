@@ -4,15 +4,17 @@ use tracing_subscriber::EnvFilter;
 use codex2api_storage::Storage;
 use codex2api_version::{CODEX_PACKAGE_VERSION, CODEX_REF_COMMIT, CODEX_REF_COMMIT_DATE};
 
-const DEFAULT_BIND: &str = "127.0.0.1:8080";
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("codex2api=info".parse()?))
         .init();
 
-    let bind = std::env::var("CODEX2API_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
+    let api_bind = std::env::var("CODEX2API_API_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let admin_bind =
+        std::env::var("CODEX2API_ADMIN_BIND").unwrap_or_else(|_| "127.0.0.1:8081".into());
+    let user_bind =
+        std::env::var("CODEX2API_USER_BIND").unwrap_or_else(|_| "127.0.0.1:8082".into());
     let db_path = std::env::var("CODEX2API_DB")
         .unwrap_or_else(|_| codex2api_storage::DEFAULT_DB_PATH.to_string());
 
@@ -34,20 +36,54 @@ async fn main() -> Result<()> {
     storage.ensure_default_admin().await?;
     storage.recover_interrupted_usage().await?;
 
-    let public_base_url = std::env::var("CODEX2API_PUBLIC_BASE_URL").ok();
-    let app = codex2api::router_with_public_base_url(storage.clone(), public_base_url.as_deref())?;
-
-    let listener = tokio::net::TcpListener::bind(&bind)
+    let api_origin = std::env::var("CODEX2API_PUBLIC_API_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+    let user_origin = std::env::var("CODEX2API_PUBLIC_USER_URL").unwrap_or_else(|_| {
+        if cfg!(feature = "dev-frontend") {
+            "http://127.0.0.1:3001".into()
+        } else {
+            "http://127.0.0.1:8082".into()
+        }
+    });
+    let apps = codex2api::routers(storage.clone(), &api_origin, &user_origin)?;
+    let api_listener = tokio::net::TcpListener::bind(&api_bind)
         .await
-        .with_context(|| format!("bind {bind}"))?;
-    tracing::info!(%bind, db = %db_path, "listening");
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
+        .with_context(|| format!("bind AI API {api_bind}"))?;
+    let admin_listener = tokio::net::TcpListener::bind(&admin_bind)
+        .await
+        .with_context(|| format!("bind administration {admin_bind}"))?;
+    let user_listener = tokio::net::TcpListener::bind(&user_bind)
+        .await
+        .with_context(|| format!("bind user website {user_bind}"))?;
+    tracing::info!(%api_bind,%admin_bind,%user_bind,db=%db_path,"listening on independent surfaces");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let signal = tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+    let admin_shutdown = shutdown_rx.clone();
+    let user_shutdown = shutdown_rx.clone();
+    let result = tokio::try_join!(
+        async {
+            axum::serve(api_listener, apps.api)
+                .with_graceful_shutdown(wait_shutdown(shutdown_rx))
+                .await
+        },
+        async {
+            axum::serve(admin_listener, apps.admin)
+                .with_graceful_shutdown(wait_shutdown(admin_shutdown))
+                .await
+        },
+        async {
+            axum::serve(user_listener, apps.user)
+                .with_graceful_shutdown(wait_shutdown(user_shutdown))
+                .await
+        }
+    );
+    signal.abort();
     tracing::info!("shutting down");
     storage.close().await;
+    result?;
     Ok(())
 }
 
@@ -74,4 +110,8 @@ async fn shutdown_signal() {
         _ = terminate => {}
     }
     tracing::info!("shutdown signal received");
+}
+
+async fn wait_shutdown(mut signal: tokio::sync::watch::Receiver<bool>) {
+    let _ = signal.wait_for(|value| *value).await;
 }

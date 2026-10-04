@@ -9,14 +9,16 @@ use axum::{
 use codex2api_storage::{DesktopSupportSettings, GatewaySettings};
 use serde::Deserialize;
 use serde_json::json;
-pub async fn overview(State(s): State<AdminState>) -> ApiResult {
-    let accounts = s.storage.virtual_accounts().await?;
-    Ok(Json(super::dto::value(super::dto::Overview {
-        supplier_count: s.storage.list_accounts().await?.len(),
-        consumer_count: accounts.len(),
-        enabled_consumers: accounts.iter().filter(|a| a.enabled).count(),
-        models_count: s.storage.model_configs("chatgpt").await?.len(),
-    })))
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct OverviewQuery {
+    tz_offset: i32,
+}
+pub async fn overview(
+    State(s): State<AdminState>,
+    Query(query): Query<OverviewQuery>,
+) -> ApiResult {
+    Ok(Json(s.storage.admin_overview(query.tz_offset).await?))
 }
 pub async fn gateway(State(s): State<AdminState>) -> ApiResult {
     Ok(Json(json!(s.storage.gateway_settings().await?)))

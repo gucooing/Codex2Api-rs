@@ -75,7 +75,7 @@ mod tests {
         plan.config = json!({"model_access":"all","models":[],"spending_windows":[
             {"duration_seconds":2592000,"cost_limit_usd":"2"},
             {"duration_seconds":18000,"cost_limit_usd":"1"}
-        ],"free_access_enabled":false,"free_model_access":"none","free_models":[],"free_spending_windows":[]});
+        ]});
         storage
             .save_virtual_plan(&plan, Some(plan.revision))
             .await
@@ -653,7 +653,7 @@ impl Storage {
             return Ok(response);
         }
         let now = Utc::now().timestamp_millis();
-        let account: VirtualAccount = sqlx::query_as("SELECT * FROM virtual_accounts WHERE id=?")
+        let account: VirtualAccount = sqlx::query_as("SELECT * FROM virtual_principals WHERE id=?")
             .bind(owner)
             .fetch_optional(&mut *tx)
             .await?
@@ -760,7 +760,7 @@ async fn resettable_windows(
         .bind(&account.plan_id)
         .fetch_one(&mut *connection)
         .await?;
-    let rules = crate::plan_spending_windows(&plan.config, false)?;
+    let rules = crate::plan_spending_windows(&plan.config)?;
     let anchor:i64=sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM virtual_accounts WHERE id=?")
         .bind(&account.id).fetch_one(&mut *connection).await?;
     let windows = crate::spending_windows::windows_on(
@@ -788,7 +788,7 @@ pub(crate) async fn admin_reset_on(
     actor: &str,
     now: i64,
 ) -> Result<Value> {
-    let account: VirtualAccount = sqlx::query_as("SELECT * FROM virtual_accounts WHERE id=?")
+    let account: VirtualAccount = sqlx::query_as("SELECT * FROM virtual_principals WHERE id=?")
         .bind(owner)
         .fetch_optional(&mut *connection)
         .await?

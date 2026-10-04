@@ -2,15 +2,15 @@
 
 ## 项目定位
 
-一个用于账户池挂载 Rust 版本的 `codex2api` 程序，并提供管理端网页。
+单个 Rust 进程提供用户端、管理端和 AI API 三个独立监听入口；两个前端分别构建并嵌入同一个可执行文件。
 
 目标是把 Codex 订阅转换成标准、可供 Codex 客户端使用的 API。Proxy 对外提供该 API；对内管理多个上游 OpenAI/ChatGPT 账户，并把请求发到官方 Codex 服务。
 
-供应账户仅负责上游执行；虚拟消费账户独立维护身份、订阅、设备及历史。创建消费账户时固定提供商，之后不可切换。当前只实现 ChatGPT，Grok 等未来提供商需要独立适配，不能复用 ChatGPT 协议冒充支持。
+供应账户仅负责上游执行。独立虚拟账户模块保留；新增用户不会从虚拟账户迁移。每位用户可以订阅多个平台，每个平台只有一个订阅及其独立执行身份，身份、设备和历史均归属该用户。创建消费账户时固定提供商，之后不可切换。当前只实现 ChatGPT，Grok 等未来提供商需要独立适配，不能复用 ChatGPT 协议冒充支持。
 
 客户端单独维护在 [gucooing/codex 的 ccodex 分支](https://github.com/gucooing/codex/tree/ccodex)，本地可与本仓库并列放在 `../codex`。更新顺序为官方稳定版 → ccodex → 本仓库。官方源码只作为协议和行为参考，不引入官方 Rust crates；纯净参考快照位置为 `reference/codex`，精确来源记录在版本常量中。
 
-官方协议目标（编译、测试与发布验证由云端 CI 执行）：
+官方协议目标：
 
 - 发布版: `0.160.0`（tag `rust-v0.160.0`，commit `a956835d020762cb2b570053af06f643a11c0ecc`）
 - 源码快照: `a956835d020762cb2b570053af06f643a11c0ecc`（2026-10-01T17:13:37Z）
@@ -26,7 +26,7 @@
 
 ## 从源码构建
 
-管理界面及消费 OAuth 授权页使用 Next.js 静态导出。先安装 Node.js 24，再执行：
+管理前端 `frontend/` 和用户前端 `frontend-user/` 分别使用 Next.js 静态导出，OAuth 确认页面属于用户前端。先安装 Node.js 24，再执行：
 
 ```powershell
 ./scripts/build.ps1 -Release
@@ -38,9 +38,11 @@ Linux/macOS：
 bash scripts/build.sh --release
 ```
 
-脚本依次执行 `npm ci`、ESLint、Prettier 格式检查、TypeScript 检查、前端契约测试、Next.js 导出及 Rust 编译。`codex2api-web` 在构建时校验前端源文件 SHA-256 清单，把 `frontend/out` 编译进二进制；产物缺失或过期会明确拒绝编译。Cargo 不会隐式联网安装 Node 依赖。发布仍为单个可执行文件，运行不依赖 Node.js 或外部网页目录。
+脚本依次执行 `npm ci`、ESLint、Prettier 格式检查、TypeScript 检查、前端契约测试、Next.js 导出及 Rust 编译。`codex2api-web` 在构建时校验前端源文件 SHA-256 清单，把 `frontend/out` 和 `frontend-user/out` 编译进二进制；产物缺失或过期会明确拒绝编译。Cargo 不会隐式联网安装 Node 依赖。发布仍为单个可执行文件，运行不依赖 Node.js 或外部网页目录。
 
-网页入口是 `/admin/`，JSON 管理接口为 `/admin/api/`；静态页面不能代替登录验证，所有数据操作仍经过管理员会话与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
+管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。AI API 在 `127.0.0.1:8080`，仅注册客户端协议接口。三端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
+
+开发时可使用 `cargo run -p codex2api --features dev-frontend`，再分别运行两个前端的 `pnpm dev`，无需预先导出静态页面。该特性仅用于本地开发，release 构建不允许启用；完整配置见 [本地验证](docs/LOCAL_TEST.md#前后端开发启动)。
 
 管理界面的 shadcn/ui 组件、操作方式和隔离浏览器验证见 [前端说明](docs/FRONTEND_UI.md)。
 
@@ -50,8 +52,11 @@ bash scripts/build.sh --release
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `CODEX2API_BIND` | `127.0.0.1:8080` | HTTP 服务监听地址，格式为 `IP:端口`。 |
-| `CODEX2API_PUBLIC_BASE_URL` | 未设置 | 对外访问地址，例如 `https://proxy.example.com`，不含路径；用于 OAuth 资源发现。未设置时使用 HTTP 和请求的 Host。反向代理提供 HTTPS 时应设置此项。 |
+| `CODEX2API_API_BIND` | `127.0.0.1:8080` | AI API 监听地址。 |
+| `CODEX2API_ADMIN_BIND` | `127.0.0.1:8081` | 管理端监听地址。 |
+| `CODEX2API_USER_BIND` | `127.0.0.1:8082` | 用户端监听地址。 |
+| `CODEX2API_PUBLIC_API_URL` | `http://127.0.0.1:8080` | 对外 AI API origin，用于 OAuth 资源发现和客户端事件地址。 |
+| `CODEX2API_PUBLIC_USER_URL` | `http://127.0.0.1:8082` | 对外用户端 origin，用于浏览器授权跳转、同源校验和安全 Cookie。 |
 | `CODEX2API_DB` | `data/codex2api.sqlite` | SQLite 数据库文件路径；相对路径以程序启动目录为基准。 |
 | `CODEX_CA_CERTIFICATE` | 未设置 | 可选的 PEM 格式自定义 CA 证书文件路径。 |
 | `SSL_CERT_FILE` | 未设置 | 未配置 `CODEX_CA_CERTIFICATE` 时使用的自定义 CA 证书文件路径。 |
@@ -66,7 +71,7 @@ bash scripts/build.sh --release
 Linux 或 macOS 自定义监听地址和数据库路径：
 
 ```bash
-CODEX2API_BIND=0.0.0.0:8080 \
+CODEX2API_API_BIND=0.0.0.0:8080 \
 CODEX2API_DB=/var/lib/codex2api/codex2api.sqlite \
 ./codex2api
 ```
@@ -74,7 +79,7 @@ CODEX2API_DB=/var/lib/codex2api/codex2api.sqlite \
 Windows PowerShell：
 
 ```powershell
-$env:CODEX2API_BIND = "0.0.0.0:8080"
+$env:CODEX2API_API_BIND = "0.0.0.0:8080"
 $env:CODEX2API_DB = "D:\data\codex2api.sqlite"
 .\codex2api.exe
 ```
@@ -89,9 +94,19 @@ $env:CODEX2API_DB = "D:\data\codex2api.sqlite"
 BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 ```
 
-不配置时使用同一默认值。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_BASE_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/api/oauth/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/api/oauth/chatgpt/codex/device`。设备码授权后的会话同样显示在消费账户的“登录设备”页，可由管理员撤销。
+不配置时使用同一默认值。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_API_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/api/oauth/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/api/oauth/chatgpt/codex/device`。授权入口跳转到 `CODEX2API_PUBLIC_USER_URL` 上的确认页；反向代理应分别路由三端，并在用户端保留 `/user` 路径。设备登录可以在用户中心或管理端撤销。
 
-在管理端 **消费账户** 创建用户名、密码、显示名称、邮箱、固定提供商、套餐和订阅信息，再在账户详情的 **执行路由** 中选择同提供商、已完成授权的供应账户。客户端在本系统授权网页输入虚拟账号密码，使用授权码 + PKCE S256 完成登录；Access Token 和 Refresh Token 由协议自动管理，后台没有手动创建、复制 RT 的入口。
+管理员在 **用户管理** 创建用户，在 **订阅管理** 发放、续期、调整或终止用户的平台订阅，默认列表不显示已到期订阅。**虚拟账户** 模块继续管理原有独立账户；不会自动创建用户或转移原有数据。订阅的“配置与记录”可查看客户端配置、实际用量、设备和内部供应绑定。
+
+用户中心采用侧栏、顶部导航和紧凑内容区，风格与管理端一致。首页总览显示本人钱包、各平台唯一的当前订阅、实际请求与 Token / 计费用量趋势和最近订单；侧栏可进入使用信息、订阅、套餐、订单、钱包、设备和用户信息。使用信息支持时间、平台、模型和结果筛选，展示本人请求明细；未知用量或费用不当作零。用户信息页为 `/user/profile/`，展示基本资料并提供修改密码。刷新先恢复会话，站内切换及刷新保留当前页面。新用户自动获得各已接入平台的 Free 身份；付费到期后保留身份和记录，实时按平台 Free 套餐计算权限与额度。Free 套餐不能删除，不存在单独的“到期免费访问”设置。钱包与套餐售价使用 USD，余额按整数美分保存，初始为零；管理员可在用户管理中增加或减少余额，每次调整记录为系统操作，保留操作人及变动前后余额，原因可选填。管理端“流水管理”集中查看全部用户的来源、前后余额和时间，并支持时间范围与用户名筛选；用户端没有充值或调整余额接口，支付方式仅支持钱包余额。套餐的“允许购买”决定是否展示在用户端，关闭后禁止用户购买和续订，管理员分配不受该开关限制。已发布但未定价的套餐显示“暂未定价”，不能按免费价格下单；供应号池配置不影响展示。套餐可设置售价、购买有效天数和仅管理端可见的默认供应号池。点击下单先打开不落单的预览，核对套餐、有效期、升级抵扣和优惠券后选择支付方式；点击“确认订单”才创建待支付订单，再单独确认钱包支付，成功后显示订单完成。金额和权益在 SQLite 写事务中一起提交，重复确认或支付不重复落单、扣款。供应路由只用于执行，不作为钱包支付条件。
+
+同套餐可以续订；当期换套餐按日均售价判断，只能升级，降级或同价换套餐在到期后办理。升级按确认的预览时刻剩余时长计算新套餐费用，再抵扣原订阅的剩余价值，保持原到期时间和用量周期起点。购买、续订和管理员发放均保存各期售价快照，后续改价不重算原抵扣价值。预览有效期最多 5 分钟，确认订单后沿用该截止时间，最终应付金额在确认订单前显示。优惠券可缩短预览有效期；修改优惠码后必须重新计算。管理端“订单管理”支持按用户、订单号、套餐与状态查询明细和取消待支付订单；用户只能查看、支付或取消自己的订单。管理员在“优惠券管理”创建或停用固定 USD 金额优惠券，设置适用套餐、有效期、最低应付金额及总量 / 每人次数。预览不占用次数；确认订单时预留，取消或超时释放，支付成功后核销。已确认订单保留优惠快照，之后升级按优惠后的剩余价值抵扣；日均售价比较仍使用原标价。
+
+浏览器已有用户会话时直接显示身份，用户点击“确认登录”后才发放授权码。未登录时，在该链接验证用户密码，再显示身份供确认；该验证不会建立持久网页登录。独立虚拟账户通过单独的身份选项授权，不能登录用户中心。管理员凭据仅用于管理端。授权保留 PKCE S256、state 和客户端提供的本机回调地址，Access Token 与 Refresh Token 均为本服务的账户设备凭据。
+
+登录身份统一保存在 `accounts`：账户类型、用户名、密码哈希和启用状态；`admin_users`、`users` 分别保存管理员关联和用户资料、钱包。两端按固定账户类型查询独立资料表，用户名在各身份类型内唯一。独立虚拟账户保留原模块，不转成用户。
+
+供应账户的身份、凭据、指纹、额度快照及执行路由只在管理端可见。用户接口不复用管理 DTO；用户 Cookie、AI access/refresh/ID token 均不能授权管理接口。改密和停用用户撤销其网页会话、平台设备及未确认授权；订阅过期后按平台 Free 套餐提供权益，仍可登录。
 
 虚拟身份、登录设备和本系统用量独立于真实账户。更换绑定保留身份、设备及历史用量，新请求使用号池内供应账户的官方凭据、代理和持久化 HTTP 指纹。供应账户可拥有多个标签，虚拟账户绑定一个标签号池，自动选择状态正常且绑定数最少的账户并保留健康绑定；也可在该池内手动换绑。删除或失效的供应账户会触发后续请求重新选号；号池无可用账户时仍能续期和读取虚拟身份，但不能执行上游请求。修改虚拟账号密码、停用或删除虚拟账号会使相关设备凭据失效。
 
@@ -101,7 +116,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 邀请记录、个人偏好、会话、侧栏项目、审批和安装状态由客户端或实际业务流程维护，管理端仅供查询；身份、功能政策、目录和订阅权益使用具名业务控件管理。Desktop 启动所需的账号、认证方式及设备标识由系统构造，用户无需填写协议字段。升级涉及启动配置的修复后，请重新打开 Desktop，避免继续使用进程内缓存的旧配置。
 
-**虚拟额度完全独立**：使用 7 天或 30 天外层与可选 5 小时内层两个美元费用窗口，额度由套餐及独立免费层策略决定。模型价格在请求开始时快照，按实际普通输入、缓存输入、缓存写入与输出结算，推理 Token 不重复收费。修改价格不重算历史；未知价格或用量明确标注。客户端响应、HTTP 头、SSE 与 WebSocket 读取同一 SQLite 账本。未完成的并发请求尚未结算，可能造成短暂超额。
+**虚拟额度完全独立**：使用 7 天或 30 天外层与可选 5 小时内层两个美元费用窗口，额度由当前有效套餐决定，未付费与付费到期统一使用平台 Free 套餐。模型价格在请求开始时快照，按实际普通输入、缓存输入、缓存写入与输出结算，推理 Token 不重复收费。修改价格不重算历史；未知价格或用量明确标注。客户端响应、HTTP 头、SSE 与 WebSocket 读取同一 SQLite 账本。未完成的并发请求尚未结算，可能造成短暂超额。
 
 本系统真实用量单独记录，每条记录保留请求时的真实消费账户和来源名称，换绑定不会重写历史。真实账户详情的页签顺序为 **账户资料 → 标签 → 指纹与网络 → 官方额度 → 本地用量 → 官方用量 → 官方资料 → 重置额度**。本系统统计汇总本地请求记录中的实际 Token，不以官方账户总用量代替。
 
@@ -111,7 +126,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 | 功能 | 路径 |
 | --- | --- |
-| 登录授权页及账号密码提交 | `GET /api/oauth/chatgpt/oauth/authorize`、`POST /api/oauth/chatgpt/oauth/authorize` |
+| 浏览器授权入口 | `GET /api/oauth/chatgpt/oauth/authorize`，跳转至用户端 `/user/authorize/` |
 | 授权码兑换／令牌刷新 | `POST /api/oauth/chatgpt/oauth/token` |
 | 撤销代理令牌 | `POST /api/oauth/chatgpt/oauth/revoke` |
 | 申请设备码／轮询授权结果 | `POST /api/oauth/chatgpt/api/accounts/deviceauth/usercode`、`POST /api/oauth/chatgpt/api/accounts/deviceauth/token` |
@@ -149,7 +164,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 云任务只列出本账号实际创建并记录的任务；详情和兄弟轮次请求校验归属。换绑后旧任务保留已记录快照，不用新供应账户凭据读取旧任务。ChatGPT 会话初始化读取本账号模型及元数据配置；prepare、发送、恢复和停止使用独立处理，conduit 凭据在服务端保存，以有期限且绑定虚拟账号及执行账户的本地凭据替换。只有上游实际返回会话 ID 后才建立会话归属。
 
-`celsius/ws/user` 返回本地事件连接地址，通知更新从持久化事件读取。连接凭据仅用于事件通道，设备下线后失效；没有通知时保持连接，不返回假的上游 URL。反向代理部署须设置 `CODEX2API_PUBLIC_BASE_URL` 为外部 HTTPS origin，以生成正确的 WSS 地址。
+`celsius/ws/user` 返回本地事件连接地址，通知更新从持久化事件读取。连接凭据仅用于事件通道，设备下线后失效；没有通知时保持连接，不返回假的上游 URL。反向代理部署须设置 `CODEX2API_PUBLIC_API_URL` 为外部 HTTPS origin，以生成正确的 WSS 地址。
 
 桌面用量页支持 `GET /api/oauth/chatgpt/backend-api/wham/usage/daily-token-usage-breakdown`：按虚拟账号、UTC 日期及实际模型汇总本系统已记录的输入和输出 Token（缓存输入已包含在输入中，不重复累加）。支持 `start_date`、`end_date`（包含当天）及 `group_by=day`，默认最近七天；没有上报 Token 的请求不伪造成已知用量。数据跨换绑保留。
 
@@ -170,11 +185,11 @@ Responses 子路径和同级模型、图片、搜索、实时接口按该客户�
 
 授权请求使用 `response_type=code`、`client_id=app_EMoamEEZ73f0CkXaXp7hrann`、`state`、`code_challenge_method=S256` 和 `code_challenge`。目前允许 HTTP 回环地址的 `/auth/callback`，必须包含端口，不接受外部回调、查询参数、用户信息或片段。授权码有效期两分钟，只能兑换一次，并绑定客户端、完整回调地址和 PKCE 证明。
 
-令牌接口接受 JSON 或表单。兑换需要 `grant_type=authorization_code`、`client_id`、`redirect_uri`、`code`、`code_verifier`；后续由客户端使用 `grant_type=refresh_token` 和设备 Refresh Token 续期。每次签发一小时有效的 Access Token，返回身份均为虚拟账号。业务请求使用 `Authorization: Bearer <access_token>`；若发送 `ChatGPT-Account-ID`，值必须是虚拟账号 ID。签名密钥、设备凭据哈希和 Access Token 哈希持久化到 SQLite，服务重启后可以继续续期。
+令牌接口接受 JSON 或表单。兑换需要 `grant_type=authorization_code`、`client_id`、`redirect_uri`、`code`、`code_verifier`；后续由客户端使用 `grant_type=refresh_token` 和设备 Refresh Token 续期。Access Token 与 ID Token 的字段及有效期遵循固定官方协议，Refresh Token 保持客户端 OAuth 原有契约；不复用网页登录 JWT。返回身份均为本地平台账户。业务请求使用 `Authorization: Bearer <access_token>`；若发送 `ChatGPT-Account-ID`，值必须是虚拟账号 ID。签名密钥、设备凭据哈希和 Access Token 哈希持久化到 SQLite，服务重启后可以继续续期。
 
 每次授权创建独立设备会话。后台显示客户端／UA、安装标识、首次登录、最近续期和最近使用，支持下线单个设备；下线使它的 Refresh Token 和全部 Access Token 失效。安装标识和 UA 是客户端上报信息，不能可靠识别物理设备，也不表示当前在线。
 
-客户端仅接受虚拟消费账户的 OAuth Access Token，已移除 API Key 客户端模式。授权 scope 随设备保存，刷新仅可保持或缩小；客户端令牌不能管理账户、套餐、价格、路由或读取供应凭据。管理员使用独立 Cookie 会话，所有管理写入要求 X-CSRF-Token。旧 API Key 用量作为历史来源保留，不再保留可用密钥。
+客户端仅接受虚拟消费账户的 OAuth Access Token，已移除 API Key 客户端模式。授权 scope 随设备保存，刷新仅可保持或缩小；客户端令牌不能管理账户、套餐、价格、路由或读取供应凭据。管理端和用户端均使用 JWT，网页通过各自 HttpOnly Cookie 携带；接口也可使用对应用途的 Bearer JWT，写入仍要求 X-CSRF-Token。管理员与用户使用两套独立 RSA 密钥，保存在 SQLite 的 `jwt_signing_keys`。验签只允许服务端固定的 RS256，拒绝 none、空算法、其他算法、未知密钥和旧随机会话凭据。签名之外还校验 account_type、token_use、aud、iss、有效期及服务端会话/设备撤销记录；错误 Bearer 不会回退使用 Cookie。首次应用账户结构迁移会撤销旧网页登录，需要重新登录管理或用户网页；Codex OAuth 的签名密钥、设备授权和令牌保持原有契约，账户、订阅、钱包及用量历史保留。旧 API Key 用量作为历史来源保留，不再保留可用密钥。
 
 未实现的路径和 HTTP 方法返回 `501 / endpoint_not_implemented`，在 **系统设置 → 端点诊断** 中记录方法、路径、次数、首次和最近时间，不保存查询参数、请求正文、密码或令牌。诊断只覆盖到达代理此前缀的请求，无法捕获应用绕过代理的直连流量。
 
@@ -297,12 +312,6 @@ Rust Proxy 进程
 
 Proxy 层负责对外 API、账户选择、请求转发和管理端所需的账户管理能力。对官方服务的请求表现必须与官方 Codex 客户端一致。
 
-## 管理端网页
-
-项目需要提供管理端网页，用于管理 Proxy 中的上游账户及其运行状态。
-
-管理端的具体页面、字段和操作范围尚未在本文中预先确定，后续单独讨论后再补充。
-
 ## 明确不采用的方案
 
 - 不为每个账户启动一个独立的 Codex CLI 操作系统进程；
@@ -310,7 +319,3 @@ Proxy 层负责对外 API、账户选择、请求转发和管理端所需的账�
 - 不用账号 ID、邮箱或自定义哈希替代官方身份生成规则；
 - 不把每次请求重新生成的随机值当作账户固定身份；
 - 不通过伪造 TLS/JA3 或网络设备特征实现所谓的官方指纹。
-
-## 当前状态
-
-工程骨架已建立：workspace crates、SQLite schema、默认管理员、版本钉死常量和进程入口。具体登录、上游转发和管理端功能按 crate 继续实现。

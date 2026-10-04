@@ -94,14 +94,17 @@ impl Storage {
         request: DeviceAuthorizationApproval<'_>,
     ) -> Result<bool> {
         let now = chrono::Utc::now().timestamp();
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        if !crate::users::confirmed_browser_identity(&mut tx, request.id, request.account).await? {
+            return Ok(false);
+        }
         let flow: Option<String> = sqlx::query_scalar("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? AND request_json='device' RETURNING id")
             .bind(request.id).bind(hash_token(request.cookie)).bind(hash_token(request.csrf))
             .bind(now).fetch_optional(&mut *tx).await?;
         if flow.is_none() {
             return Ok(false);
         }
-        let row: Option<(String,String,String,i64)> = sqlx::query_as("UPDATE virtual_device_authorizations SET authorization_code=?,virtual_account_id=?,expires_at=min(expires_at,?) WHERE user_code_hash=? AND authorization_code IS NULL AND expires_at>? AND EXISTS(SELECT 1 FROM virtual_accounts WHERE id=? AND password_hash=? AND enabled=1 AND provider_id='chatgpt') RETURNING client_id,redirect_uri,code_challenge,created_at")
+        let row: Option<(String,String,String,i64)> = sqlx::query_as("UPDATE virtual_device_authorizations SET authorization_code=?,virtual_account_id=?,expires_at=min(expires_at,?) WHERE user_code_hash=? AND authorization_code IS NULL AND expires_at>? AND EXISTS(SELECT 1 FROM virtual_principals WHERE id=? AND password_hash=? AND enabled=1 AND provider_id='chatgpt') RETURNING client_id,redirect_uri,code_challenge,created_at")
             .bind(request.code).bind(&request.account.id).bind(now+120).bind(hash_token(user_code))
             .bind(now).bind(&request.account.id).bind(&request.account.password_hash).fetch_optional(&mut *tx).await?;
         let Some((client, redirect, challenge, created)) = row else {

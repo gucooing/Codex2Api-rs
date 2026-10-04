@@ -1288,10 +1288,7 @@ export function ConsumerForm({
     setChanges((current) => ({ ...current, [key]: next }));
   const busy = actions.isBusy("consumer-account");
   const planOptions =
-    plans.data?.items.filter(
-      (plan) =>
-        plan.provider_id === value.provider_id && (plan.enabled || plan.id === value.plan_id),
-    ) ?? [];
+    plans.data?.items.filter((plan) => plan.provider_id === value.provider_id) ?? [];
   useErrorToast(plans.error);
   const fields = (
     <FieldSet disabled={disabled || busy} className="gap-3">
@@ -1398,7 +1395,6 @@ export function ConsumerForm({
               {planOptions.map((plan) => (
                 <SelectItem key={plan.id} value={plan.id}>
                   {plan.name}
-                  {plan.enabled ? "" : "（停止新分配）"}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1517,7 +1513,15 @@ export function ConsumerDetail() {
               {resource.refreshing && <Spinner />}刷新
             </Button>
             <Button variant="outline" size="sm" asChild>
-              <Link href="/consumers/">返回列表</Link>
+              <Link
+                href={
+                  account?.user_id
+                    ? `/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`
+                    : "/consumers/"
+                }
+              >
+                返回列表
+              </Link>
             </Button>
           </div>
         </div>
@@ -1560,10 +1564,19 @@ export function ConsumerDetail() {
                       <ConsumerForm
                         key={id}
                         editing
-                        disabled={!resource.ready}
+                        disabled={!resource.ready || !!account?.user_id}
                         account={account}
                         onSaved={resource.reload}
                       />
+                      {account?.user_id && (
+                        <Button asChild variant="outline">
+                          <Link
+                            href={`/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`}
+                          >
+                            管理用户订阅
+                          </Link>
+                        </Button>
+                      )}
                     </CardContent>
                   </Card>
                   <Routing key={id} id={id} account={account} />

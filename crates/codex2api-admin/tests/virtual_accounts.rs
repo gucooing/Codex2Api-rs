@@ -258,8 +258,7 @@ async fn consumer_history_and_quota_are_isolated_and_only_have_two_cost_windows(
     let a = a["id"].as_str().unwrap();
     let b = b["id"].as_str().unwrap();
     let mut plan = f.storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["primary_cost_limit_usd"] = 2.into();
-    plan.config["weekly_cost_limit_usd"] = 10.into();
+    plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}]);
     assert!(
         f.storage
             .save_virtual_plan(&plan, Some(plan.revision))

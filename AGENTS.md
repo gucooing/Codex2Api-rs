@@ -48,6 +48,44 @@ validation are complete.
 - Isolated persistent per-account identity and HTTP fingerprint in SQLite (no `$CODEX_HOME` files).
 - HTTP fingerprint: official header names/formula; originator + UA version are constants; OS/terminal are random per account then frozen. Do not use the proxy host. Do not forge TLS/JA3.
 - Admin web: one user, username/password, default `admin` / `admin`.
+- User web/API, administrator web/API, and AI API have separate routers and
+  configurable listening ports in the same process. Build the two Next.js
+  frontends independently; never mount administrator routes on other listeners.
+- Keep standalone virtual accounts independent; never migrate them into users.
+  Only administrators create users. Each user has one subscription identity per
+  platform, initially Free. Expired paid benefits resolve to the platform Free
+  plan without changing identity or history. Free plans cannot be deleted or
+  changed to a paid tier. Do not restore paid-plan-specific free-access settings.
+- Wallet balances and sale prices use USD and integer cents. Administrator-only
+  wallet adjustments must atomically change the balance and append an immutable
+  system-operation ledger entry with operator, optional reason and before/after amounts;
+  require a revision and idempotency key. No user funding route exists. Plan allow_purchase controls user catalog publication/purchase only;
+  administrator assignment must not depend on it. Preview is read-only and must
+  precede explicit order confirmation, separate payment and completion. Coupons
+  reserve only on confirmation and keep immutable discounts on confirmed orders;
+  payment atomically validates revisions, debits the wallet, updates entitlements
+  and saves an idempotent ledger entry. Upgrades compare daily prices and credit
+  remaining original price snapshots, including administrator grants; keep the
+  expiry/spending anchor. Downgrades wait for expiry. Never invent missing prices,
+  historical orders or successful payments. User usage queries always bind ownership
+  and expose only local, user-visible ledger fields; dashboard charts must preserve
+  unknown measurements and never read supplier usage.
+- User DTOs use explicit field allowlists. Never expose supplier identities,
+  credentials, fingerprints, quota snapshots or routing through user APIs or
+  client tokens. Browser sessions and AI credentials have separate audiences.
+  OAuth identity verification and confirmation are separate steps; temporary
+  login applies only to the current authorization link.
+- Login identity lives in accounts (immutable account_type admin/user); admin_users
+  and users are separate role-checked profiles. The user HTTP module receives only
+  UserStore, never raw storage or supplier/admin query capabilities.
+- Administrator/user web session tokens are purpose-bound JWTs with independent admin
+  and user RSA keys. Allow only the server's fixed RS256 algorithm; reject none,
+  empty/other algorithms and token-selected key sources. Check account_type,
+  token_use, audience, issuer, lifetime and persisted revocation/ownership.
+  Do not accept old opaque web sessions or fallback to a cookie
+  when an explicit Bearer credential fails. Codex OAuth is a separate client
+  protocol: preserve its official claims, signing keys, refresh/revoke behavior and
+  auxiliary credential formats; never apply web-session JWT changes to it.
 - Public API is Codex-compatible `POST /v1/responses`.
 - Upstream requests must look like a logged-in official Codex CLI for the pinned commit.
 - Ordinary supplier request throttling (`rate_limit_exceeded`, `slow_down`, or an
@@ -102,8 +140,9 @@ This clarification supersedes the older blanket requirement to edit every client
 
 Subscription operations clarification (user-confirmed 2026-09-21): operate each
 virtual account as a subscription account, following the ChatGPT subscription
-account model; subscriptions are manually issued by the administrator instead of
-purchased through an official checkout. Subscription grants, renewals, plan changes
+account model. Standalone accounts are administered directly; user subscriptions
+are administrator grants or local-wallet purchases, never official checkout payments.
+Subscription grants, renewals, plan changes
 and expiration are service-owned business state, not cosmetic display fields.
 Admin operations, persisted entitlements, client responses and execution checks
 must agree. Expiration must end the expired subscription's benefits; any remaining

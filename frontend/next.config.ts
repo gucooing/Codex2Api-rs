@@ -9,7 +9,7 @@ const shared: NextConfig = {
 };
 
 function developmentBackend() {
-  const value = process.env.CODEX2API_DEV_BACKEND_URL?.trim() || "http://127.0.0.1:8080";
+  const value = process.env.CODEX2API_DEV_BACKEND_URL?.trim() || "http://127.0.0.1:8081";
   let url: URL;
   try {
     url = new URL(value);
@@ -44,11 +44,6 @@ function config(phase: string): NextConfig {
         {
           source: "/admin/api/:path*",
           destination: `${backend}/admin/api/:path*`,
-          basePath: false,
-        },
-        {
-          source: "/api/oauth/chatgpt/:path*",
-          destination: `${backend}/api/oauth/chatgpt/:path*`,
           basePath: false,
         },
       ],

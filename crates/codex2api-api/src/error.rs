@@ -201,22 +201,19 @@ pub fn openai_json(error_type: &str, message: impl Into<String>, code: Option<&s
 pub fn map_upstream_status_body(status: StatusCode, body: &str) -> Response {
     if let Ok(value) = serde_json::from_str::<Value>(body) {
         if value.get("error").is_some() {
-            return (status, Json(value)).into_response();
+            return (
+                status,
+                Json(json!({"error":crate::public_output::error(&value["error"])})),
+            )
+                .into_response();
         }
-        if let Some(message) = value
-            .get("message")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-        {
-            return openai_response(status, error_type_for_status(status), message, None);
-        }
+        return (
+            status,
+            Json(json!({"error":crate::public_output::error(&value)})),
+        )
+            .into_response();
     }
-    let trimmed = body.trim();
-    let message = if trimmed.is_empty() {
-        default_message_for_status(status).to_string()
-    } else {
-        truncate(trimmed, 2048)
-    };
+    let message = default_message_for_status(status).to_string();
     openai_response(status, error_type_for_status(status), message, None)
 }
 
@@ -231,8 +228,6 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
         let mut response = map_upstream_status_body(status, &body);
         codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
         for name in [
-            "x-error-json",
-            "x-openai-authorization-error",
             "x-request-id",
             "x-oai-request-id",
             "cf-ray",
@@ -251,12 +246,8 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
     let status =
         StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY);
     let message = match &err {
-        UpstreamError::InvalidRequest(message) | UpstreamError::WorkspaceRouting(message) => {
-            message.clone()
-        }
-        _ => failure
-            .message
-            .unwrap_or_else(|| "Upstream request failed.".into()),
+        UpstreamError::InvalidRequest(message) => message.clone(),
+        _ => "The service could not complete this request.".into(),
     };
     openai_response(
         status,
@@ -287,17 +278,6 @@ fn default_message_for_status(status: StatusCode) -> &'static str {
         500..=599 => "Upstream server error.",
         _ => "Request failed.",
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 fn service_error_response(error: codex2api_service::ServiceError) -> Response {
@@ -447,15 +427,9 @@ mod tests {
             assert_eq!(response.status().as_u16(), status);
             assert_eq!(response.headers()["retry-after"], "7");
             assert_eq!(response.headers()["x-request-id"], "request-fixture");
-            assert_eq!(
-                response.headers()["x-openai-authorization-error"],
-                "access_denied"
-            );
-            assert_eq!(
-                response.headers()["x-error-json"],
-                r#"{"error":{"code":"invalid_prompt"}}"#
-            );
             for key in [
+                "x-error-json",
+                "x-openai-authorization-error",
                 "x-oai-request-id",
                 "set-cookie",
                 "authorization",
@@ -465,7 +439,9 @@ mod tests {
                 assert!(!response.headers().contains_key(key), "{key}");
             }
             let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), body);
+            let value = serde_json::from_slice::<Value>(&bytes).unwrap();
+            assert_eq!(value["error"]["code"], "invalid_prompt");
+            assert!(!value.to_string().contains("中文"));
         }
     }
 }

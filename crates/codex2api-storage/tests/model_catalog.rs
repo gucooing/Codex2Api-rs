@@ -133,8 +133,7 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
         .await
         .unwrap();
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["primary_cost_limit_usd"] = serde_json::json!(0.1);
-    plan.config["weekly_cost_limit_usd"] = serde_json::json!(0.5);
+    plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"0.5"},{"duration_seconds":18000,"cost_limit_usd":"0.1"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await

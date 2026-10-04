@@ -37,7 +37,8 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     let mut crossed = storage.virtual_plan("plus").await.unwrap().unwrap();
     let original = crossed.config.clone();
     crossed.provider_id = "test-provider".into();
-    crossed.config["primary_cost_limit_usd"] = json!(123);
+    crossed.config["spending_windows"] =
+        json!([{"duration_seconds":604800,"cost_limit_usd":"123"}]);
     assert!(
         !storage
             .save_virtual_plan(&crossed, Some(crossed.revision))

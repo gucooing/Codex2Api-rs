@@ -362,7 +362,7 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
-                value
+                serde_json::json!({"error":crate::public_output::error(&value["error"])})
             );
             let health = state.storage.supplier_health(&ids[0]).await.unwrap();
             assert!(!health.authentication_invalid);
@@ -534,7 +534,7 @@ pub(crate) mod tests {
         let (_dir, state, oauth, ids) = setup_pool().await;
         let storage = state.storage.clone();
         let owner = storage
-            .virtual_account(&oauth.virtual_account_id)
+            .effective_virtual_account(&oauth.virtual_account_id)
             .await
             .unwrap()
             .unwrap();

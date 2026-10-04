@@ -26,7 +26,29 @@ fn collect(root: &Path, dir: &Path, files: &mut BTreeMap<String, PathBuf>) {
     }
 }
 fn main() {
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../frontend");
+    if env::var_os("CARGO_FEATURE_DEV_FRONTEND").is_some() {
+        assert_ne!(
+            env::var("PROFILE").as_deref(),
+            Ok("release"),
+            "dev-frontend is for local development; release builds embed both frontends"
+        );
+        let output = PathBuf::from(env::var("OUT_DIR").unwrap());
+        for name in ["ADMIN_ASSETS", "USER_ASSETS"] {
+            fs::write(
+                output.join(format!("{name}.rs")),
+                format!("pub(crate) static {name}: &[(&str, &[u8])] = &[];\n"),
+            )
+            .unwrap();
+        }
+        return;
+    }
+    embed("frontend", "ADMIN_ASSETS");
+    embed("frontend-user", "USER_ASSETS");
+}
+fn embed(directory: &str, constant: &str) {
+    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../..")
+        .join(directory);
     let out = root.join("out");
     let manifest = out.join(".source-manifest.json");
     println!("cargo:rerun-if-changed={}", root.display());
@@ -73,7 +95,7 @@ fn main() {
         assets.contains_key("index.html"),
         "frontend export has no index.html"
     );
-    let mut code = String::from("pub(crate) static ASSETS: &[(&str, &[u8])] = &[\n");
+    let mut code = format!("pub(crate) static {constant}: &[(&str, &[u8])] = &[\n");
     for (name, path) in assets {
         if name.starts_with('.') {
             continue;
@@ -85,7 +107,7 @@ fn main() {
     }
     code.push_str("];\n");
     fs::write(
-        PathBuf::from(env::var("OUT_DIR").unwrap()).join("assets.rs"),
+        PathBuf::from(env::var("OUT_DIR").unwrap()).join(format!("{constant}.rs")),
         code,
     )
     .unwrap();

@@ -6,15 +6,30 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
-include!(concat!(env!("OUT_DIR"), "/assets.rs"));
-pub fn router() -> Router {
+include!(concat!(env!("OUT_DIR"), "/ADMIN_ASSETS.rs"));
+include!(concat!(env!("OUT_DIR"), "/USER_ASSETS.rs"));
+pub fn user_router() -> Router {
     Router::new()
+        .route("/", get(|| async { Redirect::to("/user/") }))
+        .route("/user", get(|| async { Redirect::permanent("/user/") }))
+        .route("/user/", get(serve_user))
+        .route("/user/{*path}", get(serve_user))
+}
+pub fn admin_router() -> Router {
+    Router::new()
+        .route("/", get(|| async { Redirect::to("/admin/") }))
         .route("/admin", get(|| async { Redirect::permanent("/admin/") }))
         .route("/admin/", get(serve))
         .route("/admin/{*path}", get(serve))
 }
 async fn serve(OriginalUri(uri): OriginalUri) -> Response {
-    let Some(path) = uri.path().strip_prefix("/admin/") else {
+    serve_assets(uri, "/admin/", ADMIN_ASSETS)
+}
+async fn serve_user(OriginalUri(uri): OriginalUri) -> Response {
+    serve_assets(uri, "/user/", USER_ASSETS)
+}
+fn serve_assets(uri: axum::http::Uri, prefix: &str, assets: &'static [(&str, &[u8])]) -> Response {
+    let Some(path) = uri.path().strip_prefix(prefix) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if path == "api" || path.starts_with("api/") || path.contains("..") || path.contains('\\') {
@@ -22,11 +37,11 @@ async fn serve(OriginalUri(uri): OriginalUri) -> Response {
     }
     if !path.is_empty()
         && !path.ends_with('/')
-        && ASSETS
+        && assets
             .iter()
             .any(|(name, _)| *name == format!("{path}/index.html"))
     {
-        let mut target = format!("/admin/{path}/");
+        let mut target = format!("{prefix}{path}/");
         if let Some(query) = uri.query() {
             target.push('?');
             target.push_str(query);
@@ -40,7 +55,7 @@ async fn serve(OriginalUri(uri): OriginalUri) -> Response {
     } else {
         path.into()
     };
-    let Some((_, body)) = ASSETS.iter().find(|(name, _)| *name == path) else {
+    let Some((_, body)) = assets.iter().find(|(name, _)| *name == path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let mime = match path.rsplit('.').next().unwrap_or("") {
@@ -75,7 +90,7 @@ async fn serve(OriginalUri(uri): OriginalUri) -> Response {
     )
         .into_response()
 }
-#[cfg(test)]
+#[cfg(all(test, not(feature = "dev-frontend")))]
 mod tests {
     use super::*;
     use axum::{
@@ -86,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn static_export_is_embedded_and_api_misses_never_return_html() {
         for path in ["/admin/", "/admin/login/", "/admin/consumers/"] {
-            let r = router()
+            let r = admin_router()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
@@ -101,7 +116,7 @@ mod tests {
             "/admin/../data.sqlite",
         ] {
             assert_eq!(
-                router()
+                admin_router()
                     .oneshot(Request::get(path).body(Body::empty()).unwrap())
                     .await
                     .unwrap()
@@ -119,7 +134,7 @@ mod tests {
             "settings",
         ] {
             let path = format!("/admin/{page}/__next.{page}.__PAGE__.txt?_rsc=review");
-            let response = router()
+            let response = admin_router()
                 .oneshot(Request::get(&path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
@@ -132,11 +147,11 @@ mod tests {
             assert!(!bytes.is_empty());
             assert!(!String::from_utf8_lossy(&bytes).contains("<html"));
         }
-        let asset = ASSETS
+        let asset = ADMIN_ASSETS
             .iter()
             .find(|(name, _)| name.starts_with("_next/static/") && name.ends_with(".js"))
             .unwrap();
-        let r = router()
+        let r = admin_router()
             .oneshot(
                 Request::get(format!("/admin/{}", asset.0))
                     .body(Body::empty())

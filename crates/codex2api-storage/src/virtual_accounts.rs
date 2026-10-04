@@ -85,17 +85,19 @@ impl Storage {
     }
     pub async fn virtual_accounts(&self) -> Result<Vec<VirtualAccount>> {
         Ok(
-            sqlx::query_as("SELECT * FROM virtual_accounts ORDER BY created_at,id")
+            sqlx::query_as("SELECT * FROM virtual_accounts WHERE id NOT IN(SELECT virtual_account_id FROM user_subscriptions) ORDER BY created_at,id")
                 .fetch_all(self.pool())
                 .await?,
         )
     }
 
     pub async fn virtual_account(&self, id: &str) -> Result<Option<VirtualAccount>> {
-        Ok(sqlx::query_as("SELECT * FROM virtual_accounts WHERE id=?")
-            .bind(id)
-            .fetch_optional(self.pool())
-            .await?)
+        Ok(
+            sqlx::query_as("SELECT * FROM virtual_principals WHERE id=?")
+                .bind(id)
+                .fetch_optional(self.pool())
+                .await?,
+        )
     }
     pub async fn search_virtual_accounts(
         &self,
@@ -104,7 +106,7 @@ impl Storage {
     ) -> Result<Vec<VirtualAccount>> {
         Ok(sqlx::query_as(
             "SELECT * FROM virtual_accounts
-             WHERE instr(lower(username), lower(?)) > 0 OR instr(lower(email), lower(?)) > 0
+             WHERE id NOT IN(SELECT virtual_account_id FROM user_subscriptions) AND (instr(lower(username), lower(?)) > 0 OR instr(lower(email), lower(?)) > 0)
              ORDER BY created_at, id LIMIT ?",
         )
         .bind(search)
@@ -118,7 +120,7 @@ impl Storage {
         username: &str,
     ) -> Result<Option<VirtualAccount>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM virtual_accounts WHERE username=? COLLATE NOCASE AND enabled=1",
+            "SELECT * FROM virtual_accounts WHERE username=? COLLATE NOCASE AND enabled=1 AND id NOT IN(SELECT virtual_account_id FROM user_subscriptions)",
         )
         .bind(username)
         .fetch_optional(self.pool())
@@ -132,7 +134,18 @@ impl Storage {
         account: &VirtualAccount,
         origin: &str,
     ) -> Result<()> {
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let managed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM user_subscriptions WHERE virtual_account_id=?)",
+        )
+        .bind(&account.id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if managed {
+            return Err(StorageError::InvalidAdminUpdate(
+                "用户平台账户的身份与订阅请在用户管理和订阅管理中修改",
+            ));
+        }
         // A write first avoids read-to-write upgrade races with concurrent logins.
         sqlx::query("DELETE FROM virtual_devices WHERE virtual_account_id=? AND EXISTS(SELECT 1 FROM virtual_accounts WHERE id=? AND (password_hash!=? OR ?=0))")
             .bind(&account.id).bind(&account.id).bind(&account.password_hash).bind(account.enabled).execute(&mut *tx).await?;
@@ -141,8 +154,8 @@ impl Storage {
                 .bind(&account.id)
                 .fetch_optional(&mut *tx)
                 .await?;
-        let selectable: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type=? AND (enabled=1 OR id=?))")
-            .bind(&account.plan_id).bind(&account.plan_type).bind(previous.as_ref().map(|a| &a.plan_id)).fetch_one(&mut *tx).await?;
+        let selectable: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type=? AND provider_id=?)")
+            .bind(&account.plan_id).bind(&account.plan_type).bind(&account.provider_id).fetch_one(&mut *tx).await?;
         if !selectable {
             return Err(StorageError::Constraint(
                 "请选择套餐管理中可用的套餐".into(),
@@ -224,6 +237,11 @@ impl Storage {
         Ok(())
     }
     pub async fn delete_virtual_account(&self, id: &str) -> Result<()> {
+        if self.virtual_account_user(id).await?.is_some() {
+            return Err(StorageError::InvalidAdminUpdate(
+                "用户平台账户请通过用户管理或订阅管理停用，保留其历史记录",
+            ));
+        }
         sqlx::query("DELETE FROM virtual_accounts WHERE id=?")
             .bind(id)
             .execute(self.pool())
@@ -243,7 +261,7 @@ impl Storage {
         Ok(())
     }
     pub async fn virtual_refresh_device(&self, token: &str) -> Result<Option<VirtualDevice>> {
-        Ok(sqlx::query_as("SELECT d.provider_id,d.scopes,d.id,d.virtual_account_id,d.installation_id,d.user_agent,d.created_at,d.last_login_at,d.last_used_at,d.authenticated_at_ms,d.requested_at_ms FROM virtual_devices d JOIN virtual_accounts v ON v.id=d.virtual_account_id WHERE d.refresh_hash=? AND v.enabled=1")
+        Ok(sqlx::query_as("SELECT d.provider_id,d.scopes,d.id,d.virtual_account_id,d.installation_id,d.user_agent,d.created_at,d.last_login_at,d.last_used_at,d.authenticated_at_ms,d.requested_at_ms FROM virtual_devices d JOIN virtual_principals v ON v.id=d.virtual_account_id WHERE d.refresh_hash=? AND v.enabled=1")
             .bind(hash_token(token)).fetch_optional(self.pool()).await?)
     }
     pub async fn create_virtual_device(
@@ -255,7 +273,7 @@ impl Storage {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let changed=sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,installation_id,user_agent,created_at,last_login_at,provider_id)
-            SELECT ?,v.id,?,?,?,?,?,v.provider_id FROM virtual_accounts v WHERE v.id=? AND v.enabled=1 AND v.password_hash=?")
+            SELECT ?,v.id,?,?,?,?,?,v.provider_id FROM virtual_principals v WHERE v.id=? AND v.enabled=1 AND v.password_hash=?")
             .bind(&id).bind(hash_token(token)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(&owner.id).bind(&owner.password_hash).execute(self.pool()).await?.rows_affected();
         Ok((changed == 1).then_some(id))
     }
@@ -283,7 +301,7 @@ impl Storage {
             .bind(Utc::now().timestamp())
             .execute(&mut *tx)
             .await?;
-        let grant: Option<String> = sqlx::query_scalar("SELECT d.scopes FROM virtual_devices d JOIN virtual_accounts v ON v.id=d.virtual_account_id WHERE d.id=? AND d.refresh_hash=? AND v.enabled=1")
+        let grant: Option<String> = sqlx::query_scalar("SELECT d.scopes FROM virtual_devices d JOIN virtual_principals v ON v.id=d.virtual_account_id WHERE d.id=? AND d.refresh_hash=? AND v.enabled=1")
             .bind(device).bind(hash_token(refresh)).fetch_optional(&mut *tx).await?;
         let Some(grant) = grant else {
             return Ok(false);
@@ -295,7 +313,7 @@ impl Storage {
         {
             return Ok(false);
         }
-        let changed=sqlx::query("INSERT INTO virtual_access_tokens(token_hash,device_id,expires_at,scopes) SELECT ?,d.id,?,? FROM virtual_devices d JOIN virtual_accounts v ON v.id=d.virtual_account_id WHERE d.id=? AND d.refresh_hash=? AND v.enabled=1")
+        let changed=sqlx::query("INSERT INTO virtual_access_tokens(token_hash,device_id,expires_at,scopes) SELECT ?,d.id,?,? FROM virtual_devices d JOIN virtual_principals v ON v.id=d.virtual_account_id WHERE d.id=? AND d.refresh_hash=? AND v.enabled=1")
             .bind(hash_token(token)).bind(expires).bind(scopes).bind(device).bind(hash_token(refresh)).execute(&mut *tx).await?.rows_affected();
         sqlx::query("UPDATE virtual_devices SET last_login_at=? WHERE id=?")
             .bind(Utc::now().to_rfc3339())
@@ -306,7 +324,7 @@ impl Storage {
         Ok(changed == 1)
     }
     pub async fn virtual_access(&self, hash: &str) -> Result<Option<VirtualAccess>> {
-        Ok(sqlx::query_as("SELECT t.scopes,d.provider_id,v.id AS virtual_account_id,d.id AS device_id,r.supplier_account_id AS account_id,v.name,t.token_hash FROM virtual_access_tokens t JOIN virtual_devices d ON d.id=t.device_id JOIN virtual_accounts v ON v.id=d.virtual_account_id LEFT JOIN execution_routes r ON r.virtual_account_id=v.id AND r.provider_id=d.provider_id WHERE t.token_hash=? AND t.expires_at>? AND v.enabled=1")
+        Ok(sqlx::query_as("SELECT t.scopes,d.provider_id,v.id AS virtual_account_id,d.id AS device_id,r.supplier_account_id AS account_id,v.name,t.token_hash FROM virtual_access_tokens t JOIN virtual_devices d ON d.id=t.device_id JOIN virtual_principals v ON v.id=d.virtual_account_id LEFT JOIN execution_routes r ON r.virtual_account_id=v.id AND r.provider_id=d.provider_id WHERE t.token_hash=? AND t.expires_at>? AND v.enabled=1 AND NOT EXISTS(SELECT 1 FROM user_subscriptions s JOIN user_identities u ON u.id=s.user_id WHERE s.virtual_account_id=v.id AND u.enabled=0)")
             .bind(hash).bind(Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
     pub async fn touch_virtual_access(&self, hash: &str) -> Result<()> {

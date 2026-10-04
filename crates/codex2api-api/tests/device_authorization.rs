@@ -19,7 +19,11 @@ async fn request(
 ) -> axum::response::Response {
     let mut builder = Request::builder()
         .method(if body.is_some() { "POST" } else { "GET" })
-        .uri(format!("{ROOT}{path}"))
+        .uri(if path.starts_with("/oauth/device/") {
+            format!("/user/api{path}")
+        } else {
+            format!("{ROOT}{path}")
+        })
         .header("host", "service.example.test")
         .header("content-type", "application/json");
     if let Some(cookie) = cookie {
@@ -67,7 +71,11 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
         storage.clone(),
         suppliers,
         codex2api_upstream::UpstreamPool::new(auth),
-    ));
+    ))
+    .merge(codex2api_user::router(codex2api_user::UserState {
+        storage: storage.user_store(),
+        public_base_url: "http://service.example.test".into(),
+    }));
     let issued = request(
         &app,
         "/api/accounts/deviceauth/usercode",
@@ -99,7 +107,7 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
         .unwrap()
         .to_owned();
     let flow = payload(bootstrap).await;
-    let mut approval = json!({"request_id":flow["request_id"],"csrf_token":"x".repeat(64),"user_code":issued["user_code"],"username":"alice","password":"fixture-password"});
+    let mut approval = json!({"request_id":flow["request_id"],"csrf_token":"x".repeat(64),"user_code":issued["user_code"],"account_id":account.id,"confirmed":true});
     assert_eq!(
         request(
             &app,
@@ -111,6 +119,8 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
         .status(),
         StatusCode::BAD_REQUEST
     );
+    let identified=request(&app,"/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"virtual","username":"alice","password":"fixture-password"})),Some(&cookie)).await;
+    assert_eq!(identified.status(), StatusCode::OK);
     approval["csrf_token"] = flow["csrf_token"].clone();
     assert_eq!(
         request(

@@ -14,7 +14,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend-user/package-lock.json
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -25,6 +27,16 @@ jobs:
           npm run format:check
           npm run typecheck
           npm test
+      - name: Build independent user frontend
+        working-directory: frontend-user
+        run: |
+          npm ci
+          npm run lint
+          npm run format:check
+          npm run typecheck
+          npm test
+          npm run build
+
       - name: Export embedded application
         working-directory: frontend
         run: npm run build

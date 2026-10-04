@@ -113,9 +113,6 @@ async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() 
         .unwrap();
     plan.config["model_access"] = json!("selected");
     plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-6-astra"}]);
-    plan.config["free_access_enabled"] = json!(true);
-    plan.config["free_primary_cost_limit_usd"] = json!(null);
-    plan.config["free_weekly_cost_limit_usd"] = json!(null);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -131,7 +128,7 @@ async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() 
         service
             .authorize(&account.id, "chatgpt", request("gpt-6-astra"))
             .await,
-        Err(ServiceError::Policy(PolicyError::ModelNotEntitled))
+        Err(ServiceError::Policy(PolicyError::SubscriptionRequired))
     ));
     assert!(
         storage
@@ -140,13 +137,10 @@ async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() 
             .unwrap()
             .is_empty()
     );
-    let mut plan = storage
-        .virtual_plan(&account.plan_id)
-        .await
-        .unwrap()
-        .unwrap();
-    plan.config["free_model_access"] = json!("selected");
-    plan.config["free_models"] = json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"}]);
+    let mut plan = storage.platform_free_plan("chatgpt").await.unwrap();
+    plan.config["model_access"] = json!("selected");
+    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"}]);
+    plan.config["spending_windows"] = json!([{"duration_seconds":2592000,"cost_limit_usd":null}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await

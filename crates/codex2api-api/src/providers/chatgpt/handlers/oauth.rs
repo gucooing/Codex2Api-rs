@@ -186,7 +186,7 @@ pub async fn token(State(state): State<ApiState>, headers: HeaderMap, body: Byte
         };
         let account = match state
             .storage
-            .virtual_account(&device.virtual_account_id)
+            .effective_virtual_account(&device.virtual_account_id)
             .await
         {
             Ok(Some(v)) if v.enabled && v.provider_id == codex2api_core::CHATGPT => v,

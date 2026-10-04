@@ -73,7 +73,8 @@ impl Storage {
     pub async fn delete_supplier_tag(&self, id: &str) -> Result<()> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let bound: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_routes WHERE tag_id=?)")
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_routes WHERE tag_id=?) OR EXISTS(SELECT 1 FROM virtual_plans WHERE json_extract(config,'$.supplier_tag_id')=?)")
+                .bind(id)
                 .bind(id)
                 .fetch_one(&mut *tx)
                 .await?;
@@ -252,7 +253,15 @@ impl Storage {
         excluded: &[String],
     ) -> Result<Option<String>> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM execution_routes r JOIN virtual_accounts v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
+        // User platforms inherit the current plan's pool. An expired paid plan
+        // uses the platform Free pool, so paid supply is not an expired benefit.
+        let inherited:Option<(Option<String>,bool)>=sqlx::query_as("SELECT json_extract(p.config,'$.supplier_tag_id'),(v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch()) FROM user_subscriptions s JOIN virtual_accounts v ON v.id=s.virtual_account_id JOIN platform_free_plans f ON f.provider_id=s.provider_id JOIN virtual_plans p ON p.id=CASE WHEN v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch() THEN f.plan_id ELSE v.plan_id END WHERE v.id=? AND v.provider_id=?")
+            .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
+        if let Some((tag, expired)) = inherited {
+            sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,supplier_account_id) VALUES(?,?,?,NULL) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id,supplier_account_id=NULL,revision=revision+1 WHERE (? OR execution_routes.tag_id IS NULL) AND execution_routes.tag_id IS NOT excluded.tag_id")
+                .bind(owner).bind(provider).bind(tag).bind(expired).execute(&mut *tx).await?;
+        }
+        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM execution_routes r JOIN virtual_principals v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
             .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
         let Some(route) = route else {
             return Ok(None);

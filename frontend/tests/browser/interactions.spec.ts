@@ -269,9 +269,12 @@ test("failed reads keep all pages visible and settings disabled until retry succ
   await page.getByRole("button", { name: "重新加载", exact: true }).click();
   await expect(page.getByLabel("UA 规则", { exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
-  await page.goto("/admin/authorize/");
-  await expect(page.getByLabel("虚拟账户用户名", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "登录并授权", exact: true })).toBeDisabled();
+  const userURL = process.env.CODEX2API_TEST_USER_URL;
+  if (!userURL || !["127.0.0.1", "localhost", "[::1]"].includes(new URL(userURL).hostname))
+    throw new Error("Set CODEX2API_TEST_USER_URL to the isolated local user frontend.");
+  await page.goto(`${userURL}/user/authorize/`);
+  await expect(page.getByLabel("用户名", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "验证身份", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "重新加载", exact: true })).toBeVisible();
 });
 
@@ -541,7 +544,7 @@ test("desktop navigation, mobile drawer and long forms respect viewport and redu
   });
   const header = await dialog.locator("[data-slot=dialog-header]").boundingBox();
   const scroll = await body.boundingBox();
-  const footer = await dialog.locator("form > [data-slot=field-group]").boundingBox();
+  const footer = await dialog.locator("form > [data-slot=field-group], form > [data-slot=dialog-footer]").boundingBox();
   expect(header!.y + header!.height).toBeLessThanOrEqual(scroll!.y + 1);
   expect(scroll!.y + scroll!.height).toBeLessThanOrEqual(footer!.y + 1);
   await page.screenshot({ path: resolve(evidence, "17-plan-form-mobile.png"), fullPage: true });

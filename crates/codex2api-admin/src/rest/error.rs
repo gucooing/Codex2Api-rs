@@ -60,6 +60,11 @@ impl From<codex2api_storage::StorageError> for ApiError {
     fn from(e: codex2api_storage::StorageError) -> Self {
         use codex2api_storage::StorageError as E;
         match e {
+            E::Checkout { code, message } => Self(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                code.into(),
+                message.into(),
+            ),
             E::AccountNotFound(_) | E::ProxyNotFound => Self::missing(),
             E::InvalidAdminUpdate(m) => Self::bad(m),
             E::Constraint(_) => Self::bad("数据不符合业务约束或记录已存在"),
