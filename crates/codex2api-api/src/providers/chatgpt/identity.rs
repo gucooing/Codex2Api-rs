@@ -189,6 +189,21 @@ pub fn mask(
             }
         }
         Value::Object(object) => {
+            object.retain(|key, _| {
+                !matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "supplier_account_id"
+                        | "supplier_id"
+                        | "installation_id"
+                        | "access_token"
+                        | "refresh_token"
+                        | "id_token"
+                        | "authorization"
+                        | "api_key"
+                        | "cookie"
+                        | "cookies"
+                )
+            });
             let identity_object = object.contains_key("email")
                 || object.contains_key("user_id")
                 || object.contains_key("chatgpt_user_id")
@@ -198,6 +213,7 @@ pub fn mask(
                 });
             for (key, item) in object.iter_mut() {
                 match key.as_str() {
+                    "error" if !item.is_null() => *item = crate::public_output::error(item),
                     "plan_type" | "chatgpt_plan_type" => *item = account.effective_plan().into(),
                     "email" => *item = account.email.clone().into(),
                     "account_id" | "chatgpt_account_id" => *item = account.id.clone().into(),
@@ -222,7 +238,7 @@ pub async fn quota_headers(
     id: &str,
     headers: &mut HeaderMap,
 ) -> crate::Result<()> {
-    let Some(account) = storage.virtual_account(id).await? else {
+    let Some(account) = storage.effective_virtual_account(id).await? else {
         return Ok(());
     };
     let names: Vec<_> = headers
@@ -344,7 +360,24 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
                                 .collect::<Vec<_>>();
                             lines.push(format!("data: {value}"));
                             output = format!("{}\n\n", lines.join("\n")).into_bytes();
+                        } else if let Ok(mut value) = serde_json::from_str::<Value>(&data) {
+                            let original = value.clone();
+                            crate::public_output::metadata(&mut value);
+                            if value != original {
+                                let event_name = text.lines().find(|l| l.starts_with("event:"));
+                                output = format!(
+                                    "{}data: {value}\n\n",
+                                    event_name
+                                        .map(|name| format!("{name}\n"))
+                                        .unwrap_or_default()
+                                )
+                                .into_bytes();
+                            }
+                        } else if !data.is_empty() && data != "[DONE]" {
+                            return Err(std::io::Error::other("Invalid service event"));
                         }
+                    } else {
+                        return Err(std::io::Error::other("Invalid service event encoding"));
                     }
                     return Ok::<_, std::io::Error>(Some((
                         Bytes::from(output),
@@ -370,21 +403,23 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
 
 /// The pinned client reads quota both from handshake headers and codex.rate_limits events.
 pub async fn websocket_message(storage: &Storage, hash: &str, text: &str) -> crate::Result<String> {
-    if !text.contains("codex.rate_limits") {
-        return Ok(text.to_owned());
-    }
-    let Ok(mut event) = serde_json::from_str::<Value>(text) else {
-        return Ok(text.to_owned());
-    };
+    let mut event = serde_json::from_str::<Value>(text)
+        .map_err(|_| crate::ApiError::internal("Invalid service event"))?;
     if event["type"] != "codex.rate_limits" {
-        return Ok(text.to_owned());
+        let original = event.clone();
+        crate::public_output::metadata(&mut event);
+        return Ok(if event == original {
+            text.to_owned()
+        } else {
+            event.to_string()
+        });
     }
     let access = storage
         .virtual_access(hash)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let account = storage
-        .virtual_account(&access.virtual_account_id)
+        .effective_virtual_account(&access.virtual_account_id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let usage = storage.virtual_quota(&account.id).await?;
@@ -440,8 +475,7 @@ mod isolation_tests {
             .await
             .unwrap()
             .unwrap();
-        plan.config["primary_cost_limit_usd"] = json!(0);
-        plan.config["weekly_cost_limit_usd"] = json!(10);
+        plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"0"}]);
         assert!(
             storage
                 .save_virtual_plan(&plan, Some(plan.revision))

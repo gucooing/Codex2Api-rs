@@ -2,7 +2,8 @@
 param([switch]$Release, [string]$Target)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-Push-Location (Join-Path $projectRoot 'frontend')
+foreach ($frontendProject in @('frontend','frontend-user')) {
+Push-Location (Join-Path $projectRoot $frontendProject)
 try {
     & npm ci
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
@@ -17,6 +18,7 @@ try {
     & npm run build
     if ($LASTEXITCODE -ne 0) { throw 'Next.js export failed' }
 } finally { Pop-Location }
+}
 Push-Location $projectRoot
 try {
     $cargoArguments = @('build', '--locked', '--package', 'codex2api')

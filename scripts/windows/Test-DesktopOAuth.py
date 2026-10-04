@@ -15,6 +15,7 @@ import urllib.request
 
 base, client_home = sys.argv[1:]
 proxy = base + "/api/oauth/chatgpt"
+user_api = os.environ.get("CODEX2API_TEST_USER_URL", base).rstrip("/") + "/user/api"
 cli = os.environ["CODEX2API_TEST_CLI"]
 client_env = os.environ.copy()
 client_env.update({
@@ -95,7 +96,7 @@ try:
     authorization=urllib.parse.parse_qs(urllib.parse.urlsplit(login["authUrl"]).query).get("authorize_url", [login["authUrl"]])[0]
     assert urllib.parse.urlsplit(authorization).netloc == urllib.parse.urlsplit(proxy).netloc, 'Native login escaped the configured service'
     callback=urllib.parse.parse_qs(urllib.parse.urlsplit(authorization).query)["redirect_uri"][0]
-    allowed_origins={(urllib.parse.urlsplit(value).scheme,urllib.parse.urlsplit(value).netloc) for value in [proxy,callback]}
+    allowed_origins={(urllib.parse.urlsplit(value).scheme,urllib.parse.urlsplit(value).netloc) for value in [proxy,user_api,callback]}
     class LocalLoginRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             target=urllib.parse.urlsplit(newurl)
@@ -103,10 +104,14 @@ try:
             return super().redirect_request(req,fp,code,msg,headers,newurl)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), LocalLoginRedirect(), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     query=urllib.parse.urlsplit(authorization).query
-    with opener.open(proxy + "/oauth/authorize/bootstrap?" + query, timeout=10) as response:
+    with opener.open(user_api + "/oauth/authorize/bootstrap?" + query, timeout=10) as response:
         flow=json.load(response)
-    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"alice","password":"fixture-password"}).encode()
-    with opener.open(urllib.request.Request(proxy+"/oauth/authorize/submit",data=payload,headers={"Content-Type":"application/json"}),timeout=20) as response:
+    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"virtual","username":"alice","password":"fixture-password"}).encode()
+    with opener.open(urllib.request.Request(user_api+"/oauth/authorize/identify",data=payload,headers={"Content-Type":"application/json"}),timeout=20) as response:
+        identified=json.load(response)
+    assert identified["identity"]["username"]=="alice"
+    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":identified["identity"]["account_id"],"confirmed":True}).encode()
+    with opener.open(urllib.request.Request(user_api+"/oauth/authorize/approve",data=payload,headers={"Content-Type":"application/json"}),timeout=20) as response:
         approved=json.load(response)
     with opener.open(approved["redirect_uri"],timeout=20) as response:
         response.read()

@@ -162,7 +162,6 @@ test("mutation DTOs exclude read only metadata", () => {
     revision: 2,
     updated_at_ms: 23,
     models: [],
-    free_models: [],
   });
   assert.equal("id" in plan, false);
   assert.equal("updated_at_ms" in plan, false);

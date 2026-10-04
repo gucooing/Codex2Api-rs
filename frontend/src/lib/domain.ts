@@ -39,21 +39,16 @@ export function sameProviderModels(models: ModelRef[], provider: string) {
 }
 export function planWrite(value: Plan) {
   return {
+    sale_price_usd: value.sale_price_usd,
+    duration_days: value.duration_days,
+    supplier_tag_id: value.supplier_tag_id,
     plan_type: value.plan_type,
     name: value.name,
     provider_id: value.provider_id,
     model_access: value.model_access,
     models: value.models.map(({ provider_id, model }) => ({ provider_id, model })),
-    free_model_access: value.free_model_access,
-    free_models: value.free_models.map(({ provider_id, model }) => ({ provider_id, model })),
-    free_access_enabled: value.free_access_enabled,
-    primary_cost_limit_usd: value.primary_cost_limit_usd,
-    weekly_cost_limit_usd: value.weekly_cost_limit_usd,
-    free_primary_cost_limit_usd: value.free_primary_cost_limit_usd,
-    free_weekly_cost_limit_usd: value.free_weekly_cost_limit_usd,
     spending_windows: value.spending_windows,
-    free_spending_windows: value.free_spending_windows,
-    enabled: value.enabled,
+    allow_purchase: value.allow_purchase,
     revision: value.id ? value.revision : null,
   };
 }

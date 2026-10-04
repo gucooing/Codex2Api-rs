@@ -9,6 +9,8 @@ use serde::Deserialize;
 #[derive(Default, Deserialize)]
 pub(crate) struct Filters {
     #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
     pub account: String,
     #[serde(default)]
     pub supplier_id: String,
@@ -31,6 +33,9 @@ pub(crate) struct Filters {
 
 impl Filters {
     pub fn storage_filter(&self) -> Result<UsageFilter, String> {
+        if self.user_id.len() > 128 {
+            return Err("用户筛选条件无效".into());
+        }
         codex2api_storage::table_page_size(self.page_size).map_err(|e| e.to_string())?;
         let parse = |value: &str| -> Result<Option<i64>, String> {
             if value.is_empty() {
@@ -61,6 +66,7 @@ impl Filters {
             return Err("状态无效".into());
         }
         Ok(UsageFilter {
+            user_id: Some(self.user_id.clone()),
             account: Some(self.account.trim().into()),
             account_id: Some(self.supplier_id.clone()),
             subject_id: Some(self.virtual_account.clone()),
@@ -77,6 +83,7 @@ impl Filters {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query
             .extend_pairs([
+                ("user_id", self.user_id.as_str()),
                 ("account", self.account.as_str()),
                 ("supplier_id", self.supplier_id.as_str()),
                 ("virtual_account", &self.virtual_account),

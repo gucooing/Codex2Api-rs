@@ -62,7 +62,7 @@ pub struct UsageStatistics {
 // Cache and reasoning are subsets of input/output. NULLs remain unknown; when
 // some values are known their subtotal is returned with explicit missing counts.
 // Cache rate divides those reported subtotals; missing rows do not hide the ratio.
-const TOTALS: &str = "COUNT(*) AS request_count,
+pub(crate) const TOTALS: &str = "COUNT(*) AS request_count,
     COALESCE(SUM(status IN ('completed','client_stopped')),0) AS completed_requests,
     COALESCE(SUM(status IN ('failed','incomplete','interrupted')),0) AS failed_requests,
     CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(input_tokens) END AS input_tokens,
@@ -112,7 +112,7 @@ impl Storage {
         };
         let label = match group_by {
             UsageGroup::VirtualAccount => {
-                "COALESCE((SELECT username FROM virtual_accounts WHERE id=subject_id),NULLIF(MAX(subject_name),''),subject_id)"
+                "COALESCE((SELECT username FROM virtual_principals WHERE id=subject_id),NULLIF(MAX(subject_name),''),subject_id)"
             }
             _ => &key,
         };

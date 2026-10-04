@@ -23,18 +23,18 @@ test("reset cards clear real fixture usage without changing subscription or bill
     headers,
     data: {
       name: plan.name,
+      plan_type: plan.plan_type,
+      sale_price_usd: plan.sale_price_usd,
+      duration_days: plan.duration_days,
+      supplier_tag_id: plan.supplier_tag_id,
       provider_id: "chatgpt",
       model_access: "all",
       models: [],
-      free_model_access: "none",
-      free_models: [],
-      free_access_enabled: false,
       spending_windows: [
         { duration_seconds: 2592000, cost_limit_usd: "10" },
         { duration_seconds: 18000, cost_limit_usd: "2" },
       ],
-      free_spending_windows: [],
-      enabled: true,
+      allow_purchase: true,
       revision: plan.revision,
     },
   });

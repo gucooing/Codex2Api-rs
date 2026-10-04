@@ -15,7 +15,7 @@ pub async fn virtual_profile(
 ) -> Result<Response> {
     let account = state
         .storage
-        .virtual_account(&access.virtual_account_id)
+        .effective_virtual_account(&access.virtual_account_id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let mut profile = crate::providers::chatgpt::identity::identity(&account);
@@ -36,7 +36,7 @@ pub async fn optimized_account_check(
 ) -> Result<Response> {
     let account = state
         .storage
-        .virtual_account(&access.virtual_account_id)
+        .effective_virtual_account(&access.virtual_account_id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let mut value = crate::providers::chatgpt::identity::optimized_account_check(&account);
@@ -111,7 +111,7 @@ pub async fn forward(
     let id = oauth.virtual_account_id.clone();
     let account = state
         .storage
-        .virtual_account(&id)
+        .effective_virtual_account(&id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let query: Vec<_> = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).collect();
@@ -377,6 +377,7 @@ pub async fn forward(
         if !value.get("voices").is_some_and(serde_json::Value::is_array) {
             return Err(crate::ApiError::internal("Missing voice catalog."));
         }
+        crate::public_output::metadata(&mut value);
         value["selected"] = state
             .storage
             .virtual_client_state(&id, "voice")

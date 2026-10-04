@@ -96,7 +96,11 @@ import { usePreference, useSavedFilters, validPageSize } from "@/lib/preferences
 import { usePageControls } from "@/lib/pagination";
 import { useIsMobile } from "@/hooks/use-mobile";
 
+import { useUserLookup, userOptionLabel, type UserOption } from "@/lib/user-lookup";
+
 const emptyFilters = {
+  user_id: "",
+  user_label: "",
   supplier_label: "",
   consumer_label: "",
   supplier_id: "",
@@ -108,6 +112,7 @@ const emptyFilters = {
 };
 export function UsagePageView({ consumerId }: { consumerId?: string }) {
   const fieldId = useId();
+  const userLookup = useUserLookup();
   const {
     filters,
     setFilters,
@@ -123,6 +128,9 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
   const [consumerSearch, setConsumerSearch] = useState("");
   type SupplierOption = Pick<Supplier, "id" | "display_name" | "email">;
   type ConsumerOption = Pick<Consumer, "id" | "username" | "email">;
+  const selectedUser = filters.user_id
+    ? { id: filters.user_id, username: "", name: filters.user_label }
+    : null;
   const selectedSupplier = filters.supplier_id
     ? {
         id: filters.supplier_id,
@@ -152,7 +160,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
 
   const resource = useResource<UsagePage>(
     preferencesReady
-      ? `/usage${query({ supplier_id: applied.supplier_id, virtual_account: consumerId ?? applied.virtual_account, model: applied.model, status: applied.status, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
+      ? `/usage${query({ user_id: consumerId ? "" : applied.user_id, supplier_id: applied.supplier_id, virtual_account: consumerId ?? applied.virtual_account, model: applied.model, status: applied.status, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
       : null,
   );
   const pagination = usePageControls(
@@ -183,6 +191,66 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
           >
             <Collapsible>
               <div className="flex flex-wrap items-end gap-3">
+                {!consumerId && (
+                  <Field className="w-40">
+                    <FieldLabel className="sr-only" htmlFor={fieldId + "-user"}>
+                      用户
+                    </FieldLabel>
+                    <Combobox<UserOption>
+                      items={userLookup.data?.items ?? []}
+                      value={selectedUser}
+                      onValueChange={(item) => {
+                        setFilters((v) => ({
+                          ...v,
+                          user_id: item?.id ?? "",
+                          user_label: item ? userOptionLabel(item) : "",
+                        }));
+                        userLookup.setSearch("");
+                      }}
+                      itemToStringLabel={userOptionLabel}
+                      itemToStringValue={(item) => item.id}
+                      isItemEqualToValue={(item, value) => item.id === value.id}
+                      filter={null}
+                      open={userLookup.open}
+                      onOpenChange={(open, details) => {
+                        userLookup.setOpen(open);
+                        if (open && details.reason !== "input-change") userLookup.setSearch("");
+                      }}
+                      onInputValueChange={(text, details) => {
+                        if (details.reason === "input-change") {
+                          userLookup.setSearch(text);
+                          if (!text) {
+                            setFilters((v) => ({ ...v, user_id: "", user_label: "" }));
+                          }
+                        }
+                      }}
+                    >
+                      <ComboboxInput
+                        id={fieldId + "-user"}
+                        placeholder="搜索选择用户"
+                        showClear
+                        className="w-full"
+                        maxLength={128}
+                      />
+                      <ComboboxContent>
+                        <ComboboxEmpty>
+                          {userLookup.loading
+                            ? "加载中…"
+                            : userLookup.error
+                              ? "加载失败"
+                              : "没有匹配用户"}
+                        </ComboboxEmpty>
+                        <ComboboxList aria-busy={userLookup.loading}>
+                          {(item: UserOption) => (
+                            <ComboboxItem key={item.id} value={item}>
+                              {userOptionLabel(item)}
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
+                  </Field>
+                )}
                 <Field className="w-40">
                   <FieldLabel htmlFor={fieldId + "-supplier"}>供应账户</FieldLabel>
                   <Combobox<SupplierOption>

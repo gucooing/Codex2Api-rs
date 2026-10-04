@@ -22,7 +22,7 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
     let config = storage.virtual_config("v", "quota").await.unwrap();
     assert_eq!(
         config.value,
-        serde_json::json!({"primary_cost_limit_usd":2,"weekly_cost_limit_usd":10})
+        serde_json::json!({"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}]})
     );
     assert_eq!(config.revision, 0);
     let quota = storage.virtual_quota("v").await.unwrap();
@@ -47,6 +47,108 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 }
 
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
+
+#[tokio::test]
+async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("account-identities.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 55)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("INSERT INTO admin_users VALUES(1,'same-name','admin-hash','2026-01-01','2026-01-01');
+        INSERT INTO users VALUES('user','same-name','user-hash','User','user@example.test',1,1234,7,'2026-01-01');
+        INSERT INTO virtual_accounts(id,provider_id,username,password_hash,name,email,plan_id,plan_type,enabled,created_at)
+        VALUES('managed','chatgpt','managed','user-hash','User','user@example.test','plus','plus',1,'2026-01-01'),
+              ('independent','chatgpt','standalone','own-hash','Standalone','standalone@example.test','plus','plus',1,'2026-01-01');
+        INSERT INTO user_subscriptions VALUES('user','chatgpt','managed',4);
+        INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,user_agent,created_at,last_login_at,provider_id)
+        VALUES('device','managed','client-refresh-hash','client','2026-01-01','2026-01-01','chatgpt');
+        INSERT INTO meta(key,value) VALUES('oauth_jwt_private_key','existing-client-key');
+        INSERT INTO user_sessions VALUES('old-browser','user','csrf',2000000000);
+        INSERT INTO admin_sessions VALUES('old-admin',1,'2026-01-01','2099-01-01');")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    let admin = storage.require_admin_user().await.unwrap();
+    assert_eq!(admin.username, "same-name");
+    assert_eq!(admin.password_hash, "admin-hash");
+    let user = storage.user("user").await.unwrap().unwrap();
+    assert_eq!(user.username, "same-name");
+    assert_eq!(user.password_hash, "user-hash");
+    assert_eq!((user.wallet_cents, user.revision), (1234, 7));
+    let account = storage.virtual_account("managed").await.unwrap().unwrap();
+    assert_eq!(account.password_hash, "user-hash");
+    assert_eq!(account.name, "User");
+    assert_eq!(
+        storage.virtual_devices("managed").await.unwrap()[0].id,
+        "device"
+    );
+    assert_eq!(
+        storage.oauth_jwt_private_key().await.unwrap().as_deref(),
+        Some("existing-client-key")
+    );
+    assert_eq!(
+        storage
+            .virtual_account("independent")
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        "own-hash"
+    );
+    assert!(
+        storage
+            .virtual_account_user("independent")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        storage.user_subscriptions(None, true).await.unwrap()[0].revision,
+        4
+    );
+    let sessions: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM admin_sessions)+(SELECT COUNT(*) FROM user_sessions)",
+    )
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(sessions, 0);
+    let raw: String =
+        sqlx::query_scalar("SELECT password_hash FROM virtual_accounts WHERE id='managed'")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert!(raw.is_empty());
+    assert!(
+        sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(storage.pool())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    storage.close().await;
+}
 
 #[tokio::test]
 async fn desktop_ui_visibility_upgrade_preserves_explicit_choices() {
@@ -462,11 +564,11 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
     );
     assert_eq!(
         storage.virtual_config("a", "quota").await.unwrap().value,
-        serde_json::json!({"primary_cost_limit_usd":2,"weekly_cost_limit_usd":7})
+        serde_json::json!({"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"7"},{"duration_seconds":18000,"cost_limit_usd":"2"}]})
     );
     assert_eq!(
         storage.virtual_config("c", "quota").await.unwrap().value,
-        serde_json::json!({"primary_cost_limit_usd":1,"weekly_cost_limit_usd":7})
+        serde_json::json!({"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"7"},{"duration_seconds":18000,"cost_limit_usd":"1"}]})
     );
     assert!(
         storage
@@ -482,7 +584,7 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
             .await
             .unwrap()
             .value,
-        serde_json::json!({"free_access_enabled":true,"primary_cost_limit_usd":0.25,"weekly_cost_limit_usd":1})
+        serde_json::json!({"plan_id":"free","model_access":"none","models":[],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"0"},{"duration_seconds":18000,"cost_limit_usd":"0"}]})
     );
     assert_eq!(
         storage.virtual_account("d").await.unwrap().unwrap().plan_id,
@@ -658,10 +760,7 @@ async fn billing_migration_keeps_token_history_without_converting_tokens_to_doll
         100
     );
     let config = storage.virtual_config("v", "quota").await.unwrap();
-    assert_eq!(
-        config.value,
-        serde_json::json!({"primary_cost_limit_usd":null,"weekly_cost_limit_usd":null})
-    );
+    assert_eq!(config.value, serde_json::json!({"spending_windows":[]}));
     let history:(i64,i64,String,Option<i64>)=sqlx::query_as("SELECT input_tokens,output_tokens,billing_status,cost_nano_usd FROM usage_records WHERE id='test'").fetch_one(storage.pool()).await.unwrap();
     assert_eq!(history, (123, 45, "legacy".into(), None));
     assert_eq!(storage.model_prices("chatgpt").await.unwrap().len(), 42);
@@ -682,10 +781,7 @@ async fn spending_window_migrations_remove_old_total_and_detect_stale_forms() {
     pool.close().await;
     let storage = Storage::open(&path).await.unwrap();
     let config = storage.virtual_config("v", "quota").await.unwrap();
-    assert_eq!(
-        config.value,
-        serde_json::json!({"primary_cost_limit_usd":null,"weekly_cost_limit_usd":null})
-    );
+    assert_eq!(config.value, serde_json::json!({"spending_windows":[]}));
     assert_eq!(config.revision, 0);
     assert!(
         storage

@@ -28,7 +28,14 @@ test("actual session, overview, consumer and route DTOs match their consumers", 
   string(fixture.session.csrf_token);
   string(fixture.session.app_version);
   string(fixture.session.codex_cli_version);
-  for (const key of ["supplier_count", "consumer_count", "enabled_consumers", "models_count"])
+  for (const key of [
+    "supplier_count",
+    "consumer_count",
+    "normal_consumer_count",
+    "user_count",
+    "active_user_count",
+    "models_count",
+  ])
     number(fixture.overview[key]);
   for (const key of [
     "id",
@@ -50,33 +57,29 @@ test("actual session, overview, consumer and route DTOs match their consumers", 
 test("actual plans expose provider-qualified models and writable DTOs", () => {
   assert.equal("model_choices" in fixture.plans, false);
   for (const item of fixture.plans.items) {
-    assert.ok(["all", "selected"].includes(item.model_access));
-    assert.ok(["none", "all", "selected"].includes(item.free_model_access));
+    assert.ok(["none", "all", "selected"].includes(item.model_access));
     item.models.forEach(modelRef);
-    item.free_models.forEach(modelRef);
-    for (const windows of [item.spending_windows, item.free_spending_windows]) {
+    for (const windows of [item.spending_windows]) {
       assert.ok(Array.isArray(windows));
       assert.ok(windows.length <= 2);
       if (windows[0]) assert.ok([604800, 2592000].includes(windows[0].duration_seconds));
       if (windows[1]) assert.equal(windows[1].duration_seconds, 18000);
     }
-    for (const key of [
-      "primary_cost_limit_usd",
-      "weekly_cost_limit_usd",
-      "free_primary_cost_limit_usd",
-      "free_weekly_cost_limit_usd",
-    ])
-      if (item[key] !== null) decimal(item[key]);
+    if (item.sale_price_usd !== null) decimal(item.sale_price_usd);
+    assert.equal(typeof item.duration_days, "number");
+    assert.equal("free_access_enabled" in item, false);
+    assert.equal(typeof item.allow_purchase, "boolean");
+    assert.equal("enabled" in item, false);
     assert.equal("id" in planWrite(item), false);
     assert.equal("updated_at_ms" in planWrite(item), false);
   }
 });
 test("plan writes select model identity fields from independent model list DTOs", () => {
   const model = fixture.models.items[0];
-  const plan = { ...fixture.plans.items[0], models: [model], free_models: [model] };
+  const plan = { ...fixture.plans.items[0], models: [model] };
   const expected = [{ provider_id: model.provider_id, model: model.model }];
   assert.deepEqual(planWrite(plan).models, expected);
-  assert.deepEqual(planWrite(plan).free_models, expected);
+  assert.equal("free_models" in planWrite(plan), false);
 });
 
 test("actual model metadata does not leak into write requests", () => {

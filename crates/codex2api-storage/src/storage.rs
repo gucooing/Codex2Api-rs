@@ -25,6 +25,8 @@ const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_ac
 pub struct Storage {
     pool: SqlitePool,
     db_path: PathBuf,
+    pub(crate) jwt_keys:
+        std::sync::Arc<[tokio::sync::OnceCell<std::sync::Arc<crate::jwt::JwtKey>>; 2]>,
 }
 
 #[derive(Debug, FromRow)]
@@ -101,7 +103,11 @@ impl Storage {
             .connect_with(options)
             .await?;
 
-        let storage = Self { pool, db_path };
+        let storage = Self {
+            pool,
+            db_path,
+            jwt_keys: std::sync::Arc::new(std::array::from_fn(|_| tokio::sync::OnceCell::new())),
+        };
         storage.migrate().await?;
         storage.stamp_codex_ref().await?;
         storage.ensure_default_admin().await?;
@@ -149,27 +155,26 @@ impl Storage {
     }
 
     pub async fn ensure_default_admin(&self) -> Result<()> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_users")
-            .fetch_one(&self.pool)
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM admin_users")
+            .fetch_one(&mut *tx)
             .await?;
         if count == 0 {
             let hash = hash_password(DEFAULT_ADMIN_PASSWORD)?;
             let now = now_rfc3339();
-            sqlx::query(
-                "INSERT INTO admin_users (id, username, password_hash, created_at, updated_at)
-                 VALUES (1, ?, ?, ?, ?)",
-            )
-            .bind(DEFAULT_ADMIN_USERNAME)
-            .bind(hash)
-            .bind(&now)
-            .bind(&now)
-            .execute(&self.pool)
-            .await?;
+            let account_id = Uuid::new_v4().to_string();
+            sqlx::query("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES(?,'admin',?,?,1,?,?)")
+                .bind(&account_id).bind(DEFAULT_ADMIN_USERNAME).bind(hash).bind(&now).bind(&now).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO admin_users(id,account_id) VALUES(1,?)")
+                .bind(account_id)
+                .execute(&mut *tx)
+                .await?;
             tracing::info!(
                 username = DEFAULT_ADMIN_USERNAME,
                 "created default admin user"
             );
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -181,8 +186,8 @@ impl Storage {
 
     pub async fn get_admin_user(&self) -> Result<Option<AdminUser>> {
         let user = sqlx::query_as::<_, AdminUser>(
-            "SELECT id, username, password_hash, created_at, updated_at
-             FROM admin_users WHERE id = 1",
+            "SELECT id, account_id, username, password_hash, created_at, updated_at
+             FROM admin_identities WHERE id = 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -197,8 +202,8 @@ impl Storage {
 
     pub async fn get_admin_by_username(&self, username: &str) -> Result<Option<AdminUser>> {
         let user = sqlx::query_as::<_, AdminUser>(
-            "SELECT id, username, password_hash, created_at, updated_at
-             FROM admin_users WHERE username = ?",
+            "SELECT id, account_id, username, password_hash, created_at, updated_at
+             FROM admin_identities WHERE username = ?",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -233,7 +238,7 @@ impl Storage {
         // Do not issue a session if credentials changed after password verification.
         Ok(sqlx::query_as::<_, AdminSession>(
             "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at)
-             SELECT ?, id, ?, ? FROM admin_users
+             SELECT ?, id, ?, ? FROM admin_identities
              WHERE id = ? AND username = ? AND password_hash = ?
              RETURNING id, admin_user_id, created_at, expires_at",
         )
@@ -279,8 +284,8 @@ impl Storage {
         };
         let mut tx = self.pool.begin().await?;
         let changed = sqlx::query(
-            "UPDATE admin_users SET username = ?, password_hash = ?, updated_at = ?
-             WHERE id = ? AND username = ? AND password_hash = ?",
+            "UPDATE accounts SET username = ?, password_hash = ?, updated_at = ?
+             WHERE id = (SELECT account_id FROM admin_users WHERE id=?) AND account_type='admin' AND enabled=1 AND username = ? AND password_hash = ?",
         )
         .bind(new_username)
         .bind(password_hash)
@@ -303,6 +308,39 @@ impl Storage {
 
     // --- admin sessions ---
 
+    pub async fn admin_session_token(&self, session: &AdminSession) -> Result<String> {
+        let owner: String =
+            sqlx::query_scalar("SELECT account_id FROM admin_identities WHERE id=?")
+                .bind(session.admin_user_id)
+                .fetch_one(self.pool())
+                .await?;
+        let expires = chrono::DateTime::parse_from_rfc3339(&session.expires_at)
+            .map_err(|_| StorageError::InvalidJwt)?
+            .timestamp();
+        self.sign_jwt(
+            crate::TokenPurpose::AdminSession,
+            serde_json::json!({
+                "sub":owner,"jti":session.id,"iat":Utc::now().timestamp(),"exp":expires
+            }),
+        )
+        .await
+    }
+
+    pub async fn admin_session_from_jwt(&self, token: &str) -> Result<Option<AdminSession>> {
+        let claims = match self
+            .verify_jwt(crate::TokenPurpose::AdminSession, token)
+            .await
+        {
+            Ok(claims) => claims,
+            Err(StorageError::InvalidJwt) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let session: Option<AdminSession> = sqlx::query_as(
+            "SELECT s.id,s.admin_user_id,s.created_at,s.expires_at FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=? AND a.account_id=?"
+        ).bind(claims["jti"].as_str()).bind(claims["sub"].as_str()).fetch_optional(self.pool()).await?;
+        Ok(session.filter(|s| !is_expired(&s.expires_at)))
+    }
+
     pub async fn create_admin_session(&self, ttl: Duration) -> Result<AdminSession> {
         self.create_admin_session_for(1, ttl).await
     }
@@ -318,13 +356,13 @@ impl Storage {
             (Utc::now() + duration_to_chrono(ttl)).to_rfc3339_opts(SecondsFormat::Millis, true);
         let session = sqlx::query_as::<_, AdminSession>(
             "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at)
-             VALUES (?, ?, ?, ?)
+             SELECT ?,id,?,? FROM admin_identities WHERE id=?
              RETURNING id, admin_user_id, created_at, expires_at",
         )
         .bind(&id)
-        .bind(admin_user_id)
         .bind(&created_at)
         .bind(&expires_at)
+        .bind(admin_user_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(session)
@@ -332,7 +370,7 @@ impl Storage {
 
     pub async fn get_admin_session(&self, id: &str) -> Result<Option<AdminSession>> {
         let session = sqlx::query_as::<_, AdminSession>(
-            "SELECT id, admin_user_id, created_at, expires_at FROM admin_sessions WHERE id = ?",
+            "SELECT s.id,s.admin_user_id,s.created_at,s.expires_at FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=?",
         )
         .bind(id)
         .fetch_optional(&self.pool)

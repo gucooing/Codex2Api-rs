@@ -9,7 +9,7 @@ pub struct VirtualPlan {
     pub name: String,
     pub plan_type: String,
     pub config: Value,
-    pub enabled: bool,
+    pub allow_purchase: bool,
     pub revision: i64,
     pub updated_at_ms: i64,
 }
@@ -26,7 +26,7 @@ impl<'r> FromRow<'r, SqliteRow> for VirtualPlan {
                 index: "config".into(),
                 source: Box::new(e),
             })?,
-            enabled: row.try_get("enabled")?,
+            allow_purchase: row.try_get("allow_purchase")?,
             revision: row.try_get("revision")?,
             updated_at_ms: row.try_get("updated_at_ms")?,
         })
@@ -41,12 +41,8 @@ pub fn plan_owned_config(key: &str) -> bool {
 }
 
 impl VirtualPlan {
-    pub fn model_access(&self, free_fallback: bool) -> Result<codex2api_core::ModelAccess> {
-        let (mode, items) = if free_fallback {
-            ("free_model_access", "free_models")
-        } else {
-            ("model_access", "models")
-        };
+    pub fn model_access(&self) -> Result<codex2api_core::ModelAccess> {
+        let (mode, items) = ("model_access", "models");
         let models = self.config[items]
             .as_array()
             .ok_or_else(|| StorageError::Constraint("模型权限配置无效".into()))?;
@@ -61,6 +57,13 @@ impl VirtualPlan {
         .map_err(|_| StorageError::Constraint("请选择明确的模型权限范围".into()))
     }
     pub fn validate(&self) -> Result<()> {
+        self.sale_price_cents()?;
+        self.duration_days()?;
+        if self.plan_type == "free" && self.allow_purchase {
+            return Err(StorageError::InvalidAdminUpdate(
+                "Free 套餐自动提供，无需开放购买",
+            ));
+        }
         if self.name.trim().is_empty() || self.name.len() > 128 {
             return Err(StorageError::Constraint(
                 "请填写套餐名称，长度不能超过 128 字节".into(),
@@ -92,17 +95,10 @@ impl VirtualPlan {
             ));
         }
         let value = &self.config;
-        let fields = [
-            "models",
-            "model_access",
-            "free_models",
-            "free_model_access",
-            "free_access_enabled",
-        ];
+        let fields = ["models", "model_access"];
         if !value
             .as_object()
             .is_some_and(|v| fields.iter().all(|k| v.contains_key(*k)))
-            || !value["free_access_enabled"].is_boolean()
             || !value["models"].as_array().is_some_and(|a| {
                 a.len() <= 256
                     && a.iter().all(|v| {
@@ -116,7 +112,7 @@ impl VirtualPlan {
                 "套餐模型范围或费用额度无效；金额须为非负美元数，最多九位小数".into(),
             ));
         }
-        for key in ["models", "free_models"] {
+        for key in ["models"] {
             if self.config[key]
                 .as_array()
                 .into_iter()
@@ -128,10 +124,8 @@ impl VirtualPlan {
                 ));
             }
         }
-        self.model_access(false)?;
-        self.model_access(true)?;
-        crate::plan_spending_windows(value, false)?;
-        crate::plan_spending_windows(value, true)?;
+        self.model_access()?;
+        crate::plan_spending_windows(value)?;
         Ok(())
     }
 }
@@ -168,13 +162,36 @@ impl Storage {
     ) -> Result<bool> {
         plan.validate()?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(tag) = plan.config["supplier_tag_id"].as_str() {
+            let valid: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=? AND provider_id=?)",
+            )
+            .bind(tag)
+            .bind(&plan.provider_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !valid {
+                return Err(StorageError::InvalidAdminUpdate("请选择同平台的供应号池"));
+            }
+        }
         let now = chrono::Utc::now().timestamp_millis();
+        let free: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type='free')",
+        )
+        .bind(&plan.id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if free && plan.plan_type != "free" {
+            return Err(StorageError::InvalidAdminUpdate(
+                "Free 套餐的订阅档位不能修改",
+            ));
+        }
         let changed = if let Some(revision) = expected {
-            sqlx::query("UPDATE virtual_plans SET name=?,config=?,enabled=?,revision=revision+1,updated_at_ms=?,plan_type=? WHERE id=? AND revision=? AND provider_id=?")
-                .bind(plan.name.trim()).bind(plan.config.to_string()).bind(plan.enabled).bind(now).bind(&plan.plan_type).bind(&plan.id).bind(revision).bind(&plan.provider_id).execute(&mut *tx).await?.rows_affected()
+            sqlx::query("UPDATE virtual_plans SET name=?,config=?,allow_purchase=?,revision=revision+1,updated_at_ms=?,plan_type=? WHERE id=? AND revision=? AND provider_id=?")
+                .bind(plan.name.trim()).bind(plan.config.to_string()).bind(plan.allow_purchase).bind(now).bind(&plan.plan_type).bind(&plan.id).bind(revision).bind(&plan.provider_id).execute(&mut *tx).await?.rows_affected()
         } else {
-            sqlx::query("INSERT INTO virtual_plans(provider_id,id,name,plan_type,config,enabled,updated_at_ms) VALUES(?,?,?,?,?,?,?)")
-                .bind(&plan.provider_id).bind(&plan.id).bind(plan.name.trim()).bind(&plan.plan_type).bind(plan.config.to_string()).bind(plan.enabled).bind(now).execute(&mut *tx).await?.rows_affected()
+            sqlx::query("INSERT INTO virtual_plans(provider_id,id,name,plan_type,config,allow_purchase,updated_at_ms) VALUES(?,?,?,?,?,?,?)")
+                .bind(&plan.provider_id).bind(&plan.id).bind(plan.name.trim()).bind(&plan.plan_type).bind(plan.config.to_string()).bind(plan.allow_purchase).bind(now).execute(&mut *tx).await?.rows_affected()
         };
         if changed == 1 {
             sqlx::query(
@@ -191,7 +208,16 @@ impl Storage {
     }
 
     pub async fn delete_virtual_plan(&self, id: &str, revision: i64) -> Result<bool> {
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let free: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type='free')",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if free {
+            return Err(StorageError::InvalidAdminUpdate("Free 套餐不能删除"));
+        }
         // Acquire the write lock before checking references, including concurrent assignments.
         let changed = sqlx::query("DELETE FROM virtual_plans WHERE id=? AND revision=? AND NOT EXISTS(SELECT 1 FROM virtual_accounts WHERE plan_id=?)")
             .bind(id).bind(revision).bind(id).execute(&mut *tx).await?.rows_affected();
@@ -216,49 +242,24 @@ impl Storage {
         owner: &str,
         key: &str,
     ) -> Result<VirtualClientState> {
-        let plan: VirtualPlan = sqlx::query_as("SELECT p.* FROM virtual_plans p JOIN virtual_accounts a ON a.plan_id=p.id WHERE a.id=?")
-            .bind(owner).fetch_optional(self.pool()).await?.ok_or_else(||StorageError::AccountNotFound(owner.into()))?;
+        let account = self
+            .effective_virtual_account(owner)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+        let plan = self
+            .virtual_plan(&account.plan_id)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let config = &plan.config;
-        let quota = if config.get("primary_cost_limit_usd").is_some()
-            || config.get("weekly_cost_limit_usd").is_some()
-        {
-            json!({"primary_cost_limit_usd":config["primary_cost_limit_usd"],"weekly_cost_limit_usd":config["weekly_cost_limit_usd"]})
-        } else {
-            json!({"spending_windows":config["spending_windows"]})
-        };
-        let primary_key = if plan.plan_type == "free" {
-            "primary_cost_limit_usd"
-        } else {
-            "free_primary_cost_limit_usd"
-        };
-        let weekly_key = if plan.plan_type == "free" {
-            "weekly_cost_limit_usd"
-        } else {
-            "free_weekly_cost_limit_usd"
-        };
-        let nested_key = if plan.plan_type == "free" {
-            "spending_windows"
-        } else {
-            "free_spending_windows"
-        };
+        let windows = crate::plan_spending_windows(config)?;
         let value = match key {
-            "quota" => quota,
+            "quota" => json!({"spending_windows":windows}),
             "subscription_policy" => {
-                if config.get(primary_key).is_some() {
-                    json!({"free_access_enabled":config["free_access_enabled"],
-                        "primary_cost_limit_usd":config[primary_key],
-                        "weekly_cost_limit_usd":config[weekly_key]})
-                } else {
-                    json!({"free_access_enabled":config["free_access_enabled"],
-                        "spending_windows":config[nested_key]})
-                }
+                let free = self.platform_free_plan(&account.provider_id).await?;
+                json!({"plan_id":free.id,"model_access":free.config["model_access"],"models":free.config["models"],"spending_windows":crate::plan_spending_windows(&free.config)?})
             }
             "subscription_entitlements" => {
-                if config.get("primary_cost_limit_usd").is_some() {
-                    json!({plan.plan_type:{"models":config["models"],"primary_cost_limit_usd":config["primary_cost_limit_usd"],"weekly_cost_limit_usd":config["weekly_cost_limit_usd"]}})
-                } else {
-                    json!({plan.plan_type:{"models":config["models"],"spending_windows":config["spending_windows"]}})
-                }
+                json!({plan.plan_type:{"models":config["models"],"spending_windows":windows}})
             }
             _ => {
                 return Err(StorageError::InvalidAdminUpdate(

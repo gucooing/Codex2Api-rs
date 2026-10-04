@@ -69,6 +69,7 @@ export type SupplierCycleUsage = {
   missing_token_requests: number;
 };
 export type Consumer = {
+  user_id: string | null;
   id: string;
   username: string;
   name: string;
@@ -88,22 +89,17 @@ export type ConsumerWrite = Pick<
   "username" | "name" | "email" | "provider_id" | "plan_id" | "subscription_expires_at" | "enabled"
 > & { password: string };
 export type Plan = {
+  sale_price_usd: string | null;
+  duration_days: number;
+  supplier_tag_id: string | null;
   plan_type: string;
   id: string;
   name: string;
   provider_id: string;
-  model_access: "all" | "selected";
+  model_access: "all" | "selected" | "none";
   models: ModelRef[];
-  free_model_access: "none" | "all" | "selected";
-  free_models: ModelRef[];
-  free_access_enabled: boolean;
-  primary_cost_limit_usd: string | null;
-  weekly_cost_limit_usd: string | null;
-  free_primary_cost_limit_usd: string | null;
-  free_weekly_cost_limit_usd: string | null;
   spending_windows: SpendingWindow[];
-  free_spending_windows: SpendingWindow[];
-  enabled: boolean;
+  allow_purchase: boolean;
   revision: number;
   updated_at_ms: number;
 };

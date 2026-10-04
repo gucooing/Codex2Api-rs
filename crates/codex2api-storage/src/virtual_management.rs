@@ -45,7 +45,7 @@ pub fn virtual_config_specs() -> Vec<VirtualConfigSpec> {
             "subscription_policy",
             "免费层访问策略",
             "无有效付费订阅时的执行权限与独立免费层费用窗口；不会停用登录。",
-            json!({"free_access_enabled":false,"primary_cost_limit_usd":0,"weekly_cost_limit_usd":0}),
+            json!({"model_access":"none","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"0"}]}),
         ),
         (
             "feature_bootstrap",
@@ -627,7 +627,7 @@ impl Storage {
     }
     pub(crate) async fn virtual_quota_at(&self, owner: &str, now: i64) -> Result<Value> {
         let account = self
-            .virtual_account(owner)
+            .effective_virtual_account_at(owner, now)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -635,15 +635,12 @@ impl Storage {
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let billing = self.billing_summary(owner).await?;
-        let paid = account.effective_plan_at(now) != "free";
-        let rules =
-            crate::plan_spending_windows(&plan.config, !paid && account.plan_type != "free")?;
+        let rules = crate::plan_spending_windows(&plan.config)?;
         let mut allowed = self
             .effective_entitlements_at(owner, now)
             .await?
             .execution_enabled;
-        let stored_anchor: i64 = sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM virtual_accounts WHERE id=?")
-            .bind(owner).fetch_one(self.pool()).await?;
+        let stored_anchor = self.subscription_anchor_at(owner, now).await?;
         let anchor = if stored_anchor > now {
             0
         } else {
@@ -657,13 +654,16 @@ impl Storage {
         // remains primary, matching free accounts that only report 30 days.
         let active_inner = windows
             .get(1)
-            .filter(|window| !window["started_at"].is_null());
+            .filter(|window| !window["started_at"].is_null() && !window["used_percent"].is_null());
+        let outer_public = windows
+            .first()
+            .filter(|window| !window["used_percent"].is_null());
         let primary = active_inner
             .cloned()
-            .or_else(|| windows.first().cloned())
+            .or_else(|| outer_public.cloned())
             .unwrap_or(Value::Null);
         let secondary = active_inner
-            .and_then(|_| windows.first().cloned())
+            .and_then(|_| outer_public.cloned())
             .unwrap_or(Value::Null);
         let reset_count = self.virtual_reset_credit_count(owner).await?;
         Ok(

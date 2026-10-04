@@ -51,7 +51,7 @@ impl Storage {
             ));
         }
         Ok(sqlx::query_scalar("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin,updated_at_ms)
-            SELECT id,?,?,1,'client',? FROM virtual_accounts WHERE id=? AND enabled=1 AND
+            SELECT id,?,?,1,'client',? FROM virtual_principals WHERE id=? AND enabled=1 AND
               (? IS NULL OR ?=0 OR EXISTS(SELECT 1 FROM virtual_client_state WHERE virtual_account_id=? AND state_key=?))
             ON CONFLICT(virtual_account_id,state_key) DO UPDATE SET value_json=excluded.value_json,revision=virtual_client_state.revision+1,write_origin='client',updated_at_ms=excluded.updated_at_ms
             WHERE (? IS NULL OR virtual_client_state.revision=?) RETURNING revision")

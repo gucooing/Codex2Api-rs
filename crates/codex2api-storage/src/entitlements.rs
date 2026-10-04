@@ -22,7 +22,7 @@ impl Storage {
         now: i64,
     ) -> Result<EffectiveEntitlements> {
         let account = self
-            .virtual_account(owner)
+            .effective_virtual_account_at(owner, now)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -33,11 +33,9 @@ impl Storage {
             return Err(StorageError::Constraint("账户与套餐的提供商不一致".into()));
         }
         let subscription_active = account.effective_plan_at(now) != "free";
-        let free_fallback = !subscription_active && account.plan_type != "free";
-        let enabled =
-            account.enabled && (subscription_active || plan.config["free_access_enabled"] == true);
+        let enabled = account.enabled && plan.config["model_access"] != "none";
         let models = if enabled {
-            plan.model_access(free_fallback)?
+            plan.model_access()?
         } else {
             ModelAccess::None
         };

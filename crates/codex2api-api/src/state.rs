@@ -12,6 +12,7 @@ pub struct ApiState {
     pub accounts: SupplierAccountStore,
     pub upstream: UpstreamPool,
     pub public_base_url: Option<String>,
+    pub user_base_url: String,
     #[cfg(test)]
     pub(crate) websocket_test_targets: std::collections::HashMap<String, String>,
 }
@@ -23,6 +24,7 @@ impl ApiState {
             accounts,
             upstream,
             public_base_url: None,
+            user_base_url: "http://127.0.0.1:8082".into(),
             #[cfg(test)]
             websocket_test_targets: Default::default(),
         }
@@ -38,7 +40,7 @@ impl ApiState {
                 && url.path() == "/"
                 && url.query().is_none()
                 && url.fragment().is_none(),
-            "CODEX2API_PUBLIC_BASE_URL must be an HTTP(S) origin without a path, credentials, query or fragment"
+            "CODEX2API_PUBLIC_API_URL must be an HTTP(S) origin without a path, credentials, query or fragment"
         );
         self.public_base_url = Some(url.origin().ascii_serialization());
         Ok(self)

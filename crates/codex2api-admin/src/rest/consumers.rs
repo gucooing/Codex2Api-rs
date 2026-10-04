@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 async fn dto(s: &AdminState, a: &VirtualAccount) -> Result<Value, ApiError> {
     let mut value = super::dto::Consumer::from(a);
+    value.user_id = s.storage.virtual_account_user(&a.id).await?;
     value.plan_name = s
         .storage
         .virtual_plan(&a.plan_id)
@@ -181,10 +182,7 @@ async fn save(s: AdminState, id: Option<String>, f: Input) -> ApiResult {
         .storage
         .virtual_plan(&f.plan_id)
         .await?
-        .filter(|p| {
-            p.provider_id == f.provider_id
-                && (p.enabled || previous.as_ref().is_some_and(|a| a.plan_id == p.id))
-        })
+        .filter(|p| p.provider_id == f.provider_id)
         .ok_or_else(|| ApiError::bad("请选择可用的同提供商套餐"))?;
     let expiry = match f
         .subscription_expires_at

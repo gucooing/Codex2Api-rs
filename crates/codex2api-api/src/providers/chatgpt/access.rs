@@ -146,6 +146,9 @@ pub(crate) async fn resolve_supplier(
 }
 
 pub fn extract_bearer(headers: &HeaderMap) -> Result<&str> {
+    if headers.get_all(AUTHORIZATION).iter().count() != 1 {
+        return Err(ApiError::missing_token());
+    }
     let value = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -313,8 +316,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        plan.config["primary_cost_limit_usd"] = json!(0);
-        plan.config["weekly_cost_limit_usd"] = json!(10);
+        plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"0"}]);
         assert!(
             storage
                 .save_virtual_plan(&plan, Some(plan.revision))

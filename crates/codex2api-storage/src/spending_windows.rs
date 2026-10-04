@@ -43,58 +43,9 @@ pub fn spending_windows(value: &Value) -> Result<Vec<SpendingWindow>> {
     Ok(windows)
 }
 
-/// Read the new nested form, with a legacy fallback for databases created before
-/// the nested plan fields were introduced.
-pub fn plan_spending_windows(config: &Value, free: bool) -> Result<Vec<SpendingWindow>> {
-    let nested_key = if free {
-        "free_spending_windows"
-    } else {
-        "spending_windows"
-    };
-    let primary_key = if free {
-        "free_primary_cost_limit_usd"
-    } else {
-        "primary_cost_limit_usd"
-    };
-    let weekly_key = if free {
-        "free_weekly_cost_limit_usd"
-    } else {
-        "weekly_cost_limit_usd"
-    };
-    // Legacy plans keep the old fields so historical tests and migrated data keep
-    // their exact values. New plans omit those fields and use the nested form.
-    if config.get(nested_key).is_some()
-        && config.get(primary_key).is_none()
-        && config.get(weekly_key).is_none()
-    {
-        return spending_windows(&config[nested_key]);
-    }
-    let weekly = config.get(weekly_key).cloned().unwrap_or(Value::Null);
-    let primary = config.get(primary_key).cloned().unwrap_or(Value::Null);
-    if weekly.is_null() && primary.is_null() {
-        return Ok(Vec::new());
-    }
-    let mut result = vec![SpendingWindow {
-        duration_seconds: 604800,
-        cost_limit_usd: (!weekly.is_null()).then(|| {
-            weekly
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| weekly.to_string())
-        }),
-    }];
-    if !primary.is_null() {
-        result.push(SpendingWindow {
-            duration_seconds: 18000,
-            cost_limit_usd: Some(
-                primary
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| primary.to_string()),
-            ),
-        });
-    }
-    Ok(result)
+/// Plans use one canonical nested-window representation after schema migration.
+pub fn plan_spending_windows(config: &Value) -> Result<Vec<SpendingWindow>> {
+    spending_windows(&config["spending_windows"])
 }
 
 impl Storage {

@@ -396,24 +396,8 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/codex/device", get(handlers::oauth_device::page))
         .route(
-            "/oauth/device/bootstrap",
-            get(handlers::oauth_device::bootstrap),
-        )
-        .route(
-            "/oauth/device/approve",
-            post(handlers::oauth_device::approve).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
             "/oauth/authorize",
             get(handlers::oauth_authorize::authorize).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/oauth/authorize/bootstrap",
-            get(handlers::oauth_authorize::bootstrap),
-        )
-        .route(
-            "/oauth/authorize/submit",
-            post(handlers::oauth_authorize::approve).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
             "/oauth/revoke",

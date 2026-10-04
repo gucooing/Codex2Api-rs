@@ -1,24 +1,57 @@
 "use client";
-import { subscriptionChoices, subscriptionLabel } from "@/lib/subscriptions";
 import { useColumnVisibility } from "@/lib/columns";
-import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
-import { useDialogFocus } from "@/lib/actions";
-import { ScrollArea } from "@/components/ui/scroll-area";
-
-import { Card, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import {
-  Field,
-  FieldLabel,
-  FieldDescription,
-  FieldSet,
-  FieldGroup,
-  FieldLegend,
-  FieldTitle,
-} from "@/components/ui/field";
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+
+import { useId, useState } from "react";
+import { X } from "lucide-react";
+import {
+  request,
+  type Plan,
+  type Plans,
+  type Model,
+  type SupplierTag,
+  type List,
+  type SpendingWindow,
+} from "@/lib/api";
+import { useResource } from "@/lib/hooks";
+import { useActions, useDialogFocus, useErrorToast } from "@/lib/actions";
+import { useTablePagination } from "@/lib/pagination";
+import { planWrite, modelKey } from "@/lib/domain";
+import { subscriptionChoices, subscriptionLabel } from "@/lib/subscriptions";
+import { money } from "@/lib/format";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Field, FieldLabel, FieldDescription, FieldSet, FieldGroup } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Table,
+  TableHeader,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectTrigger,
@@ -26,579 +59,250 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
-import {
-  Table,
-  TableHeader,
-  TableRow,
-  TableHead,
-  TableBody,
-  TableCell,
-} from "@/components/ui/table";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
-import { Badge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, X, Inbox } from "lucide-react";
-import { useActions, useErrorToast } from "@/lib/actions";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogClose,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
-import { Checkbox } from "@/components/ui/checkbox";
-import { money } from "@/lib/format";
-import { useId, useState } from "react";
-import { Plus, Search, RotateCcw, ChevronDown, Pencil } from "lucide-react";
-import {
-  request,
-  type Plan,
-  type Plans,
-  type ModelRef,
-  type Model,
-  type List,
-  type SpendingWindow,
-} from "@/lib/api";
-import { modelKey, sameProviderModels, planWrite } from "@/lib/domain";
-import { useResource } from "@/lib/hooks";
-import { useSavedFilters } from "@/lib/preferences";
-
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Label } from "@/components/ui/label";
+import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 
 const emptyPlan: Plan = {
-  plan_type: "plus",
   id: "",
-  name: "",
   provider_id: "chatgpt",
-  model_access: "selected",
+  name: "",
+  plan_type: "plus",
+  model_access: "all",
   models: [],
-  free_model_access: "none",
-  free_models: [],
-  free_access_enabled: false,
-  primary_cost_limit_usd: null,
-  weekly_cost_limit_usd: null,
-  free_primary_cost_limit_usd: null,
-  free_weekly_cost_limit_usd: null,
+  sale_price_usd: null,
+  duration_days: 30,
+  supplier_tag_id: null,
+  allow_purchase: true,
+  revision: 0,
+  updated_at_ms: 0,
   spending_windows: [
     { duration_seconds: 604800, cost_limit_usd: null },
     { duration_seconds: 18000, cost_limit_usd: null },
   ],
-  free_spending_windows: [
-    { duration_seconds: 604800, cost_limit_usd: "0" },
-    { duration_seconds: 18000, cost_limit_usd: "0" },
-  ],
-  enabled: true,
-  revision: 0,
-  updated_at_ms: 0,
 };
-const limit = (value: string | null) => (value === null ? "不限额" : money(value));
-const accessLabel = (mode: "all" | "selected" | "none", models: ModelRef[]) =>
-  mode === "all"
-    ? "全部已启用模型"
-    : mode === "none" || !models.length
-      ? "无模型"
-      : `指定 ${models.length} 个模型`;
-const windowLabel = (seconds: SpendingWindow["duration_seconds"]) =>
-  seconds === 2592000 ? "30 天" : seconds === 604800 ? "7 天" : "5 小时";
-const windowSummary = (windows?: SpendingWindow[]) =>
-  (windows ?? [])
-    .map((window) => `${windowLabel(window.duration_seconds)} ${limit(window.cost_limit_usd)}`)
-    .join("；") || "未设置";
+const windowLabel = (duration: number) =>
+  duration === 18000 ? "5 小时" : duration === 604800 ? "7 天" : "30 天";
 export default function PlansPage() {
-  const tableColumns0 = useColumnVisibility(
-    "app/plans/page.tsx:0",
-    ["套餐", "订阅模型", "费用上限", "到期免费访问", "分配状态", "操作"],
-    ["套餐", "分配状态", "操作"],
+  const columns = useColumnVisibility(
+    "plans",
+    ["套餐", "售价 / 有效期", "模型权限", "费用上限", "允许购买", "操作"],
+    ["套餐", "售价 / 有效期", "操作"],
   );
-
-  const fieldId = useId();
-  const actions = useActions();
   const resource = useResource<Plans>("/plans");
-  const models = useResource<List<Model>>("/models");
-  useErrorToast(models.error);
+  const [search, setSearch] = useState("");
+  const [applied, setApplied] = useState("");
   const [editing, setEditing] = useState<Plan>();
-  const empty = { search: "", status: "" };
-  const { filters, setFilters, applied, setApplied } = useSavedFilters("plans.filters", empty);
-  const items =
-    resource.data?.items.filter(
-      (plan) =>
-        `${plan.name} ${subscriptionLabel(plan.plan_type)} ${plan.provider_id}`
-          .toLowerCase()
-          .includes(applied.search.trim().toLowerCase()) &&
-        (!applied.status || plan.enabled === (applied.status === "enabled")),
+  const actions = useActions();
+  const id = useId();
+  const rows =
+    resource.data?.items.filter((p) =>
+      `${p.name} ${p.provider_id} ${subscriptionLabel(p.plan_type)}`
+        .toLowerCase()
+        .includes(applied.toLowerCase()),
     ) ?? [];
-  const pagination = useTablePagination(items, applied, resource.data !== undefined);
+  const pagination = useTablePagination(rows, applied, !!resource.data);
   useErrorToast(resource.error);
   return (
     <>
       <Card>
         <CardContent className="flex flex-wrap items-end gap-3">
           <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setApplied({ ...filters });
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setApplied(search.trim());
               resource.reload();
             }}
           >
-            <Field className="w-44">
-              <FieldLabel
-                htmlFor={fieldId + "-field-1" + "-" + encodeURIComponent(String("搜索套餐"))}
-              >
-                {"搜索套餐"}
-              </FieldLabel>
+            <Field className="w-56">
+              <FieldLabel htmlFor={`${id}-search`}>搜索套餐</FieldLabel>
               <Input
-                id={fieldId + "-field-1" + "-" + encodeURIComponent(String("搜索套餐"))}
-                aria-label={"搜索套餐"}
-                value={filters.search}
-                onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-                placeholder="套餐名称或提供商"
+                id={`${id}-search`}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </Field>
-            <Field className="w-44">
-              <FieldLabel
-                htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("分配状态"))}
-              >
-                {"分配状态"}
-              </FieldLabel>
-              <Select
-                value={filters.status}
-                onValueChange={(next) =>
-                  ((status) => setFilters({ ...filters, status }))(
-                    next ===
-                      fieldId + "-field-2" + "-" + encodeURIComponent(String("分配状态")) + "-empty"
-                      ? ""
-                      : next,
-                  )
-                }
-              >
-                <SelectTrigger
-                  id={fieldId + "-field-2" + "-" + encodeURIComponent(String("分配状态"))}
-                  aria-label={"分配状态"}
-                  data-required={false ? "true" : undefined}
-                  data-empty={String(filters.status) === "" ? "true" : undefined}
-                  className="w-full"
-                >
-                  <SelectValue
-                    placeholder={
-                      [
-                        { value: "", label: "全部状态" },
-                        { value: "enabled", label: "可分配" },
-                        { value: "disabled", label: "停止新分配" },
-                      ].find((option) => option.value === "")?.label ?? "请选择"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  {[
-                    { value: "", label: "全部状态" },
-                    { value: "enabled", label: "可分配" },
-                    { value: "disabled", label: "停止新分配" },
-                  ].map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={
-                        option.value ||
-                        fieldId +
-                          "-field-2" +
-                          "-" +
-                          encodeURIComponent(String("分配状态")) +
-                          "-empty"
-                      }
-                      disabled={"disabled" in option && Boolean(option.disabled)}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <div className="flex flex-wrap items-center gap-2 self-end">
-              <Button type="submit">
-                <Search />
-                查询
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  setFilters(empty);
-                  setApplied(empty);
-                  resource.reload();
-                }}
-              >
-                <RotateCcw />
-                重置
-              </Button>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="outline" size="sm" aria-label="显示列">
-                  <Columns3 />
-                  显示列
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>
-                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
-                </DropdownMenuLabel>
-                {tableColumns0.labels.map((label) => (
-                  <DropdownMenuCheckboxItem
-                    key={label}
-                    checked={tableColumns0.isVisible(label)}
-                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
-                    onSelect={(event) => event.preventDefault()}
-                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
-                  >
-                    {label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
-                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Button type="submit">查询</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setSearch("");
+                setApplied("");
+                resource.reload();
+              }}
+            >
+              重置
+            </Button>
           </form>
-          <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
-            {
-              <Button type="button" onClick={() => setEditing({ ...emptyPlan })}>
-                <Plus />
-                添加套餐
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline">
+                显示列
               </Button>
-            }
-          </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>{columns.mobile ? "手机显示列" : "桌面显示列"}</DropdownMenuLabel>
+              {columns.labels.map((label) => (
+                <DropdownMenuCheckboxItem
+                  key={label}
+                  checked={columns.isVisible(label)}
+                  disabled={columns.count === 1 && columns.isVisible(label)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
+                >
+                  {label}
+                </DropdownMenuCheckboxItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
+              <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            className="ml-auto"
+            disabled={!resource.ready}
+            onClick={() => setEditing({ ...emptyPlan })}
+          >
+            添加套餐
+          </Button>
         </CardContent>
       </Card>
-
       <Card>
-        <CardContent className="space-y-4">
-          {
-            <Table
-              className={
-                tableColumns0.count > 4
-                  ? "max-md:table-auto max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
-                  : "max-md:table-fixed max-md:[&_td]:px-1.5 max-md:[&_td]:py-2 max-md:[&_th]:px-1.5 max-md:[&_th]:text-xs max-md:[&_td]:text-xs"
-              }
-              role="table"
-            >
-              <TableHeader>
-                <TableRow role="row">
-                  {["套餐", "订阅模型", "费用上限", "到期免费访问", "分配状态", "操作"].map(
-                    (label) => (
-                      <TableHead
-                        hidden={!tableColumns0.isVisible(label)}
-                        className={
-                          ["套餐", "分配状态", "操作"].includes(label)
-                            ? label === "操作"
-                              ? "max-md:w-28"
-                              : label === "套餐"
-                                ? ""
-                                : "max-md:w-16"
-                            : ""
-                        }
-                        key={label}
-                        scope="col"
-                      >
-                        {label}
-                      </TableHead>
-                    ),
-                  )}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.length ? (
-                  <>
-                    {pagination.rows.map((plan) => (
-                      <TableRow role="row" key={plan.id}>
-                        <TableCell
-                          hidden={!tableColumns0.isVisible("套餐")}
-                          className=" max-md:overflow-hidden"
-                          data-label="套餐"
-                          role="cell"
-                        >
-                          <div className="max-md:hidden">
-                            <strong>
-                              {plan.name}
-                              <span className="block text-xs text-muted-foreground">
-                                {subscriptionLabel(plan.plan_type)}
-                              </span>
-                            </strong>
-                            <CardDescription>{plan.provider_id}</CardDescription>
-                          </div>
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
-                                aria-label={"查看详情：" + String(plan.name)}
-                              >
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate font-medium">
-                                    {plan.name}
-                                    <span className="block text-xs text-muted-foreground">
-                                      {subscriptionLabel(plan.plan_type)}
-                                    </span>
-                                  </span>
-                                  <span className="block truncate text-xs text-muted-foreground">
-                                    {accessLabel(plan.model_access, plan.models)}
-                                  </span>
-                                </span>
-                                <ChevronRight className="size-3 shrink-0" />
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-                              <DialogHeader>
-                                <DialogTitle>记录详情</DialogTitle>
-                                <DialogDescription>当前记录的完整字段</DialogDescription>
-                              </DialogHeader>
-                              <FieldGroup className="gap-3">
-                                <Field>
-                                  <FieldTitle>套餐</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    <strong>
-                                      {plan.name}
-                                      <span className="block text-xs text-muted-foreground">
-                                        {subscriptionLabel(plan.plan_type)}
-                                      </span>
-                                    </strong>
-                                    <CardDescription>{plan.provider_id}</CardDescription>
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>订阅模型</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    <span>{accessLabel(plan.model_access, plan.models)}</span>
-                                    {plan.model_access === "selected" && (
-                                      <CardDescription className="max-w-80 whitespace-normal break-words">
-                                        {plan.models.map((model) => model.model).join("、") ||
-                                          "尚未选择"}
-                                      </CardDescription>
-                                    )}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>费用上限</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {windowSummary(plan.spending_windows)}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>到期免费访问</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {plan.free_access_enabled
-                                      ? accessLabel(plan.free_model_access, plan.free_models)
-                                      : "不开放"}
-                                    {plan.free_access_enabled && (
-                                      <CardDescription>
-                                        {windowSummary(plan.free_spending_windows)}
-                                      </CardDescription>
-                                    )}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>分配状态</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    <Badge variant={plan.enabled ? "secondary" : "outline"}>
-                                      {plan.enabled ? "可分配" : "停止新分配"}
-                                    </Badge>
-                                  </div>
-                                </Field>
-                              </FieldGroup>
-                            </DialogContent>
-                          </Dialog>
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns0.isVisible("订阅模型")}
-                          className=" "
-                          data-label="订阅模型"
-                          role="cell"
-                        >
-                          <span>{accessLabel(plan.model_access, plan.models)}</span>
-                          {plan.model_access === "selected" && (
-                            <CardDescription className="max-w-80 whitespace-normal break-words">
-                              {plan.models.map((model) => model.model).join("、") || "尚未选择"}
-                            </CardDescription>
-                          )}
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns0.isVisible("费用上限")}
-                          className=" "
-                          data-label="费用上限"
-                          role="cell"
-                        >
-                          {windowSummary(plan.spending_windows)}
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns0.isVisible("到期免费访问")}
-                          className=" "
-                          data-label="到期免费访问"
-                          role="cell"
-                        >
-                          {plan.free_access_enabled
-                            ? accessLabel(plan.free_model_access, plan.free_models)
-                            : "不开放"}
-                          {plan.free_access_enabled && (
-                            <CardDescription>
-                              {windowSummary(plan.free_spending_windows)}
-                            </CardDescription>
-                          )}
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns0.isVisible("分配状态")}
-                          className=" max-md:overflow-hidden"
-                          data-label="分配状态"
-                          data-compact="true"
-                          role="cell"
-                        >
-                          <Badge variant={plan.enabled ? "secondary" : "outline"}>
-                            {plan.enabled ? "可分配" : "停止新分配"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell
-                          hidden={!tableColumns0.isVisible("操作")}
-                          className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
-                          data-label="操作"
-                          role="cell"
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Button variant="outline" size="sm" onClick={() => setEditing(plan)}>
-                              <Pencil />
-                              编辑
-                            </Button>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  aria-label="更多操作"
-                                >
-                                  <MoreHorizontal />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  variant={true ? "destructive" : "default"}
-                                  disabled={
-                                    false || actions.isBusy("app\\plans\\page.tsx:action:3")
-                                  }
-                                  onSelect={() =>
-                                    void actions.run(
-                                      "app\\plans\\page.tsx:action:3",
-                                      async () => {
-                                        await request(`/plans/${plan.id}`, {
-                                          method: "DELETE",
-                                          body: { revision: plan.revision },
-                                        });
-                                        resource.reload();
-                                      },
-                                      {
-                                        confirm: "删除此套餐？已分配套餐需先调整，历史记录保留。",
-                                        danger: true,
-                                        success: "套餐已删除",
-                                      },
-                                    )
-                                  }
-                                >
-                                  删除套餐
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead hidden={!columns.isVisible("套餐")}>套餐</TableHead>
+                <TableHead hidden={!columns.isVisible("售价 / 有效期")}>售价 / 有效期</TableHead>
+                <TableHead hidden={!columns.isVisible("模型权限")}>模型权限</TableHead>
+                <TableHead hidden={!columns.isVisible("费用上限")}>费用上限</TableHead>
+                <TableHead hidden={!columns.isVisible("允许购买")}>允许购买</TableHead>
+                <TableHead hidden={!columns.isVisible("操作")}>操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pagination.rows.map((plan) => (
+                <TableRow key={plan.id}>
+                  <TableCell hidden={!columns.isVisible("套餐")}>
+                    <span className="font-medium">{plan.name}</span>
+                    <p className="text-xs text-muted-foreground">
+                      {plan.provider_id} · {subscriptionLabel(plan.plan_type)}
+                    </p>
+                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("售价 / 有效期")}>
+                    {plan.plan_type === "free"
+                      ? "自动提供"
+                      : plan.sale_price_usd === null
+                        ? "未开放购买"
+                        : money(plan.sale_price_usd)}
+                    {plan.plan_type !== "free" && (
+                      <p className="text-xs text-muted-foreground">{plan.duration_days} 天</p>
+                    )}
+                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("模型权限")}>
+                    {plan.model_access === "all"
+                      ? "全部已启用模型"
+                      : plan.model_access === "none"
+                        ? "无模型"
+                        : `指定 ${plan.models.length} 个模型`}
+                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("费用上限")}>
+                    {plan.spending_windows.map((w) => (
+                      <p key={w.duration_seconds}>
+                        {windowLabel(w.duration_seconds)}：
+                        {w.cost_limit_usd === null ? "不限额" : money(w.cost_limit_usd)}
+                      </p>
                     ))}
-                  </>
-                ) : (
-                  <TableRow role="row">
-                    <TableCell role="cell" colSpan={tableColumns0.count}>
-                      <Empty>
-                        <EmptyDescription>{"暂无符合条件的套餐"}</EmptyDescription>
-                      </Empty>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          }
-          <Pagination aria-label="记录分页" className="mt-3 justify-end">
-            <PaginationContent className="flex-wrap justify-end gap-1">
+                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("允许购买")}>
+                    <Badge variant="secondary">
+                      {plan.plan_type === "free"
+                        ? "自动提供"
+                        : plan.allow_purchase
+                          ? "允许购买"
+                          : "未开放购买"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("操作")}>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!resource.ready}
+                        onClick={() => setEditing(plan)}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={
+                          !resource.ready ||
+                          plan.plan_type === "free" ||
+                          actions.isBusy(`delete-${plan.id}`)
+                        }
+                        onClick={() =>
+                          void actions.run(
+                            `delete-${plan.id}`,
+                            async () => {
+                              await request(`/plans/${plan.id}`, {
+                                method: "DELETE",
+                                body: { revision: plan.revision },
+                              });
+                              resource.reload();
+                            },
+                            { confirm: "删除此套餐？仍被使用的套餐无法删除。", danger: true },
+                          )
+                        }
+                      >
+                        删除
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <Pagination className="mt-3 justify-end" aria-label="套餐分页">
+            <PaginationContent className="flex-wrap">
+              <PaginationItem>
+                共 {pagination.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
+              </PaginationItem>
               <PaginationItem>
                 <Select {...pagination.size}>
-                  <SelectTrigger aria-label="每页条数" className="h-7 w-24">
+                  <SelectTrigger aria-label="每页条数">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent position="popper" side="bottom" align="end">
-                    {[10, 20, 30, 50].map((size) => (
-                      <SelectItem key={size} value={String(size)}>
-                        {size} 条/页
+                  <SelectContent side="bottom">
+                    {[10, 20, 30, 50].map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} 条
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </PaginationItem>
-              <PaginationItem className="mr-2 text-xs text-muted-foreground">
-                共 {pagination.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
-              </PaginationItem>
               <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="首页"
-                  {...pagination.first}
-                >
-                  <ChevronsLeft />
+                <Button variant="outline" {...pagination.first}>
+                  首页
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="上一页"
-                  {...pagination.previous}
-                >
-                  <ChevronLeft />
+                <Button variant="outline" {...pagination.previous}>
+                  上一页
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Input className="h-7 w-14 text-center tabular-nums" {...pagination.input} />
+                <Input className="w-16" {...pagination.input} />
               </PaginationItem>
               <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="下一页"
-                  {...pagination.next}
-                >
-                  <ChevronRight />
+                <Button variant="outline" {...pagination.next}>
+                  下一页
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="末页"
-                  {...pagination.last}
-                >
-                  <ChevronsRight />
+                <Button variant="outline" {...pagination.last}>
+                  末页
                 </Button>
               </PaginationItem>
             </PaginationContent>
@@ -607,12 +311,9 @@ export default function PlansPage() {
       </Card>
       {editing && (
         <PlanEditor
+          key={editing.id || "new"}
           plan={editing}
-          choices={
-            models.data?.items
-              .filter((model) => model.enabled)
-              .map(({ provider_id, model }) => ({ provider_id, model })) ?? []
-          }
+          ready={resource.ready}
           onClose={() => setEditing(undefined)}
           onSaved={() => {
             setEditing(undefined);
@@ -625,53 +326,63 @@ export default function PlansPage() {
 }
 function PlanEditor({
   plan,
-  choices,
+  ready,
   onClose,
   onSaved,
 }: {
   plan: Plan;
-  choices: ModelRef[];
+  ready: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const dialogFocus = useDialogFocus();
-
-  const fieldId = useId();
-  const actions = useActions();
   const [value, setValue] = useState(plan);
+  const [search, setSearch] = useState("");
+  const models = useResource<List<Model>>("/models");
+  const tags = useResource<List<SupplierTag>>("/supplier-tags");
+  const actions = useActions();
+  const focus = useDialogFocus();
+  const id = useId();
+  const busy = actions.isBusy("plan-save");
   const update = <K extends keyof Plan>(key: K, next: Plan[K]) =>
-    setValue((current) => ({ ...current, [key]: next }));
+    setValue((v) => ({ ...v, [key]: next }));
+  const outer = value.spending_windows[0];
+  const inner = value.spending_windows[1];
+  const windowChange = (index: number, window: SpendingWindow) =>
+    update(
+      "spending_windows",
+      value.spending_windows.map((w, i) => (i === index ? window : w)),
+    );
+  const choices =
+    models.data?.items.filter(
+      (m) =>
+        m.provider_id === value.provider_id &&
+        (m.enabled || value.models.some((v) => modelKey(v) === modelKey(m))) &&
+        m.model.toLowerCase().includes(search.toLowerCase()),
+    ) ?? [];
+  useErrorToast(models.error);
+  useErrorToast(tags.error);
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !actions.running.size) onClose();
+        if (!open && !busy) onClose();
       }}
     >
-      <DialogContent
-        {...dialogFocus}
-        showCloseButton={false}
-        className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-3xl"
-        aria-describedby={undefined}
-        onEscapeKeyDown={(event) => {
-          if (actions.running.size) event.preventDefault();
-        }}
-        onInteractOutside={(event) => {
-          if (actions.running.size) event.preventDefault();
-        }}
-      >
+      <DialogContent {...focus} className="flex max-h-[90dvh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{plan.id ? "编辑套餐" : "添加套餐"}</DialogTitle>
-          <DialogDescription>{"配置套餐的模型权限和费用窗口。"}</DialogDescription>
+          <DialogDescription>
+            Free 是平台的基础订阅；付费到期后自动使用平台 Free 套餐的权限和额度。
+          </DialogDescription>
         </DialogHeader>
         <DialogClose asChild>
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="absolute right-4 top-4"
+            className="absolute top-4 right-4"
             aria-label="关闭"
-            disabled={actions.running.size > 0}
+            disabled={busy}
           >
             <X />
           </Button>
@@ -679,569 +390,305 @@ function PlanEditor({
         <form
           noValidate
           className="flex min-h-0 flex-col gap-4"
-          aria-busy={actions.isBusy("app\\plans\\page.tsx:form:5")}
-          onSubmit={(event) =>
-            actions.submit(
-              event,
-              "app\\plans\\page.tsx:form:5",
-              async () => {
-                await request(plan.id ? `/plans/${plan.id}` : "/plans", {
-                  method: plan.id ? "PUT" : "POST",
-                  body: planWrite(value),
-                });
-                onSaved();
-              },
-              "已保存",
-            )
+          onSubmit={(e) =>
+            actions.submit(e, "plan-save", async () => {
+              if (!ready || !models.ready || !tags.ready)
+                throw new Error("请先加载套餐、模型和号池资料");
+              if (value.model_access === "selected" && !value.models.length)
+                throw new Error("请至少选择一个模型");
+              await request(plan.id ? `/plans/${plan.id}` : "/plans", {
+                method: plan.id ? "PUT" : "POST",
+                body: planWrite(value),
+              });
+              onSaved();
+            })
           }
         >
-          <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-12rem)]">
-            <FieldSet
-              disabled={actions.isBusy("app\\plans\\page.tsx:form:5")}
-              className="min-h-0 overflow-y-auto pr-1"
-            >
+          <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-13rem)]">
+            <FieldSet disabled={!ready || !models.ready || !tags.ready || busy}>
               <FieldGroup className="gap-4">
-                <section className="space-y-3">
-                  <div className="space-y-1">
-                    <CardTitle role="heading" aria-level={3}>
-                      基本信息
-                    </CardTitle>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field>
-                      <FieldLabel htmlFor={`${fieldId}-subscription`}>
-                        客户端展示的官方订阅
-                      </FieldLabel>
-                      <Select
-                        value={value.plan_type}
-                        onValueChange={(tier) => update("plan_type", tier)}
-                      >
-                        <SelectTrigger id={`${fieldId}-subscription`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {!subscriptionChoices.some((tier) => tier.value === value.plan_type) && (
-                            <SelectItem value={value.plan_type}>
-                              {subscriptionLabel(value.plan_type)}
-                            </SelectItem>
-                          )}
-                          {subscriptionChoices.map((tier) => (
-                            <SelectItem key={tier.value} value={tier.value}>
-                              {tier.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FieldDescription>
-                        官方档位同步到已分配账户；Free
-                        使用免费访问策略，模型、金额额度和到期策略由本套餐控制。
-                      </FieldDescription>
-                    </Field>
-
-                    <Field>
-                      <FieldLabel
-                        htmlFor={
-                          fieldId + "-field-6" + "-" + encodeURIComponent(String("套餐名称"))
-                        }
-                      >
-                        {"套餐名称"}
-                      </FieldLabel>
-                      <Input
-                        id={fieldId + "-field-6" + "-" + encodeURIComponent(String("套餐名称"))}
-                        aria-label={"套餐名称"}
-                        value={value.name}
-                        onChange={(event) => update("name", event.target.value)}
-                        required
-                        maxLength={128}
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel
-                        htmlFor={fieldId + "-field-7" + "-" + encodeURIComponent(String("提供商"))}
-                      >
-                        {"提供商"}
-                      </FieldLabel>
-                      <Select
-                        value={value.provider_id}
-                        onValueChange={(next) =>
-                          ((provider) => update("provider_id", provider))(
-                            next ===
-                              fieldId +
-                                "-field-7" +
-                                "-" +
-                                encodeURIComponent(String("提供商")) +
-                                "-empty"
-                              ? ""
-                              : next,
-                          )
-                        }
-                        disabled={Boolean(plan.id)}
-                      >
-                        <SelectTrigger
-                          id={fieldId + "-field-7" + "-" + encodeURIComponent(String("提供商"))}
-                          aria-label={"提供商"}
-                          aria-describedby={
-                            fieldId +
-                            "-field-7" +
-                            "-" +
-                            encodeURIComponent(String("提供商")) +
-                            "-hint"
-                          }
-                          data-required={false ? "true" : undefined}
-                          data-empty={String(value.provider_id) === "" ? "true" : undefined}
-                          className="w-full"
-                        >
-                          <SelectValue
-                            placeholder={
-                              [{ value: "chatgpt", label: "ChatGPT" }].find(
-                                (option) => option.value === "",
-                              )?.label ?? "请选择"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent position="popper">
-                          {[{ value: "chatgpt", label: "ChatGPT" }].map((option) => (
-                            <SelectItem
-                              key={option.value}
-                              value={
-                                option.value ||
-                                fieldId +
-                                  "-field-7" +
-                                  "-" +
-                                  encodeURIComponent(String("提供商")) +
-                                  "-empty"
-                              }
-                              disabled={"disabled" in option && Boolean(option.disabled)}
-                            >
-                              {option.label}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-name`}>套餐名称</FieldLabel>
+                    <Input
+                      id={`${id}-name`}
+                      required
+                      maxLength={128}
+                      value={value.name}
+                      onChange={(e) => update("name", e.target.value)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-provider`}>提供商</FieldLabel>
+                    <Select
+                      value={value.provider_id}
+                      disabled={!!plan.id}
+                      onValueChange={(v) => update("provider_id", v)}
+                    >
+                      <SelectTrigger id={`${id}-provider`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-tier`}>客户端展示的官方订阅</FieldLabel>
+                    <Select
+                      value={value.plan_type}
+                      disabled={plan.plan_type === "free"}
+                      onValueChange={(v) =>
+                        setValue((old) => ({
+                          ...old,
+                          plan_type: v,
+                          allow_purchase: v === "free" ? false : old.allow_purchase,
+                        }))
+                      }
+                    >
+                      <SelectTrigger id={`${id}-tier`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {subscriptionChoices.map((v) => (
+                          <SelectItem value={v.value} key={v.value}>
+                            {v.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-price`}>售价（USD）</FieldLabel>
+                    <Input
+                      id={`${id}-price`}
+                      inputMode="decimal"
+                      disabled={value.plan_type === "free"}
+                      value={value.sale_price_usd ?? ""}
+                      onChange={(e) => update("sale_price_usd", e.target.value || null)}
+                      placeholder={value.plan_type === "free" ? "自动提供" : "留空不开放购买"}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-duration`}>购买有效时长（天）</FieldLabel>
+                    <Input
+                      id={`${id}-duration`}
+                      type="number"
+                      required
+                      min={1}
+                      max={3650}
+                      disabled={value.plan_type === "free"}
+                      value={value.duration_days}
+                      onChange={(e) => update("duration_days", Number(e.target.value))}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-pool`}>用户订阅默认供应号池</FieldLabel>
+                    <Select
+                      value={value.supplier_tag_id ?? "none"}
+                      onValueChange={(v) => update("supplier_tag_id", v === "none" ? null : v)}
+                    >
+                      <SelectTrigger id={`${id}-pool`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">未设置</SelectItem>
+                        {tags.data?.items
+                          .filter((t) => t.provider_id === value.provider_id)
+                          .map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              {t.name}
                             </SelectItem>
                           ))}
-                        </SelectContent>
-                      </Select>
-                      {Boolean(plan.id ? "创建后固定" : undefined) && (
-                        <FieldDescription
-                          id={
-                            fieldId +
-                            "-field-7" +
-                            "-" +
-                            encodeURIComponent(String("提供商")) +
-                            "-hint"
-                          }
-                        >
-                          {plan.id ? "创建后固定" : undefined}
-                        </FieldDescription>
-                      )}
-                    </Field>
-                  </div>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>供应绑定仅管理员可见。</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-model-access`}>模型权限</FieldLabel>
+                    <Select
+                      value={value.model_access}
+                      onValueChange={(v) => update("model_access", v as Plan["model_access"])}
+                    >
+                      <SelectTrigger id={`${id}-model-access`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">无模型</SelectItem>
+                        <SelectItem value="all">全部已启用模型</SelectItem>
+                        <SelectItem value="selected">指定模型</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
                   <Field orientation="horizontal">
                     <Switch
-                      id={
-                        fieldId + "-field-8" + "-" + encodeURIComponent(String("允许新分配此套餐"))
-                      }
-                      checked={value.enabled}
-                      onCheckedChange={(enabled) => update("enabled", enabled)}
+                      id={`${id}-allow-purchase`}
+                      checked={value.allow_purchase}
+                      disabled={value.plan_type === "free"}
+                      aria-describedby={`${id}-purchase-hint`}
+                      onCheckedChange={(v) => update("allow_purchase", v)}
                     />
-                    <div>
-                      <FieldLabel
-                        htmlFor={
-                          fieldId +
-                          "-field-8" +
-                          "-" +
-                          encodeURIComponent(String("允许新分配此套餐"))
+                    <FieldLabel htmlFor={`${id}-allow-purchase`}>允许购买</FieldLabel>
+                  </Field>
+                </div>
+                <FieldDescription id={`${id}-purchase-hint`}>
+                  开启后展示在用户端，关闭后禁止用户购买和续订；管理员分配不受限制。Free
+                  自动提供，无需购买。
+                </FieldDescription>
+                {value.model_access === "selected" && (
+                  <FieldGroup className="gap-2">
+                    <Field>
+                      <FieldLabel htmlFor={`${id}-models`}>搜索模型</FieldLabel>
+                      <Input
+                        id={`${id}-models`}
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </Field>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          update(
+                            "models",
+                            Array.from(
+                              new Map(
+                                [...value.models, ...choices].map((m) => [
+                                  modelKey(m),
+                                  { provider_id: m.provider_id, model: m.model },
+                                ]),
+                              ).values(),
+                            ),
+                          )
                         }
                       >
-                        {"允许新分配此套餐"}
-                      </FieldLabel>
-                    </div>
-                  </Field>
-                </section>
-                <section className="space-y-3">
-                  <div className="space-y-1">
-                    <CardTitle role="heading" aria-level={3}>
-                      订阅费用窗口
-                    </CardTitle>
-                    <CardDescription>
-                      周期额度可选 7 天或 30 天，也可配置 5 小时额度。
-                    </CardDescription>
-                  </div>
-                  <WindowEditor
-                    label="订阅额度"
-                    windows={value.spending_windows}
-                    onChange={(windows) => update("spending_windows", windows)}
-                    id={fieldId + "-paid-windows"}
-                  />
-                </section>
-                <ModelAccess
-                  title="订阅模型范围"
-                  mode={value.model_access}
-                  selected={value.models}
-                  choices={choices}
-                  provider={value.provider_id}
-                  onMode={(mode) => update("model_access", mode === "none" ? "selected" : mode)}
-                  onModels={(models) => update("models", models)}
-                />
-                <Collapsible defaultOpen={value.free_access_enabled} className="space-y-3">
-                  <CollapsibleTrigger asChild>
-                    <Button type="button" variant="ghost" className="w-full justify-between">
-                      <span>到期免费访问</span>
-                      <span className="text-sm text-muted-foreground">
-                        {value.free_access_enabled ? "已开放" : "未开放"}
-                      </span>
-                      <ChevronDown />
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="space-y-4">
-                    <Field orientation="horizontal">
-                      <Switch
-                        id={
-                          fieldId +
-                          "-field-9" +
-                          "-" +
-                          encodeURIComponent(String("订阅到期后允许使用免费层"))
+                        选择当前结果
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          update(
+                            "models",
+                            value.models.filter(
+                              (m) => !choices.some((c) => modelKey(c) === modelKey(m)),
+                            ),
+                          )
                         }
-                        checked={value.free_access_enabled}
-                        onCheckedChange={(enabled) => update("free_access_enabled", enabled)}
-                      />
-                      <div>
-                        <FieldLabel
-                          htmlFor={
-                            fieldId +
-                            "-field-9" +
-                            "-" +
-                            encodeURIComponent(String("订阅到期后允许使用免费层"))
+                      >
+                        清除当前结果
+                      </Button>
+                    </div>
+                    {choices.map((m) => (
+                      <Field orientation="horizontal" key={modelKey(m)}>
+                        <Checkbox
+                          id={`${id}-${m.model}`}
+                          checked={value.models.some((v) => modelKey(v) === modelKey(m))}
+                          onCheckedChange={(checked) =>
+                            update(
+                              "models",
+                              checked
+                                ? [...value.models, { provider_id: m.provider_id, model: m.model }]
+                                : value.models.filter((v) => modelKey(v) !== modelKey(m)),
+                            )
                           }
-                        >
-                          {"订阅到期后允许使用免费层"}
-                        </FieldLabel>
-                      </div>
-                    </Field>
-                    <CardDescription className="text-sm text-muted-foreground">
-                      订阅到期结束付费权益，登录状态由账户启停独立控制。关闭免费访问时，下方设置仍会保留。
-                    </CardDescription>
-                    <WindowEditor
-                      label="免费层额度"
-                      windows={value.free_spending_windows}
-                      onChange={(windows) => update("free_spending_windows", windows)}
-                      id={fieldId + "-free-windows"}
-                    />
-                    <ModelAccess
-                      title="免费层模型范围"
-                      allowNone
-                      mode={value.free_model_access}
-                      selected={value.free_models}
-                      choices={choices}
-                      provider={value.provider_id}
-                      onMode={(mode) => update("free_model_access", mode)}
-                      onModels={(models) => update("free_models", models)}
-                    />
-                  </CollapsibleContent>
-                </Collapsible>
-              </FieldGroup>
-            </FieldSet>
-          </ScrollArea>
-          <FieldGroup className="flex-row justify-end gap-2 border-t pt-3">
-            {onClose && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={actions.isBusy("app\\plans\\page.tsx:form:5")}
-                onClick={onClose}
-              >
-                {"取消"}
-              </Button>
-            )}
-            <Button type="submit" disabled={actions.isBusy("app\\plans\\page.tsx:form:5")}>
-              {actions.isBusy("app\\plans\\page.tsx:form:5") && <Spinner />}
-              {actions.isBusy("app\\plans\\page.tsx:form:5") ? "正在提交…" : "保存"}
-            </Button>
-          </FieldGroup>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-function WindowEditor({
-  label,
-  windows,
-  onChange,
-  id,
-}: {
-  label: string;
-  windows: SpendingWindow[];
-  onChange: (windows: SpendingWindow[]) => void;
-  id: string;
-}) {
-  const configured = windows ?? [];
-  const outer = configured[0] ?? { duration_seconds: 604800, cost_limit_usd: null };
-  const inner = configured[1];
-  const updateOuter = (patch: Partial<SpendingWindow>) =>
-    onChange([{ ...outer, ...patch }, ...(inner ? [inner] : [])]);
-  const updateInner = (patch: Partial<SpendingWindow>) =>
-    onChange([
-      outer,
-      { ...(inner ?? { duration_seconds: 18000, cost_limit_usd: null }), ...patch },
-    ]);
-  return (
-    <div className="space-y-3 rounded-lg border p-3">
-      <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
-        <Field>
-          <FieldLabel htmlFor={`${id}-outer-duration`}>{label}周期</FieldLabel>
-          <Select
-            value={String(outer.duration_seconds)}
-            onValueChange={(next) =>
-              updateOuter({ duration_seconds: Number(next) as 604800 | 2592000 })
-            }
-          >
-            <SelectTrigger id={`${id}-outer-duration`} aria-label={`${label}周期`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="604800">7 天</SelectItem>
-              <SelectItem value="2592000">30 天</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor={`${id}-outer-limit`}>{label}周期费用上限（美元）</FieldLabel>
-          <Input
-            id={`${id}-outer-limit`}
-            aria-label={`${label}周期费用上限（美元）`}
-            type="number"
-            min="0"
-            step="0.000000001"
-            value={outer.cost_limit_usd ?? ""}
-            onChange={(event) => updateOuter({ cost_limit_usd: event.target.value || null })}
-          />
-          <FieldDescription>留空表示周期额度不限额。</FieldDescription>
-        </Field>
-      </div>
-      <div className="flex items-center gap-2">
-        <Switch
-          id={`${id}-inner-enabled`}
-          aria-label={`${label} 5 小时额度`}
-          checked={Boolean(inner)}
-          onCheckedChange={(enabled) =>
-            onChange(
-              enabled
-                ? [outer, inner ?? { duration_seconds: 18000, cost_limit_usd: null }]
-                : [outer],
-            )
-          }
-        />
-        <FieldLabel htmlFor={`${id}-inner-enabled`}>启用 5 小时额度</FieldLabel>
-      </div>
-      {inner && (
-        <Field>
-          <FieldLabel htmlFor={`${id}-inner-limit`}>{label} 5 小时费用上限（美元）</FieldLabel>
-          <Input
-            id={`${id}-inner-limit`}
-            aria-label={`${label} 5 小时费用上限（美元）`}
-            type="number"
-            min="0"
-            step="0.000000001"
-            value={inner.cost_limit_usd ?? ""}
-            onChange={(event) => updateInner({ cost_limit_usd: event.target.value || null })}
-          />
-          <FieldDescription>从第一次使用开始计时，受周期额度剩余值限制。</FieldDescription>
-        </Field>
-      )}
-    </div>
-  );
-}
-
-export function ModelAccess({
-  title,
-  mode,
-  selected,
-  choices,
-  provider,
-  allowNone,
-  onMode,
-  onModels,
-}: {
-  title: string;
-  mode: "all" | "selected" | "none";
-  selected: ModelRef[];
-  choices: ModelRef[];
-  provider: string;
-  allowNone?: boolean;
-  onMode: (mode: "all" | "selected" | "none") => void;
-  onModels: (models: ModelRef[]) => void;
-}) {
-  const fieldId = useId();
-  const id = useId();
-  const [search, setSearch] = useState("");
-  const available = [
-    ...new Map(
-      [...sameProviderModels(choices, provider), ...sameProviderModels(selected, provider)].map(
-        (model) => [modelKey(model), model],
-      ),
-    ).values(),
-  ];
-  const filtered = available.filter((model) =>
-    modelKey(model).toLowerCase().includes(search.trim().toLowerCase()),
-  );
-  const selectedKeys = new Set(selected.map(modelKey));
-  const selectedCount = sameProviderModels(selected, provider).length;
-  return (
-    <FieldSet className="space-y-3">
-      <FieldLegend>{title}</FieldLegend>
-      <Field>
-        <FieldLabel htmlFor={fieldId + "-field-10" + "-" + encodeURIComponent(String("访问范围"))}>
-          {"访问范围"}
-        </FieldLabel>
-        <Select
-          value={mode}
-          onValueChange={(next) =>
-            ((next) => onMode(next as typeof mode))(
-              next ===
-                fieldId + "-field-10" + "-" + encodeURIComponent(String("访问范围")) + "-empty"
-                ? ""
-                : next,
-            )
-          }
-        >
-          <SelectTrigger
-            id={fieldId + "-field-10" + "-" + encodeURIComponent(String("访问范围"))}
-            aria-label={"访问范围"}
-            data-required={false ? "true" : undefined}
-            data-empty={String(mode) === "" ? "true" : undefined}
-            className="w-full"
-          >
-            <SelectValue
-              placeholder={
-                [
-                  ...(allowNone ? [{ value: "none", label: "无模型" }] : []),
-                  { value: "all", label: "全部已启用模型" },
-                  { value: "selected", label: "指定模型" },
-                ].find((option) => option.value === "")?.label ?? "请选择"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent position="popper">
-            {[
-              ...(allowNone ? [{ value: "none", label: "无模型" }] : []),
-              { value: "all", label: "全部已启用模型" },
-              { value: "selected", label: "指定模型" },
-            ].map((option) => (
-              <SelectItem
-                key={option.value}
-                value={
-                  option.value ||
-                  fieldId + "-field-10" + "-" + encodeURIComponent(String("访问范围")) + "-empty"
-                }
-                disabled={"disabled" in option && Boolean(option.disabled)}
-              >
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-      {mode === "all" && (
-        <CardDescription className="text-sm text-muted-foreground">
-          允许此提供商的全部已启用模型，后续启用的模型也包含在内。
-        </CardDescription>
-      )}
-      {mode === "none" && (
-        <CardDescription className="text-sm text-muted-foreground">
-          此范围不授予任何模型权限。
-        </CardDescription>
-      )}
-      {mode === "selected" && (
-        <>
-          <div className="flex items-end justify-between gap-3">
-            <Field>
-              <FieldLabel
-                htmlFor={fieldId + "-field-11" + "-" + encodeURIComponent(String("搜索模型"))}
-              >
-                {"搜索模型"}
-              </FieldLabel>
-              <Input
-                id={fieldId + "-field-11" + "-" + encodeURIComponent(String("搜索模型"))}
-                aria-label={"搜索模型"}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="输入模型名称"
-              />
-            </Field>
-            <span className="text-sm text-muted-foreground">
-              已选 {selectedCount} / {available.length} 个
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={
-                !filtered.length || filtered.every((model) => selectedKeys.has(modelKey(model)))
-              }
-              onClick={() =>
-                onModels([
-                  ...new Map(
-                    [...selected, ...filtered].map((model) => [modelKey(model), model]),
-                  ).values(),
-                ])
-              }
-            >
-              选择当前结果
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={!filtered.some((model) => selectedKeys.has(modelKey(model)))}
-              onClick={() => {
-                const keys = new Set(filtered.map(modelKey));
-                onModels(selected.filter((model) => !keys.has(modelKey(model))));
-              }}
-            >
-              清除当前结果
-            </Button>
-            <span className="text-sm text-muted-foreground">当前显示 {filtered.length} 个</span>
-          </div>
-          <div className="grid max-h-64 gap-2 overflow-y-auto sm:grid-cols-2">
-            {filtered.length ? (
-              filtered.map((model, index) => (
-                <Label key={modelKey(model)} htmlFor={`${id}-${index}`}>
-                  <Checkbox
-                    id={`${id}-${index}`}
-                    checked={selectedKeys.has(modelKey(model))}
-                    onCheckedChange={(checked) =>
-                      onModels(
-                        checked === true
-                          ? [
-                              ...selected.filter((item) => modelKey(item) !== modelKey(model)),
-                              model,
-                            ]
-                          : selected.filter((item) => modelKey(item) !== modelKey(model)),
+                        />
+                        <FieldLabel htmlFor={`${id}-${m.model}`}>{m.model}</FieldLabel>
+                      </Field>
+                    ))}
+                  </FieldGroup>
+                )}
+                <Field orientation="horizontal">
+                  <Switch
+                    id={`${id}-windows`}
+                    checked={!!outer}
+                    onCheckedChange={(enabled) =>
+                      update(
+                        "spending_windows",
+                        enabled ? [{ duration_seconds: 604800, cost_limit_usd: "0" }] : [],
                       )
                     }
                   />
-                  <span>{modelKey(model)}</span>
-                </Label>
-              ))
-            ) : (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <Inbox />
-                  </EmptyMedia>
-                  <EmptyDescription>
-                    {available.length ? "没有匹配的模型" : "暂无模型，请先在模型配置中添加。"}
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            )}
-          </div>
-          {!selectedCount && (
-            <CardDescription className="text-sm text-muted-foreground">
-              尚未选择模型。保存后，此范围不允许任何模型请求。
-            </CardDescription>
-          )}
-        </>
-      )}
-    </FieldSet>
+                  <FieldLabel htmlFor={`${id}-windows`}>设置费用窗口</FieldLabel>
+                </Field>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-outer`}>外层额度周期</FieldLabel>
+                    <Select
+                      disabled={!outer}
+                      value={String(outer?.duration_seconds ?? 604800)}
+                      onValueChange={(v) =>
+                        windowChange(0, {
+                          ...outer,
+                          duration_seconds: Number(v) as SpendingWindow["duration_seconds"],
+                        })
+                      }
+                    >
+                      <SelectTrigger id={`${id}-outer`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="604800">7 天</SelectItem>
+                        <SelectItem value="2592000">30 天</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-outer-limit`}>外层费用上限（USD）</FieldLabel>
+                    <Input
+                      id={`${id}-outer-limit`}
+                      disabled={!outer}
+                      inputMode="decimal"
+                      value={outer?.cost_limit_usd ?? ""}
+                      placeholder="留空不限额"
+                      onChange={(e) =>
+                        windowChange(0, { ...outer, cost_limit_usd: e.target.value || null })
+                      }
+                    />
+                  </Field>
+                  <Field orientation="horizontal">
+                    <Switch
+                      id={`${id}-inner`}
+                      disabled={!outer}
+                      checked={!!inner}
+                      onCheckedChange={(v) =>
+                        update(
+                          "spending_windows",
+                          v ? [outer, { duration_seconds: 18000, cost_limit_usd: null }] : [outer],
+                        )
+                      }
+                    />
+                    <FieldLabel htmlFor={`${id}-inner`}>启用 5 小时内层窗口</FieldLabel>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-inner-limit`}>5 小时费用上限（USD）</FieldLabel>
+                    <Input
+                      id={`${id}-inner-limit`}
+                      inputMode="decimal"
+                      disabled={!inner}
+                      value={inner?.cost_limit_usd ?? ""}
+                      placeholder="留空不限额"
+                      onChange={(e) => {
+                        if (inner)
+                          windowChange(1, { ...inner, cost_limit_usd: e.target.value || null });
+                      }}
+                    />
+                  </Field>
+                </div>
+              </FieldGroup>
+            </FieldSet>
+          </ScrollArea>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
+              取消
+            </Button>
+            <Button type="submit" disabled={!ready || !models.ready || !tags.ready || busy}>
+              保存
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/codex2api-user",
     "crates/codex2api-web",
     "crates/codex2api-service",
     "crates/codex2api-core",
@@ -21,6 +22,7 @@ license = "MIT"
 rust-version = "1.93"
 
 [workspace.dependencies]
+codex2api-user = { path = "crates/codex2api-user" }
 codex2api-web = { path = "crates/codex2api-web" }
 codex2api-service = { path = "crates/codex2api-service" }
 codex2api-core = { path = "crates/codex2api-core" }

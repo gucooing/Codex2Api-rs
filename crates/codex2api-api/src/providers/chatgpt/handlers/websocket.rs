@@ -712,7 +712,9 @@ mod tests {
                     let received: Value =
                         serde_json::from_slice(&client.next().await.unwrap().unwrap().into_data())
                             .unwrap();
-                    assert_eq!(Some(received), error_event);
+                    let mut expected_event = error_event.clone().unwrap();
+                    crate::public_output::metadata(&mut expected_event);
+                    assert_eq!(received, expected_event);
                     assert!(matches!(
                         client.next().await.unwrap().unwrap(),
                         UpstreamMessage::Close(_)
@@ -1119,8 +1121,11 @@ mod tests {
         sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt','gpt-test','text')").execute(storage.pool()).await.unwrap();
         plan.config["model_access"] = json!("selected");
         plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-test"}]);
-        plan.config["primary_cost_limit_usd"] = if exhausted { json!(0.01) } else { json!(null) };
-        plan.config["weekly_cost_limit_usd"] = json!(null);
+        plan.config["spending_windows"] = if exhausted {
+            json!([{"duration_seconds":604800,"cost_limit_usd":null},{"duration_seconds":18000,"cost_limit_usd":"0.01"}])
+        } else {
+            json!([])
+        };
         assert!(
             storage
                 .save_virtual_plan(&plan, Some(plan.revision))

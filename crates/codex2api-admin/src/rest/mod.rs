@@ -1,13 +1,17 @@
 mod auth;
 mod catalog;
 mod consumers;
+mod coupons;
 mod dto;
 pub(crate) mod error;
+mod orders;
 mod proxies;
 mod settings;
 mod suppliers;
 mod tags;
 mod usage;
+mod users;
+mod wallet;
 use crate::{AdminState, session};
 use axum::{
     Router,
@@ -15,6 +19,22 @@ use axum::{
 };
 pub(crate) fn router(state: AdminState) -> Router {
     let protected = Router::new()
+        .route("/wallet-entries", get(wallet::list))
+        .route("/coupons", get(coupons::list).post(coupons::create))
+        .route("/coupons/{id}", put(coupons::update))
+        .route("/orders", get(orders::list))
+        .route("/orders/plans", get(orders::plans))
+        .route("/orders/{id}", get(orders::detail))
+        .route("/orders/{id}/cancel", post(orders::cancel))
+        .route("/users", get(users::list).post(users::create))
+        .route("/users/options", get(users::options))
+        .route("/users/{id}/wallet-adjustments", post(users::adjust_wallet))
+        .route("/users/{id}", get(users::detail).put(users::update))
+        .route(
+            "/subscriptions",
+            get(users::subscriptions).post(users::grant),
+        )
+        .route("/subscriptions/{id}", put(users::update_subscription))
         .route("/logout", post(auth::logout))
         .route("/overview", get(settings::overview))
         .route("/overview/usage", get(usage::statistics))

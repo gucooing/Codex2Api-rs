@@ -28,7 +28,7 @@ impl ConsumerFilters {
 
     pub(crate) fn conditions(&self, query: &mut QueryBuilder<'_, Sqlite>, now: i64) {
         // Both the visible list and 'all matching' use this exact predicate.
-        query.push(" WHERE 1=1");
+        query.push(" WHERE id NOT IN(SELECT virtual_account_id FROM user_subscriptions)");
         if !self.search.trim().is_empty() {
             query
                 .push(" AND instr(lower(name || ' ' || username || ' ' || email),lower(")
@@ -153,6 +153,7 @@ impl ConsumerSelection {
             }
         } else {
             ids_clause(&mut q, " WHERE id IN (", &self.ids);
+            q.push(" AND id NOT IN(SELECT virtual_account_id FROM user_subscriptions)");
         }
         q
     }
@@ -208,16 +209,16 @@ impl Storage {
     /// Current configured quota windows only; never query lifetime billing or a supplier.
     pub async fn virtual_list_quota(&self, account: &VirtualAccount) -> Result<Value> {
         let now = chrono::Utc::now().timestamp();
+        let account = self
+            .effective_virtual_account_at(&account.id, now)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(account.id.clone()))?;
         let plan = self
             .virtual_plan(&account.plan_id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
-        let rules = crate::plan_spending_windows(
-            &plan.config,
-            account.effective_plan_at(now) == "free" && account.plan_type != "free",
-        )?;
-        let anchor:i64=sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM virtual_accounts WHERE id=?")
-            .bind(&account.id).fetch_one(self.pool()).await?;
+        let rules = crate::plan_spending_windows(&plan.config)?;
+        let anchor = self.subscription_anchor_at(&account.id, now).await?;
         let windows = self
             .nested_spending_windows(
                 &account.id,

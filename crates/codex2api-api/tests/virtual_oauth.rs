@@ -313,8 +313,7 @@ async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usa
         .await
         .unwrap()
         .unwrap();
-    plan.config["primary_cost_limit_usd"] = json!(1);
-    plan.config["weekly_cost_limit_usd"] = json!(2);
+    plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"2"},{"duration_seconds":18000,"cost_limit_usd":"1"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -534,8 +533,7 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
         .await
         .unwrap()
         .unwrap();
-    plan.config["primary_cost_limit_usd"] = json!(5);
-    plan.config["weekly_cost_limit_usd"] = json!(10);
+    plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"5"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -751,7 +749,7 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
         .await
         .unwrap()
         .unwrap();
-    plan.config["primary_cost_limit_usd"] = json!(5);
+    plan.config["spending_windows"] = json!([{"duration_seconds":604800,"cost_limit_usd":null},{"duration_seconds":18000,"cost_limit_usd":"5"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -1092,7 +1090,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
         codex2api_admin::AdminState::new(storage.clone()).unwrap(),
     ));
     let (cookie, csrf) = admin_login(&app).await;
-    let mut input = json!({"provider_id":"chatgpt","name":"研发专用","model_access":"selected","models":[{"provider_id":"chatgpt","model":"gpt-6-astra"}],"free_model_access":"none","free_models":[],"free_access_enabled":false,"primary_cost_limit_usd":"2","weekly_cost_limit_usd":"10","free_primary_cost_limit_usd":"0","free_weekly_cost_limit_usd":"0","enabled":true});
+    let mut input = json!({"sale_price_usd": null, "duration_days": 30, "supplier_tag_id": null, "provider_id": "chatgpt", "name": "研发专用", "model_access": "selected", "models": [{"provider_id": "chatgpt", "model": "gpt-6-astra"}], "allow_purchase": true, "plan_type": "plus", "spending_windows": [{"duration_seconds": 604800, "cost_limit_usd": "10"}, {"duration_seconds": 18000, "cost_limit_usd": "2"}]});
     let saved = app
         .clone()
         .oneshot(admin_request(
@@ -3780,18 +3778,11 @@ async fn desktop_login_wrapper_redirects_only_to_local_authorization_and_preserv
         let response=app.clone().oneshot(Request::get(format!("/codex/desktop-auth?{wrapper}&codex_streamlined_login=true&no_universal_links=1")).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let location = response.headers()["location"].to_str().unwrap();
-        assert_eq!(location, format!("{ROOT}/oauth/authorize?{query}"));
-        assert_eq!(response.headers()["cache-control"], "no-store");
-        let page = app
-            .clone()
-            .oneshot(Request::get(location).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(page.status(), StatusCode::SEE_OTHER);
         assert_eq!(
-            page.headers()["location"],
-            format!("/admin/authorize/?{query}")
+            location,
+            format!("http://127.0.0.1:8082/user/authorize/?{query}")
         );
+        assert_eq!(response.headers()["cache-control"], "no-store");
     }
     for target in [
         "https://untrusted.example/steal".to_owned(),
@@ -3889,7 +3880,7 @@ async fn text_body(response: axum::response::Response) -> String {
 }
 fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Body> {
     if path == format!("{ROOT}/oauth/authorize") {
-        let value: serde_json::Map<String, Value> = fields
+        let mut value: serde_json::Map<String, Value> = fields
             .iter()
             .map(|(key, value)| {
                 (
@@ -3903,7 +3894,8 @@ fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Bo
                 )
             })
             .collect();
-        let mut request = Request::post(format!("{ROOT}/oauth/authorize/submit"))
+        value.insert("kind".into(), Value::String("virtual".into()));
+        let mut request = Request::post("/user/api/oauth/authorize/identify")
             .header("content-type", "application/json");
         if let Some(cookie) = cookie {
             request = request.header("cookie", cookie);
@@ -3920,11 +3912,6 @@ fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Bo
         fields.retain(|(k, _)| *k != "account_id");
         if !fields.iter().any(|(k, _)| *k == "provider_id") {
             fields.push(("provider_id", "chatgpt"));
-        }
-        if fields.iter().any(|(k, _)| *k == "model_access")
-            && !fields.iter().any(|(k, _)| *k == "free_model_access")
-        {
-            fields.push(("free_model_access", "none"));
         }
     }
 
@@ -4098,6 +4085,10 @@ fn router(storage: &Storage) -> Router {
         accounts,
         codex2api_upstream::UpstreamPool::new(auth),
     ))
+    .merge(codex2api_user::router(codex2api_user::UserState {
+        storage: storage.user_store(),
+        public_base_url: "http://127.0.0.1:8082".into(),
+    }))
 }
 
 async fn authorize(app: &Router) -> (String, String, String, String) {
@@ -4120,7 +4111,7 @@ async fn authorize_scoped(app: &Router, scope: &str) -> (String, String, String,
     let response = app
         .clone()
         .oneshot(
-            Request::get(format!("{ROOT}/oauth/authorize/bootstrap?{query}"))
+            Request::get(format!("/user/api/oauth/authorize/bootstrap?{query}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4154,17 +4145,10 @@ async fn login_scoped(app: &Router, scope: &str) -> Value {
         ("username", "alice"),
         ("password", "fixture-password"),
     ];
-    let response = app
-        .clone()
-        .oneshot(form(
-            &format!("{ROOT}/oauth/authorize"),
-            &fields,
-            Some(&cookie),
-        ))
-        .await
-        .unwrap();
+    let response = consent(&app, &fields, Some(&cookie)).await;
     assert_eq!(response.status(), StatusCode::OK);
-    let callback = url::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let callback =
+        url::Url::parse(json_body(response).await["redirect_uri"].as_str().unwrap()).unwrap();
     assert_eq!(callback.host_str(), Some("localhost"));
     let code = callback
         .query_pairs()
@@ -4374,20 +4358,17 @@ async fn rejects_csrf_bad_password_redirects_and_pkce_replay() {
         ("fixture-password", "wrong", Some(cookie.as_str())),
         ("fixture-password", csrf.as_str(), None),
     ] {
-        let response = app
-            .clone()
-            .oneshot(form(
-                &format!("{ROOT}/oauth/authorize"),
-                &[
-                    ("flow", &flow),
-                    ("csrf", csrf),
-                    ("username", "alice"),
-                    ("password", password),
-                ],
-                cookie,
-            ))
-            .await
-            .unwrap();
+        let response = consent(
+            &app,
+            &[
+                ("flow", &flow),
+                ("csrf", csrf),
+                ("username", "alice"),
+                ("password", password),
+            ],
+            cookie,
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let html = text_body(response).await;
         assert!(!html.contains("fixture-password"));
@@ -4395,21 +4376,18 @@ async fn rejects_csrf_bad_password_redirects_and_pkce_replay() {
             assert!(html.contains("用户名或密码错误"));
         }
     }
-    let response = app
-        .clone()
-        .oneshot(form(
-            &format!("{ROOT}/oauth/authorize"),
-            &[
-                ("flow", &flow),
-                ("csrf", &csrf),
-                ("username", "alice"),
-                ("password", "fixture-password"),
-            ],
-            Some(&cookie),
-        ))
-        .await
-        .unwrap();
-    let url = url::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let response = consent(
+        &app,
+        &[
+            ("flow", &flow),
+            ("csrf", &csrf),
+            ("username", "alice"),
+            ("password", "fixture-password"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    let url = url::Url::parse(json_body(response).await["redirect_uri"].as_str().unwrap()).unwrap();
     let code = url
         .query_pairs()
         .find(|(k, _)| k == "code")
@@ -4983,21 +4961,19 @@ async fn authorization_codes_expire_bind_client_and_callback_and_redeem_atomical
         .unwrap();
     let (app, _) = fixture(&storage).await;
     let (flow, csrf, cookie, verifier) = authorize(&app).await;
-    let response = app
-        .clone()
-        .oneshot(form(
-            &format!("{ROOT}/oauth/authorize"),
-            &[
-                ("flow", &flow),
-                ("csrf", &csrf),
-                ("username", "alice"),
-                ("password", "fixture-password"),
-            ],
-            Some(&cookie),
-        ))
-        .await
-        .unwrap();
-    let callback = url::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let response = consent(
+        &app,
+        &[
+            ("flow", &flow),
+            ("csrf", &csrf),
+            ("username", "alice"),
+            ("password", "fixture-password"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    let callback =
+        url::Url::parse(json_body(response).await["redirect_uri"].as_str().unwrap()).unwrap();
     assert_eq!(
         callback
             .query_pairs()
@@ -5069,21 +5045,19 @@ async fn authorization_codes_expire_bind_client_and_callback_and_redeem_atomical
         1
     );
     let (flow, csrf, cookie, verifier) = authorize(&app).await;
-    let response = app
-        .clone()
-        .oneshot(form(
-            &format!("{ROOT}/oauth/authorize"),
-            &[
-                ("flow", &flow),
-                ("csrf", &csrf),
-                ("username", "alice"),
-                ("password", "fixture-password"),
-            ],
-            Some(&cookie),
-        ))
-        .await
-        .unwrap();
-    let callback = url::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let response = consent(
+        &app,
+        &[
+            ("flow", &flow),
+            ("csrf", &csrf),
+            ("username", "alice"),
+            ("password", "fixture-password"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    let callback =
+        url::Url::parse(json_body(response).await["redirect_uri"].as_str().unwrap()).unwrap();
     let code = callback
         .query_pairs()
         .find(|(k, _)| k == "code")
@@ -5194,20 +5168,17 @@ async fn credentials_are_device_scoped_and_identity_and_diagnostic_boundaries_ho
         .execute(storage.pool())
         .await
         .unwrap();
-    let expired = app
-        .clone()
-        .oneshot(form(
-            &format!("{ROOT}/oauth/authorize"),
-            &[
-                ("flow", &flow),
-                ("csrf", &csrf),
-                ("username", "alice"),
-                ("password", "fixture-password"),
-            ],
-            Some(&cookie),
-        ))
-        .await
-        .unwrap();
+    let expired = consent(
+        &app,
+        &[
+            ("flow", &flow),
+            ("csrf", &csrf),
+            ("username", "alice"),
+            ("password", "fixture-password"),
+        ],
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(expired.status(), StatusCode::BAD_REQUEST);
     storage.close().await;
 }
@@ -7051,9 +7022,7 @@ async fn set_test_plan_config(
         return Ok(None);
     }
     if key == "quota" {
-        for key in ["primary_cost_limit_usd", "weekly_cost_limit_usd"] {
-            current.config[key] = value[key].clone();
-        }
+        current.config["spending_windows"] = test_windows(value);
         if !storage.save_virtual_plan(&current, Some(revision)).await? {
             return Ok(None);
         }
@@ -7065,7 +7034,14 @@ async fn set_test_plan_config(
                 kind
             };
             let mut plan = storage.virtual_plan(id).await?.unwrap();
-            for key in ["models", "primary_cost_limit_usd", "weekly_cost_limit_usd"] {
+            if config.get("primary_cost_limit_usd").is_some()
+                || config.get("weekly_cost_limit_usd").is_some()
+            {
+                plan.config["spending_windows"] = test_windows(config);
+            } else if let Some(windows) = config.get("spending_windows") {
+                plan.config["spending_windows"] = windows.clone();
+            }
+            for key in ["models"] {
                 if let Some(value) = config.get(key) {
                     plan.config[key] = value.clone();
                 }
@@ -7125,4 +7101,63 @@ async fn bind_test_supplier(storage: &Storage, account: &VirtualAccount, supplie
             .await
             .unwrap()
     );
+}
+
+// Drive both browser steps explicitly; the production listeners remain separate.
+async fn consent(
+    app: &Router,
+    fields: &[(&str, &str)],
+    cookie: Option<&str>,
+) -> axum::response::Response {
+    let response = app
+        .clone()
+        .oneshot(form(&format!("{ROOT}/oauth/authorize"), fields, cookie))
+        .await
+        .unwrap();
+    if response.status() != StatusCode::OK {
+        return response;
+    }
+    let identity = json_body(response).await;
+    let field = |key: &str| {
+        fields
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| *v)
+            .unwrap_or("")
+    };
+    let value = serde_json::json!({"request_id":field("flow"),"csrf_token":field("csrf"),"account_id":identity["identity"]["account_id"],"confirmed":true});
+    let mut request = Request::post("/user/api/oauth/authorize/approve")
+        .header("content-type", "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    app.clone()
+        .oneshot(request.body(Body::from(value.to_string())).unwrap())
+        .await
+        .unwrap()
+}
+
+fn test_windows(value: &Value) -> Value {
+    let amount = |key: &str| {
+        if value[key].is_null() {
+            Value::Null
+        } else {
+            Value::String(
+                value[key]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value[key].to_string()),
+            )
+        }
+    };
+    let mut windows = vec![
+        serde_json::json!({"duration_seconds":604800,"cost_limit_usd":amount("weekly_cost_limit_usd")}),
+    ];
+    if !value["primary_cost_limit_usd"].is_null() {
+        windows.push(serde_json::json!({"duration_seconds":18000,"cost_limit_usd":amount("primary_cost_limit_usd")}));
+    }
+    if windows.len() == 1 && value["weekly_cost_limit_usd"].is_null() {
+        return serde_json::json!([]);
+    }
+    serde_json::json!(windows)
 }

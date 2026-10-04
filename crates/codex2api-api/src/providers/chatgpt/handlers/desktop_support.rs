@@ -248,7 +248,7 @@ pub(crate) async fn bootstrap(
 ) -> crate::Result<Value> {
     let account = state
         .storage
-        .virtual_account(&access.virtual_account_id)
+        .effective_virtual_account(&access.virtual_account_id)
         .await?
         .filter(|a| a.enabled)
         .ok_or_else(crate::ApiError::invalid_token)?;

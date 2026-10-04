@@ -4,6 +4,7 @@ mod error;
 mod execution;
 mod pool_execution;
 mod providers;
+mod public_output;
 mod response;
 mod state;
 mod usage;

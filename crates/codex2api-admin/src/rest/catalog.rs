@@ -12,15 +12,19 @@ use codex2api_storage::{
 use serde::Deserialize;
 use serde_json::json;
 fn plan_dto(p: &VirtualPlan) -> dto::Plan {
-    let amount = |key: &str| {
-        p.config.get(key).filter(|v| !v.is_null()).map(|v| {
-            v.as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| v.to_string())
-        })
-    };
-    let refs = |key: &str| {
-        p.config[key]
+    dto::Plan {
+        id: p.id.clone(),
+        provider_id: p.provider_id.clone(),
+        name: p.name.clone(),
+        plan_type: p.plan_type.clone(),
+        allow_purchase: p.allow_purchase,
+        revision: p.revision,
+        updated_at_ms: p.updated_at_ms,
+        sale_price_usd: p.config["sale_price_usd"].as_str().map(str::to_owned),
+        duration_days: p.duration_days().unwrap_or(30),
+        supplier_tag_id: p.config["supplier_tag_id"].as_str().map(str::to_owned),
+        model_access: p.config["model_access"].as_str().unwrap_or("none").into(),
+        models: p.config["models"]
             .as_array()
             .into_iter()
             .flatten()
@@ -30,43 +34,15 @@ fn plan_dto(p: &VirtualPlan) -> dto::Plan {
                     model: m["model"].as_str()?.into(),
                 })
             })
-            .collect()
-    };
-    let windows = |free| {
-        plan_spending_windows(&p.config, free)
+            .collect(),
+        spending_windows: plan_spending_windows(&p.config)
             .unwrap_or_default()
             .into_iter()
-            .map(|window| dto::SpendingWindow {
-                duration_seconds: window.duration_seconds,
-                cost_limit_usd: window.cost_limit_usd,
+            .map(|w| dto::SpendingWindow {
+                duration_seconds: w.duration_seconds,
+                cost_limit_usd: w.cost_limit_usd,
             })
-            .collect()
-    };
-    dto::Plan {
-        plan_type: p.plan_type.clone(),
-        id: p.id.clone(),
-        provider_id: p.provider_id.clone(),
-        name: p.name.clone(),
-        enabled: p.enabled,
-        revision: p.revision,
-        updated_at_ms: p.updated_at_ms,
-        model_access: p.config["model_access"]
-            .as_str()
-            .unwrap_or("selected")
-            .into(),
-        models: refs("models"),
-        free_model_access: p.config["free_model_access"]
-            .as_str()
-            .unwrap_or("none")
-            .into(),
-        free_models: refs("free_models"),
-        free_access_enabled: p.config["free_access_enabled"].as_bool().unwrap_or(false),
-        primary_cost_limit_usd: amount("primary_cost_limit_usd"),
-        weekly_cost_limit_usd: amount("weekly_cost_limit_usd"),
-        free_primary_cost_limit_usd: amount("free_primary_cost_limit_usd"),
-        free_weekly_cost_limit_usd: amount("free_weekly_cost_limit_usd"),
-        spending_windows: windows(false),
-        free_spending_windows: windows(true),
+            .collect(),
     }
 }
 pub async fn plans(State(s): State<AdminState>) -> ApiResult {
@@ -83,23 +59,16 @@ pub async fn plans(State(s): State<AdminState>) -> ApiResult {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanInput {
-    plan_type: Option<String>,
+    plan_type: String,
     name: String,
     provider_id: String,
     model_access: String,
     models: Vec<ModelRef>,
-    free_model_access: String,
-    free_models: Vec<ModelRef>,
-    free_access_enabled: bool,
-    primary_cost_limit_usd: Option<String>,
-    weekly_cost_limit_usd: Option<String>,
-    free_primary_cost_limit_usd: Option<String>,
-    free_weekly_cost_limit_usd: Option<String>,
-    #[serde(default)]
-    spending_windows: Option<Vec<SpendingWindowInput>>,
-    #[serde(default)]
-    free_spending_windows: Option<Vec<SpendingWindowInput>>,
-    enabled: bool,
+    sale_price_usd: Option<String>,
+    duration_days: i64,
+    supplier_tag_id: Option<String>,
+    spending_windows: Vec<SpendingWindowInput>,
+    allow_purchase: bool,
     revision: Option<i64>,
 }
 #[derive(Deserialize, serde::Serialize)]
@@ -125,79 +94,51 @@ pub async fn update_plan(
     save_plan(s, Some(id), f).await
 }
 async fn save_plan(s: AdminState, id: Option<String>, f: PlanInput) -> ApiResult {
-    let old = if let Some(id) = &id {
-        Some(
+    let old = match &id {
+        Some(id) => Some(
             s.storage
                 .virtual_plan(id)
                 .await?
                 .ok_or_else(ApiError::missing)?,
-        )
-    } else {
-        None
+        ),
+        None => None,
     };
     if !codex2api_core::supported_provider(&f.provider_id)
         || old.as_ref().is_some_and(|p| p.provider_id != f.provider_id)
     {
         return Err(ApiError::bad("套餐的提供商必须在创建时确定"));
     }
-    if !matches!(f.model_access.as_str(), "all" | "selected")
-        || !matches!(f.free_model_access.as_str(), "none" | "all" | "selected")
+    if !matches!(f.model_access.as_str(), "all" | "selected" | "none")
+        || (f.model_access == "selected" && f.models.is_empty())
     {
-        return Err(ApiError::bad("模型访问范围无效"));
+        return Err(ApiError::bad("请选择明确的模型权限范围"));
     }
     let available = s.storage.virtual_plan_model_choices(&f.provider_id).await?;
-    for (key, access, selected) in [
-        ("models", &f.model_access, &f.models),
-        ("free_models", &f.free_model_access, &f.free_models),
-    ] {
-        if access == "selected" && selected.is_empty() {
-            return Err(ApiError::bad("指定模型范围必须选择至少一个模型"));
-        }
-        for m in selected {
-            let retained = old.as_ref().is_some_and(|p| {
-                p.config[key].as_array().is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|v| v["provider_id"] == m.provider_id && v["model"] == m.model)
-                })
-            });
-            if m.provider_id != f.provider_id || (!available.contains(&m.model) && !retained) {
-                return Err(ApiError::bad("请选择同提供商模型目录中的模型"));
-            }
+    for model in &f.models {
+        let retained = old.as_ref().is_some_and(|p| {
+            p.config["models"].as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|m| m["provider_id"] == model.provider_id && m["model"] == model.model)
+            })
+        });
+        if model.provider_id != f.provider_id || (!available.contains(&model.model) && !retained) {
+            return Err(ApiError::bad("请选择同提供商模型目录中的模型"));
         }
     }
-    let mut config = json!({"model_access":f.model_access,"models":if f.model_access=="selected"{f.models}else{vec![]},"free_model_access":f.free_model_access,"free_models":if f.free_model_access=="selected"{f.free_models}else{vec![]},"free_access_enabled":f.free_access_enabled});
-    let to_windows = |input: Option<Vec<SpendingWindowInput>>,
-                      outer: Option<&str>,
-                      inner: Option<&str>| {
-        input.map(|windows| json!(windows)).unwrap_or_else(|| json!([
-            {"duration_seconds":604800,"cost_limit_usd":outer.and_then(|v| (!v.trim().is_empty()).then_some(v))},
-            {"duration_seconds":18000,"cost_limit_usd":inner.and_then(|v| (!v.trim().is_empty()).then_some(v))}
-        ]))
-    };
-    config["spending_windows"] = to_windows(
-        f.spending_windows,
-        f.weekly_cost_limit_usd.as_deref(),
-        f.primary_cost_limit_usd.as_deref(),
-    );
-    config["free_spending_windows"] = to_windows(
-        f.free_spending_windows,
-        f.free_weekly_cost_limit_usd.as_deref(),
-        f.free_primary_cost_limit_usd.as_deref(),
-    );
     if old.is_some() && f.revision.is_none() {
         return Err(ApiError::bad("缺少套餐版本"));
     }
+    let config = json!({"model_access":f.model_access,"models":if f.model_access=="selected"{f.models}else{vec![]},"spending_windows":f.spending_windows,
+        "sale_price_usd":if f.plan_type=="free"{None}else{f.sale_price_usd.filter(|v|!v.trim().is_empty())},"duration_days":f.duration_days,
+        "supplier_tag_id":f.supplier_tag_id.filter(|v|!v.is_empty())});
     let plan = VirtualPlan {
         id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         provider_id: f.provider_id,
         name: f.name,
-        plan_type: f
-            .plan_type
-            .or_else(|| old.map(|p| p.plan_type))
-            .unwrap_or_else(|| "plus".into()),
+        plan_type: f.plan_type,
         config,
-        enabled: f.enabled,
+        allow_purchase: f.allow_purchase,
         revision: 0,
         updated_at_ms: 0,
     };
@@ -219,9 +160,9 @@ pub struct Revision {
 pub async fn delete_plan(
     State(s): State<AdminState>,
     Path(id): Path<String>,
-    Json(f): Json<Revision>,
+    Json(input): Json<Revision>,
 ) -> ApiResult {
-    if !s.storage.delete_virtual_plan(&id, f.revision).await? {
+    if !s.storage.delete_virtual_plan(&id, input.revision).await? {
         return Err(ApiError::conflict());
     }
     Ok(ok())

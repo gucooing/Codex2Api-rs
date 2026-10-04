@@ -20,24 +20,42 @@ pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     }
     None
 }
-pub fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
-    cookie_value(headers, SESSION_COOKIE)
-}
 pub(crate) async fn load_session(
     storage: &Storage,
     headers: &HeaderMap,
 ) -> Result<Option<AdminSession>, ApiError> {
-    let Some(id) = session_id_from_headers(headers) else {
+    let token = if headers.contains_key(header::AUTHORIZATION) {
+        if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
+            return Err(ApiError::unauthorized());
+        }
+        Some(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split_once(' '))
+                .filter(|(scheme, token)| {
+                    scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()
+                })
+                .map(|(_, token)| token.to_owned())
+                .ok_or_else(ApiError::unauthorized)?,
+        )
+    } else {
+        cookie_value(headers, SESSION_COOKIE)
+    };
+    let Some(token) = token else {
         return Ok(None);
     };
-    storage.get_admin_session(&id).await.map_err(|error| {
-        tracing::error!(%error, "failed to read admin session");
-        ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "session_unavailable".into(),
-            "暂时无法验证登录会话，请稍后重试".into(),
-        )
-    })
+    storage
+        .admin_session_from_jwt(&token)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to read admin session");
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session_unavailable".into(),
+                "暂时无法验证登录会话，请稍后重试".into(),
+            )
+        })
 }
 pub fn csrf_token(id: &str) -> String {
     format!(
