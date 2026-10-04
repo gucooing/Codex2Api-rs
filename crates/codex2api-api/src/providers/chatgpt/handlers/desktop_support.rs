@@ -1,7 +1,7 @@
 //! Public Desktop support protocols; private evaluations require an authenticated snapshot.
 use axum::{
     body::{Body, Bytes},
-    extract::{Extension, OriginalUri, State},
+    extract::{OriginalUri, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };

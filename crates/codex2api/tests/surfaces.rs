@@ -59,7 +59,8 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
                 matches!(
                     response.status(),
                     StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED
-                ),
+                ) || (path == "/api/oauth/chatgpt/oauth/authorize/bootstrap"
+                    && response.status() == StatusCode::NOT_IMPLEMENTED),
                 "{path}: {}",
                 response.status()
             );

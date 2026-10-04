@@ -178,7 +178,7 @@ async fn admin_cookie_security_uses_configured_origin_for_login_logout_and_passw
             let input = if action == "logout" {
                 json!({})
             } else {
-                json!({"old_username":"admin","old_password":"admin","new_username":"admin","new_password":""})
+                json!({"old_username":"admin","old_password":"admin","new_username":"admin","new_password":"admin"})
             };
             let response = app
                 .clone()

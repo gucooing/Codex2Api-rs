@@ -202,7 +202,7 @@ async fn cookie_sessions_require_csrf_for_every_administration_mutation() {
 #[tokio::test]
 async fn session_storage_failure_returns_503_without_invalidating_the_session() {
     let f = Fixture::new().await;
-    let session_id = f.cookie.split_once('=').unwrap().1.to_owned();
+    let session_token = f.cookie.split_once('=').unwrap().1.to_owned();
     for cookie in [None, Some("c2a_admin_session=missing-session")] {
         let response = f
             .with_auth("GET", "/admin/api/session", json!(null), cookie, None)
@@ -226,7 +226,7 @@ async fn session_storage_failure_returns_503_without_invalidating_the_session() 
         .unwrap();
     assert!(
         reopened
-            .get_admin_session(&session_id)
+            .admin_session_from_jwt(&session_token)
             .await
             .unwrap()
             .is_some()

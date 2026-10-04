@@ -341,6 +341,8 @@ actual ordinary input, cached input, cache writes and output, once; reasoning is
 already included in output. Price edits, preset updates, rebinding and account
 changes never alter that snapshot. Missing prices/usage remain unknown, not free.
 Concurrent requests not yet settled can temporarily exceed a spending window.
+Pricing checks use the configured spending limits even before the optional
+five-hour window starts and appears in client quota responses.
 
 Client usage JSON, HTTP headers, SSE and WS quota events read the same virtual
 ledger. Client percentages are integers; local dollar summaries belong only in

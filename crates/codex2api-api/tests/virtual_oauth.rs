@@ -1482,7 +1482,7 @@ async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() 
             .await
             .unwrap()
             .status(),
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
     let device = storage
         .virtual_devices(&account.id)

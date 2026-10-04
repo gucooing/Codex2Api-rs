@@ -206,9 +206,16 @@ async fn users_do_not_migrate_or_authenticate_standalone_virtual_accounts() {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(internal.username, user.username);
+    let internal_username: String =
+        sqlx::query_scalar("SELECT username FROM virtual_accounts WHERE id=?")
+            .bind(&platform.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
     assert!(
         storage
-            .virtual_account_by_username(&internal.username)
+            .virtual_account_by_username(&internal_username)
             .await
             .unwrap()
             .is_none()

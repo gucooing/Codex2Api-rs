@@ -621,9 +621,19 @@ impl Storage {
             .await
     }
     pub async fn virtual_spending_limited(&self, owner: &str) -> Result<bool> {
-        let quota = self.virtual_quota(owner).await?;
-        Ok(!quota["rate_limit"]["primary_window"].is_null()
-            || !quota["rate_limit"]["secondary_window"].is_null())
+        let account = self
+            .effective_virtual_account(owner)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+        let plan = self
+            .virtual_plan(&account.plan_id)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
+        // The first request must respect an inner limit before that window starts
+        // and becomes visible in the client's quota presentation.
+        Ok(crate::plan_spending_windows(&plan.config)?
+            .iter()
+            .any(|window| window.cost_limit_usd.is_some()))
     }
     pub(crate) async fn virtual_quota_at(&self, owner: &str, now: i64) -> Result<Value> {
         let account = self

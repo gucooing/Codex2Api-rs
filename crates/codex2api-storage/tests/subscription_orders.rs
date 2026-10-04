@@ -524,6 +524,13 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
         .unwrap();
+    // Updating the plan also revises its subscribed accounts.
+    let refreshed = storage
+        .user_subscriptions(Some(&user.id), true)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(refreshed.revision > subscription.revision);
     storage
         .save_user_subscription(SubscriptionChange {
             reissue: true,
@@ -531,7 +538,7 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
             plan_id: "plus",
             expires_at: Some(&expiry),
             enabled: true,
-            revision: Some(subscription.revision),
+            revision: Some(refreshed.revision),
         })
         .await
         .unwrap();

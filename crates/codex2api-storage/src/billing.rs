@@ -378,9 +378,7 @@ mod tests {
         revision: i64,
     ) -> crate::Result<Option<i64>> {
         let mut plan = storage.virtual_plan("pro").await?.unwrap();
-        for key in ["primary_cost_limit_usd", "weekly_cost_limit_usd"] {
-            plan.config[key] = value[key].clone();
-        }
+        plan.config["spending_windows"] = value.clone();
         Ok(storage
             .save_virtual_plan(&plan, Some(revision))
             .await?
@@ -403,7 +401,7 @@ mod tests {
             plan_id: "pro".into(),
             subscription_expires_at: None,
             enabled: true,
-            created_at: "2026-09-21".into(),
+            created_at: "1970-01-01T00:00:00Z".into(),
         };
         storage.save_virtual_account(&account).await.unwrap();
         // 35 days is a common boundary of the 5h and 7d windows.
@@ -431,7 +429,7 @@ mod tests {
         let config = storage.virtual_config("a", "quota").await.unwrap();
         let mut revision = set_test_quota(
             &storage,
-            &json!({"primary_cost_limit_usd":1,"weekly_cost_limit_usd":2}),
+            &json!([{"duration_seconds":604800,"cost_limit_usd":"2"},{"duration_seconds":18000,"cost_limit_usd":"1"}]),
             config.revision,
         )
         .await
@@ -456,7 +454,7 @@ mod tests {
         assert!(next["rate_limit"]["secondary_window"].is_null());
         revision = set_test_quota(
             &storage,
-            &json!({"primary_cost_limit_usd":null,"weekly_cost_limit_usd":1}),
+            &json!([{"duration_seconds":604800,"cost_limit_usd":"1"}]),
             revision,
         )
         .await
@@ -476,14 +474,10 @@ mod tests {
         assert_eq!(reset["rate_limit"]["allowed"], true);
         assert_eq!(reset["rate_limit"]["primary_window"]["used_usd"], "0");
         assert!(reset["rate_limit"]["secondary_window"].is_null());
-        set_test_quota(
-            &storage,
-            &json!({"primary_cost_limit_usd":null,"weekly_cost_limit_usd":null}),
-            revision,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        set_test_quota(&storage, &json!([]), revision)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             storage
                 .virtual_quota_at("a", boundary + 604800)
@@ -500,10 +494,10 @@ mod tests {
                 .unwrap()["billing"]["used_usd"],
             "2"
         );
-        for key in ["primary_cost_limit_usd", "weekly_cost_limit_usd"] {
-            let mut invalid = json!({"primary_cost_limit_usd":null,"weekly_cost_limit_usd":null});
-            invalid[key] = json!(-1);
-            assert!(crate::validate_virtual_config("quota", &invalid).is_err());
+        for index in [0, 1] {
+            let mut invalid = json!([{"duration_seconds":604800,"cost_limit_usd":null},{"duration_seconds":18000,"cost_limit_usd":null}]);
+            invalid[index]["cost_limit_usd"] = json!("-1");
+            assert!(crate::spending_windows(&invalid).is_err());
         }
     }
     #[tokio::test]

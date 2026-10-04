@@ -12,7 +12,9 @@
     "models_count": 7,
     "normal_consumer_count": 1,
     "user_count": 0,
-    "active_user_count": 0
+    "active_user_count": 0,
+    "activity_from_ms": 0,
+    "activity_until_ms": 1
   },
   "plans": {
     "items": [
