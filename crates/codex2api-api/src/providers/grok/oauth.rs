@@ -62,8 +62,11 @@ fn parse<T: serde::de::DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Op
     }
     serde_json::from_value(Value::Object(values)).ok()
 }
-fn origin(state: &ApiState, headers: &HeaderMap) -> Option<String> {
-    state.public_base_url.clone().or_else(|| {
+async fn origin(
+    state: &ApiState,
+    headers: &HeaderMap,
+) -> codex2api_storage::Result<Option<String>> {
+    Ok(state.public_api_url().await?.or_else(|| {
         let host = headers.get(header::HOST)?.to_str().ok()?;
         let url = url::Url::parse(&format!("http://{host}")).ok()?;
         (url.username().is_empty()
@@ -72,15 +75,17 @@ fn origin(state: &ApiState, headers: &HeaderMap) -> Option<String> {
             && url.query().is_none()
             && url.fragment().is_none())
         .then(|| url.origin().ascii_serialization())
-    })
+    }))
 }
 pub async fn discovery(
     State(state): State<ApiState>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    let Some(origin) = origin(&state, &headers) else {
-        return error("invalid_request");
+    let origin = match origin(&state, &headers).await {
+        Ok(Some(origin)) => origin,
+        Ok(None) => return error("invalid_request"),
+        Err(e) => return failure(e),
     };
     let issuer = format!(
         "{origin}{}",
@@ -112,9 +117,13 @@ pub async fn authorize(
     if !request.valid() || request.provider() != codex2api_core::GROK {
         return error("invalid_request");
     }
+    let user_url = match state.public_user_url().await {
+        Ok(url) => url,
+        Err(e) => return failure(e),
+    };
     Redirect::to(&format!(
         "{}/user/authorize/?{}",
-        state.user_base_url,
+        user_url,
         uri.query().unwrap_or_default()
     ))
     .into_response()
@@ -137,6 +146,10 @@ pub async fn device(State(state): State<ApiState>, headers: HeaderMap, body: Byt
     {
         return error("invalid_scope");
     }
+    let user_url = match state.public_user_url().await {
+        Ok(url) => url,
+        Err(e) => return failure(e),
+    };
     let id = oauth_secret();
     let raw = oauth_secret()[..12].to_ascii_uppercase();
     let code = format!("{}-{}-{}", &raw[..4], &raw[4..8], &raw[8..]);
@@ -164,7 +177,7 @@ pub async fn device(State(state): State<ApiState>, headers: HeaderMap, body: Byt
         Ok(true) => reply(
             StatusCode::OK,
             json!({"device_code":id,"user_code":code,"expires_in":900,"interval":5,
-            "verification_uri":format!("{}/user/device/?provider=grok",state.user_base_url),"verification_uri_complete":format!("{}/user/device/?provider=grok&user_code={code}",state.user_base_url)}),
+            "verification_uri":format!("{user_url}/user/device/?provider=grok"),"verification_uri_complete":format!("{user_url}/user/device/?provider=grok&user_code={code}")}),
         ),
         Ok(false) => reply(StatusCode::TOO_MANY_REQUESTS, json!({"error":"slow_down"})),
         Err(e) => failure(e),
@@ -198,8 +211,10 @@ pub async fn token(
     if input.client_id != wire::CLIENT_ID {
         return error("invalid_client");
     }
-    let Some(origin) = origin(&state, &headers) else {
-        return error("invalid_request");
+    let origin = match origin(&state, &headers).await {
+        Ok(Some(origin)) => origin,
+        Ok(None) => return error("invalid_request"),
+        Err(e) => return failure(e),
     };
     let issuer = format!(
         "{origin}{}",

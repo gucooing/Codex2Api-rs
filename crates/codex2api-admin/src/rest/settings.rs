@@ -6,7 +6,7 @@ use axum::{
     http::header,
     response::{IntoResponse, Response},
 };
-use codex2api_storage::{DesktopSupportSettings, GatewaySettings};
+use codex2api_storage::{DesktopSupportSettings, GatewaySettings, PublicUrlSettings};
 use serde::Deserialize;
 use serde_json::json;
 #[derive(Deserialize, Default)]
@@ -22,6 +22,25 @@ pub async fn overview(
 }
 pub async fn gateway(State(s): State<AdminState>) -> ApiResult {
     Ok(Json(json!(s.storage.gateway_settings().await?)))
+}
+pub async fn public_urls(State(s): State<AdminState>) -> ApiResult {
+    Ok(Json(json!(
+        s.storage
+            .public_url_settings()
+            .await?
+            .unwrap_or(s.public_url_defaults)
+    )))
+}
+pub async fn save_public_urls(
+    State(s): State<AdminState>,
+    Json(settings): Json<PublicUrlSettings>,
+) -> ApiResult {
+    let saved = s
+        .storage
+        .save_public_url_settings(&settings)
+        .await?
+        .ok_or_else(ApiError::conflict)?;
+    Ok(Json(json!(saved)))
 }
 pub async fn save_gateway(
     State(s): State<AdminState>,
@@ -63,7 +82,7 @@ pub async fn save_security(
         )
         .await?;
     Ok((
-        [(header::SET_COOKIE, session::clear_session_cookie(&s))],
+        [(header::SET_COOKIE, session::clear_session_cookie(&s).await?)],
         ok(),
     )
         .into_response())

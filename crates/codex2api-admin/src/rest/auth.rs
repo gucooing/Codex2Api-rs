@@ -48,7 +48,7 @@ pub async fn login(
     Ok((
         [(
             header::SET_COOKIE,
-            session::set_session_cookie(&state, &token, ttl),
+            session::set_session_cookie(&state, &token, ttl).await?,
         )],
         Json(dto::Session {
             authenticated: true,
@@ -83,7 +83,10 @@ pub async fn logout(
         state.storage.delete_admin_session(&session.id).await?;
     }
     Ok((
-        [(header::SET_COOKIE, session::clear_session_cookie(&state))],
+        [(
+            header::SET_COOKIE,
+            session::clear_session_cookie(&state).await?,
+        )],
         ok(),
     )
         .into_response())

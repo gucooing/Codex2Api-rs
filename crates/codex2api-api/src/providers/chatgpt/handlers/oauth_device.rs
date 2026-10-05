@@ -41,7 +41,11 @@ pub async fn user_code(
     if request.client_id != codex2api_version::OAUTH_CLIENT_ID {
         return failure(StatusCode::BAD_REQUEST, "Unknown client_id.");
     }
-    let origin = state.public_base_url.clone().or_else(|| {
+    let configured = match state.public_api_url().await {
+        Ok(url) => url,
+        Err(error) => return crate::ApiError::from(error).into_response(),
+    };
+    let origin = configured.or_else(|| {
         let host = headers.get(header::HOST)?.to_str().ok()?;
         let url = url::Url::parse(&format!("http://{host}")).ok()?;
         (url.username().is_empty() && url.password().is_none() && url.path() == "/")
@@ -123,6 +127,9 @@ pub async fn poll(State(state): State<ApiState>, Json(request): Json<PollRequest
     }
 }
 
-pub async fn page(State(state): State<ApiState>) -> Redirect {
-    Redirect::to(&format!("{}/user/device/", state.user_base_url))
+pub async fn page(State(state): State<ApiState>) -> crate::Result<Redirect> {
+    Ok(Redirect::to(&format!(
+        "{}/user/device/",
+        state.public_user_url().await?
+    )))
 }

@@ -10,6 +10,7 @@ pub struct AdminState {
     pub auth: AuthService,
     pub upstream: codex2api_upstream::UpstreamPool,
     pub secure_cookies: bool,
+    pub public_url_defaults: codex2api_storage::PublicUrlSettings,
     pub(crate) supplier_cache: Arc<crate::quota::SupplierCache>,
 }
 impl AdminState {
@@ -23,6 +24,7 @@ impl AdminState {
             upstream: codex2api_upstream::UpstreamPool::new(auth.clone()),
             supplier_cache: Arc::new(crate::quota::SupplierCache::new(storage.clone())),
             secure_cookies: true,
+            public_url_defaults: Default::default(),
             storage,
             accounts,
             auth,

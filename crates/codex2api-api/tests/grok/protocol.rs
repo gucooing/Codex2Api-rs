@@ -165,6 +165,16 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     let settings =
         payload(request(&app, "/grok/v1/settings", None, None, Some(access)).await).await;
     assert_eq!(settings["subscription_tier_display"], "Free");
+    storage
+        .save_public_url_settings(&codex2api_storage::PublicUrlSettings {
+            api_url: "https://public.example.test:9443".into(),
+            user_url: "http://users.example.test:8082".into(),
+            admin_url: "https://admin.example.test".into(),
+            revision: 0,
+        })
+        .await
+        .unwrap()
+        .unwrap();
     let renewed = payload(
         request(
             &app,
@@ -187,6 +197,21 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     )
     .unwrap();
     assert_eq!(claims["tier"], 0);
+    assert_eq!(claims["iss"], "https://public.example.test:9443/grok");
+    let identity: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(
+                renewed["id_token"]
+                    .as_str()
+                    .unwrap()
+                    .split('.')
+                    .nth(1)
+                    .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(identity["iss"], claims["iss"]);
 }
 
 #[tokio::test]

@@ -44,6 +44,8 @@ bash scripts/build.sh --release
 
 管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。AI API 在 `127.0.0.1:8080`，仅注册客户端协议接口。三端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
 
+反向代理部署后，在管理端 **设置 → 访问地址** 填写 API、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/api/oauth/grok`、`/user`、`/admin` 等路径。三端可以使用同一域名，由反向代理按路径转发到各自监听端口。保存到 SQLite 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
+
 开发时可使用 `cargo run -p codex2api --features dev-frontend`，再分别运行两个前端的 `pnpm dev`，无需预先导出静态页面。该特性仅用于本地开发，release 构建不允许启用；完整配置见 [本地验证](docs/LOCAL_TEST.md#前后端开发启动)。
 
 管理界面的 shadcn/ui 组件、操作方式和隔离浏览器验证见 [前端说明](docs/FRONTEND_UI.md)。

@@ -29,9 +29,13 @@ pub async fn authorize(
     if !request.valid() {
         return failure();
     }
+    let user_url = match state.public_user_url().await {
+        Ok(url) => url,
+        Err(error) => return crate::ApiError::from(error).into_response(),
+    };
     redirect(&format!(
         "{}/user/authorize/?{}",
-        state.user_base_url,
+        user_url,
         uri.query().unwrap_or_default()
     ))
 }
@@ -71,9 +75,13 @@ pub async fn desktop_authorize(
     if !request.valid() {
         return failure();
     }
+    let user_url = match state.public_user_url().await {
+        Ok(url) => url,
+        Err(error) => return crate::ApiError::from(error).into_response(),
+    };
     redirect(&format!(
         "{}/user/authorize/?{}",
-        state.user_base_url,
+        user_url,
         target.query().unwrap_or_default()
     ))
 }

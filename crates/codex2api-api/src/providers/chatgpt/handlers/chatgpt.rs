@@ -455,7 +455,7 @@ pub async fn apps_batch(
 }
 
 pub async fn mcp_metadata(State(state): State<ApiState>, headers: HeaderMap) -> Result<Response> {
-    let origin = if let Some(origin) = state.public_base_url {
+    let origin = if let Some(origin) = state.public_api_url().await? {
         origin
     } else {
         let host = headers

@@ -166,6 +166,10 @@ pub(crate) fn router(state: AdminState) -> Router {
             get(settings::gateway).put(settings::save_gateway),
         )
         .route(
+            "/settings/public-urls",
+            get(settings::public_urls).put(settings::save_public_urls),
+        )
+        .route(
             "/settings/security",
             get(settings::security).put(settings::save_security),
         )

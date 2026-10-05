@@ -32,8 +32,8 @@ pub(crate) async fn connection(
     Extension(access): Extension<VirtualAccess>,
     headers: HeaderMap,
 ) -> crate::Result<Response> {
-    let origin = if let Some(origin) = &state.public_base_url {
-        origin.clone()
+    let origin = if let Some(origin) = state.public_api_url().await? {
+        origin
     } else {
         let host = headers
             .get("host")

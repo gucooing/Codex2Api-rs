@@ -26,9 +26,15 @@ pub fn routers(
     let mut api = codex2api_api::ApiState::new(storage.clone(), accounts.clone(), upstream.clone())
         .with_public_base_url(&api_origin)?;
     api.user_base_url = user_origin.clone();
-    let admin = codex2api_admin::AdminState::from_parts(storage.clone(), accounts, auth)
+    let mut admin = codex2api_admin::AdminState::from_parts(storage.clone(), accounts, auth)
         .with_upstream(upstream)
         .with_secure_cookies(admin_origin.starts_with("https://"));
+    admin.public_url_defaults = codex2api_storage::PublicUrlSettings {
+        api_url: api_origin,
+        user_url: user_origin.clone(),
+        admin_url: admin_origin,
+        revision: 0,
+    };
     let user = codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: user_origin,

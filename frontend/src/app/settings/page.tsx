@@ -65,9 +65,11 @@ import {
   type Proxy,
 } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
+import { PublicUrls } from "@/components/public-url-settings";
 
 const settingTabs = [
   ["gateway", "网关与限流"],
+  ["public-urls", "访问地址"],
   ["security", "管理员凭据"],
   ["desktop", "Desktop 支持"],
   ["resources", "公开资源"],
@@ -89,6 +91,7 @@ export default function SettingsPage() {
         </div>
         <TabsContent value={tab} className="space-y-4">
           {tab === "gateway" && <Gateway />}
+          {tab === "public-urls" && <PublicUrls />}
           {tab === "security" && <Security />}
           {tab === "desktop" && <Desktop />}
           {tab === "resources" && (

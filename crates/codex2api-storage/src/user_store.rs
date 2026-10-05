@@ -18,6 +18,15 @@ impl Storage {
     }
 }
 impl UserStore {
+    pub async fn public_user_url(&self, fallback: &str) -> Result<String> {
+        Ok(self
+            .storage
+            .public_url_settings()
+            .await?
+            .map(|settings| settings.user_url)
+            .unwrap_or_else(|| fallback.to_owned()))
+    }
+
     pub async fn checkout_preview(&self, owner: &str, input: CheckoutInput) -> Result<Value> {
         self.storage.checkout_preview(owner, input).await
     }

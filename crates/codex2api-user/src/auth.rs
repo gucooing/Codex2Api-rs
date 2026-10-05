@@ -27,15 +27,19 @@ pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
             (k == name && !v.is_empty()).then(|| v.to_owned())
         })
 }
-pub(crate) fn session_cookie(state: &UserState, token: &str, max_age: u32) -> String {
-    format!(
+pub(crate) async fn session_cookie(state: &UserState, token: &str, max_age: u32) -> Result<String> {
+    let origin = state
+        .storage
+        .public_user_url(&state.public_base_url)
+        .await?;
+    Ok(format!(
         "{COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/user; Max-Age={max_age}{}",
-        if state.public_base_url.starts_with("https://") {
+        if origin.starts_with("https://") {
             "; Secure"
         } else {
             ""
         }
-    )
+    ))
 }
 pub(crate) async fn load_session(
     state: &UserState,
@@ -69,6 +73,10 @@ pub(crate) async fn browser_boundary(
     request: Request,
     next: Next,
 ) -> Response {
+    let origin = match state.storage.public_user_url(&state.public_base_url).await {
+        Ok(origin) => origin,
+        Err(error) => return UserError::from(error).into_response(),
+    };
     // Browser sessions are a distinct credential audience, even when another cookie is present.
     let rejection = if request.headers().contains_key(header::AUTHORIZATION) {
         match load_session(&state, request.headers()).await {
@@ -90,7 +98,7 @@ pub(crate) async fn browser_boundary(
             || request
                 .headers()
                 .get(header::ORIGIN)
-                .is_none_or(|v| v.to_str().ok() == Some(state.public_base_url.as_str()));
+                .is_none_or(|v| v.to_str().ok() == Some(origin.as_str()));
         if !same_origin || site == Some("cross-site") {
             Some(UserError(
                 StatusCode::FORBIDDEN,
@@ -207,7 +215,10 @@ pub(crate) async fn login(
         state.storage.revoke_user_session(&old.token_hash).await?;
     }
     Ok((
-        [(header::SET_COOKIE, session_cookie(&state, &token, 86400))],
+        [(
+            header::SET_COOKIE,
+            session_cookie(&state, &token, 86400).await?,
+        )],
         Json(json!({"user":user.view(),"csrf_token":csrf})),
     )
         .into_response())
@@ -221,7 +232,7 @@ pub(crate) async fn logout(
         .revoke_user_session(&session.token_hash)
         .await?;
     Ok((
-        [(header::SET_COOKIE, session_cookie(&state, "", 0))],
+        [(header::SET_COOKIE, session_cookie(&state, "", 0).await?)],
         Json(json!({"ok":true})),
     )
         .into_response())

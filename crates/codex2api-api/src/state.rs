@@ -50,6 +50,24 @@ impl ApiState {
         &self.storage
     }
 
+    pub async fn public_api_url(&self) -> codex2api_storage::Result<Option<String>> {
+        Ok(self
+            .storage
+            .public_url_settings()
+            .await?
+            .map(|settings| settings.api_url)
+            .or_else(|| self.public_base_url.clone()))
+    }
+
+    pub async fn public_user_url(&self) -> codex2api_storage::Result<String> {
+        Ok(self
+            .storage
+            .public_url_settings()
+            .await?
+            .map(|settings| settings.user_url)
+            .unwrap_or_else(|| self.user_base_url.clone()))
+    }
+
     pub fn accounts(&self) -> &SupplierAccountStore {
         &self.accounts
     }

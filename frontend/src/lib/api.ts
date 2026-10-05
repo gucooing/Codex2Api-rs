@@ -285,6 +285,12 @@ export type GatewaySettings = {
   ua_rules: string[];
   default_rpm: number;
 };
+export type PublicUrlSettings = {
+  api_url: string;
+  user_url: string;
+  admin_url: string;
+  revision: number;
+};
 export type SupplierTag = {
   id: string;
   provider_id: string;

@@ -82,15 +82,19 @@ impl AuthorizationRequest {
 fn failure() -> UserError {
     UserError::bad("授权请求无效或已过期，请回到应用重新发起登录")
 }
-fn flow_cookie(state: &UserState, flow: &str, value: &str, age: u32) -> String {
-    format!(
+async fn flow_cookie(state: &UserState, flow: &str, value: &str, age: u32) -> Result<String> {
+    let origin = state
+        .storage
+        .public_user_url(&state.public_base_url)
+        .await?;
+    Ok(format!(
         "c2a_flow_{flow}={value}; HttpOnly; SameSite=Lax; Path=/user/api/oauth; Max-Age={age}{}",
-        if state.public_base_url.starts_with("https://") {
+        if origin.starts_with("https://") {
             "; Secure"
         } else {
             ""
         }
-    )
+    ))
 }
 async fn identity_view(state: &UserState, account: &VirtualAccount) -> Result<Value> {
     let username = match state.storage.virtual_account_user(&account.id).await? {
@@ -145,7 +149,7 @@ async fn start(
     Ok((
         [(
             header::SET_COOKIE,
-            flow_cookie(&state, &flow, &browser, 600),
+            flow_cookie(&state, &flow, &browser, 600).await?,
         )],
         Json(json!({"request_id":flow,
         "csrf_token":csrf,"client_name":crate::providers::by_id(provider).map(|p|p.client_name),"provider_id":provider,"scope":scope,"identity":identity,"user":user,
@@ -256,7 +260,7 @@ pub(crate) async fn cancel(
     Ok((
         [(
             header::SET_COOKIE,
-            flow_cookie(&state, &input.request_id, "", 0),
+            flow_cookie(&state, &input.request_id, "", 0).await?,
         )],
         Json(result),
     )
@@ -413,7 +417,7 @@ pub(crate) async fn approve(
     Ok((
         [(
             header::SET_COOKIE,
-            flow_cookie(&state, &input.request_id, "", 0),
+            flow_cookie(&state, &input.request_id, "", 0).await?,
         )],
         Json(json!({"redirect_uri":callback.as_str()})),
     )
@@ -464,7 +468,7 @@ pub(crate) async fn device_approve(
     Ok((
         [(
             header::SET_COOKIE,
-            flow_cookie(&state, &input.request_id, "", 0),
+            flow_cookie(&state, &input.request_id, "", 0).await?,
         )],
         Json(json!({"authorized":true})),
     )

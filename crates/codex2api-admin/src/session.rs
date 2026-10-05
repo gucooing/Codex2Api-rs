@@ -63,15 +63,25 @@ pub fn csrf_token(id: &str) -> String {
         Sha256::digest(format!("codex2api-official-actions:{id}"))
     )
 }
-pub fn set_session_cookie(state: &AdminState, id: &str, ttl: Duration) -> String {
-    format!(
+pub async fn set_session_cookie(
+    state: &AdminState,
+    id: &str,
+    ttl: Duration,
+) -> codex2api_storage::Result<String> {
+    let secure = state
+        .storage
+        .public_url_settings()
+        .await?
+        .map(|settings| settings.admin_url.starts_with("https://"))
+        .unwrap_or(state.secure_cookies);
+    Ok(format!(
         "{SESSION_COOKIE}={id}; HttpOnly; Path=/admin; SameSite=Lax; Max-Age={}{}",
         ttl.as_secs(),
-        if state.secure_cookies { "; Secure" } else { "" }
-    )
+        if secure { "; Secure" } else { "" }
+    ))
 }
-pub fn clear_session_cookie(state: &AdminState) -> String {
-    set_session_cookie(state, "", Duration::ZERO)
+pub async fn clear_session_cookie(state: &AdminState) -> codex2api_storage::Result<String> {
+    set_session_cookie(state, "", Duration::ZERO).await
 }
 pub(crate) async fn require_session(
     State(state): State<AdminState>,
