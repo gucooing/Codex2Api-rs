@@ -57,7 +57,7 @@ import { Progress } from "@/components/ui/progress";
 
 import { date } from "@/lib/format";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { quotaWindowLabel, percentLabel } from "@/lib/supplier-state";
 import { duration, tokenCount } from "@/lib/usage-display";
@@ -66,7 +66,15 @@ import { request, type SupplierQuota, type Json } from "@/lib/api";
 
 import { useResource } from "@/lib/hooks";
 
-export function ChatgptOfficialData({ id, section }: { id: string; section: string }) {
+export function ChatgptOfficialData({
+  id,
+  section,
+  onUpdated,
+}: {
+  id: string;
+  section: string;
+  onUpdated?: () => void;
+}) {
   const [refresh, setRefresh] = useState(0);
   const resource = useResource<{
     value: Json;
@@ -84,6 +92,9 @@ export function ChatgptOfficialData({ id, section }: { id: string; section: stri
   const value = root && typeof root === "object" && !Array.isArray(root) ? root : {};
   useErrorToast(resource.error);
   useErrorToast(resource.data?.refresh_error ?? undefined);
+  useEffect(() => {
+    if (section === "quota" && resource.data) onUpdated?.();
+  }, [section, resource.data, onUpdated]);
   return (
     <Card>
       <CardHeader>

@@ -103,17 +103,21 @@ impl SupplierCache {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Value, String>>,
     {
+        let requested_at = Utc::now();
         let lock = self.refresh_lock(account_id, section).await;
         let _guard = lock.lock().await;
-        if !refresh
-            && let Some(snapshot) = self
-                .storage
-                .get_supplier_info(account_id, section)
-                .await
-                .map_err(|error| error.to_string())?
+        if let Some(snapshot) = self
+            .storage
+            .get_supplier_info(account_id, section)
+            .await
+            .map_err(|error| error.to_string())?
         {
             let age = Utc::now() - snapshot.observed_at;
-            if age >= TimeDelta::zero() && age < CACHE_TTL {
+            // Concurrent forced refreshes share a real observation made after
+            // this caller arrived; an older cache never satisfies a forced read.
+            if age >= TimeDelta::zero()
+                && ((!refresh && age < CACHE_TTL) || snapshot.observed_at >= requested_at)
+            {
                 return Ok(snapshot);
             }
         }
@@ -337,6 +341,31 @@ mod tests {
             .unwrap();
         assert_eq!(first.unwrap(), second.unwrap());
         assert_eq!(other.unwrap().value, json!("b"));
+        storage.close().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_forced_refreshes_share_the_new_official_observation() {
+        let (_dir, storage, cache, a, _) = setup().await;
+        let release = tokio::sync::Notify::new();
+        let (first, second, _) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                biased;
+                cache.get_or_fetch(&a, SupplierInfoSection::Quota, true, || async {
+                    release.notified().await;
+                    Ok(json!({"rate_limit":{"allowed":true}}))
+                }),
+                cache.get_or_fetch(&a, SupplierInfoSection::Quota, true, || async {
+                    panic!("overlapping forced refresh must share the new observation")
+                }),
+                async {
+                    release.notify_one();
+                }
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(first.unwrap(), second.unwrap());
         storage.close().await;
     }
 }

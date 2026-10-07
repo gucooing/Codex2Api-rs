@@ -71,7 +71,11 @@ import { tokenCount } from "@/lib/usage-display";
 import { Separator } from "@/components/ui/separator";
 import Link from "next/link";
 import { useState } from "react";
-import { useSupplierQuotas, useQuotaClock } from "@/hooks/use-supplier-quotas";
+import {
+  useSupplierQuotas,
+  useQuotaClock,
+  refreshSupplierQuotas,
+} from "@/hooks/use-supplier-quotas";
 import {
   supplierStatusLabel,
   quotaWindowLabel,
@@ -127,7 +131,8 @@ export function SuppliersPage() {
     validSupplierFilters,
   );
   const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
-  const snapshots = useSupplierQuotas(resource.data?.items);
+  const [quotaResetIds, setQuotaResetIds] = useState<string[]>([]);
+  const snapshots = useSupplierQuotas(resource.data?.items, quotaResetIds);
   const now = useQuotaClock();
   const all = snapshots.map((item) =>
     item.cooldown_until && item.cooldown_until * 1000 <= now && item.status === "quota_exhausted"
@@ -176,6 +181,24 @@ export function SuppliersPage() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            disabled={!resource.ready || actions.isBusy("reset-state-" + item.id)}
+            onSelect={() =>
+              void actions.run(
+                "reset-state-" + item.id,
+                async () => {
+                  await request(`/suppliers/${item.id}/reset-state`, { method: "POST" });
+                  // Keep this offline retry independent of stale-cache auto reads
+                  // for the rest of the page visit. Explicit refresh still works.
+                  setQuotaResetIds((ids) => [...new Set([...ids, item.id])]);
+                  resource.reload();
+                },
+                { success: "状态已重置" },
+              )
+            }
+          >
+            重置状态
+          </DropdownMenuItem>
           {item.authentication_invalid && (
             <DropdownMenuItem
               disabled={actions.isBusy("recover-" + item.id)}
@@ -360,10 +383,23 @@ export function SuppliersPage() {
                 size="icon-sm"
                 aria-label="刷新供应账户"
                 title="刷新"
-                onClick={resource.reload}
-                disabled={resource.refreshing}
+                onClick={() =>
+                  void actions.run(
+                    "refresh-supplier-quotas",
+                    async () => {
+                      const failures = await refreshSupplierQuotas(resource.data?.items ?? []);
+                      resource.reload();
+                      if (failures.length)
+                        throw new Error(
+                          `${failures.length} 个账户额度刷新失败：${failures.slice(0, 3).join("、")}`,
+                        );
+                    },
+                    { success: "供应账户额度已刷新" },
+                  )
+                }
+                disabled={!resource.ready || actions.isBusy("refresh-supplier-quotas")}
               >
-                <RefreshCw />
+                {actions.isBusy("refresh-supplier-quotas") ? <Spinner /> : <RefreshCw />}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -551,6 +587,9 @@ export function SuppliersPage() {
                                   <span className="block truncate text-xs text-muted-foreground">
                                     {subscriptionLabel(item.plan_type, item.provider_id)}
                                   </span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    套餐到期：{date(item.subscription_expires_at)}
+                                  </span>
                                 </span>
                                 <ChevronRight className="size-3 shrink-0" />
                               </Button>
@@ -578,6 +617,9 @@ export function SuppliersPage() {
                                     {item.provider_id}
                                     <CardDescription>
                                       {subscriptionLabel(item.plan_type, item.provider_id)}
+                                    </CardDescription>
+                                    <CardDescription>
+                                      套餐到期：{date(item.subscription_expires_at)}
                                     </CardDescription>
                                   </div>
                                 </Field>
@@ -681,6 +723,9 @@ export function SuppliersPage() {
                           {item.provider_id}
                           <CardDescription>
                             {subscriptionLabel(item.plan_type, item.provider_id)}
+                          </CardDescription>
+                          <CardDescription>
+                            套餐到期：{date(item.subscription_expires_at)}
                           </CardDescription>
                         </TableCell>
                         <TableCell
@@ -836,12 +881,15 @@ export function SuppliersPage() {
                       label: "上游订阅",
                       value: subscriptionLabel(item.plan_type, item.provider_id),
                     },
+                    { label: "套餐到期", value: date(item.subscription_expires_at) },
                     { label: "最近使用", value: date(item.last_used_at) },
                   ].map(({ label, value }) => (
                     <Field
                       key={label}
                       orientation="horizontal"
-                      className={label === "最近使用" ? "col-span-2 min-w-0" : "min-w-0"}
+                      className={
+                        ["套餐到期", "最近使用"].includes(label) ? "col-span-2 min-w-0" : "min-w-0"
+                      }
                     >
                       <FieldTitle className="shrink-0">{label}</FieldTitle>
                       <FieldDescription className="min-w-0 break-words">
@@ -1107,6 +1155,7 @@ export function SupplierDetail() {
                       label: "上游订阅",
                       value: subscriptionLabel(account?.plan_type, account?.provider_id),
                     },
+                    { label: "套餐到期", value: date(account?.subscription_expires_at) },
                     { label: "上游空间编号", value: account?.chatgpt_account_id },
                     { label: "上游用户编号", value: account?.chatgpt_user_id },
                     { label: "创建时间", value: date(account?.created_at) },
@@ -1178,7 +1227,7 @@ export function SupplierDetail() {
           {tab === "local-usage" && <LocalUsage account={account} />}
           {tab === "models" && ChannelModels && <ChannelModels id={id} />}
           {["quota", "usage", "details", "credits"].includes(tab) && (
-            <ChannelOfficialData key={tab} id={id} section={tab} />
+            <ChannelOfficialData key={tab} id={id} section={tab} onUpdated={resource.reload} />
           )}
         </TabsContent>
       </Tabs>
@@ -1204,9 +1253,6 @@ function LocalUsage({ account }: { account?: Supplier }) {
         <CardTitle role="heading" aria-level={2}>
           本地用量
         </CardTitle>
-        <CardDescription>
-          按本系统账本统计；周期金额使用请求时的计费价格，Token 包含输入与输出。
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <FieldGroup className="grid gap-3 sm:grid-cols-2" aria-label="周期使用额度">
@@ -1314,7 +1360,6 @@ function FingerprintEditor({
                     <CardTitle role="heading" aria-level={3}>
                       账户指纹
                     </CardTitle>
-                    <CardDescription>每个供应账户独立保存系统、终端和网络设置。</CardDescription>
                   </div>
                   <ChannelFingerprintFields
                     value={value}
@@ -1322,10 +1367,6 @@ function FingerprintEditor({
                     proxies={proxies.data?.items ?? []}
                   />
                 </section>
-
-                <CardDescription className="text-sm text-muted-foreground">
-                  指纹保存到该供应账户，后续请求使用此身份。
-                </CardDescription>
               </FieldGroup>
             </FieldSet>
           </ScrollArea>
@@ -1705,9 +1746,7 @@ export function OAuthWizard({
                         }}
                       />
                       <FieldDescription>
-                        {supplierId
-                          ? "输入此账户的新 RT"
-                          : "一行一个，最多 50 条。批量导入为每个新账户独立生成设备指纹与安装 ID，沿用所选代理和时区；重复账户保留原指纹。"}
+                        {supplierId ? "输入新的 RT" : "每行一条，最多 50 条"}
                       </FieldDescription>
                     </Field>
                   ) : pending ? (

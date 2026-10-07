@@ -143,9 +143,6 @@ function Gateway() {
             {resource.refreshing ? <Spinner /> : null}重新加载
           </Button>
         )}
-        <CardDescription className="text-sm text-muted-foreground">
-          规则应用于虚拟账户执行接口和 WebSocket 入口。黑名单命中时拒绝请求，白名单仅允许命中的 UA。
-        </CardDescription>
         <form
           noValidate
           className="flex min-h-0 flex-col gap-4"
@@ -208,7 +205,6 @@ function Gateway() {
                     <CardTitle role="heading" aria-level={3}>
                       访问策略
                     </CardTitle>
-                    <CardDescription>按客户端的 User-Agent 请求头匹配。</CardDescription>
                   </div>
                   <Field>
                     <FieldLabel
@@ -555,9 +551,6 @@ function Desktop() {
             {resource.refreshing ? <Spinner /> : null}重新加载
           </Button>
         )}
-        <CardDescription className="text-sm text-muted-foreground">
-          公开资源缓存与资源出站代理。客户端更新状态由官方服务提供。
-        </CardDescription>
         <form
           noValidate
           className="flex min-h-0 flex-col gap-4"

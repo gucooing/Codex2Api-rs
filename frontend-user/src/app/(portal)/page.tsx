@@ -201,9 +201,7 @@ export default function OverviewPage() {
           <CardHeader>
             <CardTitle>请求与 Token 趋势</CardTitle>
             <CardDescription>
-              {summary?.request_count === 0
-                ? "所选时段内暂无使用记录"
-                : "所选时段内本人的真实请求记录"}
+              {summary?.request_count === 0 ? "暂无使用记录" : null}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -239,7 +237,6 @@ export default function OverviewPage() {
         <Card>
           <CardHeader>
             <CardTitle>计费用量趋势</CardTitle>
-            <CardDescription>按模型价格结算的套餐额度用量，与钱包购套餐支出分开</CardDescription>
           </CardHeader>
           <CardContent>
             <ChartContainer config={chartConfig} className="h-64 w-full">
@@ -270,8 +267,8 @@ export default function OverviewPage() {
       </div>
       <p className="text-xs text-muted-foreground">
         {summary
-          ? `已完成 ${summary.completed_requests} 次，失败或中断 ${summary.failed_requests} 次；${summary.missing_token_requests} 次用量不完整，${summary.unpriced_requests} 次尚无计费金额。图表只汇总已知数值。`
-          : "统计加载后显示请求和计费完整性。"}
+          ? `已完成 ${summary.completed_requests} 次 · 失败或中断 ${summary.failed_requests} 次 · ${summary.missing_token_requests} 次用量不完整 · ${summary.unpriced_requests} 次未计价`
+          : "—"}
       </p>
       <Card>
         <CardHeader>

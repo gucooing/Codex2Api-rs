@@ -29,7 +29,8 @@ mod body;
 mod error;
 mod outcome;
 pub use availability::{
-    SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_unavailable_until,
+    SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_available,
+    quota_unavailable_until,
 };
 #[derive(Clone, Copy, Debug)]
 pub struct SupplierAuthRevision(pub i64);

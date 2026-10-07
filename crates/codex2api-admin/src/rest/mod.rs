@@ -96,6 +96,7 @@ pub(crate) fn router(state: AdminState) -> Router {
         )
         .route("/suppliers/{id}/status", post(suppliers::status))
         .route("/suppliers/{id}/recover", post(suppliers::recover))
+        .route("/suppliers/{id}/reset-state", post(suppliers::reset_state))
         .route("/suppliers/{id}/quota", get(suppliers::quota))
         .route(
             "/suppliers/{id}/fingerprint",

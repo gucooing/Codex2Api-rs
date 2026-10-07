@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
     });
     let admin_shutdown = shutdown_rx.clone();
     let user_shutdown = shutdown_rx.clone();
+    let quota_monitor = apps.spawn_quota_monitor();
     let result = tokio::try_join!(
         async {
             axum::serve(api_listener, apps.api)
@@ -83,6 +84,8 @@ async fn main() -> Result<()> {
         }
     );
     signal.abort();
+    quota_monitor.abort();
+    let _ = quota_monitor.await;
     tracing::info!("shutting down");
     storage.close().await;
     result?;

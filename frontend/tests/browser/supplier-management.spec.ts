@@ -24,6 +24,7 @@ async function fixture(page: Page, includeGrok = false) {
     email: `supplier${index}@example.test`,
     username: `supplier${index}`,
     plan_type: "prolite",
+    subscription_expires_at: index === 0 ? "2026-10-17T08:00:00+08:00" : null,
     status: index === 0 ? "quota_exhausted" : "active",
     authorized: true,
     authentication_invalid: false,
@@ -87,6 +88,11 @@ async function fixture(page: Page, includeGrok = false) {
           supplier.tag_ids.includes(tag.id),
         ).length;
       value = { ok: true };
+    } else if (path.endsWith("/reset-state") && method === "POST") {
+      const supplier = suppliers.find((item) => item.id === path.split("/")[2])!;
+      supplier.status = "active";
+      supplier.cooldown_until = null;
+      value = supplier;
     } else if (path === "/suppliers") value = { items: suppliers };
     else if (path.startsWith("/suppliers/"))
       value = suppliers.find((supplier) => supplier.id === path.split("/")[2]);
@@ -135,6 +141,114 @@ async function fixture(page: Page, includeGrok = false) {
   });
   return { writes, suppliers, state, allocations };
 }
+
+test("list refresh checks fresh official quotas and offers an offline state reset", async ({
+  page,
+}) => {
+  const { suppliers } = await fixture(page);
+  suppliers[1].status = "disabled";
+  suppliers[2].status = "error";
+  suppliers[2].authentication_invalid = true;
+  suppliers[3].authorized = false;
+  let fail = false;
+  const reads: string[] = [];
+  const quotaRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/quota")) quotaRequests.push(request.url());
+  });
+  await page.route("**/admin/api/suppliers/*/quota?refresh=true", async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
+    reads.push(id);
+    if (fail && id === "s0") {
+      await route.fulfill({ status: 502, json: { error: { message: "official unavailable" } } });
+      return;
+    }
+    const supplier = suppliers.find((item) => item.id === id)!;
+    supplier.status = "active";
+    supplier.cooldown_until = null;
+    supplier.quota.windows[0].used_percent = 0;
+    await route.fulfill({ json: supplier });
+  });
+  await page.goto("/admin/suppliers/");
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("link", { name: "supplier0@example.test", exact: true }) });
+  await expect(row.getByText("配额耗尽", { exact: true })).toBeVisible();
+  expect(reads).toEqual([]);
+  const refresh = page.getByRole("button", { name: "刷新供应账户", exact: true });
+  await refresh.click();
+  await expect(row.getByText("正常", { exact: true })).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  expect(reads).toHaveLength(20);
+  expect(reads).not.toContain("s1");
+  expect(reads).not.toContain("s2");
+  expect(reads).not.toContain("s3");
+  fail = true;
+  suppliers[0].status = "quota_exhausted";
+  suppliers[0].cooldown_until = Math.floor(Date.now() / 1000) + 86400;
+  await refresh.click();
+  await expect(row.getByText("配额耗尽", { exact: true })).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  const checked = quotaRequests.length;
+  suppliers[0].quota.stale = true;
+  await row.getByRole("button", { name: "更多操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "重置状态", exact: true }).click();
+  await expect(row.getByText("正常", { exact: true })).toBeVisible();
+  expect(quotaRequests).toHaveLength(checked);
+});
+
+test("supplier subscription expiry is visible in table, cards, mobile and account details", async ({
+  page,
+}) => {
+  const { suppliers } = await fixture(page);
+  await page.goto("/admin/suppliers/");
+  const expiry = await page.evaluate(
+    (value) => new Date(value!).toLocaleString("zh-CN"),
+    suppliers[0].subscription_expires_at,
+  );
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("link", { name: "supplier0@example.test", exact: true }) });
+  await expect(
+    row.locator('[data-label="提供商 / 订阅"]').getByText(`套餐到期：${expiry}`, { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "切换为卡片视图", exact: true }).click();
+  const card = page
+    .locator('[data-slot="card"]')
+    .filter({ has: page.getByRole("link", { name: "supplier0@example.test", exact: true }) });
+  await expect(card.getByText(expiry, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "切换为表格视图", exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "查看详情：supplier0@example.test", exact: true }).click();
+  await expect(
+    page.getByRole("dialog").getByText(`套餐到期：${expiry}`, { exact: true }),
+  ).toBeVisible();
+  await page.goto("/admin/suppliers/detail/?id=s0");
+  await expect(page.getByText(expiry, { exact: true })).toBeVisible();
+});
+
+test("exhausted accounts with stale quota are queried on list load", async ({ page }) => {
+  const { suppliers } = await fixture(page);
+  suppliers[0].quota.stale = true;
+  let reads = 0;
+  await page.route("**/admin/api/suppliers/s0/quota", async (route) => {
+    reads++;
+    suppliers[0].status = "active";
+    suppliers[0].cooldown_until = null;
+    suppliers[0].quota.stale = false;
+    suppliers[0].quota.windows[0].used_percent = 0;
+    await route.fulfill({ json: suppliers[0] });
+  });
+  await page.goto("/admin/suppliers/");
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("link", { name: "supplier0@example.test", exact: true }) });
+  await expect(row.getByText("正常", { exact: true })).toBeVisible();
+  expect(reads).toBe(1);
+  await page.getByRole("button", { name: "切换为卡片视图", exact: true }).click();
+  await page.getByRole("button", { name: "切换为表格视图", exact: true }).click();
+  expect(reads).toBe(1);
+});
 
 test("left-side cross-page selection updates complete tag sets and tag management has its own page", async ({
   page,

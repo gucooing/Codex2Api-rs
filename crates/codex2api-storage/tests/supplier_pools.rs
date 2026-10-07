@@ -403,6 +403,242 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
 }
 
 #[tokio::test]
+async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_newer_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("recovery.sqlite"))
+        .await
+        .unwrap();
+    supplier(&storage, "s").await;
+    supplier(&storage, "other").await;
+    consumer(&storage, "v").await;
+    storage
+        .save_supplier_tag("pool", "chatgpt", "Pool")
+        .await
+        .unwrap();
+    storage
+        .edit_supplier_tags(&["s".into()], &["pool".into()], false)
+        .await
+        .unwrap();
+    storage
+        .save_pool_route("v", "chatgpt", Some("pool"), None, None)
+        .await
+        .unwrap();
+    let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    let until = chrono::Utc::now().timestamp() + 86400;
+    storage
+        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .await
+        .unwrap();
+    let observed = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    assert!(
+        storage
+            .execution_route("v", "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .supplier_account_id
+            .is_none()
+    );
+    // Identical exhaustion in the same second must still supersede the check.
+    storage
+        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .await
+        .unwrap();
+    assert!(
+        !storage
+            .recover_supplier_quota("s", auth, observed)
+            .await
+            .unwrap()
+    );
+    let current = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    assert!(
+        storage
+            .recover_supplier_quota("s", auth, current)
+            .await
+            .unwrap()
+    );
+    let health = storage.supplier_health("s").await.unwrap();
+    assert!(health.cooldown_kind.is_none());
+    assert!(health.cooldown_until.is_none());
+    assert!(health.cooldown_code.is_none());
+    assert_eq!(
+        storage
+            .execution_route("v", "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .supplier_account_id
+            .as_deref(),
+        Some("s")
+    );
+
+    storage
+        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .await
+        .unwrap();
+    let before_reset = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    storage.reset_supplier_quota("s").await.unwrap();
+    storage
+        .exhaust_supplier_quota_if_unchanged("s", auth, until, "usage_limit_reached", before_reset)
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .cooldown_kind
+            .is_none()
+    );
+    assert_eq!(
+        storage
+            .select_pool_supplier("v", "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("s")
+    );
+    // A subsequent real generation can still report exhaustion.
+    storage
+        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .await
+        .unwrap();
+    storage.reject_supplier_auth("s", auth).await.unwrap();
+    storage
+        .set_account_status("s", SupplierStatus::Disabled)
+        .await
+        .unwrap();
+    storage.reset_supplier_quota("s").await.unwrap();
+    assert!(
+        storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .authentication_invalid
+    );
+    assert_eq!(
+        storage.require_account("s").await.unwrap().status,
+        SupplierStatus::Disabled
+    );
+    assert!(
+        storage
+            .select_pool_supplier("v", "chatgpt", &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        storage
+            .supplier_health("other")
+            .await
+            .unwrap()
+            .cooldown_revision,
+        0
+    );
+}
+
+#[tokio::test]
+async fn background_candidates_are_only_currently_exhausted_authorized_enabled_suppliers() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("probes.sqlite"))
+        .await
+        .unwrap();
+    let now = chrono::Utc::now().timestamp();
+    for id in [
+        "exhausted",
+        "healthy",
+        "disabled",
+        "rejected",
+        "expired",
+        "reauthorized",
+        "no-token",
+    ] {
+        supplier(&storage, id).await;
+        if id == "healthy" {
+            continue;
+        }
+        let auth = storage.supplier_auth_revision(id).await.unwrap().unwrap();
+        storage
+            .exhaust_supplier_quota(
+                id,
+                auth,
+                if id == "expired" {
+                    now - 1
+                } else {
+                    now + 86400
+                },
+                "usage_limit_reached",
+            )
+            .await
+            .unwrap();
+        match id {
+            "disabled" => {
+                storage
+                    .set_account_status(id, SupplierStatus::Disabled)
+                    .await
+                    .unwrap();
+            }
+            "rejected" => storage.reject_supplier_auth(id, auth).await.unwrap(),
+            "reauthorized" => {
+                storage
+                    .upsert_supplier_tokens(SupplierTokens {
+                        account_id: id.into(),
+                        access_token: Some("rotated-fixture".into()),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                assert!(storage.supplier_auth_revision(id).await.unwrap().unwrap() > auth);
+                let old = storage.supplier_health(id).await.unwrap().cooldown_revision;
+                assert!(!storage.recover_supplier_quota(id, auth, old).await.unwrap());
+            }
+            "no-token" => {
+                sqlx::query("DELETE FROM supplier_tokens WHERE account_id=?")
+                    .bind(id)
+                    .execute(storage.pool())
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        storage
+            .supplier_quota_probe_candidates("chatgpt")
+            .await
+            .unwrap(),
+        vec!["exhausted"]
+    );
+    assert!(
+        storage
+            .supplier_quota_probe_candidates("grok")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    storage.reset_supplier_quota("exhausted").await.unwrap();
+    assert!(
+        storage
+            .supplier_quota_probe_candidates("chatgpt")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn rpm_is_atomic_sliding_persistent_and_honors_default_override_and_unlimited() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rpm.sqlite");

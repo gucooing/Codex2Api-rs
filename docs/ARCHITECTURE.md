@@ -112,10 +112,36 @@ are refreshed before abandoning their supplier. Observations carry credential
 revisions so stale failures cannot disable newly replaced authorization.
 
 Quota cooldowns persist in SQLite and expire automatically at the official reset or
-Retry-After time. When timing is absent, a sixty-second probe cooldown is used;
-it is not presented as an official quota reset. Cached main quota responses can
+Retry-After time. When timing is absent, a sixty-second retry cooldown is used;
+it is not presented as an official quota reset. Fresh main quota responses can
 also record exhaustion; model-specific additional windows do not disable the whole
-account. The normal quota cache remains in use, without requests on UI timer ticks.
+account. A fresh ChatGPT response explicitly allowing execution or reporting usable
+credits clears quota exhaustion immediately, even before the old reset time, and
+repairs unassigned pool routes. Unknown, failed or cached reads never prove recovery.
+Credential and quota observation revisions protect against late checks, including
+checks started before an administrator reset.
+
+The process runs a ChatGPT recovery sweep at startup and waits ten minutes after
+each sweep. It probes only currently quota-exhausted, enabled, authorized suppliers
+with current credentials, at most four concurrently; healthy, disabled, rejected
+and already-expired cooldowns are excluded. It shares account clients, per-account
+cache locks and concurrent fresh observations with administrator checks. Failures
+use ChatGPT execution's normal authentication refresh/retry and supplier failure classification:
+permanent authorization rejection marks the credentials invalid, explicit exhaustion
+updates cooldowns, and transient transport/service failures do not disable accounts.
+Failed reads preserve the last quota snapshot; no separate probe failure counter is used.
+These wire-error and authentication rules remain in the ChatGPT adapter and are
+never applied to Grok or another provider.
+No browser is needed.
+The worker is cancelled before storage closes. The list refresh explicitly fetches
+official quotas for eligible accounts with bounded concurrency. Ordinary list reads
+reuse the ten-minute cache, and UI timer ticks never call the provider.
+
+Administrator `POST /admin/api/suppliers/{id}/reset-state` provides an offline retry
+through the list's **More / Reset state** action. It clears only quota cooldowns,
+invalidates in-flight quota observation revisions and repairs pool routes; manual
+disablement, authorization rejection, credentials and official snapshots remain
+intact. A subsequent explicit upstream exhaustion can mark the account again.
 
 HTTP Responses and Responses WebSocket internally try each eligible pool member
 at most once for unrecoverable authorization or explicit quota exhaustion.

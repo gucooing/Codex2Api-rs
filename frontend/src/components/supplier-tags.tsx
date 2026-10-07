@@ -80,11 +80,6 @@ export function SupplierTagEditor({
             ? ` · ${provider === "chatgpt" ? "ChatGPT" : provider === "grok" ? "Grok" : provider}`
             : ""}
         </FieldLegend>
-        {batch && (
-          <FieldDescription>
-            修改后按勾选结果覆盖所选账户的标签。横线表示仅部分账户使用。
-          </FieldDescription>
-        )}
         {!provider && accounts.length > 0 && (
           <FieldDescription>请选择同一平台的账户。</FieldDescription>
         )}

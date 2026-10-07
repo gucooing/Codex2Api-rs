@@ -25,6 +25,7 @@ export function GrokOfficialData({
   id: string;
   section: string;
   onUsername?: (username: string | undefined) => void;
+  onUpdated?: () => void;
 }) {
   const [refresh, setRefresh] = useState(0);
   const now = useQuotaClock();

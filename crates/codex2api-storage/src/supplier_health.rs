@@ -11,6 +11,7 @@ pub struct SupplierHealth {
     pub cooldown_kind: Option<String>,
     pub cooldown_until: Option<i64>,
     pub cooldown_code: Option<String>,
+    pub cooldown_revision: i64,
 }
 
 impl Storage {
@@ -19,7 +20,7 @@ impl Storage {
             "SELECT h.error_message,h.error_at,h.revision,
              CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_kind END AS cooldown_kind,
              CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_until END AS cooldown_until,
-             h.cooldown_code,
+             h.cooldown_code,h.cooldown_revision,
              COALESCE(h.rejected_auth_revision=a.auth_revision,0) AS authentication_invalid
              FROM supplier_health h JOIN supplier_accounts a ON a.id=h.account_id WHERE h.account_id=?",
         ).bind(id).fetch_optional(self.pool()).await?.unwrap_or_default())
@@ -34,15 +35,113 @@ impl Storage {
         until: i64,
         code: &str,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO supplier_health(account_id,cooldown_kind,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at)
-            SELECT id,'quota_exhausted',?,auth_revision,?,unixepoch() FROM supplier_accounts WHERE id=? AND auth_revision=?
+        self.record_supplier_quota_exhaustion(id, auth_revision, until, code, None)
+            .await
+    }
+
+    pub async fn exhaust_supplier_quota_if_unchanged(
+        &self,
+        id: &str,
+        auth_revision: i64,
+        until: i64,
+        code: &str,
+        cooldown_revision: i64,
+    ) -> Result<()> {
+        self.record_supplier_quota_exhaustion(
+            id,
+            auth_revision,
+            until,
+            code,
+            Some(cooldown_revision),
+        )
+        .await
+    }
+
+    async fn record_supplier_quota_exhaustion(
+        &self,
+        id: &str,
+        auth_revision: i64,
+        until: i64,
+        code: &str,
+        expected: Option<i64>,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO supplier_health(account_id,cooldown_kind,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at,cooldown_revision)
+            SELECT id,'quota_exhausted',?,auth_revision,?,unixepoch(),1 FROM supplier_accounts a WHERE id=? AND auth_revision=?
+            AND (? IS NULL OR COALESCE((SELECT cooldown_revision FROM supplier_health WHERE account_id=a.id),0)=?)
             ON CONFLICT(account_id) DO UPDATE SET
             cooldown_kind=excluded.cooldown_kind,
             cooldown_until=CASE WHEN supplier_health.cooldown_kind='quota_exhausted' AND supplier_health.cooldown_auth_revision=excluded.cooldown_auth_revision THEN MAX(COALESCE(supplier_health.cooldown_until,0),excluded.cooldown_until) ELSE excluded.cooldown_until END,
-            cooldown_auth_revision=excluded.cooldown_auth_revision,cooldown_code=excluded.cooldown_code,cooldown_observed_at=excluded.cooldown_observed_at")
-            .bind(until).bind(code).bind(id).bind(auth_revision).execute(self.pool()).await?;
+            cooldown_auth_revision=excluded.cooldown_auth_revision,cooldown_code=excluded.cooldown_code,cooldown_observed_at=excluded.cooldown_observed_at,cooldown_revision=supplier_health.cooldown_revision+1")
+            .bind(until).bind(code).bind(id).bind(auth_revision).bind(expected).bind(expected).execute(self.pool()).await?;
         self.refresh_supplier_bindings(id).await?;
         Ok(())
+    }
+
+    /// Administrator-requested retry, independent of provider reachability.
+    /// Only quota state is cleared; credential rejection and manual enablement
+    /// continue to govern eligibility. In-flight quota checks lose their revision.
+    pub async fn reset_supplier_quota(&self, id: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO supplier_health(account_id,cooldown_revision)
+             SELECT id,1 FROM supplier_accounts WHERE id=?
+             ON CONFLICT(account_id) DO UPDATE SET cooldown_kind=NULL,cooldown_until=NULL,
+             cooldown_auth_revision=NULL,cooldown_code=NULL,cooldown_observed_at=NULL,
+             cooldown_revision=supplier_health.cooldown_revision+1",
+        )
+        .bind(id)
+        .execute(self.pool())
+        .await?;
+        self.refresh_supplier_bindings(id).await?;
+        Ok(())
+    }
+
+    /// A fresh official quota check may recover before the previously reported
+    /// reset. Never erase an exhaustion observed after the check started.
+    pub async fn recover_supplier_quota(
+        &self,
+        id: &str,
+        auth_revision: i64,
+        cooldown_revision: i64,
+    ) -> Result<bool> {
+        let changed = sqlx::query(
+            "UPDATE supplier_health SET cooldown_kind=NULL,cooldown_until=NULL,
+             cooldown_auth_revision=NULL,cooldown_code=NULL,cooldown_observed_at=NULL,
+             cooldown_revision=cooldown_revision+1
+             WHERE account_id=? AND cooldown_kind='quota_exhausted'
+             AND cooldown_auth_revision=? AND cooldown_revision=?
+             AND EXISTS(SELECT 1 FROM supplier_accounts WHERE id=? AND auth_revision=?)",
+        )
+        .bind(id)
+        .bind(auth_revision)
+        .bind(cooldown_revision)
+        .bind(id)
+        .bind(auth_revision)
+        .execute(self.pool())
+        .await?
+        .rows_affected()
+            == 1;
+        if changed {
+            self.refresh_supplier_bindings(id).await?;
+        }
+        Ok(changed)
+    }
+
+    /// Only currently exhausted suppliers are probed. Manual disablement,
+    /// rejected credentials and obsolete credential revisions are excluded.
+    pub async fn supplier_quota_probe_candidates(&self, provider: &str) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT a.id FROM supplier_accounts a
+             JOIN supplier_health h ON h.account_id=a.id
+             JOIN supplier_tokens t ON t.account_id=a.id
+             WHERE a.provider_id=? AND a.status='active' AND COALESCE(t.access_token,'')!=''
+             AND h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
+             AND h.cooldown_until>unixepoch()
+             AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
+             ORDER BY h.cooldown_observed_at,a.id",
+        )
+        .bind(provider)
+        .fetch_all(self.pool())
+        .await?)
     }
 
     /// The caller must have observed an upstream 401 for this credential revision.

@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useActions, useErrorToast } from "@/lib/actions";
@@ -14,17 +14,14 @@ const fields = [
   {
     key: "api_url",
     label: "API 基础地址",
-    description: "客户端实际访问的地址，用于登录授权、令牌交换和客户端服务链接。",
   },
   {
     key: "user_url",
     label: "用户端基础地址",
-    description: "浏览器实际访问用户网站的地址，用于登录确认页和设备码授权页。",
   },
   {
     key: "admin_url",
     label: "管理端基础地址",
-    description: "浏览器实际访问管理网站的地址，用于管理会话的安全设置。",
   },
 ] as const;
 
@@ -108,10 +105,6 @@ export function PublicUrls() {
       <Card>
         <CardContent>
           <FieldSet disabled={disabled}>
-            <FieldDescription>
-              填写完整基础地址，保留实际使用的 http:// 或 https://
-              及端口。反向代理部署时填写对外地址，服务自动添加各端路径。保存后立即生效。
-            </FieldDescription>
             <FieldGroup className="gap-4">
               {fields.map((field) => (
                 <Field key={field.key}>
@@ -127,7 +120,6 @@ export function PublicUrls() {
                       if (current) setDraft({ ...current, [field.key]: event.target.value });
                     }}
                   />
-                  <FieldDescription>{field.description}</FieldDescription>
                 </Field>
               ))}
             </FieldGroup>

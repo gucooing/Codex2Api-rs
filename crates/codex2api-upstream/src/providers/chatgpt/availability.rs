@@ -3,6 +3,21 @@ use crate::SupplierFailure;
 use http::HeaderMap;
 use serde_json::Value;
 
+/// Recovery requires affirmative official evidence, not simply the absence of a
+/// recognized exhaustion. Partial responses must leave persisted health alone.
+pub fn quota_available(value: &Value) -> bool {
+    value.get("rate_limit").is_some_and(Value::is_object)
+        && (value
+            .pointer("/rate_limit/allowed")
+            .and_then(Value::as_bool)
+            == Some(true)
+            || value.pointer("/credits/unlimited").and_then(Value::as_bool) == Some(true)
+            || value
+                .pointer("/credits/has_credits")
+                .and_then(Value::as_bool)
+                == Some(true))
+}
+
 /// Only the main official execution allowance can cool the whole account.
 /// Additional model-specific limits and a full window backed by credits do not.
 pub fn quota_unavailable_until(value: &Value, now: i64) -> Option<i64> {
@@ -153,6 +168,28 @@ pub fn classify_supplier_failure(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn quota_recovery_requires_explicit_main_allowance_or_usable_credits() {
+        for value in [
+            json!({"rate_limit":{"allowed":true,"primary_window":{"used_percent":0,"reset_at":10000}}}),
+            json!({"rate_limit":{"allowed":true},"additional_rate_limits":[{"rate_limit":{"allowed":false}}]}),
+            json!({"rate_limit":{"allowed":false},"credits":{"has_credits":true}}),
+            json!({"rate_limit":{"allowed":false},"credits":{"unlimited":true}}),
+        ] {
+            assert!(quota_available(&value), "{value}");
+            assert_eq!(quota_unavailable_until(&value, 100), None);
+        }
+        for value in [
+            Value::Null,
+            json!({"plan_type":"plus"}),
+            json!({"rate_limit":null}),
+            json!({"rate_limit":{"primary_window":{"used_percent":0}}}),
+            json!({"rate_limit":{"allowed":false},"credits":{"has_credits":false}}),
+            json!({"rate_limit":{"allowed":"true"}}),
+        ] {
+            assert!(!quota_available(&value), "{value}");
+        }
+    }
     #[test]
     fn only_explicit_quota_exhaustion_or_authentication_change_availability() {
         let headers = HeaderMap::new();

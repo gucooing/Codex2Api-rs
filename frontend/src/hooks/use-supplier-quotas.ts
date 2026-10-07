@@ -4,7 +4,7 @@ import { request, type Supplier } from "@/lib/api";
 import { toastError } from "@/lib/actions";
 
 /** Cached reads only; filter and view changes do not trigger upstream refreshes. */
-export function useSupplierQuotas(accounts: Supplier[] | undefined) {
+export function useSupplierQuotas(accounts: Supplier[] | undefined, resetIds?: readonly string[]) {
   const [updates, setUpdates] = useState<{ source: Supplier[]; items: Record<string, Supplier> }>();
   useEffect(() => {
     if (!accounts) return;
@@ -13,7 +13,8 @@ export function useSupplierQuotas(accounts: Supplier[] | undefined) {
       for (const account of accounts!) {
         if (controller.signal.aborted) break;
         if (
-          account.status !== "active" ||
+          resetIds?.includes(account.id) ||
+          !["active", "quota_exhausted"].includes(account.status) ||
           !account.authorized ||
           (account.quota && !account.quota.stale)
         )
@@ -54,12 +55,35 @@ export function useSupplierQuotas(accounts: Supplier[] | undefined) {
     }
     void refreshMissing();
     return () => controller.abort();
-  }, [accounts]);
+  }, [accounts, resetIds]);
   return (
     accounts?.map((account) =>
       updates?.source === accounts ? (updates.items[account.id] ?? account) : account,
     ) ?? []
   );
+}
+
+/** An explicit list refresh checks official quotas, including still-fresh cache. */
+export async function refreshSupplierQuotas(accounts: Supplier[]) {
+  const pending = accounts.filter(
+    (account) =>
+      account.authorized &&
+      !account.authentication_invalid &&
+      ["active", "quota_exhausted"].includes(account.status),
+  );
+  const failures: string[] = [];
+  await Promise.all(
+    Array.from({ length: Math.min(4, pending.length) }, async () => {
+      for (let account = pending.shift(); account; account = pending.shift()) {
+        try {
+          await request<Supplier>(`/suppliers/${account.id}/quota?refresh=true`);
+        } catch {
+          failures.push(account.email || account.display_name || account.id);
+        }
+      }
+    }),
+  );
+  return failures;
 }
 
 /** A local clock tick never performs network I/O. */

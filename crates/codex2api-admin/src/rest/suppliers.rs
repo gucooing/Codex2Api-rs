@@ -21,6 +21,8 @@ fn cached_username(value: &Value) -> Option<String> {
 }
 pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value, ApiError> {
     let mut value = dto(a);
+    value["subscription_expires_at"] =
+        json!(crate::providers::subscription_expiration(s, a).await?);
     value["username"] = json!(
         s.storage
             .get_supplier_info(&a.id, SupplierInfoSection::Usage)
@@ -72,10 +74,7 @@ pub async fn list(
     };
     let mut items = vec![];
     for a in accounts {
-        let mut value = display(&s, &a).await?;
-        let expires = crate::providers::subscription_expiration(&s, &a).await?;
-        value["subscription_expires_at"] = json!(expires);
-        items.push(value);
+        items.push(display(&s, &a).await?);
     }
     Ok(Json(json!({"items":items})))
 }
@@ -138,6 +137,13 @@ pub async fn recover(State(s): State<AdminState>, Path(id): Path<String>) -> Api
         return Err(ApiError::bad("检查期间授权再次被拒绝，请重新授权"));
     }
     s.upstream.evict(&id).await;
+    Ok(Json(
+        display(&s, &s.storage.require_account(&id).await?).await?,
+    ))
+}
+pub async fn reset_state(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+    s.storage.require_account(&id).await?;
+    s.storage.reset_supplier_quota(&id).await?;
     Ok(Json(
         display(&s, &s.storage.require_account(&id).await?).await?,
     ))
