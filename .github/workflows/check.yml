@@ -70,3 +70,10 @@ jobs:
         run: cargo check --workspace --locked
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
+
+  container:
+    needs: check
+    uses: ./.github/workflows/docker.yml
+    permissions:
+      contents: read
+      packages: write

@@ -136,9 +136,16 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  container:
+    needs: build
+    uses: ./.github/workflows/docker.yml
+    permissions:
+      contents: read
+      packages: write
+
   release:
     name: Publish ${{ github.ref_name }}
-    needs: build
+    needs: [build, container]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

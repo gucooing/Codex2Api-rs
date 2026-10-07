@@ -26,6 +26,76 @@
 
 Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授权，支持本地套餐、钱包购买、模型计价和用量记录。`cgrok` 的默认服务根与 `ccodex` 同域，使用 `/api/oauth/grok`。模型可用性由管理端配置及套餐决定，自定义模型无需内置名单认证；官方数据仅作预设。接入方式及能力边界见 [Grok 渠道](docs/GROK.md)。
 
+## Docker Compose 部署
+
+需要 Docker Engine 与 Docker Compose（`docker compose`）。镜像地址为 `ghcr.io/gucooing/codex2api-rs`，支持 `linux/amd64` 和 `linux/arm64`；两个前端已经嵌入镜像内的 Rust 可执行文件，服务器不需要安装 Node.js 或 Rust。
+
+下载仓库中的 `docker-compose.yml` 和 `.env.example` 到同一目录，或在仓库根目录执行：
+
+```bash
+cp .env.example .env
+# 按部署环境编辑 .env 中的端口和对外访问地址。
+mkdir -p data
+# Linux：让容器运行用户能够读写此目录；已有数据库文件也需要相同权限。
+sudo chown -R 10001:10001 ./data
+docker compose pull
+docker compose up -d --wait
+docker compose logs -f --tail=100
+```
+
+PowerShell 中复制配置使用 `Copy-Item .env.example .env`，创建目录使用 `New-Item -ItemType Directory -Force data`；Docker Desktop 不需要执行 Linux 的 `chown`。如修改 `CODEX2API_DATA_DIR`，创建目录和设置权限时使用该实际路径。默认镜像标签为 `latest`，指向最近成功发布的正式版本；首个正式版本镜像发布前，可将 `.env` 中的 `CODEX2API_IMAGE` 改为 `ghcr.io/gucooing/codex2api-rs:edge`，使用通过 CI 的 `main` 构建。生产部署也可以指定已发布的完整版本标签或 `@sha256:…` 摘要固定镜像。
+
+默认只在宿主机回环地址开放三个端口：
+
+| 入口 | 地址 | Compose 配置 |
+| --- | --- | --- |
+| AI API | `http://127.0.0.1:8080` | `CODEX2API_API_HOST` / `CODEX2API_API_PORT` |
+| 管理端 | `http://127.0.0.1:8081/admin/` | `CODEX2API_ADMIN_HOST` / `CODEX2API_ADMIN_PORT` |
+| 用户端 | `http://127.0.0.1:8082/user/` | `CODEX2API_USER_HOST` / `CODEX2API_USER_PORT` |
+
+直接从其他机器访问时，将所需入口的 `*_HOST` 改为 `0.0.0.0`，并将对应的 `CODEX2API_PUBLIC_*_URL` 改为客户端实际访问的 origin。首次管理登录为 `admin` / `admin`，登录后修改密码。使用宿主机上的反向代理时，可保留回环绑定，并将三个公开地址设置为实际 HTTPS origin；这些变量不启用容器内 TLS。反向代理应把 `/admin` 及其子路径转发到 8081，把 `/user` 及其子路径转发到 8082，其余客户端协议路径转发到 8080，并支持 WebSocket 和不缓冲的 SSE。容器内监听端口固定为 8080、8081、8082，只通过端口映射更改宿主机端口。
+
+管理端 **设置 → 访问地址** 中保存的地址优先于 `.env` 中的启动默认值；已有部署改域名时同步更新该设置，并重新发起客户端登录。
+
+SQLite 及账户身份直接保存在宿主机目录，默认映射为 `./data:/app/data`，数据库就是宿主机的 `./data/codex2api.sqlite`。可用 `.env` 中的 `CODEX2API_DATA_DIR` 指定其他目录；相对路径以 `docker-compose.yml` 所在目录为基准。容器使用 UID/GID `10001:10001`，Linux 上该目录及已有文件需允许该用户读写。升级、重建容器和 `docker compose down` 均保留宿主机文件。复用已有 `./data` 时先停止原服务，避免两个进程同时运行在同一数据库上。若部署多个实例，使用不同的 Compose 项目名、端口和数据目录。
+
+升级前备份数据；停止服务后复制整个宿主机数据目录，包括可能存在的 SQLite WAL 文件。以下示例使用 Bash 和默认 `./data`：
+
+```bash
+docker compose stop
+sudo tar -czf ../codex2api-data-backup.tar.gz data
+docker compose start
+```
+
+升级时执行：
+
+```bash
+docker compose pull
+docker compose up -d --wait
+```
+
+也可使用仓库中的多阶段 `Dockerfile` 自行构建，然后在 `.env` 中设置 `CODEX2API_IMAGE=codex2api:local`：
+
+```bash
+docker build --build-arg CODEX2API_BUILD_TAG=local -t codex2api:local .
+docker compose up -d --wait --pull never
+```
+
+构建会分别检查、导出两个前端，再使用仓库锁定的 Rust 工具链及 `Cargo.lock` 编译。运行容器为非 root 用户，根文件系统只读，写入使用挂载的数据目录和临时目录；健康检查覆盖三个监听入口，停止时向 Rust 进程直接发送 SIGTERM，并预留 60 秒关闭时间。自定义 CA 证书可通过 Compose override 只读挂载到容器，再设置 `CODEX_CA_CERTIFICATE` 为容器内路径。
+
+### CI 镜像发布
+
+现有 `Check` 和 `Release` 工作流调用 `.github/workflows/docker.yml`：
+
+- PR 先通过现有检查，再在原生 amd64、arm64 runner 上构建镜像并验证 Compose，不登录 GHCR、不发布。
+- `main` 推送在 `Check` 通过后发布 `edge` 和 `sha-<完整提交哈希>`。
+- Git 标签推送在现有多平台二进制构建通过后发布同名镜像标签及提交哈希标签；正式 `vX.Y.Z` / `X.Y.Z` 标签同时更新 `latest`，预发布标签不更新 `latest`。GitHub Release 在镜像成功发布后创建。
+- `Container` 支持手动运行：`main` 和已合入 `main` 的标签允许发布，其他分支仅验证。标签必须满足 Docker 标签格式。
+
+每个平台发布前映射全新的临时目录启动 Compose，检查三个入口隔离、两个嵌入页面及静态资源、非 root 运行、管理员登录，并重建容器验证宿主机目录中的 SQLite、签名密钥及会话仍然有效；两个平台均通过后才发布多架构标签。镜像名从当前 GitHub 仓库名自动转为小写，Fork 仓库部署时同步修改 `.env` 中的镜像地址。
+
+CI 使用自动提供的 `GITHUB_TOKEN` 及 `packages: write` 权限推送，无需另设 GHCR 密码。首次发布后，如需匿名拉取，在 GitHub Packages 中将该包的可见性设为 Public；私有包须先使用有 `read:packages` 权限的凭据执行 `docker login ghcr.io`。详见 [GitHub Container Registry 文档](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+
 ## 从源码构建
 
 管理前端 `frontend/` 和用户前端 `frontend-user/` 分别使用 Next.js 静态导出，OAuth 确认页面属于用户前端。先安装 Node.js 24，再执行：

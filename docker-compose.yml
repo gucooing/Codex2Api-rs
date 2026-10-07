@@ -1,0 +1,33 @@
+name: codex2api
+
+services:
+  codex2api:
+    image: ${CODEX2API_IMAGE:-ghcr.io/gucooing/codex2api-rs:latest}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "${CODEX2API_API_HOST:-127.0.0.1}:${CODEX2API_API_PORT:-8080}:8080"
+      - "${CODEX2API_ADMIN_HOST:-127.0.0.1}:${CODEX2API_ADMIN_PORT:-8081}:8081"
+      - "${CODEX2API_USER_HOST:-127.0.0.1}:${CODEX2API_USER_PORT:-8082}:8082"
+    environment:
+      CODEX2API_API_BIND: 0.0.0.0:8080
+      CODEX2API_ADMIN_BIND: 0.0.0.0:8081
+      CODEX2API_USER_BIND: 0.0.0.0:8082
+      CODEX2API_DB: /app/data/codex2api.sqlite
+      CODEX2API_PUBLIC_API_URL: ${CODEX2API_PUBLIC_API_URL:-http://127.0.0.1:8080}
+      CODEX2API_PUBLIC_ADMIN_URL: ${CODEX2API_PUBLIC_ADMIN_URL:-http://127.0.0.1:8081}
+      CODEX2API_PUBLIC_USER_URL: ${CODEX2API_PUBLIC_USER_URL:-http://127.0.0.1:8082}
+      RUST_LOG: ${RUST_LOG:-codex2api=info}
+    volumes:
+      - type: bind
+        source: ${CODEX2API_DATA_DIR:-./data}
+        target: /app/data
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

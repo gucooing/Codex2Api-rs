@@ -1,4 +1,9 @@
 /frontend/** text=auto eol=lf
 /frontend-user/** text=auto eol=lf
+/Dockerfile text eol=lf
+/.dockerignore text eol=lf
+/docker-compose.yml text eol=lf
+/.env.example text eol=lf
+/.github/workflows/*.yml text eol=lf
 # SQLx hashes migration bytes. Keep release and local builds identical on Windows.
 /crates/codex2api-storage/migrations/*.sql text eol=lf
