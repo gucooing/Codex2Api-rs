@@ -4,7 +4,7 @@ import { request, type Supplier } from "@/lib/api";
 import { toastError } from "@/lib/actions";
 
 /** Cached reads only; filter and view changes do not trigger upstream refreshes. */
-export function useSupplierQuotas(accounts: Supplier[] | undefined) {
+export function useSupplierQuotas(accounts: Supplier[] | undefined, resetIds?: readonly string[]) {
   const [updates, setUpdates] = useState<{ source: Supplier[]; items: Record<string, Supplier> }>();
   useEffect(() => {
     if (!accounts) return;
@@ -13,6 +13,7 @@ export function useSupplierQuotas(accounts: Supplier[] | undefined) {
       for (const account of accounts!) {
         if (controller.signal.aborted) break;
         if (
+          resetIds?.includes(account.id) ||
           !["active", "quota_exhausted"].includes(account.status) ||
           !account.authorized ||
           (account.quota && !account.quota.stale)
@@ -54,7 +55,7 @@ export function useSupplierQuotas(accounts: Supplier[] | undefined) {
     }
     void refreshMissing();
     return () => controller.abort();
-  }, [accounts]);
+  }, [accounts, resetIds]);
   return (
     accounts?.map((account) =>
       updates?.source === accounts ? (updates.items[account.id] ?? account) : account,

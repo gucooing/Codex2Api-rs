@@ -131,7 +131,8 @@ export function SuppliersPage() {
     validSupplierFilters,
   );
   const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
-  const snapshots = useSupplierQuotas(resource.data?.items);
+  const [quotaResetIds, setQuotaResetIds] = useState<string[]>([]);
+  const snapshots = useSupplierQuotas(resource.data?.items, quotaResetIds);
   const now = useQuotaClock();
   const all = snapshots.map((item) =>
     item.cooldown_until && item.cooldown_until * 1000 <= now && item.status === "quota_exhausted"
@@ -187,6 +188,9 @@ export function SuppliersPage() {
                 "reset-state-" + item.id,
                 async () => {
                   await request(`/suppliers/${item.id}/reset-state`, { method: "POST" });
+                  // Keep this offline retry independent of stale-cache auto reads
+                  // for the rest of the page visit. Explicit refresh still works.
+                  setQuotaResetIds((ids) => [...new Set([...ids, item.id])]);
                   resource.reload();
                 },
                 { success: "额度耗尽状态已重置，将在下次请求时重新确认" },

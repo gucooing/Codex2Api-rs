@@ -152,6 +152,10 @@ test("list refresh checks fresh official quotas and offers an offline state rese
   suppliers[3].authorized = false;
   let fail = false;
   const reads: string[] = [];
+  const quotaRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/quota")) quotaRequests.push(request.url());
+  });
   await page.route("**/admin/api/suppliers/*/quota?refresh=true", async (route) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
     reads.push(id);
@@ -173,7 +177,7 @@ test("list refresh checks fresh official quotas and offers an offline state rese
   expect(reads).toEqual([]);
   const refresh = page.getByRole("button", { name: "刷新供应账户", exact: true });
   await refresh.click();
-  await expect(row.getByText("启用", { exact: true })).toBeVisible();
+  await expect(row.getByText("正常", { exact: true })).toBeVisible();
   await expect(refresh).toBeEnabled();
   expect(reads).toHaveLength(20);
   expect(reads).not.toContain("s1");
@@ -185,11 +189,12 @@ test("list refresh checks fresh official quotas and offers an offline state rese
   await refresh.click();
   await expect(row.getByText("配额耗尽", { exact: true })).toBeVisible();
   await expect(refresh).toBeEnabled();
-  const checked = reads.length;
+  const checked = quotaRequests.length;
+  suppliers[0].quota.stale = true;
   await row.getByRole("button", { name: "更多操作", exact: true }).click();
   await page.getByRole("menuitem", { name: "重置状态", exact: true }).click();
-  await expect(row.getByText("启用", { exact: true })).toBeVisible();
-  expect(reads).toHaveLength(checked);
+  await expect(row.getByText("正常", { exact: true })).toBeVisible();
+  expect(quotaRequests).toHaveLength(checked);
 });
 
 test("supplier subscription expiry is visible in table, cards, mobile and account details", async ({
@@ -207,12 +212,12 @@ test("supplier subscription expiry is visible in table, cards, mobile and accoun
   await expect(
     row.locator('[data-label="提供商 / 订阅"]').getByText(`套餐到期：${expiry}`, { exact: true }),
   ).toBeVisible();
-  await page.getByRole("radio", { name: "卡片视图", exact: true }).click();
+  await page.getByRole("button", { name: "切换为卡片视图", exact: true }).click();
   const card = page
     .locator('[data-slot="card"]')
     .filter({ has: page.getByRole("link", { name: "supplier0@example.test", exact: true }) });
   await expect(card.getByText(expiry, { exact: true })).toBeVisible();
-  await page.getByRole("radio", { name: "表格视图", exact: true }).click();
+  await page.getByRole("button", { name: "切换为表格视图", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "查看详情：supplier0@example.test", exact: true }).click();
   await expect(
@@ -238,10 +243,10 @@ test("exhausted accounts with stale quota are queried on list load", async ({ pa
   const row = page
     .getByRole("row")
     .filter({ has: page.getByRole("link", { name: "supplier0@example.test", exact: true }) });
-  await expect(row.getByText("启用", { exact: true })).toBeVisible();
+  await expect(row.getByText("正常", { exact: true })).toBeVisible();
   expect(reads).toBe(1);
-  await page.getByRole("radio", { name: "卡片视图", exact: true }).click();
-  await page.getByRole("radio", { name: "表格视图", exact: true }).click();
+  await page.getByRole("button", { name: "切换为卡片视图", exact: true }).click();
+  await page.getByRole("button", { name: "切换为表格视图", exact: true }).click();
   expect(reads).toBe(1);
 });
 
