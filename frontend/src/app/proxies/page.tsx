@@ -774,7 +774,6 @@ function ProxyEditor({
       >
         <DialogHeader>
           <DialogTitle>{proxy ? "编辑代理" : "添加代理"}</DialogTitle>
-          <DialogDescription>{"保存连接信息后，可在列表中执行实际连接检查。"}</DialogDescription>
         </DialogHeader>
         <DialogClose asChild>
           <Button

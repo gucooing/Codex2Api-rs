@@ -193,7 +193,7 @@ export function SuppliersPage() {
                   setQuotaResetIds((ids) => [...new Set([...ids, item.id])]);
                   resource.reload();
                 },
-                { success: "额度耗尽状态已重置，将在下次请求时重新确认" },
+                { success: "状态已重置" },
               )
             }
           >
@@ -1253,9 +1253,6 @@ function LocalUsage({ account }: { account?: Supplier }) {
         <CardTitle role="heading" aria-level={2}>
           本地用量
         </CardTitle>
-        <CardDescription>
-          按本系统账本统计；周期金额使用请求时的计费价格，Token 包含输入与输出。
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <FieldGroup className="grid gap-3 sm:grid-cols-2" aria-label="周期使用额度">
@@ -1363,7 +1360,6 @@ function FingerprintEditor({
                     <CardTitle role="heading" aria-level={3}>
                       账户指纹
                     </CardTitle>
-                    <CardDescription>每个供应账户独立保存系统、终端和网络设置。</CardDescription>
                   </div>
                   <ChannelFingerprintFields
                     value={value}
@@ -1371,10 +1367,6 @@ function FingerprintEditor({
                     proxies={proxies.data?.items ?? []}
                   />
                 </section>
-
-                <CardDescription className="text-sm text-muted-foreground">
-                  指纹保存到该供应账户，后续请求使用此身份。
-                </CardDescription>
               </FieldGroup>
             </FieldSet>
           </ScrollArea>
@@ -1754,9 +1746,7 @@ export function OAuthWizard({
                         }}
                       />
                       <FieldDescription>
-                        {supplierId
-                          ? "输入此账户的新 RT"
-                          : "一行一个，最多 50 条。批量导入为每个新账户独立生成设备指纹与安装 ID，沿用所选代理和时区；重复账户保留原指纹。"}
+                        {supplierId ? "输入新的 RT" : "每行一条，最多 50 条"}
                       </FieldDescription>
                     </Field>
                   ) : pending ? (

@@ -1365,7 +1365,6 @@ export function ConsumerForm({
           />
           <FieldContent>
             <FieldLabel htmlFor={`${fieldId}-enabled`}>允许账户登录</FieldLabel>
-            <FieldDescription>与订阅是否到期分别管理。</FieldDescription>
           </FieldContent>
         </Field>
       </div>
@@ -1416,7 +1415,6 @@ export function ConsumerForm({
           />
         </Field>
       </div>
-      <FieldDescription>到期结束付费权益，免费访问和额度由所选套餐管理。</FieldDescription>
     </FieldSet>
   );
   return (
@@ -2187,9 +2185,6 @@ function Devices({ id }: { id: string }) {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <CardDescription className="text-sm text-muted-foreground">
-                授权只用于当前账户的消费操作。撤销后该设备需要重新登录。
-              </CardDescription>
               <>
                 <div className="mb-2 flex justify-end">
                   <DropdownMenu>
@@ -3004,7 +2999,6 @@ function ClientRecords({ id }: { id: string }) {
             </SelectContent>
           </Select>
         </Field>
-        <CardDescription>仅展示本账户的实际记录。</CardDescription>
       </div>
       {kind === "logs" ? (
         <Logs id={id} />

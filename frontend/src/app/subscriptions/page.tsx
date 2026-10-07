@@ -33,7 +33,7 @@ import { date } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel, FieldSet, FieldGroup, FieldDescription } from "@/components/ui/field";
+import { Field, FieldLabel, FieldSet, FieldGroup } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -48,7 +48,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -379,12 +378,13 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
           if (!open && !actions.isBusy("subscription")) setEditing(undefined);
         }}
       >
-        <DialogContent {...focus} className="max-h-[90dvh] overflow-y-auto">
+        <DialogContent
+          {...focus}
+          aria-describedby={undefined}
+          className="max-h-[90dvh] overflow-y-auto"
+        >
           <DialogHeader>
             <DialogTitle>{editing?.id ? "调整订阅" : "发放订阅"}</DialogTitle>
-            <DialogDescription>
-              每位用户在每个平台只有一个订阅。管理员发放不扣钱包余额。
-            </DialogDescription>
           </DialogHeader>
           <form
             noValidate
@@ -484,11 +484,10 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
                       setEditing((value) => (value ? { ...value, reissue } : value))
                     }
                   />
-                  <FieldLabel htmlFor={`${id}-reissue`}>重新发放，使用当前售价</FieldLabel>
+                  <FieldLabel htmlFor={`${id}-reissue`}>
+                    重新发放，重启周期并使用当前售价
+                  </FieldLabel>
                 </Field>
-                <FieldDescription>
-                  重新发放会重启用量周期并保存当前售价作为升级抵扣基准，到期时间按此表单设置。不勾选时保留原有计价记录。
-                </FieldDescription>
                 <Field orientation="horizontal">
                   <Switch
                     id={`${id}-enabled`}

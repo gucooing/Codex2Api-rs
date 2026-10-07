@@ -14,7 +14,6 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -241,12 +240,12 @@ export default function CouponsPage() {
           if (!open && !busy) setEdit(undefined);
         }}
       >
-        <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-xl">
+        <DialogContent
+          aria-describedby={undefined}
+          className="flex max-h-[90dvh] flex-col sm:max-w-xl"
+        >
           <DialogHeader>
             <DialogTitle>{edit?.id ? "编辑优惠券" : "创建优惠券"}</DialogTitle>
-            <DialogDescription>
-              固定金额优惠券，按原订阅抵扣后的应付金额计算门槛。已确认订单保留当时的优惠，修改适用于之后的订单。
-            </DialogDescription>
           </DialogHeader>
           <form
             noValidate

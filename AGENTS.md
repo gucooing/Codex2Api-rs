@@ -148,6 +148,9 @@ validation are complete.
 - Keep Next.js static export embedded in the single Rust process; production must not require a Node.js server.
 - Use official shadcn/ui components directly. Do not create custom visual wrappers, controls, or handwritten component CSS. Keep only required business data/state/event logic outside the official component source.
 - Keep all pages compact. Do not add duplicate page-title/description banners in the content area; put refresh, view switches and create actions inside the top filter bar.
+- Keep implementation explanations and long operating instructions in documentation,
+  not on web pages. Use concise field labels, actual values and action feedback;
+  do not render developer notes about protocol, persistence, isolation or bookkeeping.
 - Supplier quota summaries stay compact: render the windows actually returned by the official response, labelled by their reported duration (including 30-day windows), without placeholders for absent windows. Each window has reset countdown on the first line and shadcn Progress plus percentage on the second; no extra label before the percentage. Read persisted official snapshots and reuse the existing cache; UI countdown/filter/view changes must not call the provider.
 - Frontend code owns page structure and field definitions. Never gate entire pages, tables, tabs or forms on API data/loading/error, or use backend field descriptors to construct the UI. Render structure first and bind values/rows as they arrive. Keep same-resource data on refresh failure and disable writes until actual data is ready. Never save placeholder defaults.
 - Use the official shadcn/ui neutral palette; do not add custom accent-color choices or overrides. Light, dark and system theme modes are browser-local preferences; persist the mode locally, never in a business account or server policy.

@@ -1471,9 +1471,6 @@ function ModelEditor({
                         <Plus />
                         添加分辨率档位
                       </Button>
-                      <CardDescription className="text-sm text-muted-foreground">
-                        实际成功张数按长边档位计费，未配置档位保持未计价。
-                      </CardDescription>
                     </div>
                   </FieldSet>
                 )}

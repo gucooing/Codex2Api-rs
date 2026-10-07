@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 
-import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { useId } from "react";
 import { Input } from "@/components/ui/input";
 import {
@@ -132,9 +132,6 @@ export function ChatgptFingerprintFields({
           <Input
             id={fieldId + "-field-10" + "-" + encodeURIComponent(String("时区"))}
             aria-label={"时区"}
-            aria-describedby={
-              fieldId + "-field-10" + "-" + encodeURIComponent(String("时区")) + "-hint"
-            }
             value={value.timezone}
             onChange={(e) => onChange({ ...value, timezone: e.target.value })}
             placeholder="Asia/Taipei"
@@ -163,13 +160,6 @@ export function ChatgptFingerprintFields({
             </Button>
           )}
         </div>
-        {Boolean("留空保留请求中的时区。") && (
-          <FieldDescription
-            id={fieldId + "-field-10" + "-" + encodeURIComponent(String("时区")) + "-hint"}
-          >
-            {"用于对话和上下文压缩的日期与环境信息；留空保留请求中的时区。"}
-          </FieldDescription>
-        )}
       </Field>
     </div>
   );

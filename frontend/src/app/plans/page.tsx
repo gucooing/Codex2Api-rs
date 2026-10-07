@@ -36,7 +36,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Field, FieldLabel, FieldDescription, FieldSet, FieldGroup } from "@/components/ui/field";
+import { Field, FieldLabel, FieldSet, FieldGroup } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -54,7 +54,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
@@ -382,6 +381,7 @@ function PlanEditor({
     >
       <DialogContent
         {...focus}
+        aria-describedby={undefined}
         showCloseButton={false}
         className="flex max-h-[90dvh] flex-col sm:max-w-2xl"
         onEscapeKeyDown={(event) => {
@@ -393,9 +393,6 @@ function PlanEditor({
       >
         <DialogHeader>
           <DialogTitle>{plan.id ? "编辑套餐" : "添加套餐"}</DialogTitle>
-          <DialogDescription>
-            Free 是平台的基础订阅；付费到期后自动使用平台 Free 套餐的权限和额度。
-          </DialogDescription>
         </DialogHeader>
         <DialogClose asChild>
           <Button
@@ -505,9 +502,6 @@ function PlanEditor({
                       onChange={(event) => update("description", event.target.value)}
                       placeholder="介绍套餐的特点、适用场景和权益"
                     />
-                    <FieldDescription>
-                      支持 Markdown，卡片显示前三行，详情显示完整内容。
-                    </FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor={`${id}-price`}>售价（USD）</FieldLabel>
@@ -553,7 +547,6 @@ function PlanEditor({
                           ))}
                       </SelectContent>
                     </Select>
-                    <FieldDescription>供应绑定仅管理员可见。</FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor={`${id}-model-access`}>模型权限</FieldLabel>
@@ -576,16 +569,11 @@ function PlanEditor({
                       id={`${id}-allow-purchase`}
                       checked={value.allow_purchase}
                       disabled={value.plan_type === "free"}
-                      aria-describedby={`${id}-purchase-hint`}
                       onCheckedChange={(v) => update("allow_purchase", v)}
                     />
                     <FieldLabel htmlFor={`${id}-allow-purchase`}>允许购买</FieldLabel>
                   </Field>
                 </div>
-                <FieldDescription id={`${id}-purchase-hint`}>
-                  开启后展示在用户端，关闭后禁止用户购买和续订；管理员分配不受限制。Free
-                  自动提供，无需购买。
-                </FieldDescription>
                 {value.model_access === "selected" && (
                   <FieldGroup className="gap-2">
                     <Field>

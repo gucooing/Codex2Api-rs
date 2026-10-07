@@ -146,9 +146,8 @@ export default function UsagePage() {
       </div>
       <p className="text-xs text-muted-foreground">
         {summary
-          ? `${summary.missing_token_requests} 次用量不完整，${summary.unpriced_requests} 次尚无计费金额；“—”表示未记录，统计仅累加已知数值。缓存命中属于输入、推理属于输出，不重复累加。`
-          : "加载本人使用记录。"}{" "}
-        计费用量消耗套餐额度，与钱包余额分开。
+          ? `${summary.missing_token_requests} 次用量不完整 · ${summary.unpriced_requests} 次未计价`
+          : "—"}
       </p>
       <Card>
         <CardContent>

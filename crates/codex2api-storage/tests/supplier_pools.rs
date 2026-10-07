@@ -584,10 +584,12 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
             .await
             .unwrap();
         match id {
-            "disabled" => storage
-                .set_account_status(id, SupplierStatus::Disabled)
-                .await
-                .unwrap(),
+            "disabled" => {
+                storage
+                    .set_account_status(id, SupplierStatus::Disabled)
+                    .await
+                    .unwrap();
+            }
             "rejected" => storage.reject_supplier_auth(id, auth).await.unwrap(),
             "reauthorized" => {
                 storage

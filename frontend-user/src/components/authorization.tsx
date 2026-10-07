@@ -216,7 +216,6 @@ export function Authorization({ device = false }: { device?: boolean }) {
                       onChange={(e) => setPassword(e.target.value)}
                     />
                   </Field>
-                  <CardDescription>登录仅用于本次授权链接，验证后还需确认身份。</CardDescription>
                   <Button type="submit">{actions.isBusy("identify") && <Spinner />}验证身份</Button>
                 </FieldGroup>
               </FieldSet>

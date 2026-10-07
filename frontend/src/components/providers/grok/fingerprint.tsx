@@ -1,6 +1,6 @@
 "use client";
 import { useId } from "react";
-import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Select,
   SelectTrigger,
@@ -78,9 +78,6 @@ export function GrokFingerprintFields({
           value={value.timezone}
           onChange={(e) => onChange({ ...value, timezone: e.target.value })}
         />
-        <FieldDescription>
-          设备资料保存在当前供应账户；Grok 请求保留客户端的环境上下文。
-        </FieldDescription>
       </Field>
     </div>
   );

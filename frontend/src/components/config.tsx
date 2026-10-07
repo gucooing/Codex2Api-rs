@@ -234,9 +234,6 @@ function ConfigForm({
             {busy ? "正在保存…" : "保存设置"}
           </Button>
         </CardAction>
-        {switches.length > 0 && (
-          <CardDescription>统一保存修改；标记为“默认”的选项尚未指定开启或关闭。</CardDescription>
-        )}
       </CardHeader>
       <CardContent>
         <form
@@ -294,18 +291,12 @@ function ConfigForm({
                     <Field key={controlId} orientation="horizontal">
                       <FieldContent>
                         <FieldLabel htmlFor={controlId}>{field.label}</FieldLabel>
-                        {field.description && (
-                          <FieldDescription id={`${controlId}-hint`} className="text-xs">
-                            {field.description}
-                          </FieldDescription>
-                        )}
                       </FieldContent>
                       <div className="flex shrink-0 items-center gap-2">
                         {current == null && <Badge variant="outline">默认</Badge>}
                         <Switch
                           id={controlId}
                           checked={current === true}
-                          aria-describedby={field.description ? `${controlId}-hint` : undefined}
                           onCheckedChange={(checked) =>
                             change(config, withPath(value, field.path, checked))
                           }
@@ -429,11 +420,7 @@ function BusinessFields({
                           );
                         }}
                       >
-                        <SelectTrigger
-                          id={controlId}
-                          aria-describedby={field.description ? `${controlId}-hint` : undefined}
-                          className="w-full"
-                        >
+                        <SelectTrigger id={controlId} className="w-full">
                           <SelectValue placeholder={field.optional ? "使用默认设置" : "请选择"} />
                         </SelectTrigger>
                         <SelectContent position="popper">
@@ -450,7 +437,6 @@ function BusinessFields({
                     ) : field.kind === "text" ? (
                       <Textarea
                         id={controlId}
-                        aria-describedby={field.description ? `${controlId}-hint` : undefined}
                         rows={2}
                         maxLength={2000}
                         value={typeof current === "string" ? current : ""}
@@ -459,7 +445,6 @@ function BusinessFields({
                     ) : (
                       <Input
                         id={controlId}
-                        aria-describedby={field.description ? `${controlId}-hint` : undefined}
                         type={
                           field.kind === "integer"
                             ? "number"
@@ -490,11 +475,6 @@ function BusinessFields({
                           )
                         }
                       />
-                    )}
-                    {field.description && (
-                      <FieldDescription id={`${controlId}-hint`} className="text-xs">
-                        {field.description}
-                      </FieldDescription>
                     )}
                   </Field>
                 );
