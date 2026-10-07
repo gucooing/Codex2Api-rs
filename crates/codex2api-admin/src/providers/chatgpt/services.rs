@@ -200,9 +200,9 @@ async fn observe_request_failure(
     let Some(revision) = auth_revision else {
         return Ok(());
     };
-    // Share execution's classification; a probe has no separate failure counter
+    // Share ChatGPT execution's classification; a probe has no separate failure counter
     // or blanket "keep state" rule. Transient failures are not auth rejection.
-    match error.supplier_failure(chrono::Utc::now().timestamp()) {
+    match error.supplier_failure_for(codex2api_core::CHATGPT, chrono::Utc::now().timestamp()) {
         Some(codex2api_upstream::SupplierFailure::Authentication) => {
             state
                 .storage

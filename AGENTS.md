@@ -117,6 +117,10 @@ validation are complete.
 - A channel may not import another channel or add branches to the other channel's
   authentication, transport or handlers. Root modules may dispatch by provider;
   shared SQLite, supplier pools, billing, sessions and UI layout stay protocol-neutral.
+- Common supplier error handling is common within a provider: ChatGPT quota
+  probes and administrator refreshes reuse ChatGPT execution's credential refresh,
+  retry and error classification. Never apply ChatGPT error codes or recovery
+  rules to Grok or another provider; only classified availability reaches shared storage.
 - Grok supplier credentials, PKCE/device/RT flows, frozen identity, clients and
   version constants are independent of ChatGPT. Never interpret Grok tokens as
   Codex auth.json or send Codex headers to Grok.

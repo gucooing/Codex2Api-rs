@@ -126,10 +126,12 @@ each sweep. It probes only currently quota-exhausted, enabled, authorized suppli
 with current credentials, at most four concurrently; healthy, disabled, rejected
 and already-expired cooldowns are excluded. It shares account clients, per-account
 cache locks and concurrent fresh observations with administrator checks. Failures
-use execution's normal authentication refresh/retry and supplier failure classification:
+use ChatGPT execution's normal authentication refresh/retry and supplier failure classification:
 permanent authorization rejection marks the credentials invalid, explicit exhaustion
 updates cooldowns, and transient transport/service failures do not disable accounts.
 Failed reads preserve the last quota snapshot; no separate probe failure counter is used.
+These wire-error and authentication rules remain in the ChatGPT adapter and are
+never applied to Grok or another provider.
 No browser is needed.
 The worker is cancelled before storage closes. The list refresh explicitly fetches
 official quotas for eligible accounts with bounded concurrency. Ordinary list reads
