@@ -10,6 +10,12 @@ pub struct ApplicationRouters {
     pub api: Router,
     pub admin: Router,
     pub user: Router,
+    quota_monitor: codex2api_admin::AdminState,
+}
+impl ApplicationRouters {
+    pub fn spawn_quota_monitor(&self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(self.quota_monitor.clone().monitor_supplier_quota())
+    }
 }
 pub fn routers(
     storage: Storage,
@@ -41,8 +47,9 @@ pub fn routers(
     };
     Ok(ApplicationRouters {
         api: codex2api_api::router(api),
-        admin: codex2api_admin::router(admin).merge(codex2api_web::admin_router()),
+        admin: codex2api_admin::router(admin.clone()).merge(codex2api_web::admin_router()),
         user: codex2api_user::router(user).merge(codex2api_web::user_router()),
+        quota_monitor: admin,
     })
 }
 pub fn validate_origin(value: &str) -> Result<String> {

@@ -13,7 +13,7 @@ export function useSupplierQuotas(accounts: Supplier[] | undefined) {
       for (const account of accounts!) {
         if (controller.signal.aborted) break;
         if (
-          account.status !== "active" ||
+          !["active", "quota_exhausted"].includes(account.status) ||
           !account.authorized ||
           (account.quota && !account.quota.stale)
         )
@@ -60,6 +60,29 @@ export function useSupplierQuotas(accounts: Supplier[] | undefined) {
       updates?.source === accounts ? (updates.items[account.id] ?? account) : account,
     ) ?? []
   );
+}
+
+/** An explicit list refresh checks official quotas, including still-fresh cache. */
+export async function refreshSupplierQuotas(accounts: Supplier[]) {
+  const pending = accounts.filter(
+    (account) =>
+      account.authorized &&
+      !account.authentication_invalid &&
+      ["active", "quota_exhausted"].includes(account.status),
+  );
+  const failures: string[] = [];
+  await Promise.all(
+    Array.from({ length: Math.min(4, pending.length) }, async () => {
+      for (let account = pending.shift(); account; account = pending.shift()) {
+        try {
+          await request<Supplier>(`/suppliers/${account.id}/quota?refresh=true`);
+        } catch {
+          failures.push(account.email || account.display_name || account.id);
+        }
+      }
+    }),
+  );
+  return failures;
 }
 
 /** A local clock tick never performs network I/O. */

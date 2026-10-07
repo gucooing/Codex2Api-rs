@@ -3,6 +3,129 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::json;
 #[tokio::test]
+async fn subscription_expiry_survives_list_detail_quota_refresh_and_state_reset() {
+    use codex2api_storage::{QuotaSnapshot, SupplierTokens};
+    let f = Fixture::new().await;
+    let id = f.state.accounts.create_pending().await.unwrap().account.id;
+    // Synthetic ID token: exp=2000000000, subscription_active_until=2026-10-17T08:00:00+08:00.
+    let token = "e30.eyJleHAiOjIwMDAwMDAwMDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X3N1YnNjcmlwdGlvbl9hY3RpdmVfdW50aWwiOiIyMDI2LTEwLTE3VDA4OjAwOjAwKzA4OjAwIn19.fixture";
+    f.storage
+        .upsert_supplier_tokens(SupplierTokens {
+            account_id: id.clone(),
+            id_token: Some(token.into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    f.storage
+        .store_account_quota(
+            &id,
+            &QuotaSnapshot {
+                value: json!({"rate_limit":{"allowed":true}}),
+                observed_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+    let expiry = json!(
+        chrono::DateTime::parse_from_rfc3339("2026-10-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    );
+    assert_eq!(
+        f.get("/admin/api/suppliers").await["items"][0]["subscription_expires_at"],
+        expiry
+    );
+    for suffix in ["", "/quota"] {
+        assert_eq!(
+            f.get(&format!("/admin/api/suppliers/{id}{suffix}")).await["subscription_expires_at"],
+            expiry
+        );
+    }
+    let reset = body(
+        f.request(
+            "POST",
+            &format!("/admin/api/suppliers/{id}/reset-state"),
+            json!({}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(reset["subscription_expires_at"], expiry);
+    // A credential expiry alone must never become a subscription expiry.
+    f.storage
+        .upsert_supplier_tokens(SupplierTokens {
+            account_id: id.clone(),
+            id_token: Some("e30.eyJleHAiOjIwMDAwMDAwMDB9.fixture".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        f.get(&format!("/admin/api/suppliers/{id}")).await["subscription_expires_at"].is_null()
+    );
+}
+
+#[tokio::test]
+async fn administrator_can_reset_quota_offline_without_bypassing_auth_or_manual_disablement() {
+    use codex2api_storage::{SupplierStatus, SupplierTokens};
+    let f = Fixture::new().await;
+    let id = f.state.accounts.create_pending().await.unwrap().account.id;
+    f.storage
+        .upsert_supplier_tokens(SupplierTokens {
+            account_id: id.clone(),
+            access_token: Some("fixture".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    f.storage
+        .set_account_status(&id, SupplierStatus::Active)
+        .await
+        .unwrap();
+    let auth = f
+        .storage
+        .supplier_auth_revision(&id)
+        .await
+        .unwrap()
+        .unwrap();
+    let until = chrono::Utc::now().timestamp() + 86400;
+    f.storage
+        .exhaust_supplier_quota(&id, auth, until, "usage_limit_reached")
+        .await
+        .unwrap();
+    let path = format!("/admin/api/suppliers/{id}/reset-state");
+    assert_eq!(
+        f.with_auth("POST", &path, json!({}), None, None)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.with_auth("POST", &path, json!({}), Some(&f.cookie), None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.get(&format!("/admin/api/suppliers/{id}")).await["status"],
+        "quota_exhausted"
+    );
+    let response = f.request("POST", &path, json!({})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let reset = body(response).await;
+    assert_eq!(reset["status"], "active");
+    assert!(reset["cooldown_until"].is_null());
+    f.storage.reject_supplier_auth(&id, auth).await.unwrap();
+    f.storage
+        .set_account_status(&id, SupplierStatus::Disabled)
+        .await
+        .unwrap();
+    let reset = body(f.request("POST", &path, json!({})).await).await;
+    assert_eq!(reset["status"], "disabled");
+    assert_eq!(reset["authentication_invalid"], true);
+}
+#[tokio::test]
 async fn supplier_list_keeps_official_windows_and_persisted_errors_independent() {
     use codex2api_storage::{SupplierStatus, SupplierTokens};
     let f = Fixture::new().await;

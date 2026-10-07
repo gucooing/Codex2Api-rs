@@ -1,6 +1,6 @@
 //! Provider-neutral availability policy. Wire error classification belongs to the adapter.
 pub use crate::providers::chatgpt::availability::{
-    classify_supplier_failure, quota_unavailable_until,
+    classify_supplier_failure, quota_available, quota_unavailable_until,
 };
 use http::HeaderMap;
 use serde_json::Value;

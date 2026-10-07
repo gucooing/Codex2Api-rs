@@ -2,6 +2,7 @@
 mod providers;
 mod proxy_checks;
 mod quota;
+mod quota_monitor;
 mod rest;
 mod session;
 mod state;
