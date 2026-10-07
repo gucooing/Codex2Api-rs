@@ -116,7 +116,6 @@ async fn cookie_sessions_require_csrf_for_every_administration_mutation() {
     for (method, path) in [
         ("POST", "/admin/api/logout"),
         ("POST", "/admin/api/suppliers/fake/status"),
-        ("POST", "/admin/api/suppliers/fake/recover"),
         ("DELETE", "/admin/api/suppliers/fake"),
         ("PUT", "/admin/api/suppliers/fake/fingerprint"),
         ("POST", "/admin/api/suppliers/oauth/start"),

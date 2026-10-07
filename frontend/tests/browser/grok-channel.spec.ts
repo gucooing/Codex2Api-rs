@@ -96,6 +96,7 @@ test("supplier details display the email and Grok's observed subscription", asyn
         email: "supplier@example.test",
         username: "WRONG-USERNAME",
         status: "active",
+        enabled: true,
         plan_type: "Free",
         tag_ids: [],
         authorized: true,

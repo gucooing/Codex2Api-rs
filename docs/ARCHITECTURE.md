@@ -98,8 +98,15 @@ suppliers' provider. `POST /admin/api/suppliers/tags` requires `account_ids` and
 omitted fields cannot clear tags. Unselected suppliers and other account fields
 remain unchanged. Only edited selections are submitted.
 
-Supplier availability separates manual disablement, permanent credential rejection
-and quota exhaustion. Ordinary request throttling remains a client retry concern.
+Supplier availability separates manual disablement, permanent credential rejection,
+billing rejection and quota exhaustion. The administrator `enabled` flag controls
+intent only; it can be changed in every availability state. Successful explicit
+reauthorization clears prior failure state in the same transaction as credentials,
+starts a new credential revision even for identical tokens, preserves manual
+disablement and frozen identity, and repairs eligible pool assignments. No manual
+authorization-recovery endpoint or button exists. Token refresh uses a revision
+check, cannot overwrite a concurrent login, and preserves billing and manual state.
+Ordinary request throttling remains a client retry concern.
 The ChatGPT adapter follows
 `codex-api/src/api_bridge.rs`, `sse/responses_error.rs` and
 `login/src/auth/manager.rs` in the pinned reference: `usage_limit_reached` and known
@@ -110,6 +117,14 @@ and 5xx never permanently invalidate credentials. Refresh rejection follows the
 official permanent codes, including HTTP 400 `invalid_grant`; expired access tokens
 are refreshed before abandoning their supplier. Observations carry credential
 revisions so stale failures cannot disable newly replaced authorization.
+
+ChatGPT HTTP 402 `Payment Required`, including responses without a structured
+error code, records a persistent billing rejection and removes that supplier from
+the pool. `detail.code` is preserved when supplied. This rejection does not delete
+credentials or invoke authorization recovery, has no automatic expiry, and is not
+cleared by successful quota reads or ordinary token refresh. Explicit successful
+reauthorization or the administrator state-reset operation clears it. Grok does not
+inherit this ChatGPT-specific classification.
 
 Quota cooldowns persist in SQLite and expire automatically at the official reset or
 Retry-After time. When timing is absent, a sixty-second retry cooldown is used;
@@ -123,7 +138,7 @@ checks started before an administrator reset.
 
 The process runs a ChatGPT recovery sweep at startup and waits ten minutes after
 each sweep. It probes only currently quota-exhausted, enabled, authorized suppliers
-with current credentials, at most four concurrently; healthy, disabled, rejected
+with current credentials, at most four concurrently; healthy, disabled, rejected, billing-blocked
 and already-expired cooldowns are excluded. It shares account clients, per-account
 cache locks and concurrent fresh observations with administrator checks. Failures
 use ChatGPT execution's normal authentication refresh/retry and supplier failure classification:
@@ -133,18 +148,20 @@ Failed reads preserve the last quota snapshot; no separate probe failure counter
 These wire-error and authentication rules remain in the ChatGPT adapter and are
 never applied to Grok or another provider.
 No browser is needed.
-The worker is cancelled before storage closes. The list refresh explicitly fetches
-official quotas for eligible accounts with bounded concurrency. Ordinary list reads
-reuse the ten-minute cache, and UI timer ticks never call the provider.
+The worker is cancelled before storage closes. Supplier lists use only the SQLite
+snapshots included in the list DTO, including stale or missing snapshots. They do
+not call quota endpoints and have no refresh button or batch quota refresh. Query,
+view changes and UI timer ticks never call the provider. Explicit official refresh
+remains available on the account detail page.
 
 Administrator `POST /admin/api/suppliers/{id}/reset-state` provides an offline retry
-through the list's **More / Reset state** action. It clears only quota cooldowns,
+through the list's **More / Reset state** action. It clears quota cooldowns and billing rejection,
 invalidates in-flight quota observation revisions and repairs pool routes; manual
 disablement, authorization rejection, credentials and official snapshots remain
 intact. A subsequent explicit upstream exhaustion can mark the account again.
 
 HTTP Responses and Responses WebSocket internally try each eligible pool member
-at most once for unrecoverable authorization or explicit quota exhaustion.
+at most once for unrecoverable authorization, explicit quota exhaustion or ChatGPT billing rejection.
 Authentication recovery remains bounded.
 SSE and WS buffer the small pre-generation prelude so a rejected attempt does not
 leak its error/response ID into the client's successful generation. Prices and RPM

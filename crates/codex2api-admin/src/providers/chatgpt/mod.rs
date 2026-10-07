@@ -145,13 +145,18 @@ pub async fn official(
     let account = s.storage.require_account(&id).await?;
     if q.section == "details" {
         let refresh_error = if q.refresh {
-            match s.upstream.get(&id).await {
-                Ok(client) => client
-                    .refresh_workspace_details()
-                    .await
-                    .err()
-                    .map(|e| e.to_string()),
-                Err(error) => Some(error.to_string()),
+            let revision = s.storage.supplier_auth_revision(&id).await?;
+            let observation = s.storage.supplier_health(&id).await?.cooldown_revision;
+            let result =
+                async { s.upstream.get(&id).await?.refresh_workspace_details().await }.await;
+            match result {
+                Ok(_) => None,
+                Err(error) => {
+                    services::observe_request_failure(&s, &id, revision, observation, &error)
+                        .await
+                        .map_err(ApiError::upstream)?;
+                    Some(error.to_string())
+                }
             }
         } else {
             None

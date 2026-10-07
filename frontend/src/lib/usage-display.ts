@@ -114,6 +114,7 @@ export function usageResultCode(
 export function usageFailureKind(kind: string | null | undefined) {
   const labels: Record<string, string> = {
     authentication: "授权失效",
+    payment_required: "账单受限",
     permission: "权限拒绝",
     rate_limit: "临时限流",
     quota_exhausted: "额度耗尽",

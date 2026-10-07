@@ -30,25 +30,32 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
             .and_then(|snapshot| cached_username(&snapshot.value))
     );
     let health = s.storage.supplier_health(&a.id).await?;
-    value["status"] = json!(if a.status != SupplierStatus::Active {
-        "disabled"
-    } else if health.authentication_invalid {
-        "error"
-    } else if let Some(kind) = &health.cooldown_kind {
-        kind
+    let enabled = a.status == SupplierStatus::Active;
+    let authorized = s
+        .storage
+        .load_supplier_tokens(&a.id)
+        .await?
+        .and_then(|t| t.access_token)
+        .is_some_and(|t| !t.is_empty());
+    value["enabled"] = json!(enabled);
+    value["status"] = json!(health.display_status(enabled, authorized));
+    value["authorized"] = json!(authorized);
+    value["error_message"] = json!(if health.authentication_invalid {
+        health.error_message.as_deref()
+    } else if health.payment_required {
+        Some("HTTP 402 Payment Required：供应账户付费/订阅不可用")
+    } else if !authorized {
+        Some("供应账户尚未完成授权")
     } else {
-        "active"
+        None
     });
-    value["authorized"] = json!(
-        a.status != SupplierStatus::Pending
-            && s.storage
-                .load_supplier_tokens(&a.id)
-                .await?
-                .and_then(|t| t.access_token)
-                .is_some_and(|t| !t.is_empty())
-    );
-    value["error_message"] = json!(health.error_message);
-    value["error_at"] = json!(health.error_at);
+    value["error_at"] = json!(if health.authentication_invalid {
+        &health.error_at
+    } else {
+        &health.payment_required_at
+    });
+    value["payment_required"] = json!(health.payment_required);
+    value["payment_required_code"] = json!(health.payment_required_code);
     value["authentication_invalid"] = json!(health.authentication_invalid);
     value["cooldown_until"] = json!(health.cooldown_until);
     value["cooldown_code"] = json!(health.cooldown_code);
@@ -95,20 +102,7 @@ pub async fn status(
     Path(id): Path<String>,
     Json(f): Json<StatusInput>,
 ) -> ApiResult {
-    let a = s.storage.require_account(&id).await?;
-    if f.enabled
-        && (a.status == SupplierStatus::Pending
-            || s.storage
-                .load_supplier_tokens(&id)
-                .await?
-                .and_then(|t| t.access_token)
-                .is_none_or(|t| t.is_empty()))
-    {
-        return Err(ApiError::bad("供应账户需先完成授权"));
-    }
-    if f.enabled && s.storage.supplier_health(&id).await?.authentication_invalid {
-        return Err(ApiError::bad("授权已失效，请重新授权或检查恢复后再启用"));
-    }
+    s.storage.require_account(&id).await?;
     s.storage
         .set_account_status(
             &id,
@@ -120,30 +114,11 @@ pub async fn status(
         )
         .await?;
     s.upstream.evict(&id).await;
-    s.storage.refresh_supplier_bindings(&id).await?;
     Ok(ok())
-}
-pub async fn recover(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
-    let account = s.storage.require_account(&id).await?;
-    if account.status == SupplierStatus::Pending {
-        return Err(ApiError::bad("供应账户需先完成授权"));
-    }
-    let health = s.storage.supplier_health(&id).await?;
-    // A real request is required; a healthy cached snapshot cannot prove recovery.
-    crate::providers::quota(&s, &id, true)
-        .await
-        .map_err(ApiError::upstream)?;
-    if health.authentication_invalid && !s.storage.recover_supplier(&id, health.revision).await? {
-        return Err(ApiError::bad("检查期间授权再次被拒绝，请重新授权"));
-    }
-    s.upstream.evict(&id).await;
-    Ok(Json(
-        display(&s, &s.storage.require_account(&id).await?).await?,
-    ))
 }
 pub async fn reset_state(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     s.storage.require_account(&id).await?;
-    s.storage.reset_supplier_quota(&id).await?;
+    s.storage.reset_supplier_availability(&id).await?;
     Ok(Json(
         display(&s, &s.storage.require_account(&id).await?).await?,
     ))

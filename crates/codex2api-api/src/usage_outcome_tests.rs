@@ -27,6 +27,12 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
         .unwrap();
     let cases = [
         (
+            "billing",
+            json!({"type":"error","status":402,"error":{"message":"Payment Required"}}),
+            "payment_required",
+            Some(402),
+        ),
+        (
             "rate",
             json!({"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"retry later"}}}),
             "rate_limit",

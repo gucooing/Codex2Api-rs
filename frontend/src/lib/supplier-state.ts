@@ -5,6 +5,7 @@ export const supplierStatusLabel = (status: Supplier["status"]) =>
     active: "正常",
     disabled: "停用",
     error: "授权失效",
+    payment_required: "账单受限",
     quota_exhausted: "配额耗尽",
   })[status];
 

@@ -53,6 +53,12 @@ pub(crate) async fn observe(
             SupplierFailure::Authentication => {
                 state.storage.reject_supplier_auth(id, revision).await?
             }
+            SupplierFailure::PaymentRequired { code } => {
+                state
+                    .storage
+                    .mark_supplier_payment_required(id, revision, code.as_deref(), None)
+                    .await?
+            }
             SupplierFailure::QuotaExhausted { until, code } => {
                 state
                     .storage
@@ -198,6 +204,7 @@ async fn inspect_for(
                     status: failure.status.unwrap_or(429),
                     body,
                     headers,
+                    auth_revision: revision.map(|revision| revision.0),
                 });
             }
             if !is_prelude(&value) {
@@ -268,6 +275,7 @@ where
         match result {
             Ok(response) => return Ok(response),
             Err(error) => {
+                revision = error.auth_revision().or(revision);
                 let Some(mut failure) = error
                     .supplier_failure_for(&ctx.account.provider_id, chrono::Utc::now().timestamp())
                 else {
@@ -297,7 +305,8 @@ where
                                 Some("Supplier temporarily unavailable"),
                             )
                         }
-                        SupplierFailure::Authentication => error.failure(),
+                        SupplierFailure::Authentication
+                        | SupplierFailure::PaymentRequired { .. } => error.failure(),
                     };
                     log.supplier_attempt_failed(cause);
                 }
@@ -327,6 +336,94 @@ pub(crate) mod tests {
         VirtualAccount,
     };
     use serde_json::json;
+
+    #[tokio::test]
+    async fn payment_required_switches_http_and_sse_supply_without_rejecting_credentials() {
+        for stream in [false, true] {
+            let (_dir, state, oauth, ids) = setup_pool().await;
+            let first = ids[0].clone();
+            let ctx = select(&state, &oauth, &[]).await.unwrap();
+            let result = execute(&state, &oauth, ctx, &mut None, move |id| {
+                let first = first.clone();
+                async move {
+                    if id == first {
+                        Ok(if stream {
+                            response(200, true, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"rejected\"}}\n\ndata: {\"type\":\"error\",\"status\":402,\"error\":{\"message\":\"Payment Required\"}}\n\n")
+                        } else {
+                            response(402, false, "Payment Required")
+                        })
+                    } else {
+                        Ok(response(200, false, "{\"id\":\"success\"}"))
+                    }
+                }
+            }).await.unwrap();
+            assert_eq!(result.text().await.unwrap(), "{\"id\":\"success\"}");
+            let health = state.storage.supplier_health(&ids[0]).await.unwrap();
+            assert!(health.payment_required);
+            assert!(!health.authentication_invalid);
+            assert!(health.cooldown_until.is_none());
+            assert_eq!(
+                state
+                    .storage
+                    .load_supplier_tokens(&ids[0])
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .access_token
+                    .as_deref(),
+                Some("fixture")
+            );
+            assert_eq!(
+                select(&state, &oauth, &[]).await.unwrap().account.id,
+                ids[1]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn billing_failure_uses_the_actual_attempt_revision_after_a_token_refresh() {
+        let (_dir, state, oauth, ids) = setup_pool().await;
+        let first = ids[0].clone();
+        let storage = state.storage.clone();
+        let ctx = select(&state, &oauth, &[]).await.unwrap();
+        let result = execute(&state, &oauth, ctx, &mut None, move |id| {
+            let (first, storage) = (first.clone(), storage.clone());
+            async move {
+                if id == first {
+                    let snapshot = storage.supplier_auth_snapshot(&id).await.unwrap().unwrap();
+                    let mut tokens = snapshot.tokens;
+                    tokens.access_token = Some("refreshed-before-discovery".into());
+                    storage
+                        .replace_supplier_tokens(&id, snapshot.auth_revision, tokens)
+                        .await
+                        .unwrap();
+                    let revision = storage.supplier_auth_revision(&id).await.unwrap().unwrap();
+                    Err(UpstreamError::status(
+                        http::StatusCode::PAYMENT_REQUIRED,
+                        "Payment Required",
+                    )
+                    .with_auth_revision(revision))
+                } else {
+                    Ok(response(200, false, "{}"))
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.status(), 200);
+        assert!(
+            state
+                .storage
+                .supplier_health(&ids[0])
+                .await
+                .unwrap()
+                .payment_required
+        );
+        assert_eq!(
+            select(&state, &oauth, &[]).await.unwrap().account.id,
+            ids[1]
+        );
+    }
 
     #[tokio::test]
     async fn request_throttling_is_forwarded_without_changing_supplier_or_health() {

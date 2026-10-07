@@ -52,7 +52,8 @@ pub fn quota_unavailable_until(value: &Value, now: i64) -> Option<i64> {
     Some(reset.unwrap_or(now.saturating_add(60)))
 }
 
-/// Only credential rejection and explicit quota exhaustion remove pool supply.
+/// Credential rejection, HTTP 402 billing rejection and explicit quota
+/// exhaustion remove pool supply. Billing rejection never refreshes credentials.
 /// Ordinary throttling, including an unclassified 429, is forwarded for the
 /// official client to pause/retry; it never changes supplier health or binding.
 pub fn classify_supplier_failure(
@@ -63,16 +64,17 @@ pub fn classify_supplier_failure(
 ) -> Option<SupplierFailure> {
     let error = value
         .pointer("/response/error")
+        .filter(|value| !value.is_null())
         .or_else(|| value.get("error"))
+        .or_else(|| value.get("detail"))
         .unwrap_or(value);
-    let status = status.or_else(|| {
-        value
-            .get("status")
-            .and_then(Value::as_u64)
-            .and_then(|n| u16::try_from(n).ok())
-    });
+    let failure = crate::ResponseFailure::from_error(status, value);
+    let status = failure.status;
     if status == Some(401) {
         return Some(SupplierFailure::Authentication);
+    }
+    if status == Some(402) {
+        return Some(SupplierFailure::PaymentRequired { code: failure.code });
     }
     let code = error
         .get("code")
@@ -168,6 +170,53 @@ pub fn classify_supplier_failure(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn payment_required_is_chatgpt_billing_rejection_without_a_quota_reset() {
+        for (status, value, code) in [
+            (Some(402), Value::Null, None),
+            (
+                Some(402),
+                json!({"detail":{"code":"deactivated_workspace"}}),
+                Some("deactivated_workspace"),
+            ),
+            (
+                None,
+                json!({"type":"error","status":402,"error":{"message":"Payment Required"}}),
+                None,
+            ),
+            (
+                Some(200),
+                json!({"type":"response.failed","response":{"error":{"status_code":402,"code":"billing_required"}}}),
+                Some("billing_required"),
+            ),
+        ] {
+            assert_eq!(
+                classify_supplier_failure(status, &value, &HeaderMap::new(), 100),
+                Some(SupplierFailure::PaymentRequired {
+                    code: code.map(str::to_owned)
+                })
+            );
+        }
+        assert!(
+            crate::classify_provider_failure(
+                codex2api_core::GROK,
+                Some(402),
+                &Value::Null,
+                &HeaderMap::new(),
+                100
+            )
+            .is_none()
+        );
+        assert!(
+            classify_supplier_failure(
+                None,
+                &json!({"error":{"message":"Payment Required"}}),
+                &HeaderMap::new(),
+                100
+            )
+            .is_none()
+        );
+    }
     #[test]
     fn quota_recovery_requires_explicit_main_allowance_or_usable_credits() {
         for value in [

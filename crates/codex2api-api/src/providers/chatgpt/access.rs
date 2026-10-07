@@ -50,12 +50,12 @@ impl AccessCheck {
         if account.status != SupplierStatus::Active {
             return Err(ApiError::account_disabled());
         }
-        if storage
-            .supplier_health(&self.account_id)
-            .await?
-            .authentication_invalid
-        {
+        let health = storage.supplier_health(&self.account_id).await?;
+        if health.authentication_invalid {
             return Err(codex2api_upstream::UpstreamError::Unauthorized.into());
+        }
+        if health.payment_required {
+            return Err(crate::pool_execution::exhausted());
         }
         if storage
             .load_supplier_tokens(&self.account_id)
@@ -369,13 +369,12 @@ mod tests {
             .await
             .unwrap();
         assert!(rebound.validate(&storage).await.is_err());
-        let health = storage.supplier_health(&rebound.account_id).await.unwrap();
-        assert!(
-            storage
-                .recover_supplier(&rebound.account_id, health.revision)
-                .await
-                .unwrap()
-        );
+        let tokens = storage
+            .load_supplier_tokens(&rebound.account_id)
+            .await
+            .unwrap()
+            .unwrap();
+        storage.upsert_supplier_tokens(tokens).await.unwrap();
         assert!(rebound.validate(&storage).await.is_ok());
         storage
             .revoke_virtual_device(&account.id, &device)

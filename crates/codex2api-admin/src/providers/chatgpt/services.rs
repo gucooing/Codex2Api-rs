@@ -190,14 +190,14 @@ async fn request_with_revision(
     }
 }
 
-async fn observe_request_failure(
+pub(super) async fn observe_request_failure(
     state: &AdminState,
     id: &str,
     auth_revision: Option<i64>,
     cooldown_revision: i64,
     error: &codex2api_upstream::UpstreamError,
 ) -> Result<(), String> {
-    let Some(revision) = auth_revision else {
+    let Some(revision) = error.auth_revision().or(auth_revision) else {
         return Ok(());
     };
     // Share ChatGPT execution's classification; a probe has no separate failure counter
@@ -207,6 +207,18 @@ async fn observe_request_failure(
             state
                 .storage
                 .reject_supplier_auth(id, revision)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Some(codex2api_upstream::SupplierFailure::PaymentRequired { code }) => {
+            state
+                .storage
+                .mark_supplier_payment_required(
+                    id,
+                    revision,
+                    code.as_deref(),
+                    Some(cooldown_revision),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -227,6 +239,61 @@ mod tests {
     use super::*;
     use codex2api_storage::{Storage, SupplierStatus, SupplierTokens};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn billing_rejection_is_persisted_and_fresh_quota_does_not_restore_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("billing-check.sqlite"))
+            .await
+            .unwrap();
+        let state = AdminState::new(storage.clone()).unwrap();
+        let id = state.accounts.create_pending().await.unwrap().account.id;
+        storage
+            .upsert_supplier_tokens(SupplierTokens {
+                account_id: id.clone(),
+                access_token: Some("fixture".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        storage
+            .set_account_status(&id, SupplierStatus::Active)
+            .await
+            .unwrap();
+        let auth = storage.supplier_auth_revision(&id).await.unwrap().unwrap();
+        let observation = storage
+            .supplier_health(&id)
+            .await
+            .unwrap()
+            .cooldown_revision;
+        let error = codex2api_upstream::UpstreamError::status(
+            reqwest::StatusCode::PAYMENT_REQUIRED,
+            r#"{"detail":{"code":"deactivated_workspace"}}"#,
+        );
+        observe_request_failure(&state, &id, Some(auth), observation, &error)
+            .await
+            .unwrap();
+        let health = storage.supplier_health(&id).await.unwrap();
+        assert!(health.payment_required);
+        assert!(!health.authentication_invalid);
+        assert_eq!(
+            health.payment_required_code.as_deref(),
+            Some("deactivated_workspace")
+        );
+        quota_with_fetch(&state, &id, true, || async {
+            Ok((json!({"rate_limit":{"allowed":true}}), Some(auth)))
+        })
+        .await
+        .unwrap();
+        assert!(storage.supplier_health(&id).await.unwrap().payment_required);
+        assert!(
+            storage
+                .supplier_quota_probe_candidates("chatgpt")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn failed_checks_follow_execution_auth_and_quota_classification() {
@@ -332,6 +399,11 @@ mod tests {
             reqwest::StatusCode::TOO_MANY_REQUESTS,
             json!({"error":{"type":"usage_limit_reached","resets_at":until}}).to_string(),
         );
+        let generation = storage
+            .supplier_health(&id)
+            .await
+            .unwrap()
+            .cooldown_revision;
         observe_request_failure(&state, &id, Some(auth), generation, &exhausted)
             .await
             .unwrap();
@@ -349,7 +421,7 @@ mod tests {
                 .as_deref(),
             Some("quota_exhausted")
         );
-        storage.reset_supplier_quota(&id).await.unwrap();
+        storage.reset_supplier_availability(&id).await.unwrap();
         observe_request_failure(&state, &id, Some(auth), generation, &exhausted)
             .await
             .unwrap();
@@ -485,7 +557,7 @@ mod tests {
             Some(recovered)
         );
         quota_with_fetch(&state, &id, true, || async {
-            storage.reset_supplier_quota(&id).await.unwrap();
+            storage.reset_supplier_availability(&id).await.unwrap();
             Ok((exhausted, Some(auth)))
         })
         .await

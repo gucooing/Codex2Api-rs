@@ -175,7 +175,6 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
         )
         .await
         .unwrap();
-    let revision = f.storage.supplier_health(&first.id).await.unwrap().revision;
     f.storage
         .reject_supplier_auth(
             &first.id,
@@ -187,12 +186,6 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
         )
         .await
         .unwrap();
-    assert!(
-        !f.storage
-            .recover_supplier(&first.id, revision)
-            .await
-            .unwrap()
-    );
     let rows = f.get("/admin/api/suppliers").await;
     let row = rows["items"]
         .as_array()
@@ -218,7 +211,7 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
         )
         .await
         .status(),
-        StatusCode::BAD_REQUEST
+        StatusCode::OK
     );
     f.storage
         .set_account_status(&first.id, SupplierStatus::Disabled)
@@ -228,8 +221,34 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
         f.get(&format!("/admin/api/suppliers/{}", first.id)).await["status"],
         "disabled"
     );
-    let latest = f.storage.supplier_health(&first.id).await.unwrap().revision;
-    assert!(f.storage.recover_supplier(&first.id, latest).await.unwrap());
+    let old_revision = f
+        .storage
+        .supplier_auth_revision(&first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let tokens = f
+        .storage
+        .load_supplier_tokens(&first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    f.storage.upsert_supplier_tokens(tokens).await.unwrap();
+    f.storage
+        .reject_supplier_auth(&first.id, old_revision)
+        .await
+        .unwrap();
+    assert!(
+        !f.storage
+            .supplier_health(&first.id)
+            .await
+            .unwrap()
+            .authentication_invalid
+    );
+    assert_eq!(
+        f.get(&format!("/admin/api/suppliers/{}", first.id)).await["enabled"],
+        false
+    );
     assert_eq!(
         f.storage.require_account(&first.id).await.unwrap().status,
         SupplierStatus::Disabled
@@ -241,6 +260,17 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
             .unwrap()
             .is_some()
     );
+    let enabled = f
+        .request(
+            "POST",
+            &format!("/admin/api/suppliers/{}/status", first.id),
+            json!({"enabled":true}),
+        )
+        .await;
+    assert_eq!(enabled.status(), StatusCode::OK);
+    let restored = f.get(&format!("/admin/api/suppliers/{}", first.id)).await;
+    assert_eq!(restored["status"], "active");
+    assert!(restored["error_message"].is_null());
 }
 #[tokio::test]
 async fn supplier_quota_preserves_monthly_and_other_durations_without_absent_windows() {

@@ -21,6 +21,7 @@ async fn candidates(conn: &mut SqliteConnection, tag: &str, now: i64) -> Result<
          LEFT JOIN supplier_health h ON h.account_id=a.id
          WHERE m.tag_id=? AND a.status='active' AND COALESCE(k.access_token,'')!=''
            AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
+           AND h.payment_required_at IS NULL
            AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted' OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision OR h.cooldown_until<=?)
          ORDER BY (SELECT COUNT(*) FROM execution_routes r WHERE r.supplier_account_id=a.id),a.created_at,a.id",
     ).bind(tag).bind(now).fetch_all(conn).await?)

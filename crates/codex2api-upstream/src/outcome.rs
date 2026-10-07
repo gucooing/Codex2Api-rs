@@ -5,6 +5,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
     Authentication,
+    PaymentRequired,
     Permission,
     RateLimit,
     QuotaExhausted,
@@ -19,6 +20,7 @@ impl FailureKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Authentication => "authentication",
+            Self::PaymentRequired => "payment_required",
             Self::Permission => "permission",
             Self::RateLimit => "rate_limit",
             Self::QuotaExhausted => "quota_exhausted",
@@ -79,6 +81,7 @@ impl ResponseFailure {
         let reported = status.filter(|s| (400..=599).contains(s));
         let kind = match reported {
             Some(401) => K::Authentication,
+            Some(402) => K::PaymentRequired,
             Some(403) => K::Permission,
             Some(408 | 504) => K::Timeout,
             Some(429) => match known {
@@ -97,7 +100,10 @@ impl ResponseFailure {
             kind,
             status: reported.or_else(|| known.map(|(_, status)| status)),
             code: code.filter(|s| !s.is_empty()).map(str::to_owned),
-            message: message.filter(|s| !s.is_empty()).map(str::to_owned),
+            message: message
+                .filter(|s| !s.is_empty())
+                .or((reported == Some(402)).then_some("Payment Required"))
+                .map(str::to_owned),
         }
     }
 
@@ -268,6 +274,7 @@ mod tests {
     fn classification_requires_structured_evidence() {
         for (status, code, kind) in [
             (Some(401), "unknown", FailureKind::Authentication),
+            (Some(402), "unknown", FailureKind::PaymentRequired),
             (Some(403), "invalid_token", FailureKind::Permission),
             (Some(429), "rate_limit_exceeded", FailureKind::RateLimit),
             (
@@ -295,6 +302,15 @@ mod tests {
         );
         assert_eq!(failure.status, Some(429));
         assert_eq!(failure.kind, FailureKind::QuotaExhausted);
+        let billing = ResponseFailure::from_error(
+            Some(402),
+            &json!({"detail":{"code":"deactivated_workspace"}}),
+        );
+        assert_eq!(billing.kind, FailureKind::PaymentRequired);
+        assert_eq!(billing.status, Some(402));
+        assert_eq!(billing.code.as_deref(), Some("deactivated_workspace"));
+        assert_eq!(billing.message.as_deref(), Some("Payment Required"));
+        assert!(!billing.authentication_invalid());
         assert!(
             ResponseFailure::new(None, Some("new_error"), None)
                 .status

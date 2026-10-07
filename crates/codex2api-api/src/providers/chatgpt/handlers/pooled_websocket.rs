@@ -87,7 +87,13 @@ async fn open(
                 let Some(failure) = error.supplier_failure(chrono::Utc::now().timestamp()) else {
                     return Err(error.into());
                 };
-                pool::observe(state, &ctx.account.id, revision, &failure).await?;
+                pool::observe(
+                    state,
+                    &ctx.account.id,
+                    error.auth_revision().or(revision),
+                    &failure,
+                )
+                .await?;
                 excluded.push(ctx.account.id);
             }
         }
@@ -527,20 +533,26 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_prelude_is_consumed_and_exhausted_pool_sends_service_error_and_close() {
-        pool_websocket_fixture(false, false).await;
+        pool_websocket_fixture(false, false, false).await;
     }
 
     #[tokio::test]
     async fn quota_rejection_switches_supplier_without_leaking_failure_or_double_admission() {
-        pool_websocket_fixture(true, false).await;
+        pool_websocket_fixture(true, false, false).await;
     }
 
     #[tokio::test]
     async fn request_throttle_is_forwarded_without_rebinding_or_supplier_cooldown() {
-        pool_websocket_fixture(true, true).await;
+        pool_websocket_fixture(true, true, false).await;
     }
 
-    async fn pool_websocket_fixture(available: bool, throttle: bool) {
+    #[tokio::test]
+    async fn payment_required_rebinds_or_closes_an_exhausted_pool_without_refreshing_auth() {
+        pool_websocket_fixture(true, false, true).await;
+        pool_websocket_fixture(false, false, true).await;
+    }
+
+    async fn pool_websocket_fixture(available: bool, throttle: bool, payment: bool) {
         let (_dir, mut state, oauth, ids) = crate::pool_execution::tests::setup_pool().await;
         state
             .storage
@@ -606,7 +618,15 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            socket.send(UpstreamMessage::Text(json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if throttle {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600}},"headers":{"retry-after":"7"}}).to_string().into())).await.unwrap();
+            let failure = if payment {
+                json!({"type":"error","status":402,"error":{"message":"Payment Required"}})
+            } else {
+                json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if throttle {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600}},"headers":{"retry-after":"7"}})
+            };
+            socket
+                .send(UpstreamMessage::Text(failure.to_string().into()))
+                .await
+                .unwrap();
             let _ = socket.next().await;
         });
         let fixture_state = state.clone();
@@ -664,6 +684,12 @@ mod tests {
             .unwrap()
             .unwrap();
         let value: Value = serde_json::from_slice(&event.into_data()).unwrap();
+        if payment {
+            let health = state.storage.supplier_health(&ids[0]).await.unwrap();
+            assert!(health.payment_required);
+            assert!(!health.authentication_invalid);
+            assert!(health.cooldown_until.is_none());
+        }
         if throttle {
             assert_eq!(value["type"], "response.created");
             assert_eq!(value["response"]["id"], "rejected-attempt");

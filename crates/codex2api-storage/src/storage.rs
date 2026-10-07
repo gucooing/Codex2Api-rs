@@ -488,7 +488,7 @@ impl Storage {
                 http_fingerprint_json, proxy_id, created_at, updated_at, provider_id
              ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(provider_id,chatgpt_account_id,chatgpt_user_id) DO UPDATE SET
-                status = 'active',
+                status = CASE WHEN supplier_accounts.status='pending' THEN 'active' ELSE supplier_accounts.status END,
                 display_name = COALESCE(excluded.display_name, supplier_accounts.display_name),
                 chatgpt_user_id = COALESCE(excluded.chatgpt_user_id, supplier_accounts.chatgpt_user_id),
                 email = COALESCE(excluded.email, supplier_accounts.email),
@@ -520,6 +520,11 @@ impl Storage {
             .fetch_one(&mut *tx)
             .await?;
         let account = SupplierAccount::try_from(row)?;
+        let revision: i64 =
+            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
+                .bind(&account.id)
+                .fetch_one(&mut *tx)
+                .await?;
         sqlx::query(
             "INSERT INTO supplier_tokens (account_id, auth_mode, id_token, access_token,
                 refresh_token, last_refresh, raw_auth_json, updated_at)
@@ -540,7 +545,9 @@ impl Storage {
         .bind(&now)
         .execute(&mut *tx)
         .await?;
+        crate::supplier_health::complete_authorization(&mut tx, &account.id, revision).await?;
         tx.commit().await?;
+        self.refresh_supplier_bindings(&account.id).await?;
         Ok(account)
     }
 
@@ -691,14 +698,17 @@ impl Storage {
         id: &str,
         status: SupplierStatus,
     ) -> Result<SupplierAccount> {
-        self.update_account(
-            id,
-            SupplierAccountUpdate {
-                status: Some(status),
-                ..SupplierAccountUpdate::default()
-            },
-        )
-        .await
+        let changed = sqlx::query("UPDATE supplier_accounts SET status=?,updated_at=? WHERE id=?")
+            .bind(status.as_str())
+            .bind(now_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if changed.rows_affected() == 0 {
+            return Err(StorageError::AccountNotFound(id.to_owned()));
+        }
+        self.refresh_supplier_bindings(id).await?;
+        self.require_account(id).await
     }
 
     pub async fn touch_account(&self, id: &str) -> Result<SupplierAccount> {
@@ -798,6 +808,12 @@ impl Storage {
     // --- account tokens ---
 
     pub async fn upsert_supplier_tokens(&self, tokens: SupplierTokens) -> Result<SupplierTokens> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let revision: i64 =
+            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
+                .bind(&tokens.account_id)
+                .fetch_one(&mut *tx)
+                .await?;
         let updated_at = if tokens.updated_at.is_empty() {
             now_rfc3339()
         } else {
@@ -827,8 +843,12 @@ impl Storage {
         .bind(&tokens.last_refresh)
         .bind(&tokens.raw_auth_json)
         .bind(&updated_at)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+        crate::supplier_health::complete_authorization(&mut tx, &tokens.account_id, revision)
+            .await?;
+        tx.commit().await?;
+        self.refresh_supplier_bindings(&tokens.account_id).await?;
         Ok(row)
     }
 

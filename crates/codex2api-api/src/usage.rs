@@ -295,10 +295,17 @@ impl RequestLog {
         self.apply_outcome();
     }
     pub fn upstream_failure(&mut self, error: &codex2api_upstream::UpstreamError) {
+        self.auth_revision = error.auth_revision().or(self.auth_revision);
+        if let Some(record) = &self.record {
+            self.supplier_failure = error
+                .supplier_failure_for(&record.provider_id, chrono::Utc::now().timestamp())
+                .or(self.supplier_failure.take());
+        }
         if let codex2api_upstream::UpstreamError::Status {
             status,
             headers,
             body,
+            ..
         } = error
         {
             self.http_status(*status);
@@ -490,15 +497,27 @@ impl RequestLog {
         }
     }
     async fn persist_auth_rejection(&self) -> crate::Result<()> {
-        if let (
-            Some(record),
-            Some(revision),
-            Some(codex2api_upstream::SupplierFailure::QuotaExhausted { until, code }),
-        ) = (&self.record, self.auth_revision, &self.supplier_failure)
+        if let (Some(record), Some(revision), Some(failure)) =
+            (&self.record, self.auth_revision, &self.supplier_failure)
         {
-            self.storage
-                .exhaust_supplier_quota(&record.account_id, revision, *until, code)
-                .await?;
+            match failure {
+                codex2api_upstream::SupplierFailure::QuotaExhausted { until, code } => {
+                    self.storage
+                        .exhaust_supplier_quota(&record.account_id, revision, *until, code)
+                        .await?;
+                }
+                codex2api_upstream::SupplierFailure::PaymentRequired { code } => {
+                    self.storage
+                        .mark_supplier_payment_required(
+                            &record.account_id,
+                            revision,
+                            code.as_deref(),
+                            None,
+                        )
+                        .await?;
+                }
+                codex2api_upstream::SupplierFailure::Authentication => {}
+            }
         }
         if let (Some(record), Some(revision)) = (&self.record, self.auth_revision)
             && self
@@ -572,15 +591,28 @@ impl RequestLog {
         });
         let cooldown = self.supplier_failure.clone().zip(self.auth_revision);
         tokio::spawn(async move {
-            if let Some((
-                codex2api_upstream::SupplierFailure::QuotaExhausted { until, code },
-                revision,
-            )) = cooldown
-                && let Err(error) = storage
-                    .exhaust_supplier_quota(&record.account_id, revision, until, &code)
-                    .await
-            {
-                tracing::error!(%error,"failed to persist supplier cooldown");
+            if let Some((failure, revision)) = cooldown {
+                let result = match failure {
+                    codex2api_upstream::SupplierFailure::QuotaExhausted { until, code } => {
+                        storage
+                            .exhaust_supplier_quota(&record.account_id, revision, until, &code)
+                            .await
+                    }
+                    codex2api_upstream::SupplierFailure::PaymentRequired { code } => {
+                        storage
+                            .mark_supplier_payment_required(
+                                &record.account_id,
+                                revision,
+                                code.as_deref(),
+                                None,
+                            )
+                            .await
+                    }
+                    codex2api_upstream::SupplierFailure::Authentication => Ok(()),
+                };
+                if let Err(error) = result {
+                    tracing::error!(%error,"failed to persist supplier availability");
+                }
             }
             if let Some(revision) = rejected_revision
                 && let Err(error) = storage
@@ -1567,6 +1599,7 @@ mod tests {
                 .unwrap();
                 if status_error {
                     log.upstream_failure(&codex2api_upstream::UpstreamError::Status {
+                        auth_revision: None,
                         status: 400,
                         body: body.into(),
                         headers: http::HeaderMap::new(),

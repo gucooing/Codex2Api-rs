@@ -7,10 +7,9 @@ use crate::tokens::{
     parse_chatgpt_jwt_claims, should_refresh, token_set_from_auth,
 };
 use codex2api_accounts::{
-    AccountIdentity, AuthDotJson, BoundAccount, OauthIdentity, PendingAccount,
-    SupplierAccountStore, TokenData,
+    AccountIdentity, AuthDotJson, BoundAccount, PendingAccount, SupplierAccountStore, TokenData,
 };
-use codex2api_storage::{Storage, SupplierAccount, SupplierAccountUpdate, SupplierStatus};
+use codex2api_storage::SupplierAccount;
 
 pub async fn persist_auth(
     accounts: &SupplierAccountStore,
@@ -127,9 +126,17 @@ pub async fn refresh_account(
     account: &SupplierAccount,
     force: bool,
 ) -> Result<AuthDotJson> {
-    let mut auth = load_auth(accounts, account)
+    let storage = accounts.storage()?;
+    let snapshot = storage
+        .supplier_auth_snapshot(&account.id)
         .await?
         .ok_or_else(|| AuthError::TokensNotFound(account.id.clone()))?;
+    let mut auth = AuthDotJson::from_supplier_tokens(&snapshot.tokens)?;
+    if let Some(tokens) = auth.tokens.as_mut()
+        && tokens.account_id.is_none()
+    {
+        tokens.account_id = snapshot.chatgpt_account_id.clone();
+    }
     if !force && !should_refresh(&auth) {
         return Ok(auth);
     }
@@ -169,12 +176,37 @@ pub async fn refresh_account(
     {
         return Err(AuthError::AccountMismatch);
     }
-    persist_auth(accounts, &account.id, &auth).await?;
+    // Refresh is not a new login: preserve administrator intent and billing
+    // rejection, and never overwrite credentials from a concurrent reauthorization.
+    storage
+        .replace_supplier_tokens(
+            &account.id,
+            snapshot.auth_revision,
+            auth.to_supplier_tokens(&account.id),
+        )
+        .await?;
+    let current = storage
+        .supplier_auth_snapshot(&account.id)
+        .await?
+        .ok_or_else(|| AuthError::TokensNotFound(account.id.clone()))?;
+    let mut auth = AuthDotJson::from_supplier_tokens(&current.tokens)?;
+    if let Some(tokens) = auth.tokens.as_mut()
+        && tokens.account_id.is_none()
+    {
+        tokens.account_id = current.chatgpt_account_id.clone();
+    }
     if let Some(tokens) = auth.tokens.as_ref()
         && let Ok(claims) = parse_chatgpt_jwt_claims(&tokens.id_token)
         && let Ok(oauth) = claims.oauth_identity()
     {
-        let _ = update_account_identity(accounts.storage()?, &account.id, &oauth).await;
+        storage
+            .update_supplier_profile(
+                &account.id,
+                current.auth_revision,
+                oauth.email.as_deref(),
+                oauth.plan_type.as_deref(),
+            )
+            .await?;
     }
     Ok(auth)
 }
@@ -209,27 +241,6 @@ pub async fn pending_from_account(
         account: ctx.account,
         identity: ctx.identity,
     })
-}
-
-async fn update_account_identity(
-    storage: &Storage,
-    account_id: &str,
-    oauth: &OauthIdentity,
-) -> Result<SupplierAccount> {
-    Ok(storage
-        .update_account(
-            account_id,
-            SupplierAccountUpdate {
-                status: Some(SupplierStatus::Active),
-                display_name: oauth.display_name.clone().or(oauth.email.clone()),
-                chatgpt_account_id: Some(oauth.chatgpt_account_id.clone()),
-                chatgpt_user_id: oauth.chatgpt_user_id.clone(),
-                email: oauth.email.clone(),
-                plan_type: oauth.plan_type.clone(),
-                ..SupplierAccountUpdate::default()
-            },
-        )
-        .await?)
 }
 
 pub fn empty_chatgpt_auth() -> AuthDotJson {

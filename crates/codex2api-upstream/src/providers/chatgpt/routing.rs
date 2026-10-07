@@ -225,12 +225,15 @@ impl UpstreamClient {
                 .send()
                 .await?;
             let status = response.status();
+            let headers = response.headers().clone();
             let body = response.bytes().await?;
             if !status.is_success() {
-                return Err(UpstreamError::status(
+                return Err(UpstreamError::status_with_headers(
                     status,
                     String::from_utf8_lossy(&body),
-                ));
+                    headers,
+                )
+                .with_auth_revision(request.revision));
             }
             Ok(QuotaSnapshot {
                 value: serde_json::from_slice(&body)?,

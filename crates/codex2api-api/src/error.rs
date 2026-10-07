@@ -200,16 +200,15 @@ pub fn openai_json(error_type: &str, message: impl Into<String>, code: Option<&s
 /// `{ "error": ... }` payloads when present.
 pub fn map_upstream_status_body(status: StatusCode, body: &str) -> Response {
     if let Ok(value) = serde_json::from_str::<Value>(body) {
-        if value.get("error").is_some() {
-            return (
-                status,
-                Json(json!({"error":crate::public_output::error(&value["error"])})),
-            )
-                .into_response();
-        }
+        let error = value
+            .pointer("/response/error")
+            .filter(|value| !value.is_null())
+            .or_else(|| value.get("error").filter(|value| !value.is_null()))
+            .or_else(|| value.get("detail"))
+            .unwrap_or(&value);
         return (
             status,
-            Json(json!({"error":crate::public_output::error(&value)})),
+            Json(json!({"error":crate::public_output::error(error)})),
         )
             .into_response();
     }
@@ -222,6 +221,7 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
         status,
         body,
         mut headers,
+        ..
     } = err
     {
         let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -271,6 +271,7 @@ fn default_message_for_status(status: StatusCode) -> &'static str {
     match status.as_u16() {
         400 => "Bad request.",
         401 => "Unauthorized.",
+        402 => "Payment Required.",
         403 => "Forbidden.",
         404 => "Not found.",
         409 => "Conflict.",
@@ -396,6 +397,24 @@ mod tests {
         let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
         let response = map_upstream_status_body(StatusCode::SERVICE_UNAVAILABLE, body);
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn payment_errors_keep_the_status_and_detail_code_without_private_diagnostics() {
+        use axum::body::to_bytes;
+        let response = map_upstream_status_body(
+            StatusCode::PAYMENT_REQUIRED,
+            r#"{"detail":{"code":"deactivated_workspace","message":"private supplier billing details"}}"#,
+        );
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "deactivated_workspace");
+        assert!(!String::from_utf8_lossy(&bytes).contains("private supplier"));
+        let response = map_upstream_status_body(StatusCode::PAYMENT_REQUIRED, "Payment Required");
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["message"], "Payment Required.");
     }
 
     #[tokio::test]

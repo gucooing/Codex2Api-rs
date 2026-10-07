@@ -14,7 +14,8 @@ export type Fingerprint = {
 export type Supplier = {
   id: string;
   provider_id: string;
-  status: "active" | "disabled" | "error" | "quota_exhausted";
+  enabled: boolean;
+  status: "active" | "disabled" | "error" | "payment_required" | "quota_exhausted";
   tag_ids: string[];
   binding_count: number;
   cooldown_until: number | null;

@@ -411,8 +411,8 @@ impl SupplierAccountStore {
         }
 
         let status = match existing.status {
-            SupplierStatus::Disabled | SupplierStatus::Pending => Some(SupplierStatus::Active),
-            SupplierStatus::Active => None,
+            SupplierStatus::Pending => Some(SupplierStatus::Active),
+            SupplierStatus::Disabled | SupplierStatus::Active => None,
         };
 
         let account = storage

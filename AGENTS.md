@@ -91,8 +91,16 @@ validation are complete.
 - Ordinary supplier request throttling (`rate_limit_exceeded`, `slow_down`, or an
   unclassified HTTP 429) belongs to client backoff. Forward its structured error
   and retry information; never persist a supplier throttled state or switch
-  suppliers for it. Pool failover is for unrecoverable authorization failure or
-  explicit quota exhaustion.
+  suppliers for it. Pool failover is for unrecoverable authorization failure,
+  explicit quota exhaustion, or ChatGPT HTTP 402 billing rejection. A ChatGPT
+  402 persists as payment/subscription unavailable without deleting credentials,
+  refreshing tokens to recover it, or expiring it as a quota cooldown. Only a
+  successful explicit reauthorization or administrator reset clears that state.
+- Supplier enablement is administrator intent, independent of observed availability.
+  Do not block enable/disable operations on authorization, billing or quota state.
+  Successful reauthorization automatically clears old failure state and preserves
+  manual disablement and frozen identity. Do not require a manual authorization
+  recovery button. Late failures or token refreshes must not overwrite a new login.
 
 ## Official constants (do not invent)
 
@@ -152,6 +160,10 @@ validation are complete.
   not on web pages. Use concise field labels, actual values and action feedback;
   do not render developer notes about protocol, persistence, isolation or bookkeeping.
 - Supplier quota summaries stay compact: render the windows actually returned by the official response, labelled by their reported duration (including 30-day windows), without placeholders for absent windows. Each window has reset countdown on the first line and shadcn Progress plus percentage on the second; no extra label before the percentage. Read persisted official snapshots and reuse the existing cache; UI countdown/filter/view changes must not call the provider.
+- Supplier lists read only snapshots included in the list response. Missing or stale
+  snapshots must not trigger quota requests. Do not add a list refresh button or
+  batch quota refresh; official reads belong to background probes and explicit
+  account-detail refreshes.
 - Frontend code owns page structure and field definitions. Never gate entire pages, tables, tabs or forms on API data/loading/error, or use backend field descriptors to construct the UI. Render structure first and bind values/rows as they arrive. Keep same-resource data on refresh failure and disable writes until actual data is ready. Never save placeholder defaults.
 - Use the official shadcn/ui neutral palette; do not add custom accent-color choices or overrides. Light, dark and system theme modes are browser-local preferences; persist the mode locally, never in a business account or server policy.
 - Show loading, request, login, save and validation failures as small floating toast messages. Error feedback must not occupy page/form layout, move keyboard focus or use a blocking browser validation popup; persistent business statuses remain normal record content.

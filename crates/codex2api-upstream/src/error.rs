@@ -29,6 +29,7 @@ pub enum UpstreamError {
         status: u16,
         body: String,
         headers: http::HeaderMap,
+        auth_revision: Option<i64>,
     },
     #[error("invalid header value: {0}")]
     InvalidHeader(#[from] http::header::InvalidHeaderValue),
@@ -118,6 +119,21 @@ impl UpstreamError {
             status: status.as_u16(),
             body: body.into(),
             headers,
+            auth_revision: None,
+        }
+    }
+
+    pub fn with_auth_revision(mut self, revision: i64) -> Self {
+        if let Self::Status { auth_revision, .. } = &mut self {
+            *auth_revision = Some(revision);
+        }
+        self
+    }
+
+    pub fn auth_revision(&self) -> Option<i64> {
+        match self {
+            Self::Status { auth_revision, .. } => *auth_revision,
+            _ => None,
         }
     }
 
@@ -140,7 +156,8 @@ mod tests {
             reqwest::StatusCode::BAD_REQUEST,
             reqwest::StatusCode::UNAUTHORIZED,
         ] {
-            let error = UpstreamError::status(status, body.clone());
+            let error = UpstreamError::status(status, body.clone()).with_auth_revision(17);
+            assert_eq!(error.auth_revision(), Some(17));
             assert_eq!(
                 error.is_unauthorized(),
                 status == reqwest::StatusCode::UNAUTHORIZED

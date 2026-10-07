@@ -7,6 +7,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupplierFailure {
     Authentication,
+    PaymentRequired { code: Option<String> },
     QuotaExhausted { until: i64, code: String },
 }
 pub fn classify_provider_failure(
@@ -41,6 +42,7 @@ impl crate::UpstreamError {
                 status,
                 body,
                 headers,
+                ..
             } => classify_provider_failure(
                 provider,
                 Some(*status),

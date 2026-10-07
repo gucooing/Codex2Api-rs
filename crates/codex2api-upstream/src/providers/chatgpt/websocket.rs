@@ -219,7 +219,8 @@ impl UpstreamClient {
                         response.status(),
                         String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()),
                         response.headers().clone(),
-                    ));
+                    )
+                    .with_auth_revision(auth.revision));
                 }
                 Err(error) => {
                     return Err(UpstreamError::Stream(error.to_string()));

@@ -8,22 +8,87 @@ pub struct SupplierHealth {
     pub error_at: Option<String>,
     pub revision: i64,
     pub authentication_invalid: bool,
+    pub payment_required: bool,
+    pub payment_required_at: Option<String>,
+    pub payment_required_code: Option<String>,
     pub cooldown_kind: Option<String>,
     pub cooldown_until: Option<i64>,
     pub cooldown_code: Option<String>,
     pub cooldown_revision: i64,
 }
 
+impl SupplierHealth {
+    pub fn display_status(&self, enabled: bool, authorized: bool) -> &'static str {
+        if !enabled {
+            "disabled"
+        } else if !authorized || self.authentication_invalid {
+            "error"
+        } else if self.payment_required {
+            "payment_required"
+        } else if self.cooldown_kind.as_deref() == Some("quota_exhausted") {
+            "quota_exhausted"
+        } else {
+            "active"
+        }
+    }
+}
+
+/// A successful explicit login starts a new authorization generation even if
+/// the provider returns identical token bytes. It never changes manual enablement.
+pub(crate) async fn complete_authorization(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    previous_revision: i64,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE supplier_accounts SET auth_revision=auth_revision+1 WHERE id=? AND auth_revision=?",
+    )
+    .bind(id)
+    .bind(previous_revision)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "UPDATE supplier_health SET error_message=NULL,error_at=NULL,rejected_auth_revision=NULL,
+        revision=revision+1,payment_required_at=NULL,payment_required_code=NULL,
+        cooldown_kind=NULL,cooldown_until=NULL,cooldown_auth_revision=NULL,cooldown_code=NULL,
+        cooldown_observed_at=NULL,cooldown_revision=cooldown_revision+1 WHERE account_id=?",
+    )
+    .bind(id)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 impl Storage {
     pub async fn supplier_health(&self, id: &str) -> Result<SupplierHealth> {
         Ok(sqlx::query_as(
             "SELECT h.error_message,h.error_at,h.revision,
+             h.payment_required_at IS NOT NULL AS payment_required,h.payment_required_at,h.payment_required_code,
              CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_kind END AS cooldown_kind,
              CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN h.cooldown_until END AS cooldown_until,
              h.cooldown_code,h.cooldown_revision,
              COALESCE(h.rejected_auth_revision=a.auth_revision,0) AS authentication_invalid
              FROM supplier_health h JOIN supplier_accounts a ON a.id=h.account_id WHERE h.account_id=?",
         ).bind(id).fetch_optional(self.pool()).await?.unwrap_or_default())
+    }
+
+    pub async fn mark_supplier_payment_required(
+        &self,
+        id: &str,
+        auth_revision: i64,
+        code: Option<&str>,
+        expected_observation: Option<i64>,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO supplier_health(account_id,payment_required_at,payment_required_code,cooldown_revision)
+            SELECT id,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?,1 FROM supplier_accounts a
+            WHERE id=? AND auth_revision=?
+            AND (? IS NULL OR COALESCE((SELECT cooldown_revision FROM supplier_health WHERE account_id=a.id),0)=?)
+            ON CONFLICT(account_id) DO UPDATE SET payment_required_at=excluded.payment_required_at,
+            payment_required_code=excluded.payment_required_code,cooldown_revision=supplier_health.cooldown_revision+1")
+            .bind(code).bind(id).bind(auth_revision).bind(expected_observation).bind(expected_observation)
+            .execute(self.pool()).await?;
+        self.refresh_supplier_bindings(id).await?;
+        Ok(())
     }
 
     /// Observations carry the credential revision used for that attempt; late
@@ -78,14 +143,15 @@ impl Storage {
     }
 
     /// Administrator-requested retry, independent of provider reachability.
-    /// Only quota state is cleared; credential rejection and manual enablement
-    /// continue to govern eligibility. In-flight quota checks lose their revision.
-    pub async fn reset_supplier_quota(&self, id: &str) -> Result<()> {
+    /// Billing and quota state are cleared; credential rejection and manual
+    /// enablement remain independent. In-flight checks lose their revision.
+    pub async fn reset_supplier_availability(&self, id: &str) -> Result<()> {
         sqlx::query(
             "INSERT INTO supplier_health(account_id,cooldown_revision)
              SELECT id,1 FROM supplier_accounts WHERE id=?
              ON CONFLICT(account_id) DO UPDATE SET cooldown_kind=NULL,cooldown_until=NULL,
              cooldown_auth_revision=NULL,cooldown_code=NULL,cooldown_observed_at=NULL,
+             payment_required_at=NULL,payment_required_code=NULL,
              cooldown_revision=supplier_health.cooldown_revision+1",
         )
         .bind(id)
@@ -136,6 +202,7 @@ impl Storage {
              WHERE a.provider_id=? AND a.status='active' AND COALESCE(t.access_token,'')!=''
              AND h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
              AND h.cooldown_until>unixepoch()
+             AND h.payment_required_at IS NULL
              AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
              ORDER BY h.cooldown_observed_at,a.id",
         )
@@ -149,25 +216,12 @@ impl Storage {
     pub async fn reject_supplier_auth(&self, id: &str, auth_revision: i64) -> Result<()> {
         sqlx::query(
             "INSERT INTO supplier_health(account_id,error_message,error_at,revision,rejected_auth_revision)
-             SELECT id,'供应账户授权已失效，请重新授权或检查恢复',strftime('%Y-%m-%dT%H:%M:%fZ','now'),1,auth_revision
+             SELECT id,'供应账户授权已失效，请重新授权',strftime('%Y-%m-%dT%H:%M:%fZ','now'),1,auth_revision
              FROM supplier_accounts WHERE id=? AND auth_revision=?
              ON CONFLICT(account_id) DO UPDATE SET error_message=excluded.error_message,
              error_at=excluded.error_at,revision=supplier_health.revision+1,rejected_auth_revision=excluded.rejected_auth_revision",
         ).bind(id).bind(auth_revision).execute(self.pool()).await?;
         self.refresh_supplier_bindings(id).await?;
         Ok(())
-    }
-
-    /// A successful check cannot erase a newer rejection or change manual enablement.
-    pub async fn recover_supplier(&self, id: &str, revision: i64) -> Result<bool> {
-        let result = sqlx::query(
-            "UPDATE supplier_health SET error_message=NULL,error_at=NULL,revision=revision+1,rejected_auth_revision=NULL
-             WHERE account_id=? AND revision=? AND error_message IS NOT NULL",
-        ).bind(id).bind(revision).execute(self.pool()).await?;
-        let recovered = result.rows_affected() == 1;
-        if recovered {
-            self.refresh_supplier_bindings(id).await?;
-        }
-        Ok(recovered)
     }
 }

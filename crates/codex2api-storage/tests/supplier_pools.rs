@@ -48,6 +48,173 @@ async fn consumer(storage: &Storage, id: &str) {
 }
 
 #[tokio::test]
+async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthorization() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("billing.sqlite"))
+        .await
+        .unwrap();
+    for id in ["s", "other"] {
+        supplier(&storage, id).await;
+    }
+    consumer(&storage, "v").await;
+    storage
+        .save_supplier_tag("pool", "chatgpt", "Pool")
+        .await
+        .unwrap();
+    storage
+        .replace_supplier_tags(&["s".into(), "other".into()], &["pool".into()])
+        .await
+        .unwrap();
+    storage
+        .save_pool_route("v", "chatgpt", Some("pool"), Some("s"), None)
+        .await
+        .unwrap();
+    let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    let tokens = storage.load_supplier_tokens("s").await.unwrap().unwrap();
+    storage
+        .exhaust_supplier_quota(
+            "s",
+            auth,
+            chrono::Utc::now().timestamp() + 600,
+            "usage_limit_reached",
+        )
+        .await
+        .unwrap();
+    storage
+        .mark_supplier_payment_required("s", auth, Some("deactivated_workspace"), None)
+        .await
+        .unwrap();
+    let health = storage.supplier_health("s").await.unwrap();
+    assert!(health.payment_required);
+    assert!(!health.authentication_invalid);
+    assert_eq!(health.display_status(true, true), "payment_required");
+    assert_eq!(
+        storage
+            .load_supplier_tokens("s")
+            .await
+            .unwrap()
+            .unwrap()
+            .access_token,
+        tokens.access_token
+    );
+    assert!(
+        storage
+            .supplier_quota_probe_candidates("chatgpt")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        storage
+            .select_pool_supplier("v", "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("other")
+    );
+    storage
+        .recover_supplier_quota("s", auth, health.cooldown_revision)
+        .await
+        .unwrap();
+    assert!(storage.supplier_health("s").await.unwrap().payment_required);
+    let mut refreshed = tokens.clone();
+    refreshed.access_token = Some("refreshed".into());
+    assert!(
+        storage
+            .replace_supplier_tokens("s", auth, refreshed.clone())
+            .await
+            .unwrap()
+    );
+    assert!(storage.supplier_health("s").await.unwrap().payment_required);
+    let current = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    storage.reject_supplier_auth("s", current).await.unwrap();
+    storage
+        .set_account_status("s", SupplierStatus::Disabled)
+        .await
+        .unwrap();
+    // A verified login may return identical tokens; it still clears prior failure state.
+    storage.upsert_supplier_tokens(refreshed).await.unwrap();
+    assert!(storage.supplier_auth_revision("s").await.unwrap().unwrap() > current);
+    storage.reject_supplier_auth("s", current).await.unwrap();
+    storage
+        .mark_supplier_payment_required("s", current, None, None)
+        .await
+        .unwrap();
+    let health = storage.supplier_health("s").await.unwrap();
+    assert!(!health.payment_required);
+    assert!(!health.authentication_invalid);
+    assert_eq!(
+        storage.require_account("s").await.unwrap().status,
+        SupplierStatus::Disabled
+    );
+    storage
+        .set_account_status("s", SupplierStatus::Active)
+        .await
+        .unwrap();
+    assert_eq!(health.display_status(true, true), "active");
+    storage
+        .set_account_status("s", SupplierStatus::Disabled)
+        .await
+        .unwrap();
+    let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    storage
+        .mark_supplier_payment_required("s", auth, None, None)
+        .await
+        .unwrap();
+    // The login path which finds an existing supplier must preserve the same intent.
+    supplier(&storage, "s").await;
+    assert_eq!(
+        storage.require_account("s").await.unwrap().status,
+        SupplierStatus::Disabled
+    );
+    assert!(!storage.supplier_health("s").await.unwrap().payment_required);
+}
+
+#[tokio::test]
+async fn billing_reset_preserves_credentials_and_rejects_stale_probe_observations() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("billing-reset.sqlite"))
+        .await
+        .unwrap();
+    supplier(&storage, "s").await;
+    let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    storage
+        .mark_supplier_payment_required("s", auth, None, None)
+        .await
+        .unwrap();
+    let observation = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    storage.reset_supplier_availability("s").await.unwrap();
+    storage
+        .mark_supplier_payment_required("s", auth, None, Some(observation))
+        .await
+        .unwrap();
+    assert!(!storage.supplier_health("s").await.unwrap().payment_required);
+    assert_eq!(
+        storage.supplier_auth_revision("s").await.unwrap(),
+        Some(auth)
+    );
+    assert_eq!(
+        storage
+            .load_supplier_tokens("s")
+            .await
+            .unwrap()
+            .unwrap()
+            .access_token
+            .as_deref(),
+        Some("fixture")
+    );
+    storage
+        .mark_supplier_payment_required("s", auth, None, None)
+        .await
+        .unwrap();
+    assert!(storage.supplier_health("s").await.unwrap().payment_required);
+}
+
+#[tokio::test]
 async fn obsolete_request_cooldowns_are_ignored_and_migrated_without_clearing_real_failures() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("retired-state.sqlite"))
@@ -489,7 +656,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .await
         .unwrap()
         .cooldown_revision;
-    storage.reset_supplier_quota("s").await.unwrap();
+    storage.reset_supplier_availability("s").await.unwrap();
     storage
         .exhaust_supplier_quota_if_unchanged("s", auth, until, "usage_limit_reached", before_reset)
         .await
@@ -520,7 +687,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .set_account_status("s", SupplierStatus::Disabled)
         .await
         .unwrap();
-    storage.reset_supplier_quota("s").await.unwrap();
+    storage.reset_supplier_availability("s").await.unwrap();
     assert!(
         storage
             .supplier_health("s")
@@ -628,7 +795,10 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
             .unwrap()
             .is_empty()
     );
-    storage.reset_supplier_quota("exhausted").await.unwrap();
+    storage
+        .reset_supplier_availability("exhausted")
+        .await
+        .unwrap();
     assert!(
         storage
             .supplier_quota_probe_candidates("chatgpt")

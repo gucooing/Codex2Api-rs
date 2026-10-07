@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/table";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useActions, useErrorToast, copyElementText } from "@/lib/actions";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -71,11 +72,7 @@ import { tokenCount } from "@/lib/usage-display";
 import { Separator } from "@/components/ui/separator";
 import Link from "next/link";
 import { useState } from "react";
-import {
-  useSupplierQuotas,
-  useQuotaClock,
-  refreshSupplierQuotas,
-} from "@/hooks/use-supplier-quotas";
+import { useQuotaClock } from "@/hooks/use-supplier-quotas";
 import {
   supplierStatusLabel,
   quotaWindowLabel,
@@ -85,7 +82,7 @@ import {
   percentLabel,
 } from "@/lib/supplier-state";
 
-import { Plus, Search, RotateCcw, RefreshCw, ArrowRight } from "lucide-react";
+import { Plus, Search, RotateCcw, ArrowRight } from "lucide-react";
 import {
   request,
   type Fingerprint,
@@ -104,13 +101,16 @@ import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 const validSupplierFilters = (value: { status: string; provider_id: string }) =>
-  ["", "active", "disabled", "error", "quota_exhausted"].includes(value.status) &&
-  ["", "chatgpt", "grok"].includes(value.provider_id);
+  ["", "active", "disabled", "error", "payment_required", "quota_exhausted"].includes(
+    value.status,
+  ) && ["", "chatgpt", "grok"].includes(value.provider_id);
+
+const untaggedFilter = "__untagged__";
 
 export function SuppliersPage() {
   const tableColumns0 = useColumnVisibility(
     "components/suppliers.tsx:0",
-    ["供应账户", "提供商 / 订阅", "状态", "额度", "最近使用", "操作"],
+    ["供应账户", "提供商 / 订阅", "套餐到期", "状态", "额度", "标签", "绑定数", "最近使用", "操作"],
     ["供应账户", "状态", "操作"],
   );
 
@@ -131,10 +131,8 @@ export function SuppliersPage() {
     validSupplierFilters,
   );
   const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
-  const [quotaResetIds, setQuotaResetIds] = useState<string[]>([]);
-  const snapshots = useSupplierQuotas(resource.data?.items, quotaResetIds);
   const now = useQuotaClock();
-  const all = snapshots.map((item) =>
+  const all = (resource.data?.items ?? []).map((item) =>
     item.cooldown_until && item.cooldown_until * 1000 <= now && item.status === "quota_exhausted"
       ? { ...item, status: "active" as const }
       : item,
@@ -146,7 +144,10 @@ export function SuppliersPage() {
         .includes(applied.search.trim().toLowerCase()) &&
       (!applied.provider_id || item.provider_id === applied.provider_id) &&
       (!applied.status || item.status === applied.status) &&
-      (!applied.tag || item.tag_ids?.includes(applied.tag)),
+      (!applied.tag ||
+        (applied.tag === untaggedFilter
+          ? !item.tag_ids?.length
+          : item.tag_ids?.includes(applied.tag))),
   );
   const pagination = useTablePagination(items, applied, resource.data !== undefined);
   const selectedAccounts = items.filter((item) => selected.includes(item.id));
@@ -162,110 +163,80 @@ export function SuppliersPage() {
     setSelected((current) => toggleSupplierSelection(current, ids, checked));
 
   const supplierActions = (item: Supplier) => (
-    <div className="flex flex-wrap items-center gap-2">
-      <Badge variant="outline">{item.binding_count ?? 0} 个绑定</Badge>
-      {(item.tag_ids ?? []).map((id) => (
-        <Badge variant="secondary" key={id}>
-          {tags.data?.items.find((t) => t.id === id)?.name ?? "标签"}
-        </Badge>
-      ))}
-      <Button variant="outline" size="sm" asChild>
-        <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
-          详情 <ArrowRight />
-        </Link>
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="更多操作">
-            <MoreHorizontal />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            disabled={!resource.ready || actions.isBusy("reset-state-" + item.id)}
-            onSelect={() =>
-              void actions.run(
-                "reset-state-" + item.id,
-                async () => {
-                  await request(`/suppliers/${item.id}/reset-state`, { method: "POST" });
-                  // Keep this offline retry independent of stale-cache auto reads
-                  // for the rest of the page visit. Explicit refresh still works.
-                  setQuotaResetIds((ids) => [...new Set([...ids, item.id])]);
-                  resource.reload();
-                },
-                { success: "状态已重置" },
-              )
-            }
-          >
-            重置状态
-          </DropdownMenuItem>
-          {item.authentication_invalid && (
-            <DropdownMenuItem
-              disabled={actions.isBusy("recover-" + item.id)}
-              onSelect={() =>
-                void actions.run(
-                  "recover-" + item.id,
-                  async () => {
-                    await request(`/suppliers/${item.id}/recover`, { method: "POST" });
-                    resource.reload();
-                  },
-                  { success: "官方通信已恢复" },
-                )
-              }
-            >
-              检查授权
-            </DropdownMenuItem>
-          )}
-
-          <DropdownMenuItem
-            variant={false ? "destructive" : "default"}
-            disabled={false || actions.isBusy("components\\suppliers.tsx:action:1")}
-            onSelect={() =>
-              void actions.run(
-                "components\\suppliers.tsx:action:1",
-                async () => {
-                  await request(`/suppliers/${item.id}/status`, {
-                    method: "POST",
-                    body: { enabled: item.status === "disabled" },
-                  });
-                  resource.reload();
-                },
-                {
-                  confirm:
-                    item.status !== "disabled"
-                      ? "停用此供应账户？其虚拟账户将在下次请求时自动改选号池内可用账户。"
-                      : undefined,
-                  danger: false,
-                  success: undefined,
-                },
-              )
-            }
-          >
-            {item.status !== "disabled" ? "停用账户" : "启用账户"}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            variant={true ? "destructive" : "default"}
-            disabled={false || actions.isBusy("components\\suppliers.tsx:action:2")}
-            onSelect={() =>
-              void actions.run(
-                "components\\suppliers.tsx:action:2",
-                async () => {
-                  await request(`/suppliers/${item.id}`, { method: "DELETE" });
-                  resource.reload();
-                },
-                {
-                  confirm: "删除供应账户及其上游授权？历史用量保留。",
-                  danger: true,
-                  success: "供应账户已删除",
-                },
-              )
-            }
-          >
-            删除账户
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="更多操作">
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem asChild>
+          <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
+            <ArrowRight /> 详情
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          disabled={!resource.ready || actions.isBusy("reset-state-" + item.id)}
+          onSelect={() =>
+            void actions.run(
+              "reset-state-" + item.id,
+              async () => {
+                await request(`/suppliers/${item.id}/reset-state`, { method: "POST" });
+                resource.reload();
+              },
+              { success: "状态已重置" },
+            )
+          }
+        >
+          重置状态
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!resource.ready || actions.isBusy("supplier-status-" + item.id)}
+          onSelect={() =>
+            void actions.run(
+              "supplier-status-" + item.id,
+              async () => {
+                await request(`/suppliers/${item.id}/status`, {
+                  method: "POST",
+                  body: { enabled: !item.enabled },
+                });
+                resource.reload();
+              },
+              {
+                confirm: item.enabled
+                  ? "停用此供应账户？其虚拟账户将在下次请求时自动改选号池内可用账户。"
+                  : undefined,
+                danger: false,
+                success: undefined,
+              },
+            )
+          }
+        >
+          {item.enabled ? "停用账户" : "启用账户"}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={!resource.ready || actions.isBusy("supplier-delete-" + item.id)}
+          onSelect={() =>
+            void actions.run(
+              "supplier-delete-" + item.id,
+              async () => {
+                await request(`/suppliers/${item.id}`, { method: "DELETE" });
+                resource.reload();
+              },
+              {
+                confirm: "删除供应账户及其上游授权？历史用量保留。",
+                danger: true,
+                success: "供应账户已删除",
+              },
+            )
+          }
+        >
+          删除账户
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
   useErrorToast(resource.error);
   return (
@@ -326,6 +297,7 @@ export function SuppliersPage() {
                       { value: "active", label: "启用" },
                       { value: "disabled", label: "停用" },
                       { value: "error", label: "授权失效" },
+                      { value: "payment_required", label: "账单受限" },
                       { value: "quota_exhausted", label: "配额耗尽" },
                     ].map((option) => (
                       <SelectItem key={option.value} value={option.value}>
@@ -348,6 +320,7 @@ export function SuppliersPage() {
                   </SelectTrigger>
                   <SelectContent position="popper">
                     <SelectItem value="all">全部标签</SelectItem>
+                    <SelectItem value={untaggedFilter}>无标签</SelectItem>
                     {tagOptions.map((tag) => (
                       <SelectItem key={tag.id} value={tag.id}>
                         {tag.name}
@@ -377,38 +350,6 @@ export function SuppliersPage() {
               </div>
             </form>
             <div className="ml-auto flex items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="刷新供应账户"
-                title="刷新"
-                onClick={() => {
-                  if (!resource.ready) {
-                    resource.reload();
-                    return;
-                  }
-                  void actions.run(
-                    "refresh-supplier-quotas",
-                    async () => {
-                      const failures = await refreshSupplierQuotas(resource.data?.items ?? []);
-                      resource.reload();
-                      if (failures.length)
-                        throw new Error(
-                          `${failures.length} 个账户额度刷新失败：${failures.slice(0, 3).join("、")}`,
-                        );
-                    },
-                    { success: "供应账户额度已刷新" },
-                  );
-                }}
-                disabled={resource.refreshing || actions.isBusy("refresh-supplier-quotas")}
-              >
-                {resource.refreshing || actions.isBusy("refresh-supplier-quotas") ? (
-                  <Spinner />
-                ) : (
-                  <RefreshCw />
-                )}
-              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -525,26 +466,24 @@ export function SuppliersPage() {
                       onCheckedChange={(checked) => toggleSelection(pageIds, checked === true)}
                     />
                   </TableHead>
-                  {["供应账户", "提供商 / 订阅", "状态", "额度", "最近使用", "操作"].map(
-                    (label) => (
-                      <TableHead
-                        hidden={!tableColumns0.isVisible(label)}
-                        className={
-                          ["供应账户", "状态", "操作"].includes(label)
-                            ? label === "操作"
-                              ? "max-md:w-28"
-                              : label === "供应账户"
-                                ? ""
-                                : "max-md:w-16"
-                            : ""
-                        }
-                        key={label}
-                        scope="col"
-                      >
-                        {label}
-                      </TableHead>
-                    ),
-                  )}
+                  {tableColumns0.labels.map((label) => (
+                    <TableHead
+                      hidden={!tableColumns0.isVisible(label)}
+                      className={
+                        ["供应账户", "状态", "操作"].includes(label)
+                          ? label === "操作"
+                            ? "w-12"
+                            : label === "供应账户"
+                              ? ""
+                              : "max-md:w-16"
+                          : ""
+                      }
+                      key={label}
+                      scope="col"
+                    >
+                      {label}
+                    </TableHead>
+                  ))}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -576,7 +515,6 @@ export function SuppliersPage() {
                             <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
                               <strong>{item.email || item.display_name || item.id}</strong>
                             </Link>
-                            <CardDescription>{item.email}</CardDescription>
                           </div>
                           <Dialog>
                             <DialogTrigger asChild>
@@ -594,9 +532,6 @@ export function SuppliersPage() {
                                   </span>
                                   <span className="block truncate text-xs text-muted-foreground">
                                     {subscriptionLabel(item.plan_type, item.provider_id)}
-                                  </span>
-                                  <span className="block truncate text-xs text-muted-foreground">
-                                    套餐到期：{date(item.subscription_expires_at)}
                                   </span>
                                 </span>
                                 <ChevronRight className="size-3 shrink-0" />
@@ -626,10 +561,13 @@ export function SuppliersPage() {
                                     <CardDescription>
                                       {subscriptionLabel(item.plan_type, item.provider_id)}
                                     </CardDescription>
-                                    <CardDescription>
-                                      套餐到期：{date(item.subscription_expires_at)}
-                                    </CardDescription>
                                   </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>套餐到期</FieldTitle>
+                                  <FieldDescription>
+                                    {date(item.subscription_expires_at)}
+                                  </FieldDescription>
                                 </Field>
                                 <Field>
                                   <FieldTitle>状态</FieldTitle>
@@ -713,6 +651,24 @@ export function SuppliersPage() {
                                   </div>
                                 </Field>
                                 <Field>
+                                  <FieldTitle>标签</FieldTitle>
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {(item.tag_ids ?? []).map((id) => (
+                                      <Badge variant="secondary" key={id}>
+                                        {tags.data?.items.find((tag) => tag.id === id)?.name ??
+                                          "标签"}
+                                      </Badge>
+                                    ))}
+                                    {!item.tag_ids?.length && (
+                                      <span className="text-muted-foreground">—</span>
+                                    )}
+                                  </div>
+                                </Field>
+                                <Field>
+                                  <FieldTitle>绑定数</FieldTitle>
+                                  <FieldDescription>{item.binding_count ?? 0}</FieldDescription>
+                                </Field>
+                                <Field>
                                   <FieldTitle>最近使用</FieldTitle>
                                   <div className="min-w-0 break-words [&_*]:max-w-full">
                                     {date(item.last_used_at)}
@@ -732,9 +688,13 @@ export function SuppliersPage() {
                           <CardDescription>
                             {subscriptionLabel(item.plan_type, item.provider_id)}
                           </CardDescription>
-                          <CardDescription>
-                            套餐到期：{date(item.subscription_expires_at)}
-                          </CardDescription>
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("套餐到期")}
+                          data-label="套餐到期"
+                          role="cell"
+                        >
+                          {date(item.subscription_expires_at)}
                         </TableCell>
                         <TableCell
                           hidden={!tableColumns0.isVisible("状态")}
@@ -819,6 +779,64 @@ export function SuppliersPage() {
                           </div>
                         </TableCell>
                         <TableCell
+                          hidden={!tableColumns0.isVisible("标签")}
+                          data-label="标签"
+                          role="cell"
+                        >
+                          <div className="flex items-center gap-1">
+                            {(item.tag_ids ?? []).slice(0, 2).map((id) => (
+                              <Badge variant="secondary" className="max-w-32" key={id}>
+                                <span className="truncate">
+                                  {tags.data?.items.find((tag) => tag.id === id)?.name ?? "标签"}
+                                </span>
+                              </Badge>
+                            ))}
+                            {(item.tag_ids?.length ?? 0) > 2 && (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    aria-label="查看全部标签"
+                                  >
+                                    <Plus />
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent
+                                  align="start"
+                                  aria-label="全部标签"
+                                  className="max-h-64 overflow-y-auto"
+                                >
+                                  <div className="flex flex-wrap gap-1">
+                                    {(item.tag_ids ?? []).map((id) => (
+                                      <Badge
+                                        variant="secondary"
+                                        className="h-auto max-w-full whitespace-normal break-all"
+                                        key={id}
+                                      >
+                                        {tags.data?.items.find((tag) => tag.id === id)?.name ??
+                                          "标签"}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                            {!item.tag_ids?.length && (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell
+                          hidden={!tableColumns0.isVisible("绑定数")}
+                          className="tabular-nums"
+                          data-label="绑定数"
+                          role="cell"
+                        >
+                          {item.binding_count ?? 0}
+                        </TableCell>
+                        <TableCell
                           hidden={!tableColumns0.isVisible("最近使用")}
                           className=" "
                           data-label="最近使用"
@@ -828,7 +846,7 @@ export function SuppliersPage() {
                         </TableCell>
                         <TableCell
                           hidden={!tableColumns0.isVisible("操作")}
-                          className=" max-md:[&_button]:h-7 max-md:[&_button]:px-1.5 max-md:[&_button]:text-xs max-md:[&_button]:gap-1 max-md:[&_a]:h-7 max-md:[&_a]:px-1.5 max-md:[&_a]:text-xs max-md:[&_a]:gap-1 max-md:[&>div]:gap-1"
+                          className="w-12"
                           data-label="操作"
                           role="cell"
                         >
@@ -891,6 +909,7 @@ export function SuppliersPage() {
                     },
                     { label: "套餐到期", value: date(item.subscription_expires_at) },
                     { label: "最近使用", value: date(item.last_used_at) },
+                    { label: "绑定数", value: item.binding_count ?? 0 },
                   ].map(({ label, value }) => (
                     <Field
                       key={label}
@@ -905,6 +924,50 @@ export function SuppliersPage() {
                       </FieldDescription>
                     </Field>
                   ))}
+                  <Field orientation="horizontal" className="col-span-2 min-w-0">
+                    <FieldTitle className="shrink-0">标签</FieldTitle>
+                    <div className="flex min-w-0 flex-wrap items-center gap-1">
+                      {(item.tag_ids ?? []).slice(0, 2).map((id) => (
+                        <Badge variant="secondary" className="max-w-32" key={id}>
+                          <span className="truncate">
+                            {tags.data?.items.find((tag) => tag.id === id)?.name ?? "标签"}
+                          </span>
+                        </Badge>
+                      ))}
+                      {(item.tag_ids?.length ?? 0) > 2 && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label="查看全部标签"
+                            >
+                              <Plus />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            align="start"
+                            aria-label="全部标签"
+                            className="max-h-64 overflow-y-auto"
+                          >
+                            <div className="flex flex-wrap gap-1">
+                              {(item.tag_ids ?? []).map((id) => (
+                                <Badge
+                                  variant="secondary"
+                                  className="h-auto max-w-full whitespace-normal break-all"
+                                  key={id}
+                                >
+                                  {tags.data?.items.find((tag) => tag.id === id)?.name ?? "标签"}
+                                </Badge>
+                              ))}
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                      {!item.tag_ids?.length && <span className="text-muted-foreground">—</span>}
+                    </div>
+                  </Field>
                 </FieldGroup>
                 <div
                   className="flex w-full flex-wrap gap-2"
@@ -1191,7 +1254,7 @@ export function SupplierDetail() {
                         async () => {
                           await request(`/suppliers/${id}/status`, {
                             method: "POST",
-                            body: { enabled: account?.status === "disabled" },
+                            body: { enabled: !account?.enabled },
                           });
                           resource.reload();
                         },
@@ -1206,7 +1269,7 @@ export function SupplierDetail() {
                       )
                     }
                   >
-                    {account?.status !== "disabled" ? "停用" : "启用"}
+                    {account?.enabled ? "停用" : "启用"}
                   </Button>
                 </div>
               </CardContent>
