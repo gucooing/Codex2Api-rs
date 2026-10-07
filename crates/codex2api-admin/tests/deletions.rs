@@ -88,7 +88,7 @@ async fn deleting_supply_or_proxy_preserves_consumers_and_usage_history() {
             .unwrap()
             .is_none()
     );
-    assert!(f.storage.virtual_account(id).await.unwrap().is_some());
+    assert!(f.storage.platform_account(id).await.unwrap().is_some());
     let history = f.storage.query_usage(&Default::default()).await.unwrap();
     assert_eq!(history.total, 1);
     assert_eq!(history.records[0].account_name, "supply history");

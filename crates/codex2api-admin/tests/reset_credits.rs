@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 mod common;
 use axum::http::StatusCode;
 use common::*;
@@ -9,7 +18,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     let account = f.consumer("seed").await;
     let seed = f
         .storage
-        .virtual_account(account["id"].as_str().unwrap())
+        .platform_account(account["id"].as_str().unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -18,7 +27,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
         row.id = format!("batch-{index:03}");
         row.username = format!("match-{index:03}");
         row.name = "跨页账户".into();
-        f.storage.save_virtual_account(&row).await.unwrap();
+        f.storage.save_account_fixture(&row).await.unwrap();
     }
     let page=f.get("/admin/api/consumers?page=2&page_size=10&search=match-&status=enabled&subscription=active").await;
     assert_eq!(page["total"], 205);
@@ -121,7 +130,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     }
     assert!(
         f.storage
-            .virtual_account("batch-000")
+            .platform_account("batch-000")
             .await
             .unwrap()
             .is_some()

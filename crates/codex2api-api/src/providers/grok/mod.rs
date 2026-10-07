@@ -159,10 +159,10 @@ async fn models(
 async fn account(
     state: &ApiState,
     access: &VirtualAccess,
-) -> Result<codex2api_storage::VirtualAccount> {
+) -> Result<codex2api_storage::PlatformAccount> {
     state
         .storage
-        .effective_virtual_account(&access.virtual_account_id)
+        .effective_platform_account(&access.virtual_account_id)
         .await?
         .filter(|a| a.enabled && a.provider_id == codex2api_core::GROK)
         .ok_or_else(ApiError::invalid_token)

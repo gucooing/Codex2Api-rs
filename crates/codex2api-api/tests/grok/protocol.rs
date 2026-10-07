@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
@@ -5,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use codex2api_storage::{Storage, VirtualAccount};
+use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -77,7 +86,7 @@ async fn authorize(app: &Router) -> Value {
         .to_owned();
     let flow = payload(bootstrap).await;
     assert_eq!(flow["provider_id"], "grok");
-    let identified=request(app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"virtual","username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await;
+    let identified=request(app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await;
     assert_eq!(identified.status(), StatusCode::OK);
     let identity = payload(identified).await;
     let approval=request(app,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identity["identity"]["account_id"]})),Some(&cookie),None).await;
@@ -113,7 +122,7 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     plan.name = "本地开发套餐".into();
     plan.plan_type = "supergrok_heavy".into();
     storage.save_virtual_plan(&plan, None).await.unwrap();
-    let mut account = VirtualAccount {
+    let mut account = PlatformAccount {
         provider_id: "grok".into(),
         id: "subscription-user".into(),
         username: "grok-user".into(),
@@ -126,7 +135,7 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let auth = codex2api_auth::AuthService::new(accounts.clone()).unwrap();
     let pool = codex2api_upstream::UpstreamPool::new(auth);
@@ -161,7 +170,7 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     );
 
     account.subscription_expires_at = Some("2020-01-01T00:00:00Z".into());
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let settings =
         payload(request(&app, "/grok/v1/settings", None, None, Some(access)).await).await;
     assert_eq!(settings["subscription_tier_display"], "Free");
@@ -226,7 +235,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .save_virtual_plan(&free, Some(free.revision))
         .await
         .unwrap();
-    let account = VirtualAccount {
+    let account = PlatformAccount {
         provider_id: "grok".into(),
         id: uuid::Uuid::new_v4().to_string(),
         username: "grok-user".into(),
@@ -239,7 +248,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mock=Router::new()
@@ -498,7 +507,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .unwrap()
         .to_owned();
     let flow = payload(flow).await;
-    let identified=payload(request(&app,"/user/api/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"virtual","username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await).await;
+    let identified=payload(request(&app,"/user/api/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await).await;
     assert_eq!(request(&app,"/user/api/oauth/device/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identified["identity"]["account_id"],"user_code":issued["user_code"]})),Some(&cookie),None).await.status(),StatusCode::OK);
     let device_tokens=payload(request(&app,"/api/oauth/grok/oauth2/token",Some(json!({"client_id":codex2api_version::grok::CLIENT_ID,"grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":issued["device_code"]})),None,None).await).await;
     assert_eq!(device_tokens["scope"], "openid profile offline_access");

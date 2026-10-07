@@ -6,10 +6,10 @@ use crate::{
 use axum::{
     Json,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
-use codex2api_storage::{VirtualAccount, oauth_secret};
+use codex2api_storage::{PlatformAccount, oauth_secret};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -96,13 +96,9 @@ async fn flow_cookie(state: &UserState, flow: &str, value: &str, age: u32) -> Re
         }
     ))
 }
-async fn identity_view(state: &UserState, account: &VirtualAccount) -> Result<Value> {
-    let username = match state.storage.virtual_account_user(&account.id).await? {
-        Some(id) => state.storage.user(&id).await?.ok_or_else(failure)?.username,
-        None => account.username.clone(),
-    };
+async fn identity_view(_state: &UserState, account: &PlatformAccount) -> Result<Value> {
     Ok(
-        json!({"account_id":account.id,"username":username,"name":account.name,"email":account.email,
+        json!({"account_id":account.id,"username":account.username,"name":account.name,"email":account.email,
         "provider_id":account.provider_id,"plan_type":account.effective_plan()}),
     )
 }
@@ -283,7 +279,6 @@ pub(crate) async fn reset(
 pub(crate) struct Identify {
     request_id: String,
     csrf_token: String,
-    kind: String,
     username: String,
     password: String,
 }
@@ -298,52 +293,12 @@ pub(crate) async fn identify(
         .storage
         .clear_browser_identity(&input.request_id)
         .await?;
-    let account = match input.kind.as_str() {
-        "user" => {
-            let user = auth::verify_user(&state, &input.username, input.password).await?;
-            state
-                .storage
-                .user_platform_account(&user.id, provider)
-                .await?
-                .ok_or_else(|| UserError::bad("该平台账户已停用，请联系管理员"))?
-        }
-        "virtual" => {
-            if input.username.len() > 128
-                || input.password.len() > 1024
-                || !state
-                    .storage
-                    .allow_virtual_login_attempt(&format!("virtual:{}", input.username.trim()))
-                    .await?
-            {
-                return Err(UserError(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "login_throttled",
-                    "登录尝试过多，请稍后重试",
-                ));
-            }
-            let account = state
-                .storage
-                .virtual_account_by_username(input.username.trim())
-                .await?;
-            let Some(account) = account.filter(|a| a.provider_id == provider) else {
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                return Err(UserError::bad("用户名或密码错误，或账户已停用"));
-            };
-            let hash = account.password_hash.clone();
-            if !matches!(
-                tokio::task::spawn_blocking(move || codex2api_storage::verify_password(
-                    &input.password,
-                    &hash
-                ))
-                .await,
-                Ok(Ok(true))
-            ) {
-                return Err(UserError::bad("用户名或密码错误，或账户已停用"));
-            }
-            account
-        }
-        _ => return Err(UserError::bad("请选择登录身份")),
-    };
+    let user = auth::verify_user(&state, &input.username, input.password).await?;
+    let account = state
+        .storage
+        .user_platform_account(&user.id, provider)
+        .await?
+        .ok_or_else(|| UserError::bad("该平台账户不可用，请联系管理员"))?;
     if !state
         .storage
         .bind_browser_identity(&input.request_id, &account, None)
@@ -366,7 +321,7 @@ pub(crate) struct Approve {
     #[serde(default)]
     user_code: Option<String>,
 }
-async fn approved_account(state: &UserState, input: &Approve) -> Result<VirtualAccount> {
+async fn approved_account(state: &UserState, input: &Approve) -> Result<PlatformAccount> {
     if !input.confirmed {
         return Err(UserError::bad("请先确认登录身份"));
     }

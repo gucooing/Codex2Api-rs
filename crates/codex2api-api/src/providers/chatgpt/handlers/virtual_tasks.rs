@@ -1,17 +1,26 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     body::Bytes,
     extract::Extension,
     http::{HeaderMap, Uri},
     response::Response,
 };
-use codex2api_storage::{VirtualAccess, VirtualAccount};
+use codex2api_storage::{PlatformAccount, VirtualAccess};
 use codex2api_upstream::BackendEndpoint as E;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
 async fn owned(
     state: &crate::ApiState,
-    account: &VirtualAccount,
+    account: &PlatformAccount,
     id: &str,
     execution: bool,
 ) -> crate::Result<Value> {
@@ -36,7 +45,7 @@ async fn owned(
 
 async fn save(
     state: &crate::ApiState,
-    account: &VirtualAccount,
+    account: &PlatformAccount,
     source: &str,
     value: &Value,
 ) -> crate::Result<()> {
@@ -79,7 +88,7 @@ pub(crate) struct TaskRequest {
 
 pub(crate) async fn forward(
     state: &crate::ApiState,
-    account: &VirtualAccount,
+    account: &PlatformAccount,
     access: VirtualAccess,
     request: TaskRequest,
 ) -> crate::Result<Response> {
@@ -527,7 +536,7 @@ mod tests {
             .await
             .unwrap();
         for id in ["owner", "other"] {
-            let account = VirtualAccount {
+            let account = PlatformAccount {
                 provider_id: "chatgpt".into(),
                 id: id.into(),
                 username: id.into(),
@@ -540,7 +549,7 @@ mod tests {
                 enabled: true,
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
-            storage.save_virtual_account(&account).await.unwrap();
+            storage.save_account_fixture(&account).await.unwrap();
         }
         let mut supplier = codex2api_storage::NewSupplierAccount::pending_identity(
             "installation",

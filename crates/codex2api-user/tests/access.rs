@@ -53,6 +53,7 @@ async fn setup() -> (tempfile::TempDir, Storage, Router, User) {
         .await
         .unwrap();
     let user = User {
+        kind: codex2api_storage::UserKind::Regular,
         id: "alice-user".into(),
         username: "alice".into(),
         password_hash: codex2api_storage::hash_password("user-password").unwrap(),
@@ -474,7 +475,7 @@ async fn temporary_authorization_needs_explicit_confirmation_and_does_not_log_th
         .status(),
         StatusCode::BAD_REQUEST
     );
-    let response=request(&app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"user","username":"alice","password":"user-password"})),Some(&flow_cookie),None).await;
+    let response=request(&app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"alice","password":"user-password"})),Some(&flow_cookie),None).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key("set-cookie"));
     let identity = body(response).await;
@@ -729,4 +730,109 @@ async fn empty_usage_has_a_stable_shape_in_both_timezone_directions() {
         assert_eq!(value["items"], json!([]));
     }
     storage.close().await;
+}
+
+#[tokio::test]
+async fn virtual_user_can_only_verify_oauth_and_must_confirm_separately() {
+    let (_dir, storage, app, regular) = setup().await;
+    let special = User {
+        kind: codex2api_storage::UserKind::Virtual,
+        id: "oauth-only-user".into(),
+        username: "oauth-only".into(),
+        password_hash: codex2api_storage::hash_password("oauth-password").unwrap(),
+        name: "OAuth Only".into(),
+        email: "oauth@example.test".into(),
+        enabled: true,
+        wallet_cents: 0,
+        revision: 1,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    storage
+        .save_virtual_user(codex2api_storage::VirtualUserChange {
+            user: &special,
+            platform_id: "oauth-only-platform",
+            provider_id: "chatgpt",
+            plan_id: "plus",
+            expires_at: None,
+            user_revision: None,
+            revision: None,
+        })
+        .await
+        .unwrap();
+    let denied = request(
+        &app,
+        "/user/api/login",
+        Some(json!({"username":special.username,"password":"oauth-password"})),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert!(denied.headers().get("set-cookie").is_none());
+    assert!(
+        storage
+            .create_user_session(&special, "csrf")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .user_store()
+            .user(&special.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(storage.users().await.unwrap().len(), 2);
+    assert_eq!(storage.platform_accounts().await.unwrap().len(), 1);
+    assert!(
+        storage.user_options("oauth-only").await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let boot = request(
+        &app,
+        &format!("/user/api/oauth/authorize/bootstrap?{}", query()),
+        None,
+        None,
+        None,
+    )
+    .await;
+    let flow_cookie = cookie(&boot);
+    let flow = body(boot).await;
+    let identified = request(&app, "/user/api/oauth/authorize/identify", Some(json!({
+        "request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":special.username,"password":"oauth-password"
+    })), Some(&flow_cookie), None).await;
+    assert_eq!(identified.status(), StatusCode::OK);
+    assert!(identified.headers().get("set-cookie").is_none());
+    assert_eq!(
+        body(identified).await["identity"]["account_id"],
+        "oauth-only-platform"
+    );
+    let codes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_authorization_codes")
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(codes, 0);
+    let confirmed = request(&app, "/user/api/oauth/authorize/approve", Some(json!({
+        "request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":"oauth-only-platform","confirmed":true
+    })), Some(&flow_cookie), None).await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    assert!(
+        body(confirmed).await["redirect_uri"]
+            .as_str()
+            .unwrap()
+            .contains("code=")
+    );
+    assert_eq!(
+        storage
+            .user(&regular.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .wallet_cents,
+        0
+    );
 }

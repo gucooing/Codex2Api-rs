@@ -1,7 +1,16 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use chrono::{Duration, Utc};
 use codex2api_storage::{
-    CheckoutInput, CouponInput, OrderFilter, OrderRequest, Storage, SubscriptionChange,
-    SubscriptionOrder, User, VirtualAccount,
+    CheckoutInput, CouponInput, OrderFilter, OrderRequest, PlatformAccount, Storage,
+    SubscriptionChange, SubscriptionOrder, User,
 };
 use serde_json::json;
 
@@ -11,6 +20,7 @@ async fn setup() -> (tempfile::TempDir, Storage, User) {
         .await
         .unwrap();
     let user = User {
+        kind: codex2api_storage::UserKind::Regular,
         id: "buyer".into(),
         username: "buyer".into(),
         password_hash: codex2api_storage::hash_password("password").unwrap(),
@@ -264,7 +274,7 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
         .unwrap()
         .unwrap();
     let anchor: String =
-        sqlx::query_scalar("SELECT subscription_started_at FROM virtual_accounts WHERE id=?")
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
             .bind(&account.id)
             .fetch_one(storage.pool())
             .await
@@ -300,7 +310,7 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
             .timestamp_millis()
     );
     let after_anchor: String =
-        sqlx::query_scalar("SELECT subscription_started_at FROM virtual_accounts WHERE id=?")
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
             .bind(&account.id)
             .fetch_one(storage.pool())
             .await
@@ -415,7 +425,7 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
         &(Utc::now() + Duration::days(15)).to_rfc3339(),
     )
     .await;
-    let standalone = VirtualAccount {
+    let standalone = PlatformAccount {
         id: "independent".into(),
         provider_id: "chatgpt".into(),
         username: "independent".into(),
@@ -428,7 +438,7 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
         enabled: true,
         created_at: Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&standalone).await.unwrap();
+    storage.save_account_fixture(&standalone).await.unwrap();
     let expiring = quote(&storage, &user, "pro").await.unwrap();
     sqlx::query("UPDATE subscription_orders SET quote_expires_at_ms=0 WHERE id=?")
         .bind(&expiring.id)

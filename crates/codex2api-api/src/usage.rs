@@ -1,5 +1,15 @@
 //! Client request ledger. Never retain prompts, response text, image bytes or bearer keys.
+
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
 use crate::execution::ExecutionContext;
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::body::{Body, Bytes};
 use codex2api_storage::{Storage, UsageRecord};
 use codex2api_upstream::{
@@ -2293,7 +2303,7 @@ mod tests {
             .await
             .unwrap()
             .account;
-        let consumer = codex2api_storage::VirtualAccount {
+        let consumer = codex2api_storage::PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "consumer-1".into(),
             username: "consumer-1".into(),
@@ -2306,7 +2316,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&consumer).await.unwrap();
+        storage.save_account_fixture(&consumer).await.unwrap();
         for model in ["warmup", "one", "two", "interrupted", "voice-model"] {
             sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')").bind(model).execute(storage.pool()).await.unwrap();
         }

@@ -1,10 +1,19 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     Router,
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use codex2api_storage::{Storage, VirtualAccount};
+use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -51,7 +60,7 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
     let storage = Storage::open(temporary.path().join("device.sqlite"))
         .await
         .unwrap();
-    let account = VirtualAccount {
+    let account = PlatformAccount {
         provider_id: "chatgpt".into(),
         id: uuid::Uuid::new_v4().to_string(),
         username: "alice".into(),
@@ -64,7 +73,7 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let suppliers = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let auth = codex2api_auth::AuthService::new(suppliers.clone()).unwrap();
     let app = codex2api_api::router(codex2api_api::ApiState::new(
@@ -119,7 +128,7 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
         .status(),
         StatusCode::BAD_REQUEST
     );
-    let identified=request(&app,"/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"virtual","username":"alice","password":"fixture-password"})),Some(&cookie)).await;
+    let identified=request(&app,"/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"alice","password":"fixture-password"})),Some(&cookie)).await;
     assert_eq!(identified.status(), StatusCode::OK);
     approval["csrf_token"] = flow["csrf_token"].clone();
     assert_eq!(

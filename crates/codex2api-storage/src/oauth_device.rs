@@ -1,5 +1,5 @@
 //! Short-lived device-code authorizations; redeemed sessions use the normal device ledger.
-use crate::{Result, Storage, VirtualAccount, hash_token};
+use crate::{PlatformAccount, Result, Storage, hash_token};
 
 pub struct DeviceAuthorization<'a> {
     pub id: &'a str,
@@ -33,7 +33,7 @@ pub struct DeviceAuthorizationApproval<'a> {
     pub id: &'a str,
     pub cookie: &'a str,
     pub csrf: &'a str,
-    pub account: &'a VirtualAccount,
+    pub account: &'a PlatformAccount,
     pub code: &'a str,
     pub scopes: &'a str,
 }
@@ -129,7 +129,7 @@ impl Storage {
         if flow.is_none() {
             return Ok(false);
         }
-        let row: Option<(String,String,String,i64,Option<String>)> = sqlx::query_as("UPDATE virtual_device_authorizations SET authorization_code=?,virtual_account_id=?,expires_at=min(expires_at,?) WHERE user_code_hash=? AND authorization_code IS NULL AND expires_at>? AND provider_id=? AND EXISTS(SELECT 1 FROM virtual_principals WHERE id=? AND password_hash=? AND enabled=1 AND provider_id=?) RETURNING client_id,redirect_uri,code_challenge,created_at,requested_scopes")
+        let row: Option<(String,String,String,i64,Option<String>)> = sqlx::query_as("UPDATE virtual_device_authorizations SET authorization_code=?,virtual_account_id=?,expires_at=min(expires_at,?) WHERE user_code_hash=? AND authorization_code IS NULL AND expires_at>? AND provider_id=? AND EXISTS(SELECT 1 FROM platform_principals WHERE id=? AND password_hash=? AND enabled=1 AND provider_id=?) RETURNING client_id,redirect_uri,code_challenge,created_at,requested_scopes")
             .bind(request.code).bind(&request.account.id).bind(now+120).bind(hash_token(user_code))
             .bind(now).bind(&request.account.provider_id).bind(&request.account.id).bind(&request.account.password_hash).bind(&request.account.provider_id).fetch_optional(&mut *tx).await?;
         let Some((client, redirect, challenge, created, scopes)) = row else {

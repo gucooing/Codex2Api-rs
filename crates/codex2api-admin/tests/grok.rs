@@ -153,7 +153,7 @@ async fn presets_and_custom_models_are_equal_catalog_entries_and_grok_plans_are_
     assert_eq!(f.request("PUT",&format!("/admin/api/subscriptions/{id}"),json!({"user_id":user["id"],"plan_id":saved["id"],"expires_at":"2099-01-01T00:00:00Z","enabled":true,"reissue":false,"revision":grok_sub["revision"]})).await.status(),StatusCode::OK);
     let effective = f
         .storage
-        .effective_virtual_account(id)
+        .effective_platform_account(id)
         .await
         .unwrap()
         .unwrap();

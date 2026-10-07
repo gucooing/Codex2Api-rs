@@ -55,7 +55,7 @@ fn scope(
     from: i64,
     until: i64,
 ) {
-    query.push(" WHERE subject_kind='virtual_account' AND subject_id IN (SELECT virtual_account_id FROM user_subscriptions WHERE user_id=").push_bind(owner.to_owned()).push(") AND requested_at_ms>=").push_bind(from).push(" AND requested_at_ms<").push_bind(until);
+    query.push(" WHERE subject_kind='virtual_account' AND subject_id IN (SELECT id FROM regular_platforms WHERE user_id=").push_bind(owner.to_owned()).push(") AND requested_at_ms>=").push_bind(from).push(" AND requested_at_ms<").push_bind(until);
     if !filter.provider.is_empty() {
         query
             .push(" AND provider_id=")
@@ -96,6 +96,7 @@ impl Storage {
             - (filter.days - 1) * 86_400_000;
         let totals = crate::usage_statistics::TOTALS;
         let mut tx = self.pool().begin().await?;
+        crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         let mut summary = QueryBuilder::new(format!("SELECT {totals} FROM usage_records"));
         scope(&mut summary, owner, filter, from, until);
         let summary = summary

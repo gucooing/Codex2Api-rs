@@ -1,4 +1,5 @@
 "use client";
+import { usePlatformPrefix } from "@/lib/platform-scope";
 import { useState, useId } from "react";
 import {
   request,
@@ -42,11 +43,12 @@ export function RoutingForm({
   disabled: boolean;
   onSaved: () => void;
 }) {
+  const platformPrefix = usePlatformPrefix();
   const id = useId();
   const actions = useActions();
   const tags = useResource<List<SupplierTag>>("/supplier-tags");
   const suppliers = useResource<List<Supplier>>("/suppliers");
-  const rpm = useResource<RpmLimit>(account ? `/consumers/${account.id}/rate-limit` : null);
+  const rpm = useResource<RpmLimit>(account ? `${platformPrefix}/${account.id}/rate-limit` : null);
   const route = data.items.find((r) => r.provider_id === account?.provider_id);
   const [draft, setDraft] = useState<{ tag: string; supplier: string }>();
   const current = draft ?? { tag: route?.tag_id ?? "", supplier: route?.supplier_account_id ?? "" };
@@ -68,7 +70,7 @@ export function RoutingForm({
           actions.submit(event, "pool-route", async () => {
             if (disabled || !account || !tags.ready || !suppliers.ready)
               throw new Error("请先加载号池和供应账户");
-            await request(`/consumers/${account.id}/routing`, {
+            await request(`${platformPrefix}/${account.id}/routing`, {
               method: "PUT",
               body: {
                 tag_id: current.tag || null,
@@ -184,7 +186,7 @@ export function RoutingForm({
             const value = rpmValue.trim() === "" ? null : Number(rpmValue);
             if (value !== null && (!Number.isInteger(value) || value < 0 || value > 1_000_000))
               throw new Error("RPM 须为 0 到 1000000 的整数");
-            await request(`/consumers/${account.id}/rate-limit`, {
+            await request(`${platformPrefix}/${account.id}/rate-limit`, {
               method: "PUT",
               body: { rpm: value },
             });

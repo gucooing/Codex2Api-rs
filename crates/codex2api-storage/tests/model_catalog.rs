@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use codex2api_storage::{ImagePrice, ImageUsage, ModelConfig, Storage, UsageFilter, UsageRecord};
 
 #[test]
@@ -117,7 +126,7 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
             .unwrap()
     );
     storage
-        .save_virtual_account(&codex2api_storage::VirtualAccount {
+        .save_account_fixture(&codex2api_storage::PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "virtual-one".into(),
             username: "virtual-one".into(),

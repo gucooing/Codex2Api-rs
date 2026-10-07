@@ -61,7 +61,7 @@ and refresh must preserve owner identity; missing user identity does not fall ba
 to email or workspace-only merging. Supplier IDs, credentials, routing revisions,
 quota snapshots and historical attribution survive upgrades.
 
-User identities, standalone virtual accounts, supplier accounts and administrator sessions are separate entities. Existing virtual accounts are never converted to users. `users` owns browser credentials and an integer-cent USD wallet. `user_subscriptions` uniquely maps `(user_id, provider_id)` to a generated platform virtual identity; existing virtual account administration lists only standalone accounts. User subscription configuration and history reuse the established virtual-account persistence and execution services without exposing their supplier binding to users.
+Consumer login identities share `accounts` and `users`, with immutable `users.kind` (`regular` or `virtual`). This is storage reuse, not a shared business domain: virtual users are OAuth-only and administered exclusively in Virtual accounts. Ordinary user lists, subscription management, wallets, orders, records and user statistics exclude them. `platform_accounts` owns the stable execution/client identity, provider, entitlements and revision, uniquely keyed by `(user_id, provider_id)`. An ordinary user has an identity per configured platform; a virtual user has one administrator-managed platform identity. Supplier accounts and administrator sessions remain separate.
 
  A consumer's provider is fixed at creation; execution routes may bind
 only suppliers of that provider. ChatGPT and Grok have independent protocol adapters.
@@ -219,9 +219,26 @@ reject cross-role profiles and identity/type changes. Usernames are unique withi
 each account type, and each login endpoint always specifies its own type.
 
 `admin_identities` and `user_identities` join only the corresponding role.
-`virtual_principals` resolves a managed platform identity through its user owner;
-managed identities do not duplicate passwords or profile fields. Standalone
-virtual accounts stay independent and are never converted into users.
+`platform_principals` resolves credentials and profile fields through its owner;
+platform rows never duplicate them. `regular_users`, `virtual_users`,
+`regular_platforms` and `virtual_platforms` are fixed business-scope views.
+`Storage::require_account_scope` is the shared route/transaction guard. The
+administrator API installs it once as middleware, selecting the scope by route namespace for all `/users/{id}`,
+`/consumers/{id}` and `/subscriptions/{id}` resources. IDs from the other business
+domain are rejected before handlers run. Ordinary subscriptions have their own
+resource routes and detail page; shared component code receives a fixed route
+scope. Lists, searches, counts and aggregates query the corresponding scoped view.
+SQL triggers also reject virtual-user website sessions, wallets and orders, as
+well as role changes, owner changes and additional virtual-user platforms.
+Credential changes revoke only that owner's sessions, devices and pending grants.
+
+SQL migration moves independent virtual credentials into special-user profiles,
+keeps all platform/device/history IDs, credentials, expiry and spending anchors,
+and removes the old credential table and subscription mapping. A conflicting
+virtual username receives a `~virtual-<new-user-id>` suffix; the administrator
+sees the resulting username in Virtual accounts. No unrelated identities are
+merged, and no purchase or payment history is manufactured. Runtime code uses
+only the new schema.
 The user HTTP crate receives `UserStore`, a narrow repository with no raw SQL,
 supplier or administrator access. Response DTOs explicitly select user-visible
 fields; common signing primitives do not create a shared HTTP login/data endpoint.
@@ -294,11 +311,11 @@ Desktop's `plan-names` resource; accepted protocol variants follow the pinned
 
 ### OAuth and devices
 
-The AI API authorization entry redirects to the configured public user origin. Browser consent and device-code approval run only on the user listener. An authenticated user browser session selects that user's platform identity. Otherwise, an explicit user or standalone-virtual identity login verifies credentials for the current cookie-bound, CSRF-protected authorization flow only. The identity is displayed before a separate confirmation request. No code or device session is created by password verification alone.
+The AI API authorization entry redirects to the configured public user origin. Browser consent and device-code approval run only on the user listener. An authenticated user browser session selects that user's platform identity. Otherwise, a single username/password form verifies either kind of user for the current cookie-bound, CSRF-protected authorization flow only. The identity is displayed before a separate confirmation request. No code or device session is created by password verification alone.
 
 Administrator Settings / Public addresses stores the API, user and administrator HTTP(S) origins together in SQLite with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website address to the user HTTP module. Listener bindings and router isolation are unchanged.
 
-Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Standalone identities cannot log into the user website, and administrators authenticate only on the administrator listener. Expiration does not itself disable login.
+Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Virtual users cannot log into the user website, and administrators authenticate only on the administrator listener. Expiration does not itself disable login.
 
 Administrator and user **web sessions** use JWTs, with independent RSA keys in
 `jwt_signing_keys`. Their endpoint selects the expected role/purpose and key domain.
@@ -314,8 +331,10 @@ client credential formats. It does not gain web account_type/token_use fields or
 web JWT rules. Client grants remain bound to the local platform account/device and
 cannot authorize administration or user-management APIs. Only the browser consent
 page uses the website's current user identity; it issues the ordinary PKCE-bound
-OAuth authorization code after explicit confirmation. The account-identity migration
-invalidates old website sessions while preserving Codex OAuth keys, devices and grants.
+OAuth authorization code after explicit confirmation. User type is resolved from
+persisted identity, never a browser-selected account-type field. Virtual users
+cannot obtain a user web JWT; both session issuance and session reads enforce
+ordinary-user membership independently of OAuth confirmation.
 
 Access-token audience is an API audience array with granted scp values;
 ID-token audience is the CLI client ID array and at_hash binds the actual access
@@ -504,7 +523,7 @@ compatibility boundaries and is maintained separately.
 
 Order and subscription filters use exact plan/user IDs. `/admin/api/users/options` searches usernames, names and emails and returns at most five minimal choices; it is never mounted on the user listener. Subscription filters retain the default exclusion of expired records. Administrative usage filtering applies the chosen user to every count and record query through stable subscription ownership, including all of that user's platforms.
 
-Overview virtual counts include only standalone virtual accounts; normal means enabled with no expiry or a future expiry. User totals include all user profiles. Daily active users are distinct users with any actual ledger record in the administrator browser's local day, including failed/in-progress requests, never device/session counts. The browser supplies its UTC offset; server-generated day boundaries exclude future records. Changing filters never calls a supplier.
+Overview virtual counts include only standalone virtual accounts; normal means enabled with no expiry or a future expiry. User totals include only regular-user profiles. Daily active users are distinct regular users with any actual ledger record in the administrator browser's local day, including failed/in-progress requests, never device/session counts. The browser supplies its UTC offset; server-generated day boundaries exclude future records. Changing filters never calls a supplier.
 
 ## Provider module boundaries
 

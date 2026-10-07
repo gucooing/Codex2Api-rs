@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check provider module boundaries
         run: python3 scripts/check-provider-boundaries.py
+      - name: Test account migration and database boundaries
+        run: python3 scripts/test-account-migration.py
       - uses: actions/setup-node@v6
         with:
           node-version: 24

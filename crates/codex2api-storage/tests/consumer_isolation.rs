@@ -1,8 +1,17 @@
-use codex2api_storage::{NewSupplierAccount, Storage, VirtualAccount};
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
+use codex2api_storage::{NewSupplierAccount, PlatformAccount, Storage};
 use serde_json::json;
 
-async fn consumer(storage: &Storage, id: &str, provider: &str, plan: &str) -> VirtualAccount {
-    let account = VirtualAccount {
+async fn consumer(storage: &Storage, id: &str, provider: &str, plan: &str) -> PlatformAccount {
+    let account = PlatformAccount {
         provider_id: provider.into(),
         id: id.into(),
         username: id.into(),
@@ -15,7 +24,7 @@ async fn consumer(storage: &Storage, id: &str, provider: &str, plan: &str) -> Vi
         enabled: true,
         created_at: "2026-09-22T00:00:00Z".into(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     account
 }
 
@@ -51,10 +60,10 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     let b = consumer(&storage, "b", "grok", &other_plan.id).await;
     a.provider_id = "grok".into();
     a.plan_id = other_plan.id.clone();
-    assert!(storage.save_virtual_account(&a).await.is_err());
+    assert!(storage.save_account_fixture(&a).await.is_err());
     assert_eq!(
         storage
-            .virtual_account(&a.id)
+            .platform_account(&a.id)
             .await
             .unwrap()
             .unwrap()
@@ -102,7 +111,7 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
             .is_none()
     );
     storage.delete_account(&supplier.id).await.unwrap();
-    assert!(storage.virtual_account(&b.id).await.unwrap().is_some());
+    assert!(storage.platform_account(&b.id).await.unwrap().is_some());
     assert!(
         storage
             .execution_route(&b.id, "grok")

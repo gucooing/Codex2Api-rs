@@ -2,7 +2,7 @@
 //! generic SQL, user enumeration or administrative subscription writes are exposed.
 use crate::{
     BrowserAuthorization, CheckoutInput, DeviceAuthorizationApproval, OrderFilter, OrderRequest,
-    Result, Storage, SubscriptionOrder, User, UserSession, VirtualAccount,
+    PlatformAccount, Result, Storage, SubscriptionOrder, User, UserSession,
 };
 use serde_json::{Value, json};
 
@@ -39,8 +39,8 @@ impl UserStore {
     pub async fn user_by_username(&self, name: &str) -> Result<Option<User>> {
         self.storage.user_by_username(name).await
     }
-    pub async fn allow_virtual_login_attempt(&self, name: &str) -> Result<bool> {
-        self.storage.allow_virtual_login_attempt(name).await
+    pub async fn allow_user_login_attempt(&self, name: &str) -> Result<bool> {
+        self.storage.allow_user_login_attempt(name).await
     }
     pub async fn create_user_session(&self, user: &User, csrf: &str) -> Result<Option<String>> {
         self.storage.create_user_session(user, csrf).await
@@ -114,7 +114,7 @@ impl UserStore {
         for subscription in self.storage.user_subscriptions(Some(owner), true).await? {
             let account = self
                 .storage
-                .effective_virtual_account(&subscription.virtual_account_id)
+                .effective_platform_account(&subscription.virtual_account_id)
                 .await?
                 .ok_or_else(|| {
                     crate::StorageError::AccountNotFound(subscription.virtual_account_id.clone())
@@ -143,7 +143,7 @@ impl UserStore {
             let mut windows = Vec::new();
             for window in raw_windows {
                 let unpriced: i64 = if let Some(start) = window["started_at"].as_i64() {
-                    sqlx::query_scalar("SELECT COUNT(*) FROM usage_records WHERE subject_kind='virtual_account' AND subject_id=? AND requested_at_ms>=? AND requested_at_ms<? AND cost_nano_usd IS NULL AND ((SELECT quota_reset_credit_id FROM virtual_accounts WHERE id=?) IS NULL OR quota_reset_credit_id=(SELECT quota_reset_credit_id FROM virtual_accounts WHERE id=?))")
+                    sqlx::query_scalar("SELECT COUNT(*) FROM usage_records WHERE subject_kind='virtual_account' AND subject_id=? AND requested_at_ms>=? AND requested_at_ms<? AND cost_nano_usd IS NULL AND ((SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?) IS NULL OR quota_reset_credit_id=(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?))")
                         .bind(&account.id).bind(start*1000).bind((now+1)*1000).bind(&account.id).bind(&account.id).fetch_one(self.storage.pool()).await?
                 } else {
                     0
@@ -170,21 +170,15 @@ impl UserStore {
         Ok(items)
     }
     pub async fn revoke_device(&self, owner: &str, id: &str) -> Result<bool> {
-        Ok(sqlx::query("DELETE FROM virtual_devices WHERE id=? AND virtual_account_id IN(SELECT s.virtual_account_id FROM user_subscriptions s JOIN user_identities u ON u.id=s.user_id WHERE u.id=? AND u.enabled=1)")
+        Ok(sqlx::query("DELETE FROM virtual_devices WHERE id=? AND virtual_account_id IN(SELECT s.id FROM platform_accounts s JOIN user_identities u ON u.id=s.user_id WHERE u.id=? AND u.enabled=1 AND u.kind='regular')")
             .bind(id).bind(owner).execute(self.storage.pool()).await?.rows_affected()==1)
     }
     pub async fn user_platform_account(
         &self,
         user: &str,
         provider: &str,
-    ) -> Result<Option<VirtualAccount>> {
+    ) -> Result<Option<PlatformAccount>> {
         self.storage.user_platform_account(user, provider).await
-    }
-    pub async fn virtual_account_by_username(&self, name: &str) -> Result<Option<VirtualAccount>> {
-        self.storage.virtual_account_by_username(name).await
-    }
-    pub async fn virtual_account_user(&self, id: &str) -> Result<Option<String>> {
-        self.storage.virtual_account_user(id).await
     }
     pub async fn create_oauth_browser_flow(
         &self,
@@ -221,14 +215,14 @@ impl UserStore {
     pub async fn bind_browser_identity(
         &self,
         id: &str,
-        account: &VirtualAccount,
+        account: &PlatformAccount,
         session: Option<&str>,
     ) -> Result<bool> {
         self.storage
             .bind_browser_identity(id, account, session)
             .await
     }
-    pub async fn browser_identity(&self, id: &str) -> Result<Option<VirtualAccount>> {
+    pub async fn browser_identity(&self, id: &str) -> Result<Option<PlatformAccount>> {
         self.storage.browser_identity(id).await
     }
     pub async fn authorize_oauth_browser_flow(

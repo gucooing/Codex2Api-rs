@@ -1,5 +1,15 @@
 //! Internal supplier failover before generation output is committed to the client.
+
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
 use crate::{ApiError, ApiState, Result};
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::body::Bytes;
 #[derive(Clone)]
 pub(crate) struct SupplierContext {
@@ -332,8 +342,8 @@ pub(crate) mod tests {
     use super::*;
     use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
     use codex2api_storage::{
-        OAuthDeviceIdentity, Storage, SupplierAccountUpdate, SupplierStatus, UsageRecord,
-        VirtualAccount,
+        OAuthDeviceIdentity, PlatformAccount, Storage, SupplierAccountUpdate, SupplierStatus,
+        UsageRecord,
     };
     use serde_json::json;
 
@@ -572,7 +582,7 @@ pub(crate) mod tests {
                 .unwrap();
             ids.push(a.id);
         }
-        let owner = VirtualAccount {
+        let owner = PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "consumer".into(),
             username: "consumer".into(),
@@ -585,7 +595,7 @@ pub(crate) mod tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&owner).await.unwrap();
+        storage.save_account_fixture(&owner).await.unwrap();
         storage
             .save_supplier_tag("pool", "chatgpt", "Pool")
             .await
@@ -631,7 +641,7 @@ pub(crate) mod tests {
         let (_dir, state, oauth, ids) = setup_pool().await;
         let storage = state.storage.clone();
         let owner = storage
-            .effective_virtual_account(&oauth.virtual_account_id)
+            .effective_platform_account(&oauth.virtual_account_id)
             .await
             .unwrap()
             .unwrap();

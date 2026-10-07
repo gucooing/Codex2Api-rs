@@ -1,4 +1,13 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
 use crate::{Result, Storage};
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use sqlx::{FromRow, QueryBuilder, Sqlite};
 
 #[derive(Clone, Debug, FromRow, serde::Serialize)]
@@ -157,7 +166,7 @@ pub struct VirtualDailyModelTokens {
 pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFilter) {
     query.push(" WHERE 1=1");
     if let Some(user) = filter.user_id.as_deref().filter(|s| !s.is_empty()) {
-        query.push(" AND subject_kind='virtual_account' AND subject_id IN (SELECT virtual_account_id FROM user_subscriptions WHERE user_id=")
+        query.push(" AND subject_kind='virtual_account' AND subject_id IN (SELECT id FROM regular_platforms WHERE user_id=")
             .push_bind(user.to_owned()).push(")");
     }
     if let Some(id) = filter.account_id.as_deref().filter(|s| !s.is_empty()) {
@@ -342,7 +351,7 @@ impl Storage {
     }
     pub async fn insert_usage(&self, record: &UsageRecord) -> Result<()> {
         let snapshot = self.billing_snapshot(&record.provider_id).await?;
-        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,image_input_usage_json,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM virtual_accounts WHERE id=?))")
+        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,image_input_usage_json,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?))")
             .bind(&record.provider_id).bind(&record.subject_kind).bind(&record.id).bind(&record.account_id).bind(&record.account_name).bind(&record.subject_id).bind(&record.subject_name)
             .bind(&record.endpoint).bind(&record.transport).bind(&record.model).bind(&record.reasoning_effort).bind(&record.service_tier).bind(&record.image_size).bind(&record.image_input_usage_json).bind(record.requested_at_ms).bind(&record.status)
             .bind(&record.actual_model).bind(snapshot).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.subject_id)
@@ -588,7 +597,7 @@ mod tests {
         let storage = Storage::open(dir.path().join("history.sqlite"))
             .await
             .unwrap();
-        let consumer = crate::VirtualAccount {
+        let consumer = crate::PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "consumer".into(),
             username: "consumer".into(),
@@ -601,7 +610,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&consumer).await.unwrap();
+        storage.save_account_fixture(&consumer).await.unwrap();
         storage
             .insert_usage(&UsageRecord {
                 id: "record".into(),
@@ -615,13 +624,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            storage.search_virtual_accounts("", 5).await.unwrap()[0].id,
+            storage.search_platform_accounts("", 5).await.unwrap()[0].id,
             consumer.id
         );
-        storage.delete_virtual_account(&consumer.id).await.unwrap();
+        storage.delete_virtual_user(&consumer.id).await.unwrap();
         assert!(
             storage
-                .search_virtual_accounts("", 5)
+                .search_platform_accounts("", 5)
                 .await
                 .unwrap()
                 .is_empty()

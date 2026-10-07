@@ -285,7 +285,7 @@ pub async fn token(
         {
             Ok(Some(device)) if device.provider_id == codex2api_core::GROK => match state
                 .storage
-                .effective_virtual_account(&device.virtual_account_id)
+                .effective_platform_account(&device.virtual_account_id)
                 .await
             {
                 Ok(Some(account)) if account.enabled => Ok(Some((account, device.id))),

@@ -76,7 +76,7 @@ pub(crate) async fn windows_on(
     // Old in-flight requests retain their original timestamp and stay out of the
     // new windows even if their historical bill settles after redemption.
     let reset: Option<(String,i64)> = sqlx::query_as(
-            "SELECT c.id,c.redeemed_at_ms FROM virtual_reset_credits c JOIN virtual_accounts a ON a.quota_reset_credit_id=c.id AND a.id=c.virtual_account_id WHERE a.id=? AND c.redeemed_at_ms<?",
+            "SELECT c.id,c.redeemed_at_ms FROM virtual_reset_credits c JOIN platform_accounts a ON a.quota_reset_credit_id=c.id AND a.id=c.virtual_account_id WHERE a.id=? AND c.redeemed_at_ms<?",
         )
         .bind(owner)
         .bind(now.saturating_add(1).saturating_mul(1000))

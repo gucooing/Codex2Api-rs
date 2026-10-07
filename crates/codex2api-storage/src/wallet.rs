@@ -66,9 +66,9 @@ impl Storage {
             .ok_or(StorageError::InvalidAdminUpdate("流水页码超出范围"))?;
         let condition = " WHERE (?='' OR w.user_id=?) AND (?='' OR w.kind=?) AND (? IS NULL OR julianday(w.created_at)>=julianday(?/1000.0,'unixepoch')) AND (? IS NULL OR julianday(w.created_at)<julianday(?/1000.0,'unixepoch'))";
         let mut tx = self.pool().begin().await?;
-        let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM wallet_entries w JOIN user_identities u ON u.id=w.user_id{condition}"))
+        let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM wallet_entries w JOIN regular_users u ON u.id=w.user_id{condition}"))
             .bind(&filter.user_id).bind(&filter.user_id).bind(&filter.kind).bind(&filter.kind).bind(filter.from_ms).bind(filter.from_ms).bind(filter.until_ms).bind(filter.until_ms).fetch_one(&mut *tx).await?;
-        let items:Vec<AdminWalletEntry>=sqlx::query_as(&format!("SELECT w.*,u.username,u.name AS user_name FROM wallet_entries w JOIN user_identities u ON u.id=w.user_id{condition} ORDER BY julianday(w.created_at) DESC,w.rowid DESC LIMIT ? OFFSET ?"))
+        let items:Vec<AdminWalletEntry>=sqlx::query_as(&format!("SELECT w.*,u.username,u.name AS user_name FROM wallet_entries w JOIN regular_users u ON u.id=w.user_id{condition} ORDER BY julianday(w.created_at) DESC,w.rowid DESC LIMIT ? OFFSET ?"))
             .bind(&filter.user_id).bind(&filter.user_id).bind(&filter.kind).bind(&filter.kind).bind(filter.from_ms).bind(filter.from_ms).bind(filter.until_ms).bind(filter.until_ms).bind(filter.limit).bind(offset).fetch_all(&mut *tx).await?;
         tx.commit().await?;
         Ok(json!({"items":items,"total":total,"page":filter.page,"limit":filter.limit}))
@@ -92,6 +92,7 @@ impl Storage {
             return Err(StorageError::InvalidAdminUpdate("调整原因最多 1000 字节"));
         }
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         let (actor, actor_name): (String, String) =
             sqlx::query_as("SELECT account_id,username FROM admin_identities WHERE id=?")
                 .bind(administrator)
@@ -129,7 +130,7 @@ impl Storage {
             return Ok(prior);
         }
         let (before, revision): (i64, i64) =
-            sqlx::query_as("SELECT wallet_cents,revision FROM users WHERE id=?")
+            sqlx::query_as("SELECT wallet_cents,revision FROM users WHERE id=? AND kind='regular'")
                 .bind(owner)
                 .fetch_optional(&mut *tx)
                 .await?

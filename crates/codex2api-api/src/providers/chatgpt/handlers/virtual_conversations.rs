@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     body::{Body, Bytes},
     extract::{Extension, State},
@@ -137,7 +146,7 @@ pub(crate) async fn forward(
         }
         let account = state
             .storage
-            .effective_virtual_account(&access.virtual_account_id)
+            .effective_platform_account(&access.virtual_account_id)
             .await?
             .ok_or_else(crate::ApiError::invalid_token)?;
         crate::providers::chatgpt::identity::mask(&mut value, &account, &ctx.account);
@@ -317,7 +326,7 @@ mod tests {
             .account;
         for id in ["one", "two"] {
             storage
-                .save_virtual_account(&codex2api_storage::VirtualAccount {
+                .save_account_fixture(&codex2api_storage::PlatformAccount {
                     provider_id: "chatgpt".into(),
                     id: id.into(),
                     username: id.into(),

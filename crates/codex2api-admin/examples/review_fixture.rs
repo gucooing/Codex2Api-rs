@@ -1,5 +1,13 @@
 //! Populate an explicitly selected disposable database for local UI review.
-use codex2api_storage::{Storage, VirtualAccount, hash_password};
+
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+use account_fixture::AccountFixture;
+use codex2api_storage::{PlatformAccount, Storage, hash_password};
 use serde_json::json;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -85,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
     }
-    let account = VirtualAccount {
+    let account = PlatformAccount {
         id: "review-consumer".into(),
         provider_id: "chatgpt".into(),
         username: "review-consumer".into(),
@@ -98,9 +106,7 @@ async fn main() -> anyhow::Result<()> {
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    storage
-        .save_virtual_account_operation(&account, "admin")
-        .await?;
+    storage.save_account_fixture(&account).await?;
     // One priced day exercises monthly cycle totals and sparse chart bar widths.
     let cycle_price = codex2api_storage::ModelPrice {
         provider_id: "chatgpt".into(),

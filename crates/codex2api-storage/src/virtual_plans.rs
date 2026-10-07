@@ -190,7 +190,7 @@ impl Storage {
         };
         if changed == 1 {
             sqlx::query(
-                "UPDATE virtual_accounts SET plan_type=? WHERE plan_id=? AND provider_id=?",
+                "UPDATE platform_accounts SET plan_type=? WHERE plan_id=? AND provider_id=?",
             )
             .bind(&plan.plan_type)
             .bind(&plan.id)
@@ -214,14 +214,15 @@ impl Storage {
             return Err(StorageError::InvalidAdminUpdate("Free 套餐不能删除"));
         }
         // Acquire the write lock before checking references, including concurrent assignments.
-        let changed = sqlx::query("DELETE FROM virtual_plans WHERE id=? AND revision=? AND NOT EXISTS(SELECT 1 FROM virtual_accounts WHERE plan_id=?)")
+        let changed = sqlx::query("DELETE FROM virtual_plans WHERE id=? AND revision=? AND NOT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=?)")
             .bind(id).bind(revision).bind(id).execute(&mut *tx).await?.rows_affected();
         if changed == 0 {
-            let used: bool =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_accounts WHERE plan_id=?)")
-                    .bind(id)
-                    .fetch_one(&mut *tx)
-                    .await?;
+            let used: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=?)",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
             if used {
                 return Err(StorageError::Constraint(
                     "套餐仍有账户使用，请先为这些账户更换套餐".into(),
@@ -238,7 +239,7 @@ impl Storage {
         key: &str,
     ) -> Result<VirtualClientState> {
         let account = self
-            .effective_virtual_account(owner)
+            .effective_platform_account(owner)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self

@@ -169,7 +169,7 @@ async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
     assert_eq!(user.username, "same-name");
     assert_eq!(user.password_hash, "user-hash");
     assert_eq!((user.wallet_cents, user.revision), (1234, 7));
-    let account = storage.virtual_account("managed").await.unwrap().unwrap();
+    let account = storage.platform_account("managed").await.unwrap().unwrap();
     assert_eq!(account.password_hash, "user-hash");
     assert_eq!(account.name, "User");
     assert_eq!(
@@ -182,7 +182,7 @@ async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
     );
     assert_eq!(
         storage
-            .virtual_account("independent")
+            .platform_account("independent")
             .await
             .unwrap()
             .unwrap()
@@ -191,10 +191,10 @@ async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
     );
     assert!(
         storage
-            .virtual_account_user("independent")
+            .platform_account_owner("independent")
             .await
             .unwrap()
-            .is_none()
+            .is_some()
     );
     assert_eq!(
         storage
@@ -215,11 +215,11 @@ async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
     .unwrap();
     assert_eq!(sessions, 0);
     let raw: String =
-        sqlx::query_scalar("SELECT password_hash FROM virtual_accounts WHERE id='managed'")
+        sqlx::query_scalar("SELECT password_hash FROM platform_principals WHERE id='managed'")
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    assert!(raw.is_empty());
+    assert_eq!(raw, "user-hash");
     assert!(
         sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(storage.pool())
@@ -633,9 +633,9 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
     }
     pool.close().await;
     let storage = Storage::open(&path).await.unwrap();
-    let a = storage.virtual_account("a").await.unwrap().unwrap();
-    let b = storage.virtual_account("b").await.unwrap().unwrap();
-    let c = storage.virtual_account("c").await.unwrap().unwrap();
+    let a = storage.platform_account("a").await.unwrap().unwrap();
+    let b = storage.platform_account("b").await.unwrap().unwrap();
+    let c = storage.platform_account("c").await.unwrap().unwrap();
     assert_eq!(a.plan_id, b.plan_id);
     assert_ne!(a.plan_id, c.plan_id);
     assert_eq!(
@@ -667,7 +667,12 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
         serde_json::json!({"plan_id":"free","model_access":"none","models":[],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"0"},{"duration_seconds":18000,"cost_limit_usd":"0"}]})
     );
     assert_eq!(
-        storage.virtual_account("d").await.unwrap().unwrap().plan_id,
+        storage
+            .platform_account("d")
+            .await
+            .unwrap()
+            .unwrap()
+            .plan_id,
         "free"
     );
     assert_eq!(
@@ -685,7 +690,7 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
     assert_eq!(reopened.virtual_plans().await.unwrap().len(), count);
     assert_eq!(
         reopened
-            .virtual_account("a")
+            .platform_account("a")
             .await
             .unwrap()
             .unwrap()
@@ -756,7 +761,7 @@ async fn assert_final_schema(storage: &Storage) {
             .unwrap();
     assert_eq!(version, MIGRATIONS.iter().map(|m| m.version).max().unwrap());
     let virtual_columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('virtual_accounts')")
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('platform_accounts')")
             .fetch_all(storage.pool())
             .await
             .unwrap();
@@ -806,7 +811,7 @@ async fn virtual_quota_removal_preserves_existing_accounts_devices_and_configura
     let storage = Storage::open(&path).await.unwrap();
     assert_final_schema(&storage).await;
     assert_eq!(
-        storage.virtual_account("v").await.unwrap().unwrap().name,
+        storage.platform_account("v").await.unwrap().unwrap().name,
         "Virtual"
     );
     assert_eq!(storage.virtual_devices("v").await.unwrap()[0].id, "device");

@@ -216,7 +216,7 @@ impl Storage {
             return Ok(false);
         }
         let selected = if let Some(tag) = tag {
-            let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM supplier_tags t JOIN virtual_accounts v ON v.provider_id=t.provider_id WHERE t.id=? AND v.id=? AND t.provider_id=?)")
+            let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM supplier_tags t JOIN platform_accounts v ON v.provider_id=t.provider_id WHERE t.id=? AND v.id=? AND t.provider_id=?)")
                 .bind(tag).bind(owner).bind(provider).fetch_one(&mut *tx).await?;
             if !valid {
                 return Err(StorageError::Constraint("请选择同提供商的标签号池".into()));
@@ -256,13 +256,13 @@ impl Storage {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         // User platforms inherit the current plan's pool. An expired paid plan
         // uses the platform Free pool, so paid supply is not an expired benefit.
-        let inherited:Option<(Option<String>,bool)>=sqlx::query_as("SELECT json_extract(p.config,'$.supplier_tag_id'),(v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch()) FROM user_subscriptions s JOIN virtual_accounts v ON v.id=s.virtual_account_id JOIN platform_free_plans f ON f.provider_id=s.provider_id JOIN virtual_plans p ON p.id=CASE WHEN v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch() THEN f.plan_id ELSE v.plan_id END WHERE v.id=? AND v.provider_id=?")
+        let inherited:Option<(Option<String>,bool)>=sqlx::query_as("SELECT json_extract(p.config,'$.supplier_tag_id'),(v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch()) FROM regular_platforms v JOIN platform_free_plans f ON f.provider_id=v.provider_id JOIN virtual_plans p ON p.id=CASE WHEN v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch() THEN f.plan_id ELSE v.plan_id END WHERE v.id=? AND v.provider_id=?")
             .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
         if let Some((tag, expired)) = inherited {
             sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,supplier_account_id) VALUES(?,?,?,NULL) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id,supplier_account_id=NULL,revision=revision+1 WHERE (? OR execution_routes.tag_id IS NULL) AND execution_routes.tag_id IS NOT excluded.tag_id")
                 .bind(owner).bind(provider).bind(tag).bind(expired).execute(&mut *tx).await?;
         }
-        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM execution_routes r JOIN virtual_principals v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
+        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM execution_routes r JOIN platform_principals v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
             .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
         let Some(route) = route else {
             return Ok(None);

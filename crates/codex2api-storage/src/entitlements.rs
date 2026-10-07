@@ -22,7 +22,7 @@ impl Storage {
         now: i64,
     ) -> Result<EffectiveEntitlements> {
         let account = self
-            .effective_virtual_account_at(owner, now)
+            .effective_platform_account_at(owner, now)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self

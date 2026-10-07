@@ -80,7 +80,7 @@ async fn sign_payloads(
 
 /// Verified official field sets. Business values belong only to the local account.
 pub(super) fn claims(
-    account: &codex2api_storage::VirtualAccount,
+    account: &codex2api_storage::PlatformAccount,
     device_id: &str,
     scopes: &str,
     authenticated_at_ms: i64,

@@ -56,7 +56,7 @@ async fn consumers_are_provider_fixed_and_never_expose_passwords() {
     input["provider_id"] = "chatgpt".into();
     let previous = f
         .storage
-        .virtual_account(id)
+        .platform_account(id)
         .await
         .unwrap()
         .unwrap()
@@ -67,7 +67,7 @@ async fn consumers_are_provider_fixed_and_never_expose_passwords() {
     );
     assert_eq!(
         f.storage
-            .virtual_account(id)
+            .platform_account(id)
             .await
             .unwrap()
             .unwrap()

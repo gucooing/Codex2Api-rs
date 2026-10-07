@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{Extension, State, WebSocketUpgrade};
 use axum::http::HeaderMap;
@@ -500,7 +509,7 @@ mod tests {
     async fn recorded_connection_fixture(ending: &'static str) {
         use axum::{Router, routing::get};
         use codex2api_storage::{
-            OAuthDeviceIdentity, SupplierAccountUpdate, SupplierStatus, VirtualAccount,
+            OAuthDeviceIdentity, PlatformAccount, SupplierAccountUpdate, SupplierStatus,
         };
         use serde_json::{Value, json};
         let compaction = ending.starts_with("compaction_");
@@ -552,7 +561,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let consumer = VirtualAccount {
+        let consumer = PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "consumer".into(),
             username: "consumer".into(),
@@ -565,7 +574,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&consumer).await.unwrap();
+        storage.save_account_fixture(&consumer).await.unwrap();
         storage
             .save_execution_route(&consumer.id, "chatgpt", Some(&supplier.id), None)
             .await
@@ -1073,7 +1082,9 @@ mod tests {
         exhausted: bool,
     ) {
         use axum::{Router, routing::get};
-        use codex2api_storage::{OAuthDeviceIdentity, SupplierStatus, UsageRecord, VirtualAccount};
+        use codex2api_storage::{
+            OAuthDeviceIdentity, PlatformAccount, SupplierStatus, UsageRecord,
+        };
         use serde_json::{Value, json};
         let dir = tempfile::tempdir().unwrap();
         let storage = codex2api_storage::Storage::open(dir.path().join("quota.sqlite"))
@@ -1107,7 +1118,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let account = VirtualAccount {
+        let account = PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "virtual".into(),
             username: "fixture".into(),
@@ -1120,7 +1131,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&account).await.unwrap();
+        storage.save_account_fixture(&account).await.unwrap();
         storage
             .save_execution_route(&account.id, "chatgpt", Some(&real.id), None)
             .await

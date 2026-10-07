@@ -55,7 +55,23 @@ impl Fixture {
             csrf,
         }
     }
-    pub async fn request(&self, method: &str, path: &str, value: Value) -> Response {
+    pub async fn request(&self, method: &str, path: &str, mut value: Value) -> Response {
+        if method == "PUT" {
+            if let Some(id) = path
+                .strip_prefix("/admin/api/consumers/")
+                .filter(|id| !id.contains('/'))
+            {
+                if let Some(user) = self.storage.virtual_user(id).await.unwrap() {
+                    if value.get("revision").is_none() {
+                        value["revision"] =
+                            self.storage.platform_revision(id).await.unwrap().into();
+                    }
+                    if value.get("user_revision").is_none() {
+                        value["user_revision"] = user.revision.into();
+                    }
+                }
+            }
+        }
         self.with_auth(method, path, value, Some(&self.cookie), Some(&self.csrf))
             .await
     }

@@ -585,7 +585,7 @@
     ]
   },
   "consumer": {
-    "user_id": null,
+    "user_id": "fixture-virtual-user",
     "id": "contract-consumer",
     "provider_id": "chatgpt",
     "username": "contract-consumer",
@@ -598,7 +598,10 @@
     "created_at": "2026-09-22T00:00:00+00:00",
     "effective_plan": "plus",
     "plan_name": "ChatGPT Plus",
-    "subscription_status": "active"
+    "subscription_status": "active",
+    "user_kind": "virtual",
+    "revision": 1,
+    "user_revision": 1
   },
   "routing": {
     "items": [

@@ -1,5 +1,14 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use chrono::{Duration, Utc};
-use codex2api_storage::{Storage, SubscriptionChange, User, VirtualAccount, hash_token};
+use codex2api_storage::{PlatformAccount, Storage, SubscriptionChange, User, hash_token};
 use serde_json::json;
 
 async fn setup() -> (tempfile::TempDir, Storage, User) {
@@ -8,6 +17,7 @@ async fn setup() -> (tempfile::TempDir, Storage, User) {
         .await
         .unwrap();
     let user = User {
+        kind: codex2api_storage::UserKind::Regular,
         id: "user-a".into(),
         username: "alice".into(),
         password_hash: codex2api_storage::hash_password("password").unwrap(),
@@ -152,12 +162,12 @@ async fn wallet_adjustment_reason_can_be_missing_null_or_blank() {
     storage.close().await;
 }
 #[tokio::test]
-async fn users_do_not_migrate_or_authenticate_standalone_virtual_accounts() {
+async fn virtual_users_share_identity_storage_but_not_user_business() {
     let (_dir, storage, user) = setup().await;
-    let account = VirtualAccount {
+    let account = PlatformAccount {
         id: "standalone".into(),
         provider_id: "chatgpt".into(),
-        username: user.username.clone(),
+        username: "virtual-alice".into(),
         password_hash: user.password_hash.clone(),
         name: "Independent".into(),
         email: "independent@virtual.test".into(),
@@ -167,7 +177,7 @@ async fn users_do_not_migrate_or_authenticate_standalone_virtual_accounts() {
         enabled: true,
         created_at: Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(storage.users().await.unwrap().len(), 1);
     assert_eq!(
         storage.user_subscriptions(None, true).await.unwrap()[0].plan_type,
@@ -200,37 +210,36 @@ async fn users_do_not_migrate_or_authenticate_standalone_virtual_accounts() {
         .unwrap()
         .unwrap();
     assert_ne!(platform.id, account.id);
-    assert_eq!(storage.virtual_accounts().await.unwrap().len(), 1);
+    assert_eq!(storage.platform_accounts().await.unwrap().len(), 1);
     let internal = storage
-        .virtual_account(&platform.id)
+        .platform_account(&platform.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(internal.username, user.username);
-    let internal_username: String =
-        sqlx::query_scalar("SELECT username FROM virtual_accounts WHERE id=?")
-            .bind(&platform.id)
-            .fetch_one(storage.pool())
-            .await
-            .unwrap();
+    let virtual_user = storage
+        .user_by_username("virtual-alice")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(virtual_user.kind, codex2api_storage::UserKind::Virtual);
     assert!(
         storage
-            .virtual_account_by_username(&internal_username)
+            .create_user_session(&virtual_user, "csrf")
             .await
             .unwrap()
             .is_none()
     );
-    assert_eq!(
+    assert!(
         storage
-            .virtual_account_by_username("alice")
+            .user_store()
+            .user(&virtual_user.id)
             .await
             .unwrap()
-            .unwrap()
-            .id,
-        account.id
+            .is_none()
     );
-    assert!(storage.save_virtual_account(&platform).await.is_err());
-    assert!(storage.delete_virtual_account(&platform.id).await.is_err());
+    assert!(storage.save_account_fixture(&platform).await.is_err());
+    assert!(storage.delete_virtual_user(&platform.id).await.is_err());
     assert!(
         storage
             .save_user_subscription(SubscriptionChange {
@@ -309,7 +318,7 @@ async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_sta
     );
     assert_eq!(
         storage
-            .virtual_account(&account.id)
+            .platform_account(&account.id)
             .await
             .unwrap()
             .unwrap()

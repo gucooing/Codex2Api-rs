@@ -28,7 +28,7 @@ impl Storage {
         owner: &str,
         device: &str,
     ) -> Result<(i64, i64, Option<String>)> {
-        Ok(sqlx::query_as("SELECT COALESCE(d.authenticated_at_ms,unixepoch(d.created_at)*1000),COALESCE(d.requested_at_ms,unixepoch(d.created_at)*1000),COALESCE(a.subscription_started_at,a.created_at) FROM virtual_devices d JOIN virtual_accounts a ON a.id=d.virtual_account_id WHERE a.id=? AND d.id=?")
+        Ok(sqlx::query_as("SELECT COALESCE(d.authenticated_at_ms,unixepoch(d.created_at)*1000),COALESCE(d.requested_at_ms,unixepoch(d.created_at)*1000),COALESCE(a.subscription_started_at,a.created_at) FROM virtual_devices d JOIN platform_accounts a ON a.id=d.virtual_account_id WHERE a.id=? AND d.id=?")
             .bind(owner).bind(device).fetch_one(self.pool()).await?)
     }
 

@@ -1,4 +1,13 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
 use crate::pool_execution::SupplierContext;
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
 use codex2api_storage::SupplierStatus;
@@ -173,7 +182,7 @@ mod tests {
     async fn oauth_quota_is_local_and_old_connections_stop_after_rebinding() {
         use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
         use codex2api_storage::{
-            OAuthDeviceIdentity, SupplierAccountUpdate, VirtualAccount, hash_token,
+            OAuthDeviceIdentity, PlatformAccount, SupplierAccountUpdate, hash_token,
         };
         use serde_json::{Value, json};
         let dir = tempfile::tempdir().unwrap();
@@ -211,7 +220,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let account = VirtualAccount {
+        let account = PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "virtual-id".into(),
             username: "user".into(),
@@ -224,7 +233,7 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&account).await.unwrap();
+        storage.save_account_fixture(&account).await.unwrap();
         storage
             .save_execution_route(&account.id, "chatgpt", Some(&first.id), None)
             .await
@@ -277,7 +286,7 @@ mod tests {
                 .unwrap(),
             text
         );
-        storage.save_virtual_account(&account).await.unwrap();
+        storage.save_account_fixture(&account).await.unwrap();
         let official: Value = serde_json::from_str(
             &crate::providers::chatgpt::identity::websocket_message(&storage, &hash, &event)
                 .await
@@ -350,7 +359,7 @@ mod tests {
             .save_execution_route(&account.id, "chatgpt", Some(&second.id), Some(1))
             .await
             .unwrap();
-        storage.save_virtual_account(&account).await.unwrap();
+        storage.save_account_fixture(&account).await.unwrap();
         assert!(original.validate(&storage).await.is_err());
         let rebound = AccessCheck {
             hash: hash.clone(),

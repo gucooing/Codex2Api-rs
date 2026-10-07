@@ -38,6 +38,9 @@ pub struct Session {
 }
 #[derive(Serialize)]
 pub struct Consumer {
+    pub user_kind: codex2api_storage::UserKind,
+    pub revision: i64,
+    pub user_revision: i64,
     pub user_id: Option<String>,
     pub id: String,
     pub provider_id: String,
@@ -53,10 +56,13 @@ pub struct Consumer {
     pub plan_name: String,
     pub subscription_status: &'static str,
 }
-impl From<&codex2api_storage::VirtualAccount> for Consumer {
-    fn from(a: &codex2api_storage::VirtualAccount) -> Self {
+impl From<&codex2api_storage::PlatformAccount> for Consumer {
+    fn from(a: &codex2api_storage::PlatformAccount) -> Self {
         Self {
             user_id: None,
+            user_kind: codex2api_storage::UserKind::Virtual,
+            revision: 0,
+            user_revision: 0,
             id: a.id.clone(),
             provider_id: a.provider_id.clone(),
             username: a.username.clone(),

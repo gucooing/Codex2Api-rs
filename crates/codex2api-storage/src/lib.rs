@@ -4,6 +4,10 @@
 //! `password` and `token` implement credential primitives. Migrations stay in
 //! migrations/. This crate does not register HTTP routes or call official services.
 
+mod account_scope;
+pub use account_scope::AccountScope;
+#[cfg(test)]
+extern crate self as codex2api_storage;
 mod billing;
 mod model_catalog;
 mod model_presets;
@@ -57,6 +61,8 @@ mod free_plan;
 mod jwt;
 mod user_subscriptions;
 mod users;
+mod virtual_users;
+pub use virtual_users::VirtualUserChange;
 mod wallet;
 pub use jwt::TokenPurpose;
 pub use wallet::{WalletAdjustment, WalletEntryFilter};
@@ -64,14 +70,14 @@ mod user_store;
 mod user_usage;
 pub use user_store::UserStore;
 pub use user_usage::UserUsageFilter;
-mod virtual_accounts;
+mod platform_accounts;
 mod virtual_plans;
 pub use user_subscriptions::{SubscriptionChange, UserSubscription, WalletEntry};
 mod subscription_orders;
 pub use subscription_orders::{CheckoutInput, OrderFilter, OrderRequest, SubscriptionOrder};
 mod coupons;
 pub use coupons::{Coupon, CouponInput};
-pub use users::{User, UserSession, UserView};
+pub use users::{User, UserKind, UserSession, UserView};
 pub use virtual_plans::{VirtualPlan, plan_owned_config};
 mod family_notices;
 mod virtual_client_state;
@@ -90,6 +96,7 @@ pub use desktop_support::{DesktopResource, DesktopSupportSettings};
 pub use error::{Result, StorageError};
 pub use oauth::{OAuthDeviceIdentity, oauth_secret};
 pub use password::{hash_password, verify_password};
+pub use platform_accounts::{MissingEndpoint, PlatformAccount, VirtualAccess, VirtualDevice};
 pub use proxy::{OutboundProxy, ProxyConnectionCheck, ProxyQualityCheck, parse_proxy_url};
 pub use public_urls::{PublicUrlSettings, normalize_public_origin};
 pub use quota::{QuotaSnapshot, SupplierInfoSection};
@@ -105,7 +112,6 @@ pub use usage::{
     AccountDailyUsage, AccountUsageSummary, SupplierCycleUsage, USAGE_PAGE_SIZE, UsageFilter,
     UsagePage, UsageRecord, VirtualDailyModelTokens, table_page_size,
 };
-pub use virtual_accounts::{MissingEndpoint, VirtualAccess, VirtualAccount, VirtualDevice};
 pub use virtual_client_state::VirtualClientState;
 pub use virtual_management::{VirtualConfigSpec, validate_virtual_config, virtual_config_specs};
 

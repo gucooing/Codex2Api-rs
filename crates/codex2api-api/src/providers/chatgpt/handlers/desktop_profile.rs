@@ -12,7 +12,7 @@ async fn page_value(state: &crate::ApiState, access: &VirtualAccess) -> crate::R
     let id = &access.virtual_account_id;
     let account = state
         .storage
-        .effective_virtual_account(id)
+        .effective_platform_account(id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let private = state.storage.virtual_config(id, "profile").await?.value;

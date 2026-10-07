@@ -1,4 +1,13 @@
-use codex2api_storage::{Storage, VirtualAccount};
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
+use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::json;
 
 async fn fixture() -> (tempfile::TempDir, Storage) {
@@ -7,7 +16,7 @@ async fn fixture() -> (tempfile::TempDir, Storage) {
         .await
         .unwrap();
     storage
-        .save_virtual_account(&VirtualAccount {
+        .save_account_fixture(&PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "account".into(),
             username: "account".into(),

@@ -4,7 +4,7 @@ pub struct BrowserAuthorization<'a> {
     pub id: &'a str,
     pub cookie: &'a str,
     pub csrf: &'a str,
-    pub account: &'a crate::VirtualAccount,
+    pub account: &'a crate::PlatformAccount,
     pub code: &'a str,
     pub client_id: &'a str,
     pub redirect_uri: &'a str,
@@ -95,7 +95,7 @@ impl Storage {
             .ok()
             .and_then(|v| v["nonce"].as_str().map(str::to_owned));
         let inserted=sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms)
-            SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM virtual_principals v
+            SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM platform_principals v
             WHERE v.id=? AND v.password_hash=? AND v.enabled=1")
             .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(now+120).bind(scopes).bind(chrono::Utc::now().timestamp_millis()).bind((expiry-600)*1000).bind(&account.id).bind(&account.password_hash).execute(&mut *tx).await?;
         if inserted.rows_affected() != 1 {
@@ -114,7 +114,7 @@ impl Storage {
     pub async fn redeem_oauth_code(
         &self,
         request: CodeRedemption<'_>,
-    ) -> Result<Option<(crate::VirtualAccount, String)>> {
+    ) -> Result<Option<(crate::PlatformAccount, String)>> {
         let CodeRedemption {
             provider,
             code,
@@ -130,8 +130,8 @@ impl Storage {
         let Some((owner, provider, scopes, authenticated_at_ms, requested_at_ms)) = token else {
             return Ok(None);
         };
-        let account: Option<crate::VirtualAccount> =
-            sqlx::query_as("SELECT * FROM virtual_principals WHERE id=? AND enabled=1")
+        let account: Option<crate::PlatformAccount> =
+            sqlx::query_as("SELECT * FROM platform_principals WHERE id=? AND enabled=1")
                 .bind(&owner)
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -145,7 +145,7 @@ impl Storage {
             .bind(&id).bind(&owner).bind(hash_token(refresh)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(provider).bind(scopes).bind(authenticated_at_ms).bind(requested_at_ms).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(self
-            .effective_virtual_account(&account.id)
+            .effective_platform_account(&account.id)
             .await?
             .map(|account| (account, id)))
     }

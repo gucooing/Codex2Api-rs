@@ -1,5 +1,5 @@
 //! Shared SQL selection and atomic administrator operations for consumers.
-use crate::{Result, Storage, StorageError, VirtualAccount};
+use crate::{PlatformAccount, Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
@@ -28,7 +28,7 @@ impl ConsumerFilters {
 
     pub(crate) fn conditions(&self, query: &mut QueryBuilder<'_, Sqlite>, now: i64) {
         // Both the visible list and 'all matching' use this exact predicate.
-        query.push(" WHERE id NOT IN(SELECT virtual_account_id FROM user_subscriptions)");
+        query.push(" WHERE 1=1");
         if !self.search.trim().is_empty() {
             query
                 .push(" AND instr(lower(name || ' ' || username || ' ' || email),lower(")
@@ -145,7 +145,7 @@ impl ConsumerSelection {
         Ok(())
     }
     fn query(&self, now: i64, columns: &str) -> QueryBuilder<'static, Sqlite> {
-        let mut q = QueryBuilder::new(format!("SELECT {columns} FROM virtual_accounts"));
+        let mut q = QueryBuilder::new(format!("SELECT {columns} FROM virtual_platforms"));
         if self.all_matching {
             self.filters.conditions(&mut q, now);
             if !self.excluded_ids.is_empty() {
@@ -153,7 +153,6 @@ impl ConsumerSelection {
             }
         } else {
             ids_clause(&mut q, " WHERE id IN (", &self.ids);
-            q.push(" AND id NOT IN(SELECT virtual_account_id FROM user_subscriptions)");
         }
         q
     }
@@ -207,10 +206,10 @@ pub(crate) async fn remember(
 
 impl Storage {
     /// Current configured quota windows only; never query lifetime billing or a supplier.
-    pub async fn virtual_list_quota(&self, account: &VirtualAccount) -> Result<Value> {
+    pub async fn virtual_list_quota(&self, account: &PlatformAccount) -> Result<Value> {
         let now = chrono::Utc::now().timestamp();
         let account = self
-            .effective_virtual_account_at(&account.id, now)
+            .effective_platform_account_at(&account.id, now)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(account.id.clone()))?;
         let plan = self
@@ -235,23 +234,23 @@ impl Storage {
         )
     }
 
-    pub async fn virtual_account_page(
+    pub async fn platform_account_page(
         &self,
         filters: &ConsumerFilters,
         page: u32,
         page_size: Option<u32>,
-    ) -> Result<(Vec<VirtualAccount>, i64, u32)> {
+    ) -> Result<(Vec<PlatformAccount>, i64, u32)> {
         filters.validate()?;
         let size = crate::table_page_size(page_size)?;
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        let mut count = QueryBuilder::new("SELECT COUNT(*) FROM virtual_accounts");
+        let mut count = QueryBuilder::new("SELECT COUNT(*) FROM virtual_platforms");
         filters.conditions(&mut count, now);
         let total: i64 = count.build_query_scalar().fetch_one(&mut *tx).await?;
         let page = page
             .max(1)
             .min(((total.saturating_sub(1) / size) + 1) as u32);
-        let mut q = QueryBuilder::new("SELECT * FROM virtual_accounts");
+        let mut q = QueryBuilder::new("SELECT * FROM virtual_platforms");
         filters.conditions(&mut q, now);
         q.push(" ORDER BY id LIMIT ")
             .push_bind(size)
@@ -313,10 +312,7 @@ impl Storage {
             for id in ids {
                 match operation {
                     "delete" => {
-                        sqlx::query("DELETE FROM virtual_accounts WHERE id=?")
-                            .bind(&id)
-                            .execute(&mut *tx)
-                            .await?;
+                        crate::virtual_users::delete_on(&mut tx, &id).await?;
                         affected += 1;
                     }
                     "reset" => {

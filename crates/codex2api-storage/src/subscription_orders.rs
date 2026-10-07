@@ -1,6 +1,6 @@
 //! Wallet orders and price snapshots owned by a user's platform subscription.
 use crate::coupons::{available_coupon, checkout_error};
-use crate::{Result, Storage, StorageError, User, VirtualAccount, VirtualPlan};
+use crate::{PlatformAccount, Result, Storage, StorageError, User, VirtualPlan};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -8,7 +8,7 @@ use sqlx::{FromRow, SqliteConnection};
 
 const DAY_MS: i64 = 86_400_000;
 const QUOTE_TTL_MS: i64 = 300_000;
-const SELECT_ORDER: &str = "SELECT o.*,u.username,u.name AS user_name FROM subscription_orders o JOIN user_identities u ON u.id=o.user_id";
+const SELECT_ORDER: &str = "SELECT o.*,u.username,u.name AS user_name FROM subscription_orders o JOIN regular_users u ON u.id=o.user_id";
 
 pub struct OrderRequest<'a> {
     pub user_id: &'a str,
@@ -439,7 +439,7 @@ impl Storage {
         let now = Utc::now().timestamp_millis();
         let search = filter.search.trim();
         let condition = " WHERE (? IS NULL OR o.user_id=?) AND (?='' OR o.plan_id=?) AND (?='' OR CASE WHEN o.status='pending' AND o.quote_expires_at_ms<=? THEN 'expired' ELSE o.status END=?) AND instr(lower(o.id),lower(?))>0";
-        let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM subscription_orders o JOIN user_identities u ON u.id=o.user_id{condition}"))
+        let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM subscription_orders o JOIN regular_users u ON u.id=o.user_id{condition}"))
             .bind(owner).bind(owner).bind(&filter.plan_id).bind(&filter.plan_id).bind(&filter.status).bind(now).bind(&filter.status).bind(search).fetch_one(self.pool()).await?;
         let orders: Vec<SubscriptionOrder> = sqlx::query_as(&format!(
             "{SELECT_ORDER}{condition} ORDER BY o.created_at_ms DESC,o.id DESC LIMIT ? OFFSET ?"
@@ -466,7 +466,7 @@ impl Storage {
     pub async fn checkout_preview(&self, owner: &str, input: CheckoutInput) -> Result<Value> {
         let mut tx = self.pool().begin().await?;
         let balance: i64 =
-            sqlx::query_scalar("SELECT wallet_cents FROM user_identities WHERE id=? AND enabled=1")
+            sqlx::query_scalar("SELECT wallet_cents FROM regular_users WHERE id=? AND enabled=1")
                 .bind(owner)
                 .fetch_optional(&mut *tx)
                 .await?
@@ -518,7 +518,7 @@ impl Storage {
         let signature = crate::hash_token(input.preview_token);
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let enabled: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM user_identities WHERE id=? AND enabled=1)",
+            "SELECT EXISTS(SELECT 1 FROM regular_users WHERE id=? AND enabled=1)",
         )
         .bind(input.user_id)
         .fetch_one(&mut *tx)
@@ -566,7 +566,7 @@ impl Storage {
     }
     pub async fn pay_subscription_order(&self, owner: &str, id: &str) -> Result<SubscriptionOrder> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let user: User = sqlx::query_as("SELECT * FROM user_identities WHERE id=? AND enabled=1")
+        let user: User = sqlx::query_as("SELECT * FROM regular_users WHERE id=? AND enabled=1")
             .bind(owner)
             .fetch_optional(&mut *tx)
             .await?
@@ -663,6 +663,7 @@ impl Storage {
             Some(&expires),
             true,
             origin,
+            None,
         )
         .await?;
         if order.kind != "renew" {
@@ -754,7 +755,7 @@ pub(crate) async fn record_admin_pricing(
     connection: &mut SqliteConnection,
     id: &str,
     plan: &VirtualPlan,
-    previous: Option<&VirtualAccount>,
+    previous: Option<&PlatformAccount>,
     expires: Option<&str>,
 ) -> Result<()> {
     let now = Utc::now().timestamp_millis();

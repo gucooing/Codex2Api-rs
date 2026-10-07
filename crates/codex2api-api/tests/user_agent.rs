@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -11,7 +20,7 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
     let storage = Storage::open(temp.path().join("ua.sqlite")).await.unwrap();
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let account = accounts.create_pending().await.unwrap().account;
-    let consumer = codex2api_storage::VirtualAccount {
+    let consumer = codex2api_storage::PlatformAccount {
         provider_id: "chatgpt".into(),
         id: "ua-consumer".into(),
         username: "ua-consumer".into(),
@@ -24,7 +33,7 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&consumer).await.unwrap();
+    storage.save_account_fixture(&consumer).await.unwrap();
     let device = storage
         .create_virtual_device(&consumer, "refresh", &Default::default())
         .await

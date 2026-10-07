@@ -104,6 +104,7 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
         .to_owned();
     let admin_token = admin_cookie.split_once('=').unwrap().1;
     let user = codex2api_storage::User {
+        kind: codex2api_storage::UserKind::Regular,
         id: "surface-user".into(),
         username: "surface-user".into(),
         password_hash: codex2api_storage::hash_password("user-password").unwrap(),

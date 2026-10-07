@@ -1,6 +1,15 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use codex2api_core::{ExecutionKind, PolicyError};
 use codex2api_service::{ExecutionRequest, ExecutionService, ServiceError};
-use codex2api_storage::{Storage, VirtualAccount};
+use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::json;
 
 fn request(model: &str) -> ExecutionRequest<'_> {
@@ -12,8 +21,8 @@ fn request(model: &str) -> ExecutionRequest<'_> {
     }
 }
 
-async fn consumer(storage: &Storage, id: &str) -> VirtualAccount {
-    let account = VirtualAccount {
+async fn consumer(storage: &Storage, id: &str) -> PlatformAccount {
+    let account = PlatformAccount {
         provider_id: "chatgpt".into(),
         id: id.into(),
         username: id.into(),
@@ -26,7 +35,7 @@ async fn consumer(storage: &Storage, id: &str) -> VirtualAccount {
         enabled: true,
         created_at: chrono_timestamp(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     account
 }
 
@@ -123,7 +132,7 @@ async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() 
         .await
         .unwrap();
     account.subscription_expires_at = Some("2020-01-01T00:00:00Z".into());
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert!(matches!(
         service
             .authorize(&account.id, "chatgpt", request("gpt-6-astra"))
@@ -157,7 +166,7 @@ async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() 
     );
     assert!(
         storage
-            .virtual_account(&account.id)
+            .platform_account(&account.id)
             .await
             .unwrap()
             .unwrap()
@@ -182,7 +191,7 @@ async fn all_models_means_configured_and_enabled_and_consumer_disable_is_immedia
         .await
         .unwrap();
     account.enabled = false;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert!(matches!(
         service
             .authorize(&account.id, "chatgpt", request("gpt-6-astra"))

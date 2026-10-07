@@ -51,8 +51,15 @@ validation are complete.
 - User web/API, administrator web/API, and AI API have separate routers and
   configurable listening ports in the same process. Build the two Next.js
   frontends independently; never mount administrator routes on other listeners.
-- Keep standalone virtual accounts independent; never migrate them into users.
-  Only administrators create users. Each user has one subscription identity per
+- Ordinary and virtual users share `accounts`/`users` identity storage, with immutable
+  `users.kind` (`regular`/`virtual`). Their business domains remain independent.
+  Virtual users can authenticate only through OAuth, never the user website; manage
+  them only in administrator Virtual accounts. Never include virtual users in regular
+  user management, catalogs, wallets, orders, user records or user statistics.
+  Use the storage `require_account_scope` guard, scoped database views and the
+  account-scope middleware on whole routers; keep SQL triggers enforcing session,
+  wallet, order and ownership restrictions even if a handler omits a check.
+  Only administrators create users. Each regular user has one subscription identity per
   platform, initially Free. Expired paid benefits resolve to the platform Free
   plan without changing identity or history. Free plans cannot be deleted or
   changed to a paid tier. Do not restore paid-plan-specific free-access settings.
@@ -76,7 +83,9 @@ validation are complete.
   OAuth identity verification and confirmation are separate steps; temporary
   login applies only to the current authorization link.
 - Login identity lives in accounts (immutable account_type admin/user); admin_users
-  and users are separate role-checked profiles. The user HTTP module receives only
+  and users are separate role-checked profiles. Platform accounts hold entitlements,
+  never separate usernames/passwords. Migrate old identities with SQL only; do not
+  add runtime legacy authentication, dual writes or old-schema compatibility. The user HTTP module receives only
   UserStore, never raw storage or supplier/admin query capabilities.
 - Administrator/user web session tokens are purpose-bound JWTs with independent admin
   and user RSA keys. Allow only the server's fixed RS256 algorithm; reject none,

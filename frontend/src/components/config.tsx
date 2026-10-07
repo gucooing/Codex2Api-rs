@@ -1,4 +1,5 @@
 "use client";
+import { usePlatformPrefix } from "@/lib/platform-scope";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -116,7 +117,8 @@ const serviceFields: Record<string, BusinessField[]> = {
   ],
 };
 export function ConfigPanel({ id, group }: { id: string; group: string }) {
-  const resource = useResource<List<Config>>(`/consumers/${id}/configs`);
+  const platformPrefix = usePlatformPrefix();
+  const resource = useResource<List<Config>>(`${platformPrefix}/${id}/configs`);
   const category = accountConfigGroups.find((item) => item.key === group);
   const items = (category?.sections ?? []).flatMap((key) => {
     const section = accountSections.find((item) => item.key === key);
@@ -170,6 +172,7 @@ function ConfigForm({
   disabled: boolean;
   onSaved: () => void;
 }) {
+  const platformPrefix = usePlatformPrefix();
   const fieldId = useId();
   const actions = useActions();
   const actionKey = `consumer-settings:${id}:${group}`;
@@ -251,7 +254,7 @@ function ConfigForm({
                 for (const config of pending) {
                   try {
                     const saved = await request<{ value: Json; revision: number }>(
-                      `/consumers/${id}/config/${config.key}`,
+                      `${platformPrefix}/${id}/config/${config.key}`,
                       {
                         method: "PUT",
                         body: drafts[config.key],
@@ -498,12 +501,13 @@ function ComplexService({
   value: Json;
   onChange: (next: Json) => void;
 }) {
+  const platformPrefix = usePlatformPrefix();
   const fieldId = useId();
   const plugins = useResource<List<{ id: string; name: string }>>(
-    config.key === "system_hints" ? `/consumers/${id}/plugins` : null,
+    config.key === "system_hints" ? `${platformPrefix}/${id}/plugins` : null,
   );
   const connectors = useResource<List<{ id: string; name: string }>>(
-    config.key === "system_hints" ? `/consumers/${id}/connectors` : null,
+    config.key === "system_hints" ? `${platformPrefix}/${id}/connectors` : null,
   );
   useErrorToast(plugins.error);
   useErrorToast(connectors.error);
@@ -1402,13 +1406,14 @@ export function ClientStatePanel({ id }: { id: string }) {
   );
 }
 function ClientState({ id, config }: { id: string; config: (typeof accountSections)[number] }) {
+  const platformPrefix = usePlatformPrefix();
   const resource = useResource<{
     value: Json;
     revision: number | null;
     write_origin: string | null;
     updated_at_ms: number | null;
     fields: BusinessField[];
-  }>(`/consumers/${id}/client-state/${config.key}`);
+  }>(`${platformPrefix}/${id}/client-state/${config.key}`);
   useErrorToast(resource.error);
   return (
     <Card>

@@ -32,4 +32,4 @@ Responses 在输出开始前遇到供应授权失效、配额耗尽或 ChatGPT H
 官方 CLI 的 OpenAI Apps 文件传递以工具 _meta.openai/fileParams 为条件，依赖托管文件 API。
 普通第三方 MCP 可以使用自己的传输协议；MCP 协议本身不要求把文件上传到模型供应商。
 
-浏览器授权入口在 AI API 端，身份验证和明确确认在独立用户端 `/user/api/oauth/authorize/{bootstrap,identify,approve}`；设备码的浏览器步骤使用 `/user/api/oauth/device/{bootstrap,identify,approve}`。令牌兑换、刷新、撤销和设备码轮询仍在 AI API 端。浏览器已有用户会话时直接展示身份，否则密码只验证当前授权链接。独立虚拟账户通过单独身份选项授权，不成为用户中心账户。三端分别监听，AI 凭据不能访问用户网页 API 或管理 API。
+浏览器授权入口在 AI API 端，身份验证和明确确认在独立用户端 `/user/api/oauth/authorize/{bootstrap,identify,approve}`；设备码的浏览器步骤使用 `/user/api/oauth/device/{bootstrap,identify,approve}`。令牌兑换、刷新、撤销和设备码轮询仍在 AI API 端。浏览器已有用户会话时直接展示身份，否则密码只验证当前授权链接。授权表单不提供身份类型选项，用户名和密码经同一身份存储验证。虚拟用户只能授权 OAuth，不能成为用户中心会话；管理和统计仍与普通用户隔离。三端分别监听，AI 凭据不能访问用户网页 API 或管理 API。

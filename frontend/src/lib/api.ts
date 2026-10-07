@@ -71,6 +71,9 @@ export type SupplierCycleUsage = {
   missing_token_requests: number;
 };
 export type Consumer = {
+  user_kind: "regular" | "virtual";
+  revision: number;
+  user_revision: number;
   user_id: string | null;
   id: string;
   username: string;
@@ -89,7 +92,7 @@ export type Consumer = {
 export type ConsumerWrite = Pick<
   Consumer,
   "username" | "name" | "email" | "provider_id" | "plan_id" | "subscription_expires_at" | "enabled"
-> & { password: string };
+> & { password: string; revision: number | null; user_revision: number | null };
 export type Plan = {
   description: string;
   sale_price_usd: string | null;

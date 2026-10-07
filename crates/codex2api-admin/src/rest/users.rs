@@ -95,6 +95,7 @@ async fn save(state: AdminState, id: Option<String>, input: UserInput) -> ApiRes
             .map_err(|_| ApiError::bad("密码保存失败"))??
     };
     let user = User {
+        kind: codex2api_storage::UserKind::Regular,
         id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         username: input.username,
         name: input.name,

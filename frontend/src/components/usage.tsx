@@ -1,4 +1,5 @@
 "use client";
+import { usePlatformPrefix } from "@/lib/platform-scope";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -1008,7 +1009,8 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
   );
 }
 export function ConsumerUsage({ id }: { id: string }) {
-  const resource = useResource<AccountUsage>(`/consumers/${id}/usage`);
+  const platformPrefix = usePlatformPrefix();
+  const resource = useResource<AccountUsage>(`${platformPrefix}/${id}/usage`);
   useErrorToast(resource.error);
   return (
     <>

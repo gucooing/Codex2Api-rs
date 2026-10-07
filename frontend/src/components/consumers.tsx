@@ -1,4 +1,5 @@
 "use client";
+import { PlatformApiContext, usePlatformPrefix } from "@/lib/platform-scope";
 import { RoutingForm, type RoutingResponse } from "@/components/consumer-routing";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
@@ -1282,6 +1283,8 @@ export function ConsumerForm({
     subscription_expires_at: account?.subscription_expires_at ?? null,
     enabled: account?.enabled ?? !editing,
     password: "",
+    revision: account?.revision ?? null,
+    user_revision: account?.user_revision ?? null,
     ...changes,
   };
   const update = <K extends keyof ConsumerWrite>(key: K, next: ConsumerWrite[K]) =>
@@ -1461,21 +1464,31 @@ export function ConsumerForm({
     </form>
   );
 }
-export function ConsumerDetail() {
+export function ConsumerDetail({ regular = false }: { regular?: boolean }) {
+  return (
+    <PlatformApiContext value={regular ? "/subscriptions" : "/consumers"}>
+      <PlatformDetail />
+    </PlatformApiContext>
+  );
+}
+function PlatformDetail() {
+  const platformPrefix = usePlatformPrefix();
   const id = useQueryId();
   const fieldId = useId();
-  const resource = useResource<Consumer>(id ? `/consumers/${encodeURIComponent(id)}` : null);
+  const resource = useResource<Consumer>(id ? `${platformPrefix}/${encodeURIComponent(id)}` : null);
   const [tab, setTab] = useState("settings");
   const [group, setGroup] = useState("account");
   const [refreshVersion, setRefreshVersion] = useState(0);
-  useErrorToast(!id ? "缺少虚拟账户编号。" : undefined);
+  useErrorToast(!id ? "缺少账户编号。" : undefined);
   useErrorToast(resource.error);
   if (!id)
     return (
       <Empty>
-        <EmptyDescription>请选择虚拟账户</EmptyDescription>
+        <EmptyDescription>
+          {platformPrefix === "/subscriptions" ? "请选择用户订阅" : "请选择虚拟账户"}
+        </EmptyDescription>
         <Button asChild variant="outline">
-          <Link href="/consumers/">返回列表</Link>
+          <Link href={platformPrefix + "/"}>返回列表</Link>
         </Button>
       </Empty>
     );
@@ -1485,7 +1498,10 @@ export function ConsumerDetail() {
       <Tabs value={tab} onValueChange={setTab} className="min-w-0 gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           <div className="min-w-0 max-w-full flex-1 overflow-x-auto overflow-y-hidden pb-1">
-            <TabsList variant="line" aria-label="虚拟账户详情">
+            <TabsList
+              variant="line"
+              aria-label={platformPrefix === "/subscriptions" ? "用户订阅详情" : "虚拟账户详情"}
+            >
               {[
                 ["settings", "账户设置"],
                 ["usage", "用量统计"],
@@ -1514,7 +1530,7 @@ export function ConsumerDetail() {
             <Button variant="outline" size="sm" asChild>
               <Link
                 href={
-                  account?.user_id
+                  account?.user_kind === "regular" && account.user_id
                     ? `/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`
                     : "/consumers/"
                 }
@@ -1560,21 +1576,46 @@ export function ConsumerDetail() {
                       <CardDescription>创建于 {date(account?.created_at)}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <ConsumerForm
-                        key={id}
-                        editing
-                        disabled={!resource.ready || !!account?.user_id}
-                        account={account}
-                        onSaved={resource.reload}
-                      />
-                      {account?.user_id && (
-                        <Button asChild variant="outline">
-                          <Link
-                            href={`/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`}
-                          >
-                            管理用户订阅
-                          </Link>
-                        </Button>
+                      {platformPrefix === "/consumers" ? (
+                        <ConsumerForm
+                          key={id}
+                          editing
+                          disabled={!resource.ready}
+                          account={account}
+                          onSaved={resource.reload}
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                            <div>
+                              <dt className="text-muted-foreground">用户名</dt>
+                              <dd>{account?.username ?? "—"}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground">名称</dt>
+                              <dd>{account?.name ?? "—"}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground">邮箱</dt>
+                              <dd>{account?.email ?? "—"}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground">订阅套餐</dt>
+                              <dd>{account?.plan_name ?? "—"}</dd>
+                            </div>
+                          </dl>
+                          <Button asChild variant="outline">
+                            <Link
+                              href={
+                                account?.user_id
+                                  ? `/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`
+                                  : "/subscriptions/"
+                              }
+                            >
+                              管理用户订阅
+                            </Link>
+                          </Button>
+                        </div>
                       )}
                     </CardContent>
                   </Card>
@@ -1607,6 +1648,7 @@ type ResetCreditRecord = {
   source: "card" | "admin_reset";
 };
 function ConsumerResetCredits({ id }: { id: string }) {
+  const platformPrefix = usePlatformPrefix();
   const tableColumns1 = useColumnVisibility(
     "components/consumers.tsx:1",
     [
@@ -1628,7 +1670,7 @@ function ConsumerResetCredits({ id }: { id: string }) {
   const dialogFocus = useDialogFocus();
   const [grantOpen, setGrantOpen] = useState(false);
   const [startMode, setStartMode] = useState("now");
-  const path = `/consumers/${encodeURIComponent(id)}/reset-credits`;
+  const path = `${platformPrefix}/${encodeURIComponent(id)}/reset-credits`;
   const resource = useResource<List<ResetCreditRecord> & { available_count: number }>(path);
   const actions = useActions();
   const [quantity, setQuantity] = useState("1");
@@ -2128,7 +2170,8 @@ function ConsumerResetCredits({ id }: { id: string }) {
   );
 }
 function Routing({ account, id }: { account?: Consumer; id: string }) {
-  const resource = useResource<RoutingResponse>(`/consumers/${id}/routing`);
+  const platformPrefix = usePlatformPrefix();
+  const resource = useResource<RoutingResponse>(`${platformPrefix}/${id}/routing`);
   useErrorToast(resource.error);
   return (
     <Card size="sm">
@@ -2152,6 +2195,7 @@ function Routing({ account, id }: { account?: Consumer; id: string }) {
   );
 }
 function Devices({ id }: { id: string }) {
+  const platformPrefix = usePlatformPrefix();
   const tableColumns2 = useColumnVisibility(
     "components/consumers.tsx:2",
     ["客户端 / 安装标识", "授权范围", "首次登录", "最近续期 / 使用", "操作"],
@@ -2165,7 +2209,7 @@ function Devices({ id }: { id: string }) {
 
   const actions = useActions();
   const resource = useResource<List<Device> & { remote_servers: Json[] }>(
-    `/consumers/${id}/devices`,
+    `${platformPrefix}/${id}/devices`,
   );
   const devices = useTablePagination(resource.data?.items ?? [], id, resource.data !== undefined);
   const servers = useTablePagination(
@@ -2377,7 +2421,7 @@ function Devices({ id }: { id: string }) {
                                     "components\\consumers.tsx:action:17",
                                     async () => {
                                       await request(
-                                        `/consumers/${id}/devices/${device.id}/revoke`,
+                                        `${platformPrefix}/${id}/devices/${device.id}/revoke`,
                                         {
                                           method: "POST",
                                           body: {},
@@ -2717,13 +2761,14 @@ function Devices({ id }: { id: string }) {
   );
 }
 function Records({ id, kind, title }: { id: string; kind: string; title: string }) {
+  const platformPrefix = usePlatformPrefix();
   const tableColumns4 = useColumnVisibility(
     "components/consumers.tsx:4:" + kind,
     recordColumns(kind),
     mobileRecordColumns(kind),
   );
 
-  const resource = useResource<List<Json>>(`/consumers/${id}/records${query({ kind })}`);
+  const resource = useResource<List<Json>>(`${platformPrefix}/${id}/records${query({ kind })}`);
   const pagination = useTablePagination(
     resource.data?.items ?? [],
     `${id}/${kind}`,
@@ -3016,6 +3061,7 @@ function ClientRecords({ id }: { id: string }) {
   );
 }
 function Logs({ id }: { id: string }) {
+  const platformPrefix = usePlatformPrefix();
   const tableColumns5 = useColumnVisibility(
     "components/consumers.tsx:5:" + "logs",
     recordColumns("logs"),
@@ -3053,7 +3099,7 @@ function Logs({ id }: { id: string }) {
     }
   >(
     preferencesReady
-      ? `/consumers/${id}/logs${query({ page, page_size: pageSize, ...applied })}`
+      ? `${platformPrefix}/${id}/logs${query({ page, page_size: pageSize, ...applied })}`
       : null,
   );
   const rows = resource.data?.items ?? [];

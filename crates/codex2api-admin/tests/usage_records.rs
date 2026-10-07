@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 mod common;
 
 #[tokio::test]
@@ -163,7 +172,7 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
     let f = Fixture::new().await;
     let mut suppliers = Vec::new();
     for index in 0..7 {
-        let consumer = codex2api_storage::VirtualAccount {
+        let consumer = codex2api_storage::PlatformAccount {
             id: format!("consumer-{index}"),
             provider_id: "chatgpt".into(),
             username: format!("User-{index}"),
@@ -176,7 +185,7 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
             subscription_expires_at: None,
             created_at: "2026-09-22T00:00:00Z".into(),
         };
-        f.storage.save_virtual_account(&consumer).await.unwrap();
+        f.storage.save_account_fixture(&consumer).await.unwrap();
         let supplier = f.state.accounts.create_pending().await.unwrap().account;
         f.storage
             .update_account(
@@ -269,10 +278,7 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
         f.get("/admin/api/usage?supplier_id=missing").await["total"],
         0
     );
-    f.storage
-        .delete_virtual_account("consumer-6")
-        .await
-        .unwrap();
+    f.storage.delete_virtual_user("consumer-6").await.unwrap();
     assert!(
         f.get("/admin/api/consumers?search=User-6&limit=5").await["items"]
             .as_array()

@@ -172,7 +172,7 @@ pub(crate) async fn verify_user(
     }
     if !state
         .storage
-        .allow_virtual_login_attempt(&format!("user:{}", username.trim()))
+        .allow_user_login_attempt(&format!("user:{}", username.trim()))
         .await?
     {
         return Err(UserError(

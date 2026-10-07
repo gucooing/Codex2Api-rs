@@ -1,15 +1,24 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     Json,
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
-use codex2api_storage::{Storage, VirtualAccount};
+use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::{Value, json};
 
-pub fn identity(account: &VirtualAccount) -> Value {
+pub fn identity(account: &PlatformAccount) -> Value {
     json!({"id":account.id,"account_id":account.id,"user_id":format!("user-{}",account.id),"email":account.email,"name":account.name,"plan_type":account.effective_plan(),"is_default":true})
 }
-pub fn account_check(account: &VirtualAccount) -> Value {
+pub fn account_check(account: &PlatformAccount) -> Value {
     let active = account.effective_plan() != "free";
     let mut details = identity(account);
     details["account_user_id"] = format!("user-{}", account.id).into();
@@ -18,7 +27,7 @@ pub fn account_check(account: &VirtualAccount) -> Value {
     json!({"accounts":{account.id.clone():{"account":details,"entitlement":{"subscription_plan":account.effective_plan(),"has_active_subscription":active,"expires_at":account.subscription_expires_at},"features":[],"permissions":[]}},"account_ordering":[account.id],"user":identity(account)})
 }
 
-pub fn optimized_account_check(account: &VirtualAccount) -> Value {
+pub fn optimized_account_check(account: &PlatformAccount) -> Value {
     // The desktop consumes the selected account directly here, unlike the keyed v4 response.
     let mut selected = account_check(account)["accounts"][&account.id].clone();
     selected["account_user"] = json!({
@@ -29,7 +38,7 @@ pub fn optimized_account_check(account: &VirtualAccount) -> Value {
     selected
 }
 
-pub fn workspace_check(account: &VirtualAccount) -> Value {
+pub fn workspace_check(account: &PlatformAccount) -> Value {
     // WHAM workspace discovery is an array; ChatGPT account checks are keyed by account ID.
     // Official native and Desktop readers both support this sentinel. It keeps
     // the client's configured service origin instead of routing virtual tokens
@@ -44,7 +53,7 @@ pub fn workspace_check(account: &VirtualAccount) -> Value {
     workspace["structure"] = "personal".into();
     json!({"accounts":[workspace],"default_account_id":account.id,"account_ordering":[account.id]})
 }
-pub fn subscriptions(account: &VirtualAccount) -> Value {
+pub fn subscriptions(account: &PlatformAccount) -> Value {
     json!({"id":format!("subscription-{}",account.id),"account_id":account.id,"plan_type":account.effective_plan(),"active_until":account.subscription_expires_at,"will_renew":false})
 }
 pub fn json_response(value: Value) -> Response {
@@ -170,7 +179,7 @@ pub(crate) async fn codex_model_catalog(storage: &Storage, owner: &str) -> crate
 /// Replace identity fields and exact identifiers in non-streaming backend metadata only.
 pub fn mask(
     value: &mut Value,
-    account: &VirtualAccount,
+    account: &PlatformAccount,
     real: &codex2api_storage::SupplierAccount,
 ) {
     match value {
@@ -238,7 +247,7 @@ pub async fn quota_headers(
     id: &str,
     headers: &mut HeaderMap,
 ) -> crate::Result<()> {
-    let Some(account) = storage.effective_virtual_account(id).await? else {
+    let Some(account) = storage.effective_platform_account(id).await? else {
         return Ok(());
     };
     let names: Vec<_> = headers
@@ -419,7 +428,7 @@ pub async fn websocket_message(storage: &Storage, hash: &str, text: &str) -> cra
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let account = storage
-        .effective_virtual_account(&access.virtual_account_id)
+        .effective_platform_account(&access.virtual_account_id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     let usage = storage.virtual_quota(&account.id).await?;
@@ -442,7 +451,7 @@ mod isolation_tests {
     async fn sse_quota_is_replaced_across_split_frames_without_changing_model_output() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path().join("sse.sqlite")).await.unwrap();
-        let account = VirtualAccount {
+        let account = PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "virtual".into(),
             username: "virtual".into(),
@@ -455,7 +464,7 @@ mod isolation_tests {
             enabled: true,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        storage.save_virtual_account(&account).await.unwrap();
+        storage.save_account_fixture(&account).await.unwrap();
         // SSE 中只有已开始使用的内层窗口才会作为 primary 返回。
         storage
             .insert_usage(&codex2api_storage::UsageRecord {

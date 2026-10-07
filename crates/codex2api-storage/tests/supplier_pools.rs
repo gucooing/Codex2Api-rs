@@ -1,5 +1,14 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use codex2api_storage::{
-    NewSupplierAccount, Storage, SupplierStatus, SupplierTokens, VirtualAccount,
+    NewSupplierAccount, PlatformAccount, Storage, SupplierStatus, SupplierTokens,
 };
 
 async fn supplier(storage: &Storage, id: &str) {
@@ -30,7 +39,7 @@ async fn supplier(storage: &Storage, id: &str) {
 }
 async fn consumer(storage: &Storage, id: &str) {
     storage
-        .save_virtual_account(&VirtualAccount {
+        .save_account_fixture(&PlatformAccount {
             id: id.into(),
             provider_id: "chatgpt".into(),
             username: id.into(),
@@ -892,7 +901,7 @@ async fn plan_display_tier_updates_members_without_resetting_subscription_or_bil
         .await
         .unwrap();
     consumer(&storage, "v").await;
-    let before = storage.virtual_account("v").await.unwrap().unwrap();
+    let before = storage.platform_account("v").await.unwrap().unwrap();
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.plan_type = "prolite".into();
     assert!(
@@ -901,7 +910,7 @@ async fn plan_display_tier_updates_members_without_resetting_subscription_or_bil
             .await
             .unwrap()
     );
-    let after = storage.virtual_account("v").await.unwrap().unwrap();
+    let after = storage.platform_account("v").await.unwrap().unwrap();
     assert_eq!(after.effective_plan(), "prolite");
     assert_eq!(after.id, before.id);
     assert_eq!(

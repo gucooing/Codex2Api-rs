@@ -1,3 +1,4 @@
+mod account_scope;
 mod auth;
 mod catalog;
 mod consumers;
@@ -18,7 +19,28 @@ use axum::{
     routing::{get, post, put},
 };
 pub(crate) fn router(state: AdminState) -> Router {
+    let user_routes = Router::new()
+        .route("/users", get(users::list).post(users::create))
+        .route("/users/options", get(users::options))
+        .route("/users/{id}/wallet-adjustments", post(users::adjust_wallet))
+        .route("/users/{id}", get(users::detail).put(users::update));
+    let virtual_routes = platform_resources("/consumers")
+        .route("/consumers", get(consumers::list).post(consumers::create))
+        .route("/consumers/batch", post(consumers::batch))
+        .route(
+            "/consumers/{id}",
+            get(consumers::detail)
+                .put(consumers::update)
+                .delete(consumers::delete),
+        );
+    let subscription_routes = platform_resources("/subscriptions").route(
+        "/subscriptions/{id}",
+        get(consumers::detail).put(users::update_subscription),
+    );
     let protected = Router::new()
+        .merge(user_routes)
+        .merge(virtual_routes)
+        .merge(subscription_routes)
         .route(
             "/suppliers/grok/{id}/profile",
             post(crate::providers::grok::refresh_profile),
@@ -47,15 +69,10 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/orders/plans", get(orders::plans))
         .route("/orders/{id}", get(orders::detail))
         .route("/orders/{id}/cancel", post(orders::cancel))
-        .route("/users", get(users::list).post(users::create))
-        .route("/users/options", get(users::options))
-        .route("/users/{id}/wallet-adjustments", post(users::adjust_wallet))
-        .route("/users/{id}", get(users::detail).put(users::update))
         .route(
             "/subscriptions",
             get(users::subscriptions).post(users::grant),
         )
-        .route("/subscriptions/{id}", put(users::update_subscription))
         .route("/logout", post(auth::logout))
         .route("/overview", get(settings::overview))
         .route("/overview/usage", get(usage::statistics))
@@ -66,10 +83,6 @@ pub(crate) fn router(state: AdminState) -> Router {
             put(tags::update).delete(tags::delete),
         )
         .route("/suppliers/tags", post(tags::batch))
-        .route(
-            "/consumers/{id}/rate-limit",
-            get(consumers::rate_limit).put(consumers::save_rate_limit),
-        )
         .route(
             "/suppliers/oauth/setup",
             get(crate::providers::chatgpt::setup),
@@ -107,42 +120,6 @@ pub(crate) fn router(state: AdminState) -> Router {
             post(crate::providers::credit),
         )
         .route("/suppliers/{id}/relogin", post(crate::providers::relogin))
-        .route("/consumers", get(consumers::list).post(consumers::create))
-        .route("/consumers/batch", post(consumers::batch))
-        .route(
-            "/consumers/{id}",
-            get(consumers::detail)
-                .put(consumers::update)
-                .delete(consumers::delete),
-        )
-        .route("/consumers/{id}/usage", get(consumers::usage))
-        .route(
-            "/consumers/{id}/reset-credits",
-            get(consumers::reset_credits).post(consumers::grant_reset_credits),
-        )
-        .route(
-            "/consumers/{id}/reset-credits/consume",
-            post(consumers::consume_reset_credit),
-        )
-        .route("/consumers/{id}/configs", get(consumers::configs))
-        .route("/consumers/{id}/plugins", get(consumers::plugins))
-        .route("/consumers/{id}/connectors", get(consumers::connectors))
-        .route("/consumers/{id}/config/{key}", put(consumers::save_config))
-        .route(
-            "/consumers/{id}/client-state/{key}",
-            get(consumers::client_state),
-        )
-        .route("/consumers/{id}/devices", get(consumers::devices))
-        .route(
-            "/consumers/{id}/devices/{device}/revoke",
-            post(consumers::revoke),
-        )
-        .route(
-            "/consumers/{id}/routing",
-            get(consumers::routes).put(consumers::save_route),
-        )
-        .route("/consumers/{id}/logs", get(consumers::logs))
-        .route("/consumers/{id}/records", get(consumers::records))
         .route("/plans", get(catalog::plans).post(catalog::create_plan))
         .route(
             "/plans/{id}",
@@ -180,6 +157,10 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/resources", get(settings::resources))
         .route("/missing-endpoints", get(settings::missing))
         .route_layer(axum::middleware::from_fn_with_state(
+            state.storage.clone(),
+            account_scope::enforce,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             session::require_session,
         ));
@@ -208,4 +189,46 @@ async fn no_store(
         axum::http::HeaderValue::from_static("nosniff"),
     );
     response
+}
+
+fn platform_resources(prefix: &str) -> Router<AdminState> {
+    Router::new()
+        .route(
+            &format!("{prefix}/{{id}}/rate-limit"),
+            get(consumers::rate_limit).put(consumers::save_rate_limit),
+        )
+        .route(&format!("{prefix}/{{id}}/usage"), get(consumers::usage))
+        .route(
+            &format!("{prefix}/{{id}}/reset-credits"),
+            get(consumers::reset_credits).post(consumers::grant_reset_credits),
+        )
+        .route(
+            &format!("{prefix}/{{id}}/reset-credits/consume"),
+            post(consumers::consume_reset_credit),
+        )
+        .route(&format!("{prefix}/{{id}}/configs"), get(consumers::configs))
+        .route(&format!("{prefix}/{{id}}/plugins"), get(consumers::plugins))
+        .route(
+            &format!("{prefix}/{{id}}/connectors"),
+            get(consumers::connectors),
+        )
+        .route(
+            &format!("{prefix}/{{id}}/config/{{key}}"),
+            put(consumers::save_config),
+        )
+        .route(
+            &format!("{prefix}/{{id}}/client-state/{{key}}"),
+            get(consumers::client_state),
+        )
+        .route(&format!("{prefix}/{{id}}/devices"), get(consumers::devices))
+        .route(
+            &format!("{prefix}/{{id}}/devices/{{device}}/revoke"),
+            post(consumers::revoke),
+        )
+        .route(
+            &format!("{prefix}/{{id}}/routing"),
+            get(consumers::routes).put(consumers::save_route),
+        )
+        .route(&format!("{prefix}/{{id}}/logs"), get(consumers::logs))
+        .route(&format!("{prefix}/{{id}}/records"), get(consumers::records))
 }

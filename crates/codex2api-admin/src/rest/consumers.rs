@@ -4,12 +4,20 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use codex2api_storage::{VirtualAccount, virtual_config_specs};
+use codex2api_storage::{PlatformAccount, virtual_config_specs};
 use serde::Deserialize;
 use serde_json::{Value, json};
-async fn dto(s: &AdminState, a: &VirtualAccount) -> Result<Value, ApiError> {
+async fn dto(s: &AdminState, a: &PlatformAccount) -> Result<Value, ApiError> {
     let mut value = super::dto::Consumer::from(a);
-    value.user_id = s.storage.virtual_account_user(&a.id).await?;
+    let user = s
+        .storage
+        .platform_account_user(&a.id)
+        .await?
+        .ok_or_else(ApiError::missing)?;
+    value.user_id = Some(user.id);
+    value.user_kind = user.kind;
+    value.user_revision = user.revision;
+    value.revision = s.storage.platform_revision(&a.id).await?;
     value.plan_name = s
         .storage
         .virtual_plan(&a.plan_id)
@@ -18,10 +26,10 @@ async fn dto(s: &AdminState, a: &VirtualAccount) -> Result<Value, ApiError> {
         .unwrap_or_else(|| "已删除套餐".into());
     Ok(super::dto::value(value))
 }
-async fn require(state: &AdminState, id: &str) -> Result<VirtualAccount, ApiError> {
+async fn require(state: &AdminState, id: &str) -> Result<PlatformAccount, ApiError> {
     state
         .storage
-        .virtual_account(id)
+        .platform_account(id)
         .await?
         .ok_or_else(ApiError::missing)
 }
@@ -50,7 +58,7 @@ pub async fn list(State(s): State<AdminState>, Query(q): Query<ConsumerListQuery
         };
         let (accounts, total, page) = s
             .storage
-            .virtual_account_page(&filters, q.page.unwrap_or(1), q.page_size)
+            .platform_account_page(&filters, q.page.unwrap_or(1), q.page_size)
             .await?;
         let mut items = Vec::new();
         for account in accounts {
@@ -69,8 +77,8 @@ pub async fn list(State(s): State<AdminState>, Query(q): Query<ConsumerListQuery
         for_routing: q.for_routing,
     };
     let accounts = match legacy.search_params()? {
-        Some((search, limit)) => s.storage.search_virtual_accounts(search, limit).await?,
-        None => s.storage.virtual_accounts().await?,
+        Some((search, limit)) => s.storage.search_platform_accounts(search, limit).await?,
+        None => s.storage.platform_accounts().await?,
     };
     let mut items = Vec::new();
     for account in accounts {
@@ -137,6 +145,8 @@ pub async fn detail(State(s): State<AdminState>, Path(id): Path<String>) -> ApiR
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
+    revision: Option<i64>,
+    user_revision: Option<i64>,
     username: String,
     provider_id: String,
     #[serde(default)]
@@ -162,12 +172,21 @@ async fn save(s: AdminState, id: Option<String>, f: Input) -> ApiResult {
         Some(id) => Some(require(&s, id).await?),
         None => None,
     };
+    let owner = match &id {
+        Some(id) => Some(
+            s.storage
+                .virtual_user(id)
+                .await?
+                .ok_or_else(ApiError::missing)?,
+        ),
+        None => None,
+    };
     if !codex2api_core::supported_provider(&f.provider_id)
         || previous
             .as_ref()
             .is_some_and(|a| a.provider_id != f.provider_id)
     {
-        return Err(ApiError::bad("提供商必须在创建时确定，当前仅支持 ChatGPT"));
+        return Err(ApiError::bad("请选择支持的提供商，创建后不可切换"));
     }
     if f.username.trim().is_empty()
         || f.username.len() > 128
@@ -210,29 +229,40 @@ async fn save(s: AdminState, id: Option<String>, f: Input) -> ApiResult {
             .await
             .map_err(|_| ApiError::bad("密码保存失败"))??
     };
-    let account = VirtualAccount {
-        id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        provider_id: f.provider_id,
-        username: f.username.trim().into(),
-        name: f.name.trim().into(),
-        email: f.email.trim().into(),
+    let user = codex2api_storage::User {
+        kind: codex2api_storage::UserKind::Virtual,
+        id: owner
+            .as_ref()
+            .map(|u| u.id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        username: f.username,
+        name: f.name,
+        email: f.email,
         password_hash,
-        plan_id: plan.id,
-        plan_type: plan.plan_type,
-        subscription_expires_at: expiry,
         enabled: f.enabled,
-        created_at: previous
-            .map(|a| a.created_at)
+        wallet_cents: 0,
+        revision: owner.as_ref().map_or(1, |u| u.revision),
+        created_at: owner
+            .as_ref()
+            .map(|u| u.created_at.clone())
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
     };
+    let platform_id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     s.storage
-        .save_virtual_account_operation(&account, "admin")
+        .save_virtual_user(codex2api_storage::VirtualUserChange {
+            user: &user,
+            platform_id: &platform_id,
+            provider_id: &f.provider_id,
+            plan_id: &plan.id,
+            expires_at: expiry.as_deref(),
+            user_revision: f.user_revision,
+            revision: f.revision,
+        })
         .await?;
-    Ok(Json(dto(&s, &account).await?))
+    Ok(Json(dto(&s, &require(&s, &platform_id).await?).await?))
 }
 pub async fn delete(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
-    require(&s, &id).await?;
-    s.storage.delete_virtual_account(&id).await?;
+    s.storage.delete_virtual_user(&id).await?;
     Ok(ok())
 }
 pub async fn usage(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {

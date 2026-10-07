@@ -212,6 +212,7 @@ async fn jwt_browser_sessions_require_live_matching_role_records() {
         .unwrap();
     let admin_jwt = storage.admin_session_token(&admin).await.unwrap();
     let mut user = codex2api_storage::User {
+        kind: codex2api_storage::UserKind::Regular,
         id: "user".into(),
         username: "admin".into(),
         password_hash: codex2api_storage::hash_password("user-password").unwrap(),

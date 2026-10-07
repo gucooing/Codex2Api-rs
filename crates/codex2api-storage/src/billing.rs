@@ -1,4 +1,13 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
 use crate::{Result, Storage, StorageError, UsageRecord};
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use serde::{Deserialize, Serialize};
 
 /// Integer micro-USD per million tokens; snapshot with each request.
@@ -390,7 +399,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("windows.sqlite");
         let storage = Storage::open(&db).await.unwrap();
-        let account = crate::VirtualAccount {
+        let account = crate::PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "a".into(),
             username: "a".into(),
@@ -403,7 +412,7 @@ mod tests {
             enabled: true,
             created_at: "1970-01-01T00:00:00Z".into(),
         };
-        storage.save_virtual_account(&account).await.unwrap();
+        storage.save_account_fixture(&account).await.unwrap();
         // 35 days is a common boundary of the 5h and 7d windows.
         let boundary = 35 * 86400_i64;
         for (id, owner, at, input) in [

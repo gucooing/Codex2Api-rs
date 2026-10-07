@@ -53,7 +53,7 @@ impl Storage {
     }
 
     pub async fn remote_server_for_token(&self, token: &str) -> Result<Option<RemoteServer>> {
-        Ok(sqlx::query_as("SELECT s.* FROM virtual_remote_servers s JOIN virtual_principals v ON v.id=s.virtual_account_id JOIN virtual_devices d ON d.id=s.device_id AND d.virtual_account_id=v.id WHERE s.token_hash=? AND s.expires_at>? AND v.enabled=1")
+        Ok(sqlx::query_as("SELECT s.* FROM virtual_remote_servers s JOIN platform_principals v ON v.id=s.virtual_account_id JOIN virtual_devices d ON d.id=s.device_id AND d.virtual_account_id=v.id WHERE s.token_hash=? AND s.expires_at>? AND v.enabled=1")
             .bind(hash_token(token)).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
 

@@ -18,7 +18,7 @@ pub async fn forward(
     crate::response::complete_on_disconnect(async move {
     let account = state
         .storage
-        .effective_virtual_account(&access.virtual_account_id)
+        .effective_platform_account(&access.virtual_account_id)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
     for (key, value) in url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()) {

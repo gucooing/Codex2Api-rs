@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 mod common;
 use common::*;
 use serde_json::{Value, json};
@@ -46,7 +55,7 @@ fn shape(v: &Value) -> Value {
 async fn real_rest_contracts_match_frontend_fixture() {
     let f = Fixture::new().await;
     let supplier = f.state.accounts.create_pending().await.unwrap().account;
-    let consumer = codex2api_storage::VirtualAccount {
+    let consumer = codex2api_storage::PlatformAccount {
         id: "contract-consumer".into(),
         provider_id: "chatgpt".into(),
         username: "contract-consumer".into(),
@@ -59,7 +68,7 @@ async fn real_rest_contracts_match_frontend_fixture() {
         enabled: true,
         created_at: "2026-09-22T00:00:00Z".into(),
     };
-    f.storage.save_virtual_account(&consumer).await.unwrap();
+    f.storage.save_account_fixture(&consumer).await.unwrap();
     let mut plan = f.storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["spending_windows"] = serde_json::json!([{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}]);
     assert!(

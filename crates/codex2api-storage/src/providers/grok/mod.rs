@@ -32,7 +32,7 @@ impl Storage {
         scopes: &str,
     ) -> Result<bool> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let granted:Option<String> = sqlx::query_scalar("SELECT d.scopes FROM virtual_devices d JOIN virtual_principals v ON v.id=d.virtual_account_id WHERE d.id=? AND d.refresh_hash=? AND d.provider_id='grok' AND v.provider_id='grok' AND v.enabled=1")
+        let granted:Option<String> = sqlx::query_scalar("SELECT d.scopes FROM virtual_devices d JOIN platform_principals v ON v.id=d.virtual_account_id WHERE d.id=? AND d.refresh_hash=? AND d.provider_id='grok' AND v.provider_id='grok' AND v.enabled=1")
             .bind(device).bind(hash_token(old_refresh)).fetch_optional(&mut *tx).await?;
         let Some(granted) = granted else {
             return Ok(false);

@@ -622,7 +622,7 @@ impl Storage {
     }
     pub async fn virtual_spending_limited(&self, owner: &str) -> Result<bool> {
         let account = self
-            .effective_virtual_account(owner)
+            .effective_platform_account(owner)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -637,7 +637,7 @@ impl Storage {
     }
     pub(crate) async fn virtual_quota_at(&self, owner: &str, now: i64) -> Result<Value> {
         let account = self
-            .effective_virtual_account_at(owner, now)
+            .effective_platform_account_at(owner, now)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -694,7 +694,7 @@ impl Storage {
         if let Some(saved) = self.virtual_client_state(owner, key).await? {
             return Ok(saved);
         }
-        sqlx::query("INSERT OR IGNORE INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin) SELECT id,?,?,0,'system' FROM virtual_accounts WHERE id=?")
+        sqlx::query("INSERT OR IGNORE INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin) SELECT id,?,?,0,'system' FROM platform_accounts WHERE id=?")
             .bind(key).bind(spec.default.to_string()).bind(owner).execute(self.pool()).await?;
         self.virtual_client_state(owner, key)
             .await?
@@ -777,7 +777,7 @@ impl Storage {
         }
         if key == "conversation_metadata" && !value["default_model_slug"].is_null() {
             let account = self
-                .virtual_account(owner)
+                .platform_account(owner)
                 .await?
                 .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
             let models = self
@@ -980,7 +980,7 @@ impl Storage {
         status: u16,
         duration: i64,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO virtual_request_logs(virtual_account_id,device_id,method,path,status,duration_ms,created_at_ms) SELECT id,?,?,?,?,?,? FROM virtual_accounts WHERE id=?")
+        sqlx::query("INSERT INTO virtual_request_logs(virtual_account_id,device_id,method,path,status,duration_ms,created_at_ms) SELECT id,?,?,?,?,?,? FROM platform_accounts WHERE id=?")
             .bind(device).bind(method).bind(path).bind(i64::from(status)).bind(duration).bind(chrono::Utc::now().timestamp_millis()).bind(owner).execute(self.pool()).await?;
         Ok(())
     }

@@ -98,12 +98,12 @@ async fn overview_counts_standalone_health_and_distinct_users_with_usage_today()
     let healthy = f.consumer("healthy").await;
     let disabled = f.consumer("disabled").await;
     let expired = f.consumer("expired").await;
-    sqlx::query("UPDATE virtual_accounts SET enabled=0 WHERE id=?")
+    sqlx::query("UPDATE platform_accounts SET enabled=0 WHERE id=?")
         .bind(disabled["id"].as_str().unwrap())
         .execute(f.storage.pool())
         .await
         .unwrap();
-    sqlx::query("UPDATE virtual_accounts SET subscription_expires_at=? WHERE id=?")
+    sqlx::query("UPDATE platform_accounts SET subscription_expires_at=? WHERE id=?")
         .bind((chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339())
         .bind(expired["id"].as_str().unwrap())
         .execute(f.storage.pool())
@@ -282,7 +282,7 @@ async fn users_and_subscription_expiry_share_free_policy_without_migrating_stand
     );
     let effective = f
         .storage
-        .effective_virtual_account(id)
+        .effective_platform_account(id)
         .await
         .unwrap()
         .unwrap();
@@ -353,4 +353,96 @@ async fn free_cannot_be_deleted_or_retyped_and_paid_plans_have_no_expiry_free_fi
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_routes() {
+    use axum::http::StatusCode;
+    let f = Fixture::new().await;
+    let special = f.consumer("isolated-virtual").await;
+    let special_platform = special["id"].as_str().unwrap();
+    let special_user = special["user_id"].as_str().unwrap();
+    let created = f.request("POST", "/admin/api/users", json!({"username":"isolated-user","name":"User","email":"user@example.test","password":"password","enabled":true,"revision":null})).await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let regular = body(created).await;
+    let regular_id = regular["id"].as_str().unwrap();
+    let regular_platform = f
+        .storage
+        .user_platform_account(regular_id, "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    for suffix in [
+        "", "/configs", "/devices", "/routing", "/usage", "/logs", "/records",
+    ] {
+        assert_eq!(
+            f.request(
+                "GET",
+                &format!("/admin/api/consumers/{}{suffix}", regular_platform.id),
+                serde_json::Value::Null
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            f.request(
+                "GET",
+                &format!("/admin/api/subscriptions/{special_platform}{suffix}"),
+                serde_json::Value::Null
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        f.request(
+            "GET",
+            &format!("/admin/api/users/{special_user}"),
+            serde_json::Value::Null
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.request(
+            "POST",
+            &format!("/admin/api/users/{special_user}/wallet-adjustments"),
+            json!({"request_id":"forbidden","amount_cents":100,"expected_revision":1})
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.get("/admin/api/users").await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        f.get("/admin/api/consumers").await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        f.get("/admin/api/subscriptions?include_expired=true").await["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["user_id"] == regular_id)
+    );
+    assert_eq!(
+        f.get(&format!("/admin/api/subscriptions/{}", regular_platform.id))
+            .await["user_kind"],
+        "regular"
+    );
+    // Missing revision is rejected by the store, independently of the UI.
+    let missing_revision = f.with_auth("PUT", &format!("/admin/api/consumers/{special_platform}"), json!({"username":"isolated-virtual","name":"Virtual","email":"virtual@example.test","password":"","provider_id":"chatgpt","plan_id":"plus","subscription_expires_at":null,"enabled":true}), Some(&f.cookie), Some(&f.csrf)).await;
+    assert_eq!(missing_revision.status(), StatusCode::CONFLICT);
 }

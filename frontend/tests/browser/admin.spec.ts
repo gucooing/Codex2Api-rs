@@ -347,11 +347,7 @@ test("real admin actions, isolation and public consumer authorization", async ({
     path: resolve(evidence, "18-public-authorization-mobile.png"),
     fullPage: true,
   });
-  await selectOption(
-    publicPage,
-    publicPage.getByLabel("登录身份", { exact: true }),
-    "独立虚拟账户",
-  );
+  await expect(publicPage.getByLabel("登录身份", { exact: true })).toHaveCount(0);
   await publicPage.getByLabel("用户名", { exact: true }).fill(`test-a-${suffix}`);
   await publicPage.getByLabel("密码", { exact: true }).fill("wrong-password");
   await publicPage.getByRole("button", { name: "验证身份", exact: true }).click();

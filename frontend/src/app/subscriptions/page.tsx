@@ -315,7 +315,7 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
                       </Button>
                       <Button size="sm" variant="outline" asChild>
                         <Link
-                          href={`/consumers/detail/?id=${encodeURIComponent(s.virtual_account_id)}`}
+                          href={`/subscriptions/detail/?id=${encodeURIComponent(s.virtual_account_id)}`}
                         >
                           配置与记录
                         </Link>

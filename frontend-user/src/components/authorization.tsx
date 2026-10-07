@@ -7,13 +7,6 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel, FieldSet, FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 
 const scopeLabels: Record<string, string> = {
@@ -54,7 +47,6 @@ export function Authorization({ device = false }: { device?: boolean }) {
   const [flow, setFlow] = useState<Flow>();
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
-  const [kind, setKind] = useState("user");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -169,7 +161,6 @@ export function Authorization({ device = false }: { device?: boolean }) {
                       body: {
                         request_id: flow.request_id,
                         csrf_token: flow.csrf_token,
-                        kind,
                         username,
                         password,
                       },
@@ -183,18 +174,6 @@ export function Authorization({ device = false }: { device?: boolean }) {
             >
               <FieldSet disabled={!flow || !!error || actions.isBusy("identify")}>
                 <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor={`${id}-kind`}>登录身份</FieldLabel>
-                    <Select value={kind} onValueChange={setKind}>
-                      <SelectTrigger id={`${id}-kind`}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent position="popper">
-                        <SelectItem value="user">用户账户</SelectItem>
-                        <SelectItem value="virtual">独立虚拟账户</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
                   <Field>
                     <FieldLabel htmlFor={`${id}-username`}>用户名</FieldLabel>
                     <Input

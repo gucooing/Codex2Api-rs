@@ -112,7 +112,7 @@ impl Storage {
         };
         let label = match group_by {
             UsageGroup::VirtualAccount => {
-                "COALESCE((SELECT username FROM virtual_principals WHERE id=subject_id),NULLIF(MAX(subject_name),''),subject_id)"
+                "COALESCE((SELECT username FROM platform_principals WHERE id=subject_id),NULLIF(MAX(subject_name),''),subject_id)"
             }
             _ => &key,
         };

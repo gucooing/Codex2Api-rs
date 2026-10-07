@@ -1,3 +1,12 @@
+#[cfg(test)]
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+#[cfg(test)]
+use account_fixture::AccountFixture;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -5,7 +14,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use codex2api_storage::{
-    Storage, SupplierAccountUpdate, SupplierStatus, UsageRecord, VirtualAccount,
+    PlatformAccount, Storage, SupplierAccountUpdate, SupplierStatus, UsageRecord,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -189,7 +198,7 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
     second.email = "bob@virtual.test".into();
     second.plan_id = "plus".into();
     second.plan_type = "plus".into();
-    storage.save_virtual_account(&second).await.unwrap();
+    storage.save_account_fixture(&second).await.unwrap();
     bind_test_supplier(&storage, &second, Some(supplier)).await;
     storage
         .create_virtual_device(&second, "bob-refresh", &Default::default())
@@ -278,7 +287,7 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
     // Disabling one virtual account revokes only its local sessions.
     let mut disabled = account.clone();
     disabled.enabled = false;
-    storage.save_virtual_account(&disabled).await.unwrap();
+    storage.save_account_fixture(&disabled).await.unwrap();
     assert!(
         storage
             .virtual_access(&codex2api_storage::hash_token(
@@ -464,7 +473,7 @@ async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usa
     assert_eq!(sample["quota_after_reset"]["account_id"], account.id);
     assert_eq!(
         storage
-            .virtual_account(&account.id)
+            .platform_account(&account.id)
             .await
             .unwrap()
             .unwrap()
@@ -1009,7 +1018,7 @@ async fn consumer_tokens_cannot_cross_account_headers_paths_queries_or_resources
     let mut other = account.clone();
     other.id = "other-consumer".into();
     other.username = "other-consumer".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     storage
         .save_virtual_resource(
             &other.id,
@@ -1112,10 +1121,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
         .unwrap();
     account.plan_id = plan.id.clone();
     account.plan_type = plan.plan_type.clone();
-    storage
-        .save_virtual_account_operation(&account, "admin")
-        .await
-        .unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let catalog = storage.virtual_config(&account.id, "models").await.unwrap();
     let mut value = catalog.value;
     value["models"] = json!([{"slug":"gpt-6-astra"},{"slug":"gpt-5.6-luna"}]);
@@ -1412,7 +1418,7 @@ async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() 
         .unwrap()
         .unwrap();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let request = |body: Value| {
         Request::post(format!("{ROOT}/v1/initialize"))
             .header("content-type", "application/json")
@@ -1672,7 +1678,7 @@ async fn desktop_wham_analytics_persist_owned_metadata_and_deduplicate() {
         .unwrap()
         .to_owned();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let requests: Vec<Value> = if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
         let output = std::process::Command::new("node")
             .arg(
@@ -1727,7 +1733,7 @@ async fn desktop_wham_analytics_persist_owned_metadata_and_deduplicate() {
     let mut other = account.clone();
     other.id = "other".into();
     other.username = "other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert!(
         storage
             .virtual_analytics(&other.id, 0, i64::MAX)
@@ -1918,7 +1924,7 @@ async fn installed_plugins_generate_desktop_pagination_for_legacy_configuration(
         .unwrap()
         .to_owned();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     seed_captured_config(&storage,&account.id,"installed_plugins",&serde_json::json!({"plugins":[],"nextPageToken":"stale-token","pagination":{"next_page_token":"stale-token"}}),None).await.unwrap();
     let path = "/backend-api/ps/plugins/installed?scope=GLOBAL&limit=200";
     let response = app
@@ -2018,7 +2024,7 @@ async fn desktop_bootstrap_carries_the_execution_settings_identity() {
         .unwrap()
         .to_owned();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let saved = storage
         .virtual_config(&account.id, "feature_bootstrap")
         .await
@@ -2271,7 +2277,7 @@ async fn referral_tracking_filters_the_virtual_records_and_paginates_without_loo
     let mut other = account.clone();
     other.id = uuid::Uuid::new_v4().to_string();
     other.username = "referral-other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert_eq!(
         storage
             .virtual_config(&other.id, "referral_tracking")
@@ -2327,7 +2333,7 @@ async fn desktop_services_authenticate_and_heartbeat_updates_virtual_device_with
         .unwrap()
         .to_owned();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     for (method, path) in [
         (
             "GET",
@@ -2405,7 +2411,7 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
     let mut other = account.clone();
     other.id = uuid::Uuid::new_v4().to_string();
     other.username = "bob".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     let supplier_id = test_supplier(&storage, &account).await.unwrap();
     let source = supplier_id.as_str();
     let conduit = storage
@@ -2633,7 +2639,7 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
     .await;
     assert_eq!(tasks["items"], serde_json::json!([]));
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let reopened = Storage::open(&db).await.unwrap();
     assert_eq!(
         reopened
@@ -2744,7 +2750,7 @@ async fn virtual_pubsub_tickets_deliver_only_owned_events_and_revoke_with_device
     let mut other = account.clone();
     other.id = "pubsub-other".into();
     other.username = "pubsub-other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     storage
         .save_virtual_resource(
             &other.id,
@@ -3034,7 +3040,7 @@ async fn desktop_usage_reads_actual_virtual_tokens_across_bindings() {
     }
     // Historical analytics remain virtual-account data after unbinding.
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let reopened = Storage::open(&db).await.unwrap();
     assert_eq!(
         json_body(
@@ -3187,7 +3193,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
     let mut other = account.clone();
     other.id = other_id.clone();
     other.username = "second".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert!(
         storage
             .virtual_client_state(&other_id, "browser_settings")
@@ -3196,7 +3202,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
             .is_none()
     );
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     for (method, path) in [
         (
             "GET",
@@ -3273,7 +3279,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
             .unwrap()
             .is_none()
     );
-    storage.delete_virtual_account(&account.id).await.unwrap();
+    storage.delete_virtual_user(&account.id).await.unwrap();
     assert!(
         storage
             .virtual_client_state(&account.id, "browser_settings")
@@ -3401,7 +3407,7 @@ async fn mcp_discovery_is_public_and_batch_and_mcp_require_virtual_credentials()
     assert!(!value.to_string().contains("auth.openai.com"));
     let tokens = login(&app).await;
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     for (method, path) in [
         ("POST", "/backend-api/ps/apps/batch"),
         ("POST", "/backend-api/codex/analytics-events/events"),
@@ -3506,7 +3512,7 @@ async fn virtual_workspace_config_is_independent_of_the_bound_upstream() {
     for bound in [true, false] {
         if !bound {
             bind_test_supplier(&storage, &account, None).await;
-            storage.save_virtual_account(&account).await.unwrap();
+            storage.save_account_fixture(&account).await.unwrap();
         }
         let response = app
             .clone()
@@ -3641,7 +3647,7 @@ async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh()
         .unwrap()
         .unwrap();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<(String, u16)>::new()));
     let seen_by_router = seen.clone();
     let app = app.layer(axum::middleware::from_fn(
@@ -3799,7 +3805,7 @@ async fn desktop_plugin_routes_require_virtual_auth_and_never_use_supplier_priva
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     for path in [
         "/backend-api/plugins/featured?platform=codex",
         "/backend-api/ps/plugins/list?scope=GLOBAL&limit=200",
@@ -4012,7 +4018,7 @@ async fn admin_save_config(
     assert_eq!(status, StatusCode::OK, "{key}: {body}");
 }
 
-async fn fixture(storage: &Storage) -> (Router, VirtualAccount) {
+async fn fixture(storage: &Storage) -> (Router, PlatformAccount) {
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let real = accounts.create_pending().await.unwrap().account;
     storage
@@ -4042,7 +4048,7 @@ async fn fixture(storage: &Storage) -> (Router, VirtualAccount) {
         )
         .await
         .unwrap();
-    let account = VirtualAccount {
+    let account = PlatformAccount {
         provider_id: "chatgpt".into(),
         id: uuid::Uuid::new_v4().to_string(),
         username: "alice".into(),
@@ -4055,7 +4061,7 @@ async fn fixture(storage: &Storage) -> (Router, VirtualAccount) {
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     bind_test_supplier(storage, &account, Some(real.id)).await;
     (router(storage), account)
 }
@@ -4304,9 +4310,13 @@ async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
             .unwrap()
             .is_some()
     );
-    let mut edited = storage.virtual_account(&account.id).await.unwrap().unwrap();
+    let mut edited = storage
+        .platform_account(&account.id)
+        .await
+        .unwrap()
+        .unwrap();
     edited.password_hash = codex2api_storage::hash_password("new-password").unwrap();
-    storage.save_virtual_account(&edited).await.unwrap();
+    storage.save_account_fixture(&edited).await.unwrap();
     assert!(
         storage
             .virtual_refresh_device(&refresh)
@@ -4488,7 +4498,7 @@ async fn desktop_profile_has_virtual_identity_and_persistent_local_statistics() 
     .await;
     record_usage(&storage, &account, "another-supplier", "second", 25).await;
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let reopened = Storage::open(&path).await.unwrap();
     let value = json_body(profile(&router(&reopened), token).await).await;
     assert_eq!(value["profile"], empty["profile"]);
@@ -4616,7 +4626,7 @@ async fn desktop_profile_has_virtual_identity_and_persistent_local_statistics() 
 }
 async fn record_usage(
     storage: &Storage,
-    owner: &VirtualAccount,
+    owner: &PlatformAccount,
     real: &str,
     id: &str,
     tokens: i64,
@@ -4679,10 +4689,10 @@ async fn remote_host_registration_refresh_socket_and_device_revocation_are_isola
     let mut other = account.clone();
     other.id = "foreign-owner".into();
     other.username = "foreign".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert!(storage.remote_servers(&other.id).await.unwrap().is_empty());
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let reopened = Storage::open(&path).await.unwrap();
     assert_eq!(reopened.remote_servers(&account.id).await.unwrap().len(), 1);
     let refreshed = app
@@ -4831,7 +4841,7 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
         .await
         .unwrap();
     bind_test_supplier(&storage, &account, Some(second.id.clone())).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(
         storage.virtual_devices(&account.id).await.unwrap()[0].id,
         devices[0].id
@@ -4892,9 +4902,13 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
         storage.virtual_usage_tokens(&account.id, 0).await.unwrap(),
         39
     );
-    let mut account = storage.virtual_account(&account.id).await.unwrap().unwrap();
+    let mut account = storage
+        .platform_account(&account.id)
+        .await
+        .unwrap()
+        .unwrap();
     bind_test_supplier(&storage, &account, Some(first)).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(refresh(&app, rt).await.status(), StatusCode::OK);
     assert_eq!(
         storage
@@ -4905,17 +4919,17 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
         Some(26)
     );
     account.enabled = false;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(refresh(&app, rt).await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         profile(&app, access).await.status(),
         StatusCode::UNAUTHORIZED
     );
     account.enabled = true;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(refresh(&app, rt).await.status(), StatusCode::BAD_REQUEST);
     let fresh = login(&app).await;
-    storage.delete_virtual_account(&account.id).await.unwrap();
+    storage.delete_virtual_user(&account.id).await.unwrap();
     assert_eq!(
         refresh(&app, fresh["refresh_token"].as_str().unwrap())
             .await
@@ -5066,7 +5080,7 @@ async fn authorization_codes_expire_bind_client_and_callback_and_redeem_atomical
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(storage.virtual_accounts().await.unwrap().len() == 1);
+    assert!(storage.platform_accounts().await.unwrap().len() == 1);
     storage.close().await;
 }
 
@@ -5175,10 +5189,7 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     let (app, mut account) = fixture(&storage).await;
     account.subscription_expires_at =
         Some((chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339());
-    storage
-        .save_virtual_account_operation(&account, "admin")
-        .await
-        .unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
     let claims: Value = serde_json::from_slice(
@@ -5235,10 +5246,7 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     );
     account.subscription_expires_at =
         Some((chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339());
-    storage
-        .save_virtual_account_operation(&account, "admin")
-        .await
-        .unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     let revision = storage
         .virtual_config(&account.id, "subscription_entitlements")
         .await
@@ -5276,10 +5284,7 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     );
     account.plan_type = "plus".into();
     account.plan_id = "plus".into();
-    storage
-        .save_virtual_account_operation(&account, "admin")
-        .await
-        .unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     // 用量记录启动内层窗口，随后验证其零额度在所有执行入口生效。
     storage
         .insert_usage(&UsageRecord {
@@ -5417,7 +5422,7 @@ async fn repairs_nested_task_and_turn_ownership_mcp_and_rebinding_are_checked_be
     let mut other = account.clone();
     other.id = "other-owner".into();
     other.username = "other-owner".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     storage
         .save_virtual_resource(
             &other.id,
@@ -5514,7 +5519,7 @@ async fn repairs_nested_task_and_turn_ownership_mcp_and_rebinding_are_checked_be
             .is_empty()
     );
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(
         app.clone()
             .oneshot(client_json(
@@ -5556,9 +5561,9 @@ async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_
     let mut other = account.clone();
     other.id = "other-records".into();
     other.username = "other-records".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     bind_test_supplier(&storage, &account, None).await;
-    storage.save_virtual_account(&account).await.unwrap();
+    storage.save_account_fixture(&account).await.unwrap();
     for (id, archived, starred, time) in [
         ("current", false, true, 20),
         ("archived", true, false, 30),
@@ -6053,7 +6058,7 @@ async fn admin_json_operations_persist_valid_nonempty_desktop_configuration() {
     let mut other = account.clone();
     other.id = "second-admin-client".into();
     other.username = "second-admin-client".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert!(
         storage
             .virtual_config(&other.id, "models")
@@ -6220,7 +6225,7 @@ async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownersh
     let mut other = account.clone();
     other.id = "controls-other".into();
     other.username = "controls-other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert_eq!(
         storage
             .virtual_config(&other.id, "computer_use_policy")
@@ -6512,7 +6517,7 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
     let mut other = account.clone();
     other.id = "layout-other".into();
     other.username = "layout-other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     storage.save_virtual_resource(&other.id, "task", "task-foreign", None, &json!({"task":{"id":"task-foreign","environment":{"id":"foreign","label":"Foreign","repos":[],"repo_map":{}}}})).await.unwrap();
     let environments = json_body(
         app.clone()
@@ -6716,7 +6721,7 @@ async fn ultra_slider_default_settings_parse_and_real_client_toggle_roundtrips()
     let mut other = account.clone();
     other.id = "slider-other".into();
     other.username = "slider-other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     assert!(
         storage
             .virtual_config(&other.id, "user_settings")
@@ -6845,7 +6850,7 @@ async fn family_graduation_notices_are_owned_persistent_and_dismiss_only_capture
     let mut other = account.clone();
     other.id = "family-notice-other".into();
     other.username = "family-notice-other".into();
-    storage.save_virtual_account(&other).await.unwrap();
+    storage.save_account_fixture(&other).await.unwrap();
     let foreign = storage
         .record_family_graduation_notice(&other.id, "event-foreign", Parent, "Foreign member", None)
         .await
@@ -7111,7 +7116,7 @@ async fn set_test_plan_config(
     value: &Value,
     revision: i64,
 ) -> codex2api_storage::Result<Option<i64>> {
-    let account = storage.virtual_account(owner).await?.unwrap();
+    let account = storage.platform_account(owner).await?.unwrap();
     let mut current = storage.virtual_plan(&account.plan_id).await?.unwrap();
     if current.revision != revision {
         return Ok(None);
@@ -7173,14 +7178,18 @@ async fn set_test_plan_config(
     ))
 }
 
-async fn test_supplier(storage: &Storage, account: &VirtualAccount) -> Option<String> {
+async fn test_supplier(storage: &Storage, account: &PlatformAccount) -> Option<String> {
     storage
         .execution_route(&account.id, "chatgpt")
         .await
         .unwrap()
         .and_then(|r| r.supplier_account_id)
 }
-async fn bind_test_supplier(storage: &Storage, account: &VirtualAccount, supplier: Option<String>) {
+async fn bind_test_supplier(
+    storage: &Storage,
+    account: &PlatformAccount,
+    supplier: Option<String>,
+) {
     let previous = storage
         .execution_route(&account.id, "chatgpt")
         .await
