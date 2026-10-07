@@ -142,6 +142,94 @@ async function fixture(page: Page, includeGrok = false) {
   return { writes, suppliers, state, allocations };
 }
 
+test("list refresh retries an initial failure and stays disabled only while loading", async ({
+  page,
+}) => {
+  await fixture(page);
+  let listReads = 0;
+  let quotaReads = 0;
+  let releaseRetry: () => void = () => {};
+  const retryGate = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/quota")) quotaReads++;
+  });
+  await page.route("**/admin/api/suppliers", async (route) => {
+    listReads++;
+    if (listReads === 1) {
+      await route.fulfill({
+        status: 503,
+        json: { error: { message: "供应列表暂时不可用" } },
+      });
+      return;
+    }
+    await retryGate;
+    await route.fallback();
+  });
+  await page.goto("/admin/suppliers/");
+  const refresh = page.getByRole("button", { name: "刷新供应账户", exact: true });
+  await expect(page.getByText("供应列表暂时不可用", { exact: true })).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  const retry = page.waitForRequest("**/admin/api/suppliers");
+  await refresh.click();
+  await retry;
+  try {
+    await expect(refresh).toBeDisabled();
+    await expect(page.getByText("供应账户额度已刷新", { exact: true })).toHaveCount(0);
+    expect(quotaReads).toBe(0);
+  } finally {
+    releaseRetry();
+  }
+  await expect(
+    page.getByRole("link", { name: "supplier0@example.test", exact: true }),
+  ).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  expect(listReads).toBe(2);
+});
+
+test("failed list reload preserves rows and refresh retries without repeating quota requests", async ({
+  page,
+}) => {
+  const { suppliers } = await fixture(page);
+  let failList = false;
+  let quotaReads = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/quota")) quotaReads++;
+  });
+  await page.route("**/admin/api/suppliers", async (route) => {
+    if (failList) {
+      await route.abort("failed");
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/admin/suppliers/");
+  const original = page.getByRole("link", { name: "supplier0@example.test", exact: true });
+  await expect(original).toBeVisible();
+  const refresh = page.getByRole("button", { name: "刷新供应账户", exact: true });
+  failList = true;
+  await refresh.click();
+  await expect(
+    page.getByText("无法连接后端服务，请检查网络后重试。", { exact: true }),
+  ).toBeVisible();
+  await expect(original).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  expect(quotaReads).toBe(suppliers.length);
+  const row = page.getByRole("row").filter({ has: original });
+  await row.getByRole("button", { name: "更多操作", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "重置状态", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  failList = false;
+  suppliers[0].email = "recovered@example.test";
+  await refresh.click();
+  await expect(
+    page.getByRole("link", { name: "recovered@example.test", exact: true }),
+  ).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  expect(quotaReads).toBe(suppliers.length);
+});
+
 test("list refresh checks fresh official quotas and offers an offline state reset", async ({
   page,
 }) => {

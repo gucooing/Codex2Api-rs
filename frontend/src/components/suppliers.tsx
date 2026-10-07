@@ -383,7 +383,11 @@ export function SuppliersPage() {
                 size="icon-sm"
                 aria-label="刷新供应账户"
                 title="刷新"
-                onClick={() =>
+                onClick={() => {
+                  if (!resource.ready) {
+                    resource.reload();
+                    return;
+                  }
                   void actions.run(
                     "refresh-supplier-quotas",
                     async () => {
@@ -395,11 +399,15 @@ export function SuppliersPage() {
                         );
                     },
                     { success: "供应账户额度已刷新" },
-                  )
-                }
-                disabled={!resource.ready || actions.isBusy("refresh-supplier-quotas")}
+                  );
+                }}
+                disabled={resource.refreshing || actions.isBusy("refresh-supplier-quotas")}
               >
-                {actions.isBusy("refresh-supplier-quotas") ? <Spinner /> : <RefreshCw />}
+                {resource.refreshing || actions.isBusy("refresh-supplier-quotas") ? (
+                  <Spinner />
+                ) : (
+                  <RefreshCw />
+                )}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
