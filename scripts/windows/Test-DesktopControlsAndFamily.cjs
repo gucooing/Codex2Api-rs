@@ -28,8 +28,9 @@ for(const [response,enabled] of [[sample.enabled,true],[sample.disabled,false]])
  const payload=JSON.parse(response.statsigPayload),client=new sdk.StatsigClient('test-client',payload.user,{disableStorage:true,loggingEnabled:'disabled',networkConfig:{preventAllNetworkTraffic:true}});
  client.dataAdapter.setData(JSON.stringify(payload));assert(client.initializeSync({disableBackgroundCacheRefresh:true}).success);
  try{
-  const browserGate=client.checkGate('410065390'),computerGate=client.checkGate('1506311413');assert.equal(browserGate,enabled);assert.equal(computerGate,enabled);
-  assert.equal(browser({...browserInputs,isExternalBrowserUseGateEnabled:browserGate}),enabled?'available':'statsig-disabled');
+  const browserGate=client.checkGate('410065390'),computerGate=client.checkGate('1506311413');assert.equal(browserGate,false);assert.equal(computerGate,enabled);
+  assert.equal(client.checkGate('410262010'),enabled);
+  assert.equal(browser({...browserInputs,isExternalBrowserUseGateEnabled:browserGate}),'statsig-disabled');
   assert.equal(computer({...computerInputs,isComputerUseGateEnabled:computerGate}),enabled?'available':'statsig-disabled');
   assert.equal(browser({...browserInputs,isExternalBrowserUseGateEnabled:true,isBrowserAndComputerUseAllowed:false}),'config-requirement-disabled');
   assert.equal(computer({...computerInputs,isComputerUseGateEnabled:true,areRequiredFeaturesEnabled:false}),'config-requirement-disabled');

@@ -1,6 +1,6 @@
 # Desktop 启动器
 
-发布为一个自包含的 `Codex2API.DesktopProxy.exe`。填写服务器地址，保存后启动已安装的客户端。界面的“配置目录”打开该服务的独立配置；首次登录后由客户端写入 `auth.json`，以后正常刷新令牌。再次启动保留现有配置和登录状态。启动前退出使用同一桌面数据目录的客户端。
+发布为一个自包含的 `Codex2API.DesktopProxy.exe`。填写服务器地址，保存后启动已安装的客户端。界面的“配置目录”打开该服务的独立配置；首次登录后由客户端写入 `auth.json`，以后正常刷新令牌。再次启动保留现有配置和登录状态。启动器不再因官方客户端正在运行而拦截启动；客户端自身的单实例处理保持原样。
 
 按用户 2026-09-29 的要求，仅 `auth.json` 和 `config.toml` 独立，保存在 `%LOCALAPPDATA%/Codex2API/DesktopLauncher/profiles/<SHA-256>/codex`。其余客户端数据使用原客户端目录：`CODEX_HOME` 使用用户级环境变量或默认 `~/.codex`，SQLite、会话、侧栏、项目、插件及桌面数据共用。原生文件访问只把这两个根目录文件重定向到独立目录，覆盖读取、写入、原子替换和删除；独立凭据不存在时不会回退到原客户端凭据。首次配置使用文件凭据存储及服务地址。导入、导出功能只处理启动器设置。
 
@@ -42,4 +42,6 @@ dotnet publish tools/desktop-proxy/DesktopProxy.csproj -c Release -r win-x64 --s
 
 共享目录测试同时验证 shell 和 code-mode 宿主的子进程标准输入输出管道。`Test-DesktopToolExecution.py --runtime <已安装 codex.exe> --fixture <DesktopProxyTests.exe> --hook <编译后的 NativeHook>` 使用本地 Responses fixture 完成一次真实工具执行及结果回传；不调用生产模型或读取生产凭据。
 
-完整新界面和重置卡显示由服务端持久化配置下发，需要同时升级代理服务。管理端“账户设置 → 功能开关 → Desktop 界面布局”分别控制新版导航、统一标签栏、统一输入区和重置卡显示。详见 [实机修复证据](../../docs/DESKTOP_LAUNCHER_FIXES_2026-09-29.md)。
+完整新界面和重置卡显示由服务端持久化配置下发，需要同时升级代理服务。管理端“账户设置 → 功能开关 → Desktop 界面布局”分别控制新版导航、统一标签栏、统一输入区和重置卡显示。
+
+浏览器操控使用 Desktop 内置浏览器。管理端页面及原有“允许浏览器操控”开关保持不变；服务端下发内置浏览器可用性，同时停用需要外部宿主凭据的 Chrome 扩展执行。更新代理服务后，Desktop 按原有逻辑选择内置浏览器；网站授权、审批和浏览器偏好仍由客户端维护。详见 [客户端能力边界](../../docs/ARCHITECTURE.md#client-routes-and-capability-boundaries)。

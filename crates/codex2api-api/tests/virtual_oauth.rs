@@ -6121,7 +6121,7 @@ async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownersh
     )
     .await;
     let parsed: Value = serde_json::from_str(enabled["statsigPayload"].as_str().unwrap()).unwrap();
-    for gate in ["410065390", "1506311413", "3693343337", "1186680773"] {
+    for gate in ["410262010", "1506311413", "3693343337", "1186680773"] {
         assert_eq!(
             parsed["feature_gates"][codex2api_storage::statsig_hash(gate)]["value"],
             true
@@ -6282,6 +6282,139 @@ async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownersh
             .write_origin,
         "system"
     );
+}
+
+#[tokio::test]
+async fn desktop_browser_policy_controls_bootstrap_and_sdk_refresh() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("browser-policy.sqlite"))
+        .await
+        .unwrap();
+    let (api, account) = fixture(&storage).await;
+    let app = api.merge(codex2api_admin::router(
+        codex2api_admin::AdminState::new(storage.clone()).unwrap(),
+    ));
+    let token = login(&app).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let preferences = storage
+        .virtual_config(&account.id, "browser_settings")
+        .await
+        .unwrap();
+    let mut saved_preferences = preferences.value;
+    saved_preferences["rules"]["origin"]["https://blocked.example.test"] = "deny".into();
+    let preferences_revision = storage
+        .save_virtual_client_state(
+            &account.id,
+            "browser_settings",
+            &saved_preferences,
+            Some(preferences.revision),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (cookie, csrf) = admin_login(&app).await;
+    let mut samples = Vec::new();
+    for enabled in [true, false, true] {
+        admin_save_config(
+            &app,
+            &account.id,
+            "computer_use_policy",
+            &cookie,
+            &csrf,
+            json!({"browser_enabled":enabled,"computer_enabled":false}),
+        )
+        .await;
+        let view = admin_config(&app, &account.id, "computer_use_policy", &cookie).await;
+        assert_eq!(view["value"]["browser_enabled"], enabled);
+        let response = app
+            .clone()
+            .oneshot(client_json(
+                "POST",
+                "/backend-api/wham/statsig/bootstrap",
+                &token,
+                json!({"stable_id":"browser-policy-test"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = json_body(response).await;
+        let payload: Value =
+            serde_json::from_str(response["statsigPayload"].as_str().unwrap()).unwrap();
+        let refreshed = app
+            .clone()
+            .oneshot(client_json(
+                "POST",
+                "/v1/initialize",
+                &token,
+                json!({"user":payload["user"],"hash":"djb2","responseMode":"live_overlay"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        let refreshed = json_body(refreshed).await;
+        for current in [&payload, &refreshed] {
+            let hash = codex2api_storage::statsig_hash("410262010");
+            assert_eq!(current["feature_gates"][&hash]["value"], enabled);
+            assert!(
+                current["live_entity_names"]["feature_gates"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(hash))
+            );
+            assert_eq!(
+                current["feature_gates"][codex2api_storage::statsig_hash("1506311413")]["value"],
+                false
+            );
+            assert_eq!(
+                current["feature_gates"][codex2api_storage::statsig_hash("410065390")]["value"],
+                false
+            );
+            assert_eq!(current["user"]["customIDs"]["account_id"], account.id);
+        }
+        samples.push(json!({"enabled":enabled,"bootstrap":payload,"refresh":refreshed}));
+    }
+    let preferences = storage
+        .virtual_config(&account.id, "browser_settings")
+        .await
+        .unwrap();
+    assert_eq!(preferences.value, saved_preferences);
+    assert_eq!(preferences.revision, preferences_revision);
+    assert_eq!(preferences.write_origin, "client");
+    if let Ok(output) = std::env::var("CODEX2API_TEST_BROWSER_OUTPUT") {
+        let path = std::path::Path::new(&output);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(&samples).unwrap()).unwrap();
+    }
+    if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
+        use std::io::Write;
+        let mut child = std::process::Command::new("node")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-DesktopBrowserPolicy.cjs"),
+            )
+            .arg(archive)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&samples).unwrap())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    storage.close().await;
 }
 
 #[tokio::test]

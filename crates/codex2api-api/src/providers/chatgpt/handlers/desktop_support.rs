@@ -160,15 +160,22 @@ pub(crate) async fn bootstrap(
         .virtual_config(&account.id, "computer_use_policy")
         .await?
         .value;
-    // Actual Desktop AWn/jWn and uHn/fHn gates. Missing evaluations mean
-    // "disabled by organization or region" even when native requirements allow use.
+    // Desktop evaluates built-in and external browser use independently. Omitting
+    // the built-in gate shows "disabled by organization or region" even when
+    // the account policy and native requirements allow it. Keep the existing
+    // administration setting; Desktop still checks native features and approvals.
     for (gate, key) in [
-        ("410065390", "browser_enabled"),
+        ("410262010", "browser_enabled"),
         ("1506311413", "computer_enabled"),
     ] {
         payload["feature_gates"][hash(gate)] =
             json!({"name":hash(gate),"value":controls[key],"rule_id":"local"});
     }
+    // The external extension host cannot obtain this proxy's Desktop credential.
+    // Advertise built-in browser execution only, so Desktop's normal backend
+    // selection excludes Chrome without rewriting client preferences or tools.
+    payload["feature_gates"][hash("410065390")] =
+        json!({"name":hash("410065390"),"value":false,"rule_id":"local"});
     let model_policy = state
         .storage
         .virtual_config(&account.id, "desktop_model_policy")

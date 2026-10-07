@@ -476,6 +476,14 @@ requests; there is no diagnostic management API or collection setting. Database
 migration removes the collected diagnostic data while preserving public resources,
 account-owned activity and the inference billing ledger.
 
+The existing `computer_use_policy.browser_enabled` account setting controls
+Desktop's built-in browser gate (`410262010`). Bootstrap and authenticated SDK
+refreshes publish the same SQLite policy and mark the external-browser gate
+(`410065390`) unavailable: the external extension host cannot obtain the proxy's
+Desktop credential. Desktop's normal backend selection therefore uses the built-in
+browser. The administrator page and saved settings stay unchanged; native feature
+requirements, browser availability, site permissions and approvals still apply.
+
 Locally recorded tasks, conversations, events, profiles and statistics are scoped
 to the consumer. Cloud operations require actual successful upstream execution
 before recording a resource. Rebinding must not use a different supplier to read

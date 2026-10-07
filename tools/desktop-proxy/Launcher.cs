@@ -71,18 +71,6 @@ internal static class Launcher
         var profile = testEnvironment is null ? ClientProfile.ForServer(server)
             : new ClientProfile(testEnvironment["CODEX_HOME"], testEnvironment["CODEX_ELECTRON_USER_DATA_PATH"], server, testEnvironment.GetValueOrDefault("CODEX2API_SHARED_HOME"));
         profile.Prepare(); CheckInstallation(client);
-        if (testEnvironment is null)
-        {
-            foreach (var existing in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(client.Executable)))
-            {
-                using (existing)
-                {
-                    string? path = null; try { path = existing.MainModule?.FileName; } catch { }
-                    if (path is null || Path.GetFullPath(path).Equals(client.Executable, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException("请先完全退出当前 Desktop，再启动独立配置客户端。");
-                }
-            }
-        }
         var hook = ExtractHook();
         var launch = Path.Combine(profile.CodexHome, "launcher", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(launch);
