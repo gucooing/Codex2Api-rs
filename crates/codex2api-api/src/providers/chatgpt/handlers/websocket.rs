@@ -16,7 +16,9 @@ use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 use crate::providers::chatgpt::access::AccessCheck;
 use crate::{ApiState, Result};
-use codex2api_upstream::{Endpoint, UpstreamWebSocket, normalize_response_identity};
+use codex2api_upstream::{
+    Endpoint, UpstreamWebSocket, normalize_response_identity, serialize_responses_request,
+};
 
 pub(crate) struct ResponseSession {
     workspace: Option<codex2api_upstream::WorkspaceConnection>,
@@ -52,6 +54,7 @@ pub(super) fn prepare_message(
             );
         }
         normalize_response_identity(&mut value, installation_id, &headers)?;
+        return serialize_responses_request(&value);
     }
     Ok(serde_json::to_string(&value)?)
 }
@@ -437,6 +440,45 @@ pub(super) async fn error_message(error: crate::ApiError) -> (u16, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn responses_prefix_preserves_warmup_incremental_input_and_controls() {
+        let input = r#"{"input":[],"previous_response_id":"previous","generate":false,"access_programs":{"cyber":"daybreak_blue"},"model":"test","service_tier":"priority","stream":true,"type":"response.create"}"#;
+        for reviewer in [false, true] {
+            let text = prepare_message(input, "installation", None, reviewer).unwrap();
+            let prefix = if reviewer {
+                r#"{"type":"response.create","model":"test","stream":true,"input":[]"#
+            } else {
+                r#"{"type":"response.create","model":"test","stream":true,"service_tier":"priority","input":[]"#
+            };
+            assert!(text.starts_with(prefix), "{text}");
+            let mut expected: serde_json::Value = serde_json::from_str(input).unwrap();
+            if reviewer {
+                expected.as_object_mut().unwrap().remove("service_tier");
+            }
+            expected["client_metadata"] =
+                serde_json::json!({"x-codex-installation-id":"installation"});
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+                expected
+            );
+        }
+        for control in [
+            r#"{"response_id":"active","type":"response.interrupt"}"#,
+            r#"{"future_field":true,"type":"future.control"}"#,
+        ] {
+            assert_eq!(
+                prepare_message(control, "installation", None, false).unwrap(),
+                control
+            );
+        }
+        let realtime = r#"{"input":[],"model":"test","type":"session.update","client_metadata":{"x-codex-installation-id":"caller"}}"#;
+        assert!(
+            prepare_realtime_message(realtime, "installation")
+                .unwrap()
+                .starts_with(r#"{"input":[],"model":"test","type":"session.update""#)
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn received_completion_is_settled_before_revoked_client_is_closed() {

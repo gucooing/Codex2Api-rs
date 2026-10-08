@@ -8,7 +8,7 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `a956835d020762cb2b570053af06f643a11c0ecc` (2026-10-01T17:13:37Z)
+- commit: `979011409de0a60b52f179721948e65531d26144` (2026-10-06T22:34:37Z)
 - constants: `crates/codex2api-version`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
@@ -23,10 +23,12 @@ release commit and the fork integration commit; fork-only service routing,
 official supplier-side protocol constants. The client otherwise retains official
 Codex behavior and isolates its default home from official Codex, not per service.
 
-Current official release integration in the fork: `232d7083cdd3a063f560e5f97a89c1b3bf8ee063`.
+Current official release integration in the fork: `9995ddd7cd50b9397305a76b1fdac6d26f435588`.
 
-Validate changes locally with the relevant compilation checks and regression
-tests before reporting completion. Do not push changes or create branches solely
+Validate proxy changes locally with the relevant compilation checks and regression
+tests before reporting completion. Do not compile ccodex locally; use source review,
+formatting and package checks that do not compile, and record its Rust validation as
+unverified. Do not push changes or create branches solely
 to obtain cloud CI validation. Record skipped or failed checks honestly instead
 of claiming validation passed.
 
@@ -115,7 +117,7 @@ validation are complete.
 ## Official constants (do not invent)
 
 - originator: `codex_cli_rs`
-- package version in UA: `0.160.0`
+- package version in UA: `0.161.0`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`

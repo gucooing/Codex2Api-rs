@@ -2,7 +2,7 @@
 //!
 //! Talks to official Codex servers with the same application-layer request
 //! identity as a logged-in Codex CLI at commit
-//! `a956835d020762cb2b570053af06f643a11c0ecc`.
+//! `979011409de0a60b52f179721948e65531d26144`.
 //!
 //! Transport uses stock reqwest and the pinned WebSocket transport dependencies.
 //! This crate does not spoof TLS/JA3.
@@ -63,7 +63,9 @@ pub use headers::{
 };
 pub use pool::UpstreamPool;
 pub use realtime::{RealtimeKind, realtime_call_models, realtime_url};
-pub use request::{MAX_REQUEST_BYTES, decode_body, normalize_response_identity};
+pub use request::{
+    MAX_REQUEST_BYTES, decode_body, normalize_response_identity, serialize_responses_request,
+};
 pub use request::{RequestMetadata, request_metadata};
 pub use routing::{WorkspaceConnection, WorkspaceRoute};
 pub use stream::{SseEvent, SseForwardStream, format_sse_event, spawn_sse_forward};

@@ -3,12 +3,12 @@
 ## Official protocol baseline
 
 - Official repository: https://github.com/openai/codex
-- Release: `0.160.0` / `rust-v0.160.0`
-- Commit: `a956835d020762cb2b570053af06f643a11c0ecc`
-- Commit time: `2026-10-01T17:13:37Z`
+- Release: `0.161.0` / `rust-v0.161.0`
+- Commit: `979011409de0a60b52f179721948e65531d26144`
+- Commit time: `2026-10-06T22:34:37Z`
 - Reference-only checkout: `reference/codex`; constants: `crates/codex2api-version`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
-- Fork integration commit: `232d7083cdd3a063f560e5f97a89c1b3bf8ee063`
+- Fork integration commit: `9995ddd7cd50b9397305a76b1fdac6d26f435588`
 
 The maintained client inherits the exact official release. Its customizations are
 `BASE_OAUTH_URL`, the `ccodex` executable, `.ccodex` default home and its release
@@ -70,7 +70,7 @@ See [Grok](GROK.md) for its authentication, model and client contracts.
 ## Upstream identity and transport
 
 The supplier UA formula is
-`codex_cli_rs/0.160.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
+`codex_cli_rs/0.161.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
 Official headers include `originator`, `User-Agent`, bearer authorization,
 `ChatGPT-Account-ID` and `x-codex-installation-id`; request-specific session,
 thread, turn and request IDs retain their actual lifecycle.
@@ -81,6 +81,11 @@ Responses uses `https://chatgpt.com/backend-api/codex/responses`.
 Request normalization changes supplier identity metadata while preserving input,
 tools, opaque Guardian messages and dynamic IDs. This is application-layer identity,
 not forged TLS/JA3.
+
+Responses serialization places `model`, `stream` and an explicitly supplied
+`service_tier` before large input fields. WebSocket `response.create` places its
+`type` first. This ordering does not add missing fields or alter nested payloads,
+Cyber access-program selections, warmups, interrupts or Realtime messages.
 
 Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags;
 each consumer selects one tag and keeps a temporary supplier assignment. SQLite

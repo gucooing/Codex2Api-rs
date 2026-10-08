@@ -11,6 +11,37 @@ pub(crate) struct PreparedRequest {
     pub headers: HeaderMap,
 }
 
+/// Official Responses puts routing fields before potentially large input.
+/// The WebSocket envelope's `type` precedes those fields when present.
+pub fn serialize_responses_request(body: &Value) -> Result<String> {
+    const PREFIX: [&str; 4] = ["type", "model", "stream", "service_tier"];
+    struct OrderedRequest<'a>(&'a Map<String, Value>);
+    impl serde::Serialize for OrderedRequest<'_> {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut output = serializer.serialize_map(Some(self.0.len()))?;
+            for key in PREFIX {
+                if let Some(value) = self.0.get(key) {
+                    output.serialize_entry(key, value)?;
+                }
+            }
+            for (key, value) in self.0 {
+                if !PREFIX.contains(&key.as_str()) {
+                    output.serialize_entry(key, value)?;
+                }
+            }
+            output.end()
+        }
+    }
+    let object = body
+        .as_object()
+        .ok_or_else(|| UpstreamError::InvalidRequest("Request body must be an object.".into()))?;
+    Ok(serde_json::to_string(&OrderedRequest(object))?)
+}
+
 /// Only installation identity is rewritten. Conversation contents and dynamic IDs survive.
 pub fn normalize_response_identity(
     body: &mut Value,
@@ -143,9 +174,9 @@ pub(crate) fn prepare_responses(
     let mut body = decode_body(body, inbound)?;
     crate::apply_response_timezone(&mut body, timezone)?;
     let mut headers = normalize_response_identity(&mut body, installation_id, inbound)?;
-    let json = serde_json::to_vec(&body)?;
+    let json = serialize_responses_request(&body)?;
     // Logged-in OpenAI backend requests use zstd level 3 by default in pinned Codex.
-    let body = Bytes::from(zstd::stream::encode_all(json.as_slice(), 3)?);
+    let body = Bytes::from(zstd::stream::encode_all(json.as_bytes(), 3)?);
     headers.insert(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
@@ -165,6 +196,55 @@ pub(crate) fn prepare_responses(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn routing_prefix_keeps_optional_fields_and_guardian_rules() {
+        for (stream, tier, reviewer) in [
+            (None, None, false),
+            (Some(false), None, false),
+            (Some(true), Some("priority"), false),
+            (Some(true), Some("priority"), true),
+        ] {
+            let mut original = json!({"input":[],"extra":{"model":"nested"},"model":"test"});
+            if let Some(stream) = stream {
+                original["stream"] = stream.into();
+            }
+            if let Some(tier) = tier {
+                original["service_tier"] = tier.into();
+            }
+            let mut headers = HeaderMap::new();
+            if reviewer {
+                headers.insert(
+                    X_CODEX_GUARDIAN_HEADER,
+                    HeaderValue::from_static("reviewer"),
+                );
+            }
+            let prepared = prepare_responses(
+                &serde_json::to_vec(&original).unwrap(),
+                &headers,
+                "installation",
+                None,
+            )
+            .unwrap();
+            let bytes = zstd::stream::decode_all(prepared.body.as_ref()).unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            let expected_prefix = match (stream, tier, reviewer) {
+                (None, _, _) => r#"{"model":"test","input":[]"#,
+                (Some(false), _, _) => r#"{"model":"test","stream":false,"input":[]"#,
+                (_, Some(_), false) => {
+                    r#"{"model":"test","stream":true,"service_tier":"priority","input":[]"#
+                }
+                _ => r#"{"model":"test","stream":true,"input":[]"#,
+            };
+            assert!(text.starts_with(expected_prefix), "{text}");
+            if reviewer {
+                original.as_object_mut().unwrap().remove("service_tier");
+                assert!(!prepared.headers.contains_key("x-codex-routing-hint"));
+            }
+            original["client_metadata"] = json!({"x-codex-installation-id":"installation"});
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), original);
+        }
+    }
 
     #[test]
     fn timezone_preserves_compaction_order_in_plain_and_zstd_requests() {

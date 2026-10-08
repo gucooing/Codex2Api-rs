@@ -20,7 +20,7 @@ test("public base addresses retain explicit schemes and ports across saves and r
         username: "admin",
         csrf_token: "fixture-csrf",
         app_version: "test",
-        codex_cli_version: "0.160.0",
+        codex_cli_version: "0.161.0",
       };
     if (path === "/settings/gateway")
       value = { ua_mode: "blacklist", ua_rules: [], default_rpm: 20 };

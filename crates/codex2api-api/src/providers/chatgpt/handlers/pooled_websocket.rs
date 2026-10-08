@@ -399,10 +399,17 @@ mod tests {
                 let (stream, _) = upstream_listener.accept().await.unwrap();
                 let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
                 let request = socket.next().await.unwrap().unwrap();
+                assert!(request.to_text().unwrap().starts_with(
+                    r#"{"type":"response.create","model":"gpt-5.5","stream":true,"service_tier":"priority","input":["#
+                ));
+                let request: Value = serde_json::from_slice(&request.into_data()).unwrap();
+                assert_eq!(request["type"], "response.create");
                 assert_eq!(
-                    serde_json::from_slice::<Value>(&request.into_data()).unwrap()["type"],
-                    "response.create"
+                    request["input"][0]["content"].as_str().unwrap().len(),
+                    2 * 1024 * 1024
                 );
+                assert_eq!(request["access_programs"]["cyber"], "daybreak_blue");
+                assert_eq!(request["future_field"], json!({"preserved":true}));
                 started.send(()).unwrap();
                 if read_output {
                     for event in [
@@ -474,7 +481,9 @@ mod tests {
                     .unwrap();
             client
                 .send(UpstreamMessage::Text(
-                    json!({"type":"response.create","model":"gpt-5.5","input":[]})
+                    json!({"input":[{"role":"user","content":"x".repeat(2 * 1024 * 1024)}],
+                        "access_programs":{"cyber":"daybreak_blue"},"future_field":{"preserved":true},
+                        "type":"response.create","service_tier":"priority","stream":true,"model":"gpt-5.5"})
                         .to_string()
                         .into(),
                 ))

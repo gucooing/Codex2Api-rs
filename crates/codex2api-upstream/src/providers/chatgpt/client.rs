@@ -455,17 +455,21 @@ mod tests {
         let hits = Arc::new(AtomicUsize::new(0));
         let counted = hits.clone();
         let app = Router::new().route(
-            "/{status}",
+            "/{status}/{advice}",
             post(
-                move |axum::extract::Path(status): axum::extract::Path<u16>| {
+                move |axum::extract::Path((status, advice)): axum::extract::Path<(u16, u8)>| {
                     let hits = counted.clone();
                     async move {
                         hits.fetch_add(1, Ordering::SeqCst);
-                        Response::builder()
-                            .status(status)
-                            .header("retry-after", "9")
-                            .body(Body::from("upstream rejection"))
-                            .unwrap()
+                        let mut response = Response::builder().status(status);
+                        if let Some(value) = match advice {
+                            1 => Some("9"),
+                            2 => Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+                            _ => None,
+                        } {
+                            response = response.header("retry-after", value);
+                        }
+                        response.body(Body::from("upstream rejection")).unwrap()
                     }
                 },
             ),
@@ -480,19 +484,32 @@ mod tests {
         )
         .unwrap()
         .with_direct_test_http();
-        for (index, status) in [429, 500, 503].into_iter().enumerate() {
+        let mut count = 0;
+        for (status, advice, retry_after) in [429, 500, 503].into_iter().flat_map(|status| {
+            [None, Some("9"), Some("Wed, 21 Oct 2015 07:28:00 GMT")]
+                .into_iter()
+                .enumerate()
+                .map(move |(advice, header)| (status, advice, header))
+        }) {
             let response = client
                 .forward_to(
-                    &format!("http://{address}/{status}"),
+                    &format!("http://{address}/{status}/{advice}"),
                     Bytes::from_static(br#"{"model":"fixture","input":[]}"#),
                     HeaderMap::new(),
                 )
                 .await
                 .unwrap();
             assert_eq!(response.status().as_u16(), status);
-            assert_eq!(response.headers()["retry-after"], "9");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("retry-after")
+                    .map(|value| value.to_str().unwrap()),
+                retry_after,
+            );
             assert_eq!(response.text().await.unwrap(), "upstream rejection");
-            assert_eq!(hits.load(Ordering::SeqCst), index + 1);
+            count += 1;
+            assert_eq!(hits.load(Ordering::SeqCst), count);
         }
         server.abort();
     }
@@ -698,9 +715,12 @@ mod tests {
             ("openai-beta", "responses_websockets=2026-02-06"),
             ("x-codex-routing-hint", "model=test;tier=priority"),
         ];
-        let json = b"{ \"stream\": true, \"model\": \"test\", \"input\": [], \"unknown\": 1.00 }\n";
+        let json = format!(
+            r#"{{"input":[{{"role":"user","content":"{}"}}],"access_programs":{{"cyber":"daybreak_blue"}},"stream":true,"model":"test","service_tier":"priority","unknown":1.00}}"#,
+            "x".repeat(2 * 1024 * 1024),
+        );
         // Same encoder and level as pinned Codex http-client/src/request.rs.
-        let compressed = zstd::stream::encode_all(json.as_slice(), 3).unwrap();
+        let compressed = zstd::stream::encode_all(json.as_bytes(), 3).unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&compressed)
                 .unwrap_err()
@@ -739,7 +759,7 @@ mod tests {
         .unwrap();
 
         for (body, encoding) in [
-            (Bytes::from_static(json), None),
+            (Bytes::from(json.clone()), None),
             (Bytes::from(compressed), Some("zstd")),
         ] {
             let mut headers = HeaderMap::new();
@@ -790,7 +810,11 @@ mod tests {
                 );
             }
             let received = crate::request::decode_body(&received_body, &received_headers).unwrap();
-            let mut expected: Value = serde_json::from_slice(json).unwrap();
+            let wire = zstd::stream::decode_all(received_body.as_ref()).unwrap();
+            assert!(std::str::from_utf8(&wire).unwrap().starts_with(
+                r#"{"model":"test","stream":true,"service_tier":"priority","input":["#
+            ));
+            let mut expected: Value = serde_json::from_str(&json).unwrap();
             expected["client_metadata"] =
                 serde_json::json!({"x-codex-installation-id":"test-installation"});
             assert_eq!(received, expected);
@@ -806,7 +830,7 @@ mod tests {
             }
             assert_eq!(received_headers["authorization"], "Bearer test-token");
             assert_eq!(received_headers["originator"], "codex_cli_rs");
-            assert_eq!(received_headers["version"], "0.160.0");
+            assert_eq!(received_headers["version"], "0.161.0");
             for name in ["forwarded", "via", "x-forwarded-for", "x-custom"] {
                 assert!(!received_headers.contains_key(name), "{name}");
             }

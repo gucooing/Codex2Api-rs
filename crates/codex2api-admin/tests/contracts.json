@@ -2,7 +2,7 @@
   "session": {
     "authenticated": true,
     "app_version": "v0.0.26",
-    "codex_cli_version": "0.160.0",
+    "codex_cli_version": "0.161.0",
     "grok_build_version": "1.0.45",
     "username": "admin",
     "csrf_token": "session-csrf-token"
