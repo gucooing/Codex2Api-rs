@@ -503,6 +503,17 @@ Desktop credential. Desktop's normal backend selection therefore uses the built-
 browser. The administrator page and saved settings stay unchanged; native feature
 requirements, browser availability, site permissions and approvals still apply.
 
+Plugin directory reads (`/backend-api/ps/plugins/list`, including the GLOBAL
+`vertical` collection) use the virtual account's persisted `installed_plugins`
+records and include only entries with `enabled: true`. Scope filtering precedes
+pagination. Installed-plugin reads use the same records, retain disabled entries,
+and honor the requested scope. Both responses generate `pagination.limit` and
+`pagination.next_page_token`; saved pagination metadata is never reused. The
+administrator's read-only installed-plugin table shows the same names, scopes,
+enablement and versions. Neither read resolves or contacts a supplier, and no
+catalog or installation is invented when an account has no records. Plugin
+installation, external authorization and execution retain their capability limits.
+
 Locally recorded tasks, conversations, events, profiles and statistics are scoped
 to the consumer. Cloud operations require actual successful upstream execution
 before recording a resource. Rebinding must not use a different supplier to read

@@ -25,9 +25,10 @@ Codex behavior and isolates its default home from official Codex, not per servic
 
 Current official release integration in the fork: `232d7083cdd3a063f560e5f97a89c1b3bf8ee063`.
 
-User instruction for the 2026-10-01 update: do not perform local compilation
-validation. Push reviewed changes and let cloud CI compile and test them; record
-pending or failed CI honestly instead of claiming validation passed.
+Validate changes locally with the relevant compilation checks and regression
+tests before reporting completion. Do not push changes or create branches solely
+to obtain cloud CI validation. Record skipped or failed checks honestly instead
+of claiming validation passed.
 
 When the user requests a Codex update, upgrade, or sync, read and follow
 [docs/CODEX_UPDATES.md](docs/CODEX_UPDATES.md) before making changes.

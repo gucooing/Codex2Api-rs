@@ -181,48 +181,17 @@ pub async fn forward(
             serde_json::json!({"success":true}),
         ));
     }
-    if endpoint == ChatgptEndpoint::InstalledPlugins {
-        let mut value = state
-            .storage
-            .virtual_config(&id, "installed_plugins")
-            .await?
-            .value;
-        // Desktop's bundled app-server requires a pagination object even when
-        // the virtual account has no installed plugins. Protocol metadata is
-        // generated here, including for configurations saved before this fix.
-        let limit_values: Vec<_> = query.iter().filter(|(key, _)| key == "limit").collect();
-        let token_values: Vec<_> = query.iter().filter(|(key, _)| key == "pageToken").collect();
-        if limit_values.len() > 1 || token_values.len() > 1 {
-            return Err(crate::ApiError::bad_request(
-                "Duplicate plugin pagination parameter.",
-            ));
-        }
-        let limit = limit_values
-            .first()
-            .map(|(_, v)| v.parse::<usize>())
-            .transpose()
-            .map_err(|_| crate::ApiError::bad_request("Invalid plugin limit."))?
-            .unwrap_or(200);
-        if !(1..=200).contains(&limit) {
-            return Err(crate::ApiError::bad_request(
-                "Plugin limit must be between 1 and 200.",
-            ));
-        }
-        let offset = token_values
-            .first()
-            .map(|(_, v)| v.parse::<usize>())
-            .transpose()
-            .map_err(|_| crate::ApiError::bad_request("Invalid plugin page token."))?
-            .unwrap_or(0);
-        let plugins = value["plugins"]
-            .as_array_mut()
-            .ok_or_else(|| crate::ApiError::internal("Invalid virtual plugin records."))?;
-        let total = plugins.len();
-        *plugins = plugins.iter().skip(offset).take(limit).cloned().collect();
-        let next = offset.saturating_add(limit);
-        value["pagination"] = serde_json::json!({"limit":limit,"next_page_token":if next<total{Some(next.to_string())}else{None}});
-        value.as_object_mut().unwrap().remove("nextPageToken");
-        return Ok(crate::providers::chatgpt::identity::json_response(value));
+    if matches!(
+        endpoint,
+        ChatgptEndpoint::Plugins | ChatgptEndpoint::InstalledPlugins
+    ) {
+        return super::plugins::list(
+            &state,
+            &oauth.0,
+            uri.query(),
+            endpoint == ChatgptEndpoint::InstalledPlugins,
+        )
+        .await;
     }
     if endpoint == ChatgptEndpoint::StatsigBootstrap {
         let request = if body.is_empty() {
@@ -314,7 +283,6 @@ pub async fn forward(
     if matches!(
         endpoint,
         ChatgptEndpoint::FeaturedPlugins
-            | ChatgptEndpoint::Plugins
             | ChatgptEndpoint::SuggestedPlugins
             | ChatgptEndpoint::ConnectorDirectory
     ) {

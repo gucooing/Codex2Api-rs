@@ -1,5 +1,6 @@
 "use client";
 import { usePlatformPrefix } from "@/lib/platform-scope";
+import { ChatgptPluginRecords } from "@/components/providers/chatgpt/plugin-records";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -1449,6 +1450,8 @@ function ClientState({ id, config }: { id: string; config: (typeof accountSectio
               </FieldGroup>
             ) : config.key === "browser_settings" ? (
               <BrowserClientState value={resource.data?.value ?? null} />
+            ) : config.key === "installed_plugins" ? (
+              <ChatgptPluginRecords value={resource.data?.value} />
             ) : (
               <NamedClientState value={resource.data?.value ?? []} />
             )}

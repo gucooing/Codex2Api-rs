@@ -3797,6 +3797,286 @@ async fn desktop_login_wrapper_redirects_only_to_local_authorization_and_preserv
 }
 
 #[tokio::test]
+async fn desktop_plugin_catalog_matches_only_this_accounts_enabled_plugins() {
+    use serde_json::json;
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().join("plugin-catalog.sqlite"))
+        .await
+        .unwrap();
+    let (app, account) = fixture(&storage).await;
+    let supplier = test_supplier(&storage, &account).await;
+    let token = login(&app).await["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    bind_test_supplier(&storage, &account, None).await;
+    let path = "/backend-api/ps/plugins/list?scope=GLOBAL&limit=200&collection=vertical";
+    let empty = app
+        .clone()
+        .oneshot(client_json("GET", path, &token, Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::OK);
+    let empty = json_body(empty).await;
+    assert_eq!(
+        empty,
+        json!({"plugins":[],"pagination":{"limit":200,"next_page_token":null}})
+    );
+    assert_eq!(
+        storage
+            .virtual_client_state(&account.id, "installed_plugins")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
+        json!({"plugins":[]})
+    );
+
+    let plugin = |number: u8, name: &str, scope: &str, enabled: Value| {
+        json!({
+            "id":format!("plugins~Plugin_{number:032}"), "name":name, "scope":scope,
+            "installation_policy":"AVAILABLE", "authentication_policy":"ON_USE",
+            "status":"ENABLED", "enabled":enabled,
+            "release":{"version":"1.0.0","display_name":name,"description":"Account-owned plugin",
+                "interface":{"short_description":"Account-owned plugin"},"app_ids":[],"skills":[]}
+        })
+    };
+    let mut saved = json!({"plugins":[
+        plugin(1,"enabled-first","GLOBAL",json!(true)),
+        plugin(2,"disabled","GLOBAL",json!(false)),
+        plugin(3,"personal","USER",json!(true)),
+        plugin(4,"enabled-second","GLOBAL",json!(true)),
+        plugin(5,"unknown-state","GLOBAL",Value::Null)
+    ],"pagination":{"next_page_token":"stale"}});
+    seed_captured_config(&storage, &account.id, "installed_plugins", &saved, None)
+        .await
+        .unwrap();
+    let mut other = account.clone();
+    other.id = uuid::Uuid::new_v4().to_string();
+    other.username = "other-plugin-owner".into();
+    storage.save_account_fixture(&other).await.unwrap();
+    seed_captured_config(
+        &storage,
+        &other.id,
+        "installed_plugins",
+        &json!({"plugins":[plugin(6,"other-account","GLOBAL",json!(true))]}),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(client_json("GET", path, &token, Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let catalog = json_body(response).await;
+    assert_eq!(
+        catalog["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["enabled-first", "enabled-second"]
+    );
+    assert!(catalog["plugins"][0].get("enabled").is_none());
+    assert!(catalog["pagination"]["next_page_token"].is_null());
+    let mut pages = Vec::new();
+    for (query, expected) in [
+        ("scope=GLOBAL&collection=vertical&limit=1", "enabled-first"),
+        (
+            "scope=GLOBAL&collection=vertical&limit=1&pageToken=1",
+            "enabled-second",
+        ),
+        ("scope=USER&limit=1", "personal"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(client_json(
+                "GET",
+                &format!("/backend-api/ps/plugins/list?{query}"),
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["plugins"].as_array().unwrap().len(), 1);
+        assert_eq!(value["plugins"][0]["name"], expected);
+        pages.push(value);
+    }
+    assert_eq!(pages[0]["pagination"]["next_page_token"], "1");
+    assert!(pages[1]["pagination"]["next_page_token"].is_null());
+    let installed = json_body(
+        app.clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/ps/plugins/installed?scope=GLOBAL&limit=200",
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(installed["plugins"].as_array().unwrap().len(), 4);
+    assert_eq!(installed["plugins"][1]["enabled"], false);
+    assert!(
+        installed["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["scope"] == "GLOBAL")
+    );
+
+    // A supplier binding cannot change the directory or trigger supplier authentication.
+    bind_test_supplier(&storage, &account, supplier).await;
+    let bound = json_body(
+        app.clone()
+            .oneshot(client_json("GET", path, &token, Value::Null))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(bound, catalog);
+    for query in [
+        "scope=OTHER",
+        "scope=GLOBAL&scope=USER",
+        "scope=USER&collection=vertical",
+        "collection=other",
+        "collection=vertical&collection=vertical",
+        "limit=0",
+        "limit=201",
+        "limit=1&limit=2",
+        "pageToken=-1",
+        "pageToken=bad",
+        "pageToken=1&pageToken=2",
+        "pageToken=99999999999999999999999999999",
+        "includeDownloadUrls=1",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(client_json(
+                "GET",
+                &format!("/backend-api/ps/plugins/list?{query}"),
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+    }
+    let cross_account = app
+        .clone()
+        .oneshot(client_json(
+            "GET",
+            "/backend-api/ps/plugins/list?account_id=other",
+            &token,
+            Value::Null,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(cross_account.status(), StatusCode::FORBIDDEN);
+    let tail = json_body(
+        app.clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/ps/plugins/list?scope=GLOBAL&pageToken=200",
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(tail["plugins"].as_array().unwrap().is_empty());
+    assert!(tail["pagination"]["next_page_token"].is_null());
+
+    // The same persisted state drives the administrator's read-only table.
+    storage.ensure_default_admin().await.unwrap();
+    let admin = codex2api_admin::router(codex2api_admin::AdminState::new(storage.clone()).unwrap());
+    let (cookie, csrf) = admin_login(&admin).await;
+    let record = json_body(
+        admin
+            .oneshot(admin_request(
+                "GET",
+                &format!(
+                    "/admin/api/consumers/{}/client-state/installed_plugins",
+                    account.id
+                ),
+                &cookie,
+                &csrf,
+                Value::Null,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(record["value"]["plugins"], saved["plugins"]);
+    saved["plugins"][0]["enabled"] = false.into();
+    seed_captured_config(&storage, &account.id, "installed_plugins", &saved, None)
+        .await
+        .unwrap();
+    let disabled = json_body(
+        app.clone()
+            .oneshot(client_json("GET", path, &token, Value::Null))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(disabled["plugins"].as_array().unwrap().len(), 1);
+    assert_eq!(disabled["plugins"][0]["name"], "enabled-second");
+
+    // Export actual HTTP responses for the installed Desktop's native reader.
+    if let Ok(path) = std::env::var("CODEX2API_TEST_PLUGIN_OUTPUT") {
+        saved["plugins"][0]["enabled"] = true.into();
+        saved["plugins"].as_array_mut().unwrap().pop();
+        seed_captured_config(&storage, &account.id, "installed_plugins", &saved, None)
+            .await
+            .unwrap();
+        let native_installed = app
+            .clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/ps/plugins/installed?scope=GLOBAL&limit=200",
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(native_installed.status(), StatusCode::OK);
+        let native_installed = json_body(native_installed).await;
+        let native_installed_all = app
+            .clone()
+            .oneshot(client_json(
+                "GET",
+                "/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+                &token,
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(native_installed_all.status(), StatusCode::OK);
+        let native_installed_all = json_body(native_installed_all).await;
+        let path = std::path::PathBuf::from(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, json!({"empty":empty,"catalog":catalog,"pages":&pages[..2],"installed":native_installed,"installed_all":native_installed_all}).to_string()).unwrap();
+    }
+    assert_eq!(
+        storage
+            .query_usage(&Default::default())
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    storage.close().await;
+}
+
+#[tokio::test]
 async fn desktop_plugin_routes_require_virtual_auth_and_never_use_supplier_private_catalogs() {
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().join("plugins.sqlite"))
@@ -3832,7 +4112,7 @@ async fn desktop_plugin_routes_require_virtual_auth_and_never_use_supplier_priva
             )
             .await
             .unwrap();
-        if path.contains("/plugins/installed") {
+        if path.contains("/plugins/installed") || path.contains("/ps/plugins/list") {
             assert_eq!(unbound.status(), StatusCode::OK);
             assert_eq!(json_body(unbound).await["plugins"], serde_json::json!([]));
             continue;
@@ -3868,7 +4148,7 @@ async fn text_body(response: axum::response::Response) -> String {
 }
 fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Body> {
     if path == format!("{ROOT}/oauth/authorize") {
-        let mut value: serde_json::Map<String, Value> = fields
+        let value: serde_json::Map<String, Value> = fields
             .iter()
             .map(|(key, value)| {
                 (
@@ -3882,7 +4162,6 @@ fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Bo
                 )
             })
             .collect();
-        value.insert("kind".into(), Value::String("virtual".into()));
         let mut request = Request::post("/user/api/oauth/authorize/identify")
             .header("content-type", "application/json");
         if let Some(cookie) = cookie {
