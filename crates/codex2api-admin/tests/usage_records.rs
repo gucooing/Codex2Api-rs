@@ -215,34 +215,36 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
     for path in ["/admin/api/consumers", "/admin/api/suppliers"] {
         assert_eq!(f.get(path).await["items"].as_array().unwrap().len(), 7);
         assert_eq!(
-            f.get(&format!("{path}?limit=5")).await["items"]
+            f.get(&format!("{path}/options?limit=5")).await["items"]
                 .as_array()
                 .unwrap()
                 .len(),
             5
         );
         assert_eq!(
-            f.get(&format!("{path}?search=")).await["items"]
+            f.get(&format!("{path}/options?search=")).await["items"]
                 .as_array()
                 .unwrap()
                 .len(),
             5
         );
         assert!(
-            f.get(&format!("{path}?search=history&limit=5")).await["items"]
+            f.get(&format!("{path}/options?search=history&limit=5"))
+                .await["items"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            f.get(&format!("{path}?search=%25_%27&limit=5")).await["items"]
+            f.get(&format!("{path}/options?search=%25_%27&limit=5"))
+                .await["items"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
         for limit in ["0", "101", "-1"] {
             assert_eq!(
-                f.request("GET", &format!("{path}?limit={limit}"), json!(null))
+                f.request("GET", &format!("{path}/options?limit={limit}"), json!(null))
                     .await
                     .status(),
                 StatusCode::BAD_REQUEST
@@ -256,7 +258,9 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
         ("suppliers", "REAM-6@EXAMPLE", suppliers[6].as_str()),
     ] {
         let found = f
-            .get(&format!("/admin/api/{path}?search={search}&limit=5"))
+            .get(&format!(
+                "/admin/api/{path}/options?search={search}&limit=5"
+            ))
             .await;
         assert_eq!(found["items"].as_array().unwrap().len(), 1);
         assert_eq!(found["items"][0]["id"], id);
@@ -280,7 +284,8 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
     );
     f.storage.delete_virtual_user("consumer-6").await.unwrap();
     assert!(
-        f.get("/admin/api/consumers?search=User-6&limit=5").await["items"]
+        f.get("/admin/api/consumers/options?search=User-6&limit=5")
+            .await["items"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -290,13 +295,15 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
         1
     );
     assert!(
-        f.get("/admin/api/suppliers?provider_id=grok&limit=5").await["items"]
+        f.get("/admin/api/suppliers/options?provider_id=grok&limit=5")
+            .await["items"]
             .as_array()
             .unwrap()
             .is_empty()
     );
     assert!(
-        f.get("/admin/api/suppliers?for_routing=true&limit=5").await["items"]
+        f.get("/admin/api/suppliers/options?for_routing=true&limit=5")
+            .await["items"]
             .as_array()
             .unwrap()
             .is_empty()

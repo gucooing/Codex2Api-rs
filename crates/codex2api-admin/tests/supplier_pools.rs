@@ -98,7 +98,7 @@ async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
         )
         .await;
     assert_eq!(tag.status(), StatusCode::OK);
-    let tags = body(tag).await;
+    let tags = f.get("/admin/api/supplier-tags").await;
     let tag_id = tags["items"][0]["id"].as_str().unwrap();
     assert_eq!(
         f.request(

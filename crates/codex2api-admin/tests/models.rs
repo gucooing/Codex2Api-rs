@@ -64,7 +64,7 @@ async fn presets_create_complete_prices_and_reject_stale_or_ambiguous_writes() {
         .collect::<Vec<_>>();
     assert_eq!(saved.len(), 6);
     assert!(saved.iter().all(|p| p.source.starts_with("preset:")));
-    let rows = f.get("/admin/api/models").await;
+    let rows = f.get("/admin/api/models?search=gpt-6.1-sol").await;
     let model = rows["items"]
         .as_array()
         .unwrap()
@@ -86,7 +86,7 @@ async fn model_prices_and_lifecycle_share_revision_checked_persisted_configurati
             .status(),
         StatusCode::CONFLICT
     );
-    let models = f.get("/admin/api/models").await;
+    let models = f.get("/admin/api/models?search=test-model").await;
     let item = models["items"]
         .as_array()
         .unwrap()

@@ -76,42 +76,64 @@ impl UserStore {
             .cancel_subscription_order(Some(owner), id)
             .await
     }
-    pub async fn wallet_entries(&self, owner: &str) -> Result<Vec<Value>> {
+    pub async fn wallet_entries(
+        &self,
+        owner: &str,
+        query: &crate::ListQuery,
+    ) -> Result<crate::ListPage<Value>> {
         Ok(self
             .storage
-            .wallet_entries(owner)
+            .wallet_entry_page(owner, query)
             .await?
-            .iter()
-            .map(crate::WalletEntry::user_view)
-            .collect())
+            .map(|entry| entry.user_view()))
     }
-    pub async fn plans(&self) -> Result<Vec<Value>> {
+    pub async fn plans(&self, query: &crate::ListQuery) -> Result<crate::ListPage<Value>> {
         let mut items = vec![];
-        for plan in self
+        let page = self
             .storage
-            .virtual_plans()
-            .await?
-            .into_iter()
-            .filter(|p| p.allow_purchase && p.plan_type != "free")
-        {
+            .read_list::<crate::VirtualPlan>(query, "p.*", "virtual_plans p", "p.rowid", |q| {
+                q.push(" AND p.allow_purchase=1 AND p.plan_type!='free'");
+                crate::list_query::exact(q, "p.provider_id", &query.provider_id);
+                crate::list_query::search(
+                    q,
+                    &["p.name", "json_extract(p.config,'$.description')"],
+                    &query.search,
+                );
+            })
+            .await?;
+        for plan in page.items {
             let price = plan
                 .sale_price_cents()?
                 .map(|value| crate::format_units(value, 2));
-            let access = plan.model_access()?;
-            let models: Vec<Value> = self.storage.model_configs(&plan.provider_id).await?
-                .into_iter()
-                .filter(|model| model.enabled && access.permits(&plan.provider_id, &model.model))
-                .map(|model| json!({"provider_id":plan.provider_id,"model":model.model,"kind":model.kind}))
-                .collect();
+            let models: Vec<(String,String,String)> = sqlx::query_as("SELECT m.provider_id,m.model,m.kind FROM model_catalog m JOIN virtual_plans p ON p.provider_id=m.provider_id WHERE p.id=? AND m.enabled=1 AND m.deleted=0 AND (json_extract(p.config,'$.model_access')='all' OR (json_extract(p.config,'$.model_access')='selected' AND EXISTS(SELECT 1 FROM json_each(p.config,'$.models') selected WHERE json_extract(selected.value,'$.provider_id')=m.provider_id AND json_extract(selected.value,'$.model')=m.model))) ORDER BY m.provider_id,m.model")
+                .bind(&plan.id).fetch_all(self.storage.pool()).await?;
+            let models: Vec<Value> = models.into_iter().map(|(provider,model,kind)|json!({"provider_id":provider,"model":model,"kind":kind})).collect();
             items.push(json!({"id":plan.id,"name":plan.name,"provider_id":plan.provider_id,"plan_type":plan.plan_type,
                 "description":plan.description(),"sale_price_usd":price,"duration_days":plan.duration_days()?,"revision":plan.revision,
                 "model_access":plan.config["model_access"],"models":models,"spending_windows":crate::plan_spending_windows(&plan.config)?}));
         }
-        Ok(items)
+        Ok(crate::ListPage {
+            items,
+            total: page.total,
+            page: page.page,
+            page_size: page.page_size,
+        })
     }
-    pub async fn subscriptions(&self, owner: &str) -> Result<Vec<Value>> {
+    pub async fn subscriptions(
+        &self,
+        owner: &str,
+        query: &crate::ListQuery,
+    ) -> Result<crate::ListPage<Value>> {
         let mut items = vec![];
-        for subscription in self.storage.user_subscriptions(Some(owner), true).await? {
+        let page = self
+            .storage
+            .subscription_page(&crate::ListQuery {
+                user_id: owner.to_owned(),
+                include_expired: true,
+                ..query.clone()
+            })
+            .await?;
+        for subscription in page.items {
             let account = self
                 .storage
                 .effective_platform_account(&subscription.virtual_account_id)
@@ -154,20 +176,22 @@ impl UserStore {
             items.push(json!({"spending_windows":windows,"current_price_cents":pricing.as_ref().and_then(|p|p.0),"current_duration_days":pricing.map(|p|p.1),"id":account.id,"provider_id":account.provider_id,"plan_id":plan.id,"plan_name":plan.name,
                 "plan_type":account.plan_type,"expires_at":account.subscription_expires_at,"enabled":account.enabled,"expired":false,"revision":subscription.revision}));
         }
-        Ok(items)
+        Ok(crate::ListPage {
+            items,
+            total: page.total,
+            page: page.page,
+            page_size: page.page_size,
+        })
     }
-    pub async fn devices(&self, owner: &str) -> Result<Vec<Value>> {
-        let mut items = vec![];
-        for subscription in self.storage.user_subscriptions(Some(owner), true).await? {
-            for device in self
-                .storage
-                .virtual_devices(&subscription.virtual_account_id)
-                .await?
-            {
-                items.push(json!({"id":device.id,"provider_id":device.provider_id,"user_agent":device.user_agent,"created_at":device.created_at,"last_used_at":device.last_used_at}));
-            }
-        }
-        Ok(items)
+    pub async fn devices(
+        &self,
+        owner: &str,
+        query: &crate::ListQuery,
+    ) -> Result<crate::ListPage<Value>> {
+        let page = self.storage.read_list::<crate::VirtualDevice>(query,"d.*",
+            "virtual_devices d JOIN platform_accounts p ON p.id=d.virtual_account_id JOIN regular_users u ON u.id=p.user_id",
+            "d.created_at DESC,d.id", |q| { q.push(" AND u.id=").push_bind(owner.to_owned()); }).await?;
+        Ok(page.map(|device|json!({"id":device.id,"provider_id":device.provider_id,"user_agent":device.user_agent,"created_at":device.created_at,"last_used_at":device.last_used_at})))
     }
     pub async fn revoke_device(&self, owner: &str, id: &str) -> Result<bool> {
         Ok(sqlx::query("DELETE FROM virtual_devices WHERE id=? AND virtual_account_id IN(SELECT s.id FROM platform_accounts s JOIN user_identities u ON u.id=s.user_id WHERE u.id=? AND u.enabled=1 AND u.kind='regular')")

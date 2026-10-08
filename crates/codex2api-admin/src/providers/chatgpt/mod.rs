@@ -132,6 +132,16 @@ pub async fn fingerprint(
         .map_err(|_| ApiError::upstream("指纹已保存，但 HTTP 客户端更新失败"))?;
     Ok(Json(json!(Fingerprint::from_account(&a))))
 }
+pub async fn official_rows(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    if s.storage.require_account(&id).await?.provider_id != codex2api_core::CHATGPT {
+        return Err(ApiError::missing());
+    }
+    Ok(Json(json!(s.storage.chatgpt_official_page(&id, &q).await?)))
+}
 #[derive(Deserialize)]
 pub struct OfficialQuery {
     section: String,
@@ -166,7 +176,7 @@ pub async fn official(
         let current_revision = s.storage.supplier_auth_revision(&id).await?;
         let mut routing =
             json!({"status":"not_observed","backend_origin":null,"constraint":null,"message":null});
-        let (value, observed_at) = match snapshot {
+        let (mut value, observed_at) = match snapshot {
             Some((snapshot, revision)) => {
                 match codex2api_upstream::WorkspaceRoute::from_accounts(
                     &snapshot.value,
@@ -191,6 +201,9 @@ pub async fn official(
             }
             None => (Value::Null, None),
         };
+        if let Some(object) = value.as_object_mut() {
+            object.remove("accounts");
+        }
         return Ok(Json(
             json!({"value":value,"observed_at":observed_at,"refresh_error":refresh_error,"routing":routing}),
         ));
@@ -219,6 +232,11 @@ pub async fn official(
         },
     };
     let mut value = json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":refresh_error});
+    if section == SupplierInfoSection::Credits
+        && let Some(object) = value["value"].as_object_mut()
+    {
+        object.remove("credits");
+    }
     if section == SupplierInfoSection::Quota {
         value["quota"] = crate::quota::summary(&s.storage, &id, &snapshot).await?;
     }

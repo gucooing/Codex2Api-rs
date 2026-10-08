@@ -50,5 +50,4 @@ export type WalletEntryPage = {
 export type UserDetail = {
   user: User;
   subscriptions: UserSubscription[];
-  wallet_entries: WalletEntry[];
 };

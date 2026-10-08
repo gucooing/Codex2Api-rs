@@ -249,11 +249,15 @@ async fn authorized(s: &AdminState, id: &str, reused: bool) -> ApiResult {
         json!({"status":"complete","supplier_id":id,"reused_existing":reused}),
     ))
 }
-pub async fn model_catalog(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+pub async fn model_catalog(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
     if s.storage.require_account(&id).await?.provider_id != codex2api_core::GROK {
         return Err(ApiError::bad("提供商不匹配"));
     }
-    Ok(Json(s.storage.grok_catalog(&id).await?))
+    Ok(Json(s.storage.grok_catalog_page(&id, &q).await?))
 }
 pub async fn refresh_profile(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     s.upstream

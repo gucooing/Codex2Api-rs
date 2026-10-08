@@ -124,7 +124,9 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
     ? { id: filters.supplier_id, display_name: filters.supplier_label, email: "" }
     : null;
   const consumers = useResource<List<Consumer>>(
-    userLookup.open ? `/consumers${query({ search: userLookup.search.trim(), limit: 5 })}` : null,
+    userLookup.open
+      ? `/consumers/options${query({ search: userLookup.search.trim(), limit: 5 })}`
+      : null,
     userLookup.search.trim() ? 250 : 0,
   );
   const subjects: SubjectOption[] = [
@@ -140,7 +142,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
     })),
   ];
   const suppliers = useResource<List<Supplier>>(
-    supplierOpen ? `/suppliers${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
+    supplierOpen ? `/suppliers/options${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
     supplierSearch.trim() ? 250 : 0,
   );
   const path = `/overview/usage${query({ user_id: applied.user_id, virtual_account: applied.virtual_account, supplier_id: applied.supplier_id, model: applied.model, status: applied.status, group_by: applied.group_by, from: applied.from, until: applied.until, tz_offset: new Date().getTimezoneOffset() })}`;

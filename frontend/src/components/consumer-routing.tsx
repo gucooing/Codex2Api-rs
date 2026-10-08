@@ -3,12 +3,21 @@ import { usePlatformPrefix } from "@/lib/platform-scope";
 import { useState, useId } from "react";
 import {
   request,
+  query,
   type Consumer,
   type List,
   type Supplier,
   type SupplierTag,
   type RpmLimit,
 } from "@/lib/api";
+import {
+  Combobox,
+  ComboboxInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxList,
+  ComboboxItem,
+} from "@/components/ui/combobox";
 import { useResource } from "@/lib/hooks";
 import { useActions, useErrorToast } from "@/lib/actions";
 import { Button } from "@/components/ui/button";
@@ -46,18 +55,28 @@ export function RoutingForm({
   const platformPrefix = usePlatformPrefix();
   const id = useId();
   const actions = useActions();
-  const tags = useResource<List<SupplierTag>>("/supplier-tags");
-  const suppliers = useResource<List<Supplier>>("/suppliers");
   const rpm = useResource<RpmLimit>(account ? `${platformPrefix}/${account.id}/rate-limit` : null);
   const route = data.items.find((r) => r.provider_id === account?.provider_id);
   const [draft, setDraft] = useState<{ tag: string; supplier: string }>();
   const current = draft ?? { tag: route?.tag_id ?? "", supplier: route?.supplier_account_id ?? "" };
   const [rpmDraft, setRpm] = useState<string>();
   const rpmValue = rpmDraft ?? (rpm.data?.rpm == null ? "" : String(rpm.data.rpm));
-  const available = (suppliers.data?.items ?? []).filter(
-    (s) => s.provider_id === account?.provider_id && s.tag_ids?.includes(current.tag),
+  const [supplierSearch, setSupplierSearch] = useState("");
+  const [supplierOpen, setSupplierOpen] = useState(false);
+  const tags = useResource<List<SupplierTag>>(
+    account ? `/supplier-tags/options${query({ provider_id: account.provider_id })}` : null,
   );
-  const assigned = suppliers.data?.items.find((supplier) => supplier.id === current.supplier);
+  const suppliers = useResource<List<Supplier>>(
+    supplierOpen && current.tag
+      ? `/suppliers/options${query({ provider_id: account?.provider_id, tag: current.tag, for_routing: true, search: supplierSearch, limit: 5 })}`
+      : null,
+    supplierSearch ? 250 : 0,
+  );
+  const assignedResource = useResource<Supplier>(
+    current.supplier ? `/suppliers/${encodeURIComponent(current.supplier)}` : null,
+  );
+  const assigned = assignedResource.data ?? null;
+  useErrorToast(assignedResource.error);
   useErrorToast(tags.error);
   useErrorToast(suppliers.error);
   useErrorToast(rpm.error);
@@ -68,8 +87,7 @@ export function RoutingForm({
         className="space-y-3"
         onSubmit={(event) =>
           actions.submit(event, "pool-route", async () => {
-            if (disabled || !account || !tags.ready || !suppliers.ready)
-              throw new Error("请先加载号池和供应账户");
+            if (disabled || !account || !tags.ready) throw new Error("请先加载号池和供应账户");
             await request(`${platformPrefix}/${account.id}/routing`, {
               method: "PUT",
               body: {
@@ -84,22 +102,13 @@ export function RoutingForm({
           })
         }
       >
-        <FieldSet
-          disabled={disabled || !tags.ready || !suppliers.ready || actions.isBusy("pool-route")}
-        >
+        <FieldSet disabled={disabled || !tags.ready || actions.isBusy("pool-route")}>
           <Field>
             <FieldLabel htmlFor={`${id}-tag`}>标签号池</FieldLabel>
             <Select
               value={current.tag || "none"}
               onValueChange={(tag) => {
-                if (
-                  disabled ||
-                  !tags.ready ||
-                  !suppliers.ready ||
-                  !tag ||
-                  tag === (current.tag || "none")
-                )
-                  return;
+                if (disabled || !tags.ready || !tag || tag === (current.tag || "none")) return;
                 setDraft({ tag: tag === "none" ? "" : tag, supplier: "" });
               }}
             >
@@ -108,58 +117,51 @@ export function RoutingForm({
               </SelectTrigger>
               <SelectContent position="popper">
                 <SelectItem value="none">不绑定号池</SelectItem>
-                {(tags.data?.items ?? [])
-                  .filter((t) => t.provider_id === account?.provider_id)
-                  .map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name}（{t.supplier_count} 个供应账户）
-                    </SelectItem>
-                  ))}
+                {(tags.data?.items ?? []).map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}（{t.supplier_count} 个供应账户）
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </Field>
           <Field>
             <FieldLabel htmlFor={`${id}-supplier`}>分配账户</FieldLabel>
-            <Select
-              value={disabled && !route && !draft ? "" : current.supplier || "unassigned"}
-              disabled={!current.tag}
-              onValueChange={(supplier) => {
-                if (
-                  disabled ||
-                  !tags.ready ||
-                  !suppliers.ready ||
-                  !supplier ||
-                  supplier === "unassigned" ||
-                  supplier === current.supplier
-                )
-                  return;
-                setDraft({ ...current, supplier });
+            <Combobox<Supplier>
+              items={suppliers.data?.items ?? []}
+              value={assigned}
+              disabled={!current.tag || disabled}
+              filter={null}
+              open={supplierOpen}
+              onOpenChange={(open) => {
+                setSupplierOpen(open);
+                if (open) setSupplierSearch("");
+              }}
+              itemToStringLabel={(item) => item.email || item.display_name || item.id}
+              itemToStringValue={(item) => item.id}
+              isItemEqualToValue={(item, value) => item.id === value.id}
+              onInputValueChange={(text, details) => {
+                if (details.reason === "input-change") setSupplierSearch(text);
+              }}
+              onValueChange={(item) => {
+                if (item) setDraft({ ...current, supplier: item.id });
               }}
             >
-              <SelectTrigger id={`${id}-supplier`}>
-                <SelectValue placeholder={disabled ? "加载中…" : "暂未分配"} />
-              </SelectTrigger>
-              <SelectContent position="popper">
-                <SelectItem value="unassigned" disabled>
-                  暂未分配
-                </SelectItem>
-                {current.supplier &&
-                  !available.some((supplier) => supplier.id === current.supplier) && (
-                    <SelectItem value={current.supplier} disabled>
-                      {assigned?.display_name || assigned?.email || current.supplier}
-                    </SelectItem>
+              <ComboboxInput
+                id={`${id}-supplier`}
+                placeholder={current.supplier ? "加载中…" : "暂未分配"}
+              />
+              <ComboboxContent>
+                <ComboboxEmpty>{suppliers.loading ? "加载中…" : "没有匹配账户"}</ComboboxEmpty>
+                <ComboboxList>
+                  {(item: Supplier) => (
+                    <ComboboxItem key={item.id} value={item}>
+                      {item.email || item.display_name || item.id}
+                    </ComboboxItem>
                   )}
-                {available.map((s) => (
-                  <SelectItem
-                    key={s.id}
-                    value={s.id}
-                    disabled={s.status !== "active" || !s.authorized}
-                  >
-                    {s.display_name || s.email || s.id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
           </Field>
           <Button type="submit">保存绑定</Button>
         </FieldSet>

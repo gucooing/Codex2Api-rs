@@ -4,7 +4,7 @@ import { subscriptionLabel } from "@/lib/subscriptions";
 
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
@@ -64,7 +64,7 @@ import { duration, tokenCount } from "@/lib/usage-display";
 
 import { request, type SupplierQuota, type Json } from "@/lib/api";
 
-import { useResource } from "@/lib/hooks";
+import { ResourceRefreshContext, useResource } from "@/lib/hooks";
 
 export function ChatgptOfficialData({
   id,
@@ -178,20 +178,22 @@ export function ChatgptOfficialData({
                 )}
               </div>
             )}
-            {section === "credits" ? (
-              <OfficialCredits value={value} id={id} onRefresh={() => setRefresh(Date.now())} />
-            ) : (
-              section !== "quota" && (
-                <OfficialFields section={section} value={resource.data?.value ?? null} />
-              )
-            )}
+            <ResourceRefreshContext value={Date.parse(resource.data?.observed_at ?? "") || 0}>
+              {section === "credits" ? (
+                <OfficialCredits value={value} id={id} onRefresh={() => setRefresh(Date.now())} />
+              ) : (
+                section !== "quota" && (
+                  <OfficialFields id={id} section={section} value={resource.data?.value ?? null} />
+                )
+              )}
+            </ResourceRefreshContext>
           </>
         }
       </CardContent>
     </Card>
   );
 }
-function OfficialFields({ value, section }: { value: Json; section: string }) {
+function OfficialFields({ value, section, id }: { value: Json; section: string; id: string }) {
   const tableColumns1 = useColumnVisibility(
     "components/suppliers.tsx:1",
     ["账户", "类型", "订阅"],
@@ -213,12 +215,13 @@ function OfficialFields({ value, section }: { value: Json; section: string }) {
     statsValue.stats && typeof statsValue.stats === "object" && !Array.isArray(statsValue.stats)
       ? statsValue.stats
       : statsValue;
-  const rows = Array.isArray(root.accounts)
-    ? root.accounts
-    : root.accounts && typeof root.accounts === "object"
-      ? Object.values(root.accounts)
-      : [];
-  const pagination = useTablePagination(rows, section);
+  const resource = useListResource<Json>(
+    section === "details" ? `/suppliers/chatgpt/${id}/official/rows` : null,
+    { kind: "details" },
+  );
+  const pagination = resource.pagination;
+  const rows = pagination.rows;
+  useErrorToast(resource.error);
   const days = Array.isArray(stats.daily_usage_buckets) ? stats.daily_usage_buckets : [];
   const fields =
     section === "usage"
@@ -567,13 +570,13 @@ function OfficialCredits({
   );
 
   const actions = useActions();
-  const credits = Array.isArray(value.credits)
-    ? value.credits.filter(
-        (credit): credit is { [key: string]: Json } =>
-          Boolean(credit) && typeof credit === "object" && !Array.isArray(credit),
-      )
-    : [];
-  const pagination = useTablePagination(credits, id);
+  const resource = useListResource<{ [key: string]: Json }>(
+    `/suppliers/chatgpt/${id}/official/rows`,
+    { kind: "credits" },
+  );
+  const pagination = resource.pagination;
+  const credits = pagination.rows;
+  useErrorToast(resource.error);
   const consume = async (creditId?: string) => {
     await request(`/suppliers/${id}/credits/consume`, {
       method: "POST",

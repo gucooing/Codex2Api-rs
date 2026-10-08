@@ -3,7 +3,7 @@ use super::error::{ApiError, ApiResult, ok};
 use crate::AdminState;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use codex2api_storage::{
     ImagePrice, ModelConfig, ModelPrice, VirtualPlan, decimal_units, format_units,
@@ -11,6 +11,27 @@ use codex2api_storage::{
 };
 use serde::Deserialize;
 use serde_json::json;
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct OptionsQuery {
+    pub provider_id: String,
+    search: String,
+    paid_only: bool,
+    plan_id: String,
+}
+pub async fn plan_options(State(s): State<AdminState>, Query(q): Query<OptionsQuery>) -> ApiResult {
+    Ok(Json(
+        json!({"items":s.storage.plan_options(&q.provider_id,q.paid_only).await?}),
+    ))
+}
+pub async fn model_options(
+    State(s): State<AdminState>,
+    Query(q): Query<OptionsQuery>,
+) -> ApiResult {
+    Ok(Json(
+        json!({"items":s.storage.model_options(&q.provider_id,&q.search,&q.plan_id).await?}),
+    ))
+}
 fn plan_dto(p: &VirtualPlan) -> dto::Plan {
     dto::Plan {
         description: p.description().into(),
@@ -46,16 +67,13 @@ fn plan_dto(p: &VirtualPlan) -> dto::Plan {
             .collect(),
     }
 }
-pub async fn plans(State(s): State<AdminState>) -> ApiResult {
-    Ok(Json(dto::value(dto::Plans {
-        items: s
-            .storage
-            .virtual_plans()
-            .await?
-            .iter()
-            .map(plan_dto)
-            .collect(),
-    })))
+pub async fn plans(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(json!(
+        s.storage.plan_page(&q).await?.map(|p| plan_dto(&p))
+    )))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,40 +201,40 @@ fn token_dto(p: &ModelPrice) -> dto::TokenPrice {
         output_rate: format_units(p.output_rate, 6),
     }
 }
-pub async fn models(State(s): State<AdminState>) -> ApiResult {
-    let mut models = Vec::new();
-    let mut tokens = Vec::new();
-    let mut images = Vec::new();
-    for (provider, _) in codex2api_core::PROVIDERS {
-        models.extend(s.storage.model_configs(provider).await?);
-        tokens.extend(s.storage.model_prices(provider).await?);
-        images.extend(s.storage.image_prices(provider).await?);
+pub async fn models(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    let page = s.storage.model_page(&q).await?;
+    let mut items = Vec::with_capacity(page.items.len());
+    for m in page.items {
+        let tokens = s
+            .storage
+            .model_token_prices(&m.provider_id, &m.model)
+            .await?;
+        let images = s
+            .storage
+            .model_image_prices(&m.provider_id, &m.model)
+            .await?;
+        items.push(dto::Model {
+            provider_id: m.provider_id,
+            model: m.model,
+            kind: m.kind,
+            enabled: m.enabled,
+            revision: m.revision,
+            token_prices: tokens.iter().map(token_dto).collect(),
+            image_prices: images
+                .iter()
+                .map(|p| dto::ImagePrice {
+                    resolution: p.resolution.clone(),
+                    price: format_units(p.price_nano_usd, 9),
+                })
+                .collect(),
+        });
     }
-    Ok(Json(dto::value(dto::Items {
-        items: models
-            .iter()
-            .map(|m| dto::Model {
-                provider_id: m.provider_id.clone(),
-                model: m.model.clone(),
-                kind: m.kind.clone(),
-                enabled: m.enabled,
-                revision: m.revision,
-                token_prices: tokens
-                    .iter()
-                    .filter(|p| p.model == m.model && p.provider_id == m.provider_id)
-                    .map(token_dto)
-                    .collect(),
-                image_prices: images
-                    .iter()
-                    .filter(|p| p.model == m.model && p.provider_id == m.provider_id)
-                    .map(|p| dto::ImagePrice {
-                        resolution: p.resolution.clone(),
-                        price: format_units(p.price_nano_usd, 9),
-                    })
-                    .collect(),
-            })
-            .collect(),
-    })))
+    Ok(Json(
+        json!({"items":items,"total":page.total,"page":page.page,"page_size":page.page_size}),
+    ))
 }
 
 pub async fn model_presets(State(s): State<AdminState>) -> ApiResult {

@@ -9,7 +9,7 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import type { Fingerprint, Proxy } from "@/lib/api";
+import type { Fingerprint, ProxyOption } from "@/lib/api";
 
 export function GrokFingerprintFields({
   value,
@@ -18,7 +18,7 @@ export function GrokFingerprintFields({
 }: {
   value: Fingerprint;
   onChange: (value: Fingerprint) => void;
-  proxies: Proxy[];
+  proxies: ProxyOption[];
 }) {
   const id = useId();
   return (

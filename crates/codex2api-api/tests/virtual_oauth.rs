@@ -4004,7 +4004,7 @@ async fn desktop_plugin_catalog_matches_only_this_accounts_enabled_plugins() {
             .oneshot(admin_request(
                 "GET",
                 &format!(
-                    "/admin/api/consumers/{}/client-state/installed_plugins",
+                    "/admin/api/consumers/{}/client-state/installed_plugins/rows?section=$.plugins",
                     account.id
                 ),
                 &cookie,
@@ -4015,7 +4015,9 @@ async fn desktop_plugin_catalog_matches_only_this_accounts_enabled_plugins() {
             .unwrap(),
     )
     .await;
-    assert_eq!(record["value"]["plugins"], saved["plugins"]);
+    assert_eq!(record["items"], saved["plugins"]);
+    assert_eq!(record["total"], saved["plugins"].as_array().unwrap().len());
+    assert_eq!(record["page"], 1);
     saved["plugins"][0]["enabled"] = false.into();
     seed_captured_config(&storage, &account.id, "installed_plugins", &saved, None)
         .await

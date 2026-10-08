@@ -1,4 +1,5 @@
 "use client";
+import type { ModelOption } from "@/lib/api";
 import { usePlatformPrefix } from "@/lib/platform-scope";
 import { ChatgptPluginRecords } from "@/components/providers/chatgpt/plugin-records";
 import {
@@ -20,7 +21,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { CardDescription } from "@/components/ui/card";
@@ -66,14 +67,7 @@ import { date } from "@/lib/format";
 import { useState } from "react";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import {
-  request,
-  type BusinessField,
-  type Config,
-  type Json,
-  type List,
-  type Model,
-} from "@/lib/api";
+import { request, type BusinessField, type Config, type Json, type List } from "@/lib/api";
 import { allowedFields, atPath, canEditConfig, withPath } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
 
@@ -183,8 +177,10 @@ function ConfigForm({
   const configs = items.map((item) =>
     committed[item.key]?.revision > item.revision ? { ...item, ...committed[item.key] } : item,
   );
-  const models = useResource<List<Model>>(
-    items.some((item) => item.key === "conversation_metadata") ? "/models" : null,
+  const models = useResource<List<ModelOption>>(
+    items.some((item) => item.key === "conversation_metadata")
+      ? "/models/options?provider_id=chatgpt"
+      : null,
   );
   useErrorToast(models.error);
   const valueOf = (config: Config) =>
@@ -209,7 +205,7 @@ function ConfigForm({
       fields={config.fields.filter((field) => field.kind !== "boolean")}
       value={valueOf(config)}
       onChange={(value) => change(config, value)}
-      models={models.data?.items.filter((model) => model.enabled) ?? []}
+      models={models.data?.items ?? []}
     />
   ));
   return (
@@ -376,7 +372,7 @@ function BusinessFields({
   value: Json;
   onChange: (next: Json) => void;
   config: Config;
-  models: Model[];
+  models: ModelOption[];
 }) {
   const fieldId = useId();
   const visibleFields = fields.filter(
@@ -1415,6 +1411,7 @@ function ClientState({ id, config }: { id: string; config: (typeof accountSectio
     updated_at_ms: number | null;
     fields: BusinessField[];
   }>(`${platformPrefix}/${id}/client-state/${config.key}`);
+  const rowsPath = `${platformPrefix}/${id}/client-state/${config.key}/rows`;
   useErrorToast(resource.error);
   return (
     <Card>
@@ -1449,11 +1446,11 @@ function ClientState({ id, config }: { id: string; config: (typeof accountSectio
                   ))}
               </FieldGroup>
             ) : config.key === "browser_settings" ? (
-              <BrowserClientState value={resource.data?.value ?? null} />
+              <BrowserClientState value={resource.data?.value ?? null} path={rowsPath} />
             ) : config.key === "installed_plugins" ? (
-              <ChatgptPluginRecords value={resource.data?.value} />
+              <ChatgptPluginRecords path={rowsPath} />
             ) : (
-              <NamedClientState value={resource.data?.value ?? []} />
+              <NamedClientState value={resource.data?.value ?? []} path={rowsPath} />
             )}
           </>
         }
@@ -1525,7 +1522,7 @@ const clientLabels: Record<string, string> = {
   referral_id: "邀请标识",
   can_resend: "可重新发送",
 };
-function BrowserClientState({ value }: { value: Json }) {
+function BrowserClientState({ value, path }: { value: Json; path: string }) {
   const tableColumns0 = useColumnVisibility(
     "components/config.tsx:0",
     ["站点匹配规则", "审批策略"],
@@ -1534,12 +1531,32 @@ function BrowserClientState({ value }: { value: Json }) {
 
   const root = obj(value);
   const preferences = obj(root.preferences);
-  const rules = obj(root.rules);
-  const origin = useTablePagination(Object.entries(obj(rules.origin)));
-  const download = useTablePagination(Object.entries(obj(rules.download)));
-  const upload = useTablePagination(Object.entries(obj(rules.upload)));
-  const fullCdp = useTablePagination(Object.entries(obj(rules.full_cdp)));
-  const pages = { origin, download, upload, full_cdp: fullCdp };
+  const origin = useListResource<[string, Json]>(path, {
+    section: "$.rules.origin",
+    entries: true,
+  });
+  const download = useListResource<[string, Json]>(path, {
+    section: "$.rules.download",
+    entries: true,
+  });
+  const upload = useListResource<[string, Json]>(path, {
+    section: "$.rules.upload",
+    entries: true,
+  });
+  const fullCdp = useListResource<[string, Json]>(path, {
+    section: "$.rules.full_cdp",
+    entries: true,
+  });
+  useErrorToast(origin.error);
+  useErrorToast(download.error);
+  useErrorToast(upload.error);
+  useErrorToast(fullCdp.error);
+  const pages = {
+    origin: origin.pagination,
+    download: download.pagination,
+    upload: upload.pagination,
+    full_cdp: fullCdp.pagination,
+  };
   return (
     <div className="space-y-4">
       <CardTitle role="heading" aria-level={3}>
@@ -1811,14 +1828,24 @@ const clientGroups: Record<string, string> = {
   requirements_toml: "客户端要求",
   enterprise_managed: "配置条目",
 };
-function NamedClientState({ value }: { value: Json }) {
+function NamedClientState({
+  value,
+  path,
+  section = "$",
+}: {
+  value: Json;
+  path: string;
+  section?: string;
+}) {
   const tableColumns1 = useColumnVisibility(
     "components/config.tsx:1",
     ["名称 / 内容", "标识", "状态", "详细记录"],
     ["名称 / 内容", "状态"],
   );
 
-  const pagination = useTablePagination(Array.isArray(value) ? value : []);
+  const resource = useListResource<Json>(Array.isArray(value) ? path : null, { section });
+  const pagination = resource.pagination;
+  useErrorToast(resource.error);
   if (Array.isArray(value))
     return (
       <>
@@ -1881,7 +1908,7 @@ function NamedClientState({ value }: { value: Json }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {value.length ? (
+              {pagination.rows.length ? (
                 <>
                   {pagination.rows.map((raw, index) => {
                     const row = obj(raw);
@@ -1985,7 +2012,11 @@ function NamedClientState({ value }: { value: Json }) {
                                           </Button>
                                         </CollapsibleTrigger>
                                         <CollapsibleContent>
-                                          <NamedClientState value={raw} />
+                                          <NamedClientState
+                                            value={raw}
+                                            path={path}
+                                            section={`${section}[${(pagination.page - 1) * Number(pagination.size.value) + index}]`}
+                                          />
                                         </CollapsibleContent>
                                       </Collapsible>
                                     )}
@@ -2027,7 +2058,11 @@ function NamedClientState({ value }: { value: Json }) {
                                 </Button>
                               </CollapsibleTrigger>
                               <CollapsibleContent>
-                                <NamedClientState value={raw} />
+                                <NamedClientState
+                                  value={raw}
+                                  path={path}
+                                  section={`${section}[${(pagination.page - 1) * Number(pagination.size.value) + index}]`}
+                                />
                               </CollapsibleContent>
                             </Collapsible>
                           )}
@@ -2145,7 +2180,11 @@ function NamedClientState({ value }: { value: Json }) {
                 {clientGroups[key]}
               </CardTitle>
             )}
-            <NamedClientState value={item} />
+            <NamedClientState
+              value={item}
+              path={path}
+              section={`${section}.${JSON.stringify(key)}`}
+            />
           </section>
         ))}
       {!fields.length && !entries.some(([, item]) => item !== null && typeof item === "object") && (

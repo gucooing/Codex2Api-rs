@@ -42,13 +42,11 @@ import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/p
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { useActions, useErrorToast } from "@/lib/actions";
-import { request, type SupplierTag, type List } from "@/lib/api";
-import { useResource } from "@/lib/hooks";
-import { useTablePagination } from "@/lib/pagination";
+import { request, type SupplierTag } from "@/lib/api";
+import { useListResource } from "@/lib/pagination";
 import { useSavedFilters } from "@/lib/preferences";
 
 export default function SupplierTagsPage() {
-  const tags = useResource<List<SupplierTag>>("/supplier-tags");
   const actions = useActions();
   const id = useId();
   const empty = { search: "", provider_id: "" };
@@ -56,12 +54,8 @@ export default function SupplierTagsPage() {
     "supplier-tags.filters",
     empty,
   );
-  const rows = (tags.data?.items ?? []).filter(
-    (tag) =>
-      (!applied.provider_id || tag.provider_id === applied.provider_id) &&
-      tag.name.toLowerCase().includes(applied.search.trim().toLowerCase()),
-  );
-  const pagination = useTablePagination(rows, applied, tags.data !== undefined);
+  const tags = useListResource<SupplierTag>("/supplier-tags", applied);
+  const pagination = tags.pagination;
   const [editing, setEditing] = useState<SupplierTag | null>();
   const [name, setName] = useState("");
   const [provider, setProvider] = useState("chatgpt");
@@ -81,7 +75,7 @@ export default function SupplierTagsPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
-              tags.reload();
+              tags.reload(1);
             }}
           >
             <Field className="w-40">
@@ -122,7 +116,7 @@ export default function SupplierTagsPage() {
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
-                  tags.reload();
+                  tags.reload(1);
                 }}
               >
                 <RotateCcw />
@@ -213,7 +207,7 @@ export default function SupplierTagsPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              {tags.ready && !rows.length && (
+              {tags.ready && !pagination.rows.length && (
                 <TableRow>
                   <TableCell colSpan={4}>
                     <Empty>

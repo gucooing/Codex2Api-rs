@@ -41,14 +41,24 @@ pub struct CouponInput {
 }
 
 impl Storage {
-    pub async fn coupons(&self) -> Result<serde_json::Value> {
+    pub async fn coupon_page(
+        &self,
+        filter: &crate::ListQuery,
+    ) -> Result<crate::ListPage<serde_json::Value>> {
         let now = Utc::now().timestamp_millis();
-        let rows: Vec<Coupon> =
-            sqlx::query_as("SELECT * FROM coupons ORDER BY created_at_ms DESC,id")
-                .fetch_all(self.pool())
-                .await?;
+        let page = self
+            .read_list::<Coupon>(
+                filter,
+                "c.*",
+                "coupons c",
+                "c.created_at_ms DESC,c.id",
+                |q| {
+                    crate::list_query::search(q, &["c.code", "c.name"], &filter.search);
+                },
+            )
+            .await?;
         let mut items = Vec::new();
-        for coupon in rows {
+        for coupon in page.items {
             let (paid, reserved): (i64,i64) = sqlx::query_as("SELECT COALESCE(SUM(status='paid'),0),COALESCE(SUM(status='pending' AND quote_expires_at_ms>?),0) FROM subscription_orders WHERE coupon_id=?")
                 .bind(now).bind(&coupon.id).fetch_one(self.pool()).await?;
             let mut value = serde_json::to_value(coupon)?;
@@ -56,7 +66,12 @@ impl Storage {
             value["reserved_count"] = reserved.into();
             items.push(value);
         }
-        Ok(serde_json::json!({"items":items}))
+        Ok(crate::ListPage {
+            items,
+            total: page.total,
+            page: page.page,
+            page_size: page.page_size,
+        })
     }
 
     pub async fn save_coupon(&self, id: Option<&str>, input: CouponInput) -> Result<Coupon> {

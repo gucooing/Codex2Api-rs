@@ -1,9 +1,10 @@
 "use client";
+import type { PlanOption } from "@/lib/api";
 import { PlatformApiContext, usePlatformPrefix } from "@/lib/platform-scope";
 import { RoutingForm, type RoutingResponse } from "@/components/consumer-routing";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination, usePageControls } from "@/lib/pagination";
+import { useListResource, usePageControls } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { useDialogFocus } from "@/lib/actions";
@@ -88,7 +89,6 @@ import {
   type Consumer,
   type ConsumerWrite,
   type List,
-  type Plans,
   type Device,
   type Json,
 } from "@/lib/api";
@@ -1272,7 +1272,6 @@ export function ConsumerForm({
 }) {
   const fieldId = useId();
   const actions = useActions();
-  const plans = useResource<Plans>("/plans");
   const [changes, setChanges] = useState<Partial<ConsumerWrite>>({});
   const value: ConsumerWrite = {
     username: account?.username ?? "",
@@ -1290,8 +1289,10 @@ export function ConsumerForm({
   const update = <K extends keyof ConsumerWrite>(key: K, next: ConsumerWrite[K]) =>
     setChanges((current) => ({ ...current, [key]: next }));
   const busy = actions.isBusy("consumer-account");
-  const planOptions =
-    plans.data?.items.filter((plan) => plan.provider_id === value.provider_id) ?? [];
+  const plans = useResource<List<PlanOption>>(
+    `/plans/options${query({ provider_id: value.provider_id })}`,
+  );
+  const planOptions = plans.data?.items ?? [];
   useErrorToast(plans.error);
   const fields = (
     <FieldSet disabled={disabled || busy} className="gap-3">
@@ -1671,14 +1672,14 @@ function ConsumerResetCredits({ id }: { id: string }) {
   const [grantOpen, setGrantOpen] = useState(false);
   const [startMode, setStartMode] = useState("now");
   const path = `${platformPrefix}/${encodeURIComponent(id)}/reset-credits`;
-  const resource = useResource<List<ResetCreditRecord> & { available_count: number }>(path);
+  const resource = useListResource<ResetCreditRecord, { available_count: number }>(path);
   const actions = useActions();
   const [quantity, setQuantity] = useState("1");
   const [note, setNote] = useState("");
   const [activateAt, setActivateAt] = useState("");
   const [durationDays, setDurationDays] = useState("30");
   const busy = actions.isBusy(`reset-credits-${id}`);
-  const rows = useTablePagination(resource.data?.items ?? [], id, resource.data !== undefined);
+  const rows = resource.pagination;
   useErrorToast(resource.error);
   return (
     <>
@@ -2208,15 +2209,11 @@ function Devices({ id }: { id: string }) {
   );
 
   const actions = useActions();
-  const resource = useResource<List<Device> & { remote_servers: Json[] }>(
-    `${platformPrefix}/${id}/devices`,
-  );
-  const devices = useTablePagination(resource.data?.items ?? [], id, resource.data !== undefined);
-  const servers = useTablePagination(
-    resource.data?.remote_servers ?? [],
-    id,
-    resource.data !== undefined,
-  );
+  const resource = useListResource<Device>(`${platformPrefix}/${id}/devices`);
+  const serverResource = useListResource<Json>(`${platformPrefix}/${id}/remote-servers`);
+  const devices = resource.pagination;
+  const servers = serverResource.pagination;
+  useErrorToast(serverResource.error);
   useErrorToast(resource.error);
   return (
     <>
@@ -2592,7 +2589,7 @@ function Devices({ id }: { id: string }) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(resource.data?.remote_servers ?? []).length ? (
+                    {(serverResource.data?.items ?? []).length ? (
                       recordRows("remote_servers", servers.rows).map((row) => (
                         <TableRow role="row" key={row.key}>
                           {row.cells.map((cell) => (
@@ -2768,12 +2765,8 @@ function Records({ id, kind, title }: { id: string; kind: string; title: string 
     mobileRecordColumns(kind),
   );
 
-  const resource = useResource<List<Json>>(`${platformPrefix}/${id}/records${query({ kind })}`);
-  const pagination = useTablePagination(
-    resource.data?.items ?? [],
-    `${id}/${kind}`,
-    resource.data !== undefined,
-  );
+  const resource = useListResource<Json>(`${platformPrefix}/${id}/records`, { kind });
+  const pagination = resource.pagination;
   useErrorToast(resource.error);
   return (
     <Card size="sm">
@@ -3094,8 +3087,6 @@ function Logs({ id }: { id: string }) {
       total: number;
       page: number;
       page_size: number;
-      analytics: Json[];
-      site_status: Json[];
     }
   >(
     preferencesReady
@@ -3111,16 +3102,16 @@ function Logs({ id }: { id: string }) {
     resource.refreshing,
     setPageSize,
   );
-  const analytics = useTablePagination(
-    resource.data?.analytics ?? [],
-    id,
-    resource.data !== undefined,
-  );
-  const sites = useTablePagination(
-    resource.data?.site_status ?? [],
-    id,
-    resource.data !== undefined,
-  );
+  const analyticsResource = useListResource<Json>(`${platformPrefix}/${id}/records`, {
+    kind: "analytics",
+  });
+  const sitesResource = useListResource<Json>(`${platformPrefix}/${id}/records`, {
+    kind: "site_status",
+  });
+  const analytics = analyticsResource.pagination;
+  const sites = sitesResource.pagination;
+  useErrorToast(analyticsResource.error);
+  useErrorToast(sitesResource.error);
   useErrorToast(resource.error);
   return (
     <>
@@ -3598,7 +3589,7 @@ function Logs({ id }: { id: string }) {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {(resource.data?.analytics ?? []).length ? (
+                      {(analyticsResource.data?.items ?? []).length ? (
                         recordRows("analytics", analytics.rows).map((row) => (
                           <TableRow role="row" key={row.key}>
                             {row.cells.map((cell) => (
@@ -3832,7 +3823,7 @@ function Logs({ id }: { id: string }) {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {(resource.data?.site_status ?? []).length ? (
+                      {(sitesResource.data?.items ?? []).length ? (
                         recordRows("site_status", sites.rows).map((row) => (
                           <TableRow role="row" key={row.key}>
                             {row.cells.map((cell) => (

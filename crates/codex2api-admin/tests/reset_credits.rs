@@ -48,7 +48,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     );
     assert_eq!(
         f.storage
-            .virtual_reset_credit_records("batch-000")
+            .virtual_reset_credit_records("batch-000", &Default::default())
             .await
             .unwrap()["items"],
         json!([])
@@ -69,7 +69,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     }
     let record = f
         .storage
-        .virtual_reset_credit_records("batch-204")
+        .virtual_reset_credit_records("batch-204", &Default::default())
         .await
         .unwrap();
     assert_eq!(record["items"].as_array().unwrap().len(), 1);
@@ -83,7 +83,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     assert_eq!((end - start).num_days(), 30);
     assert_eq!(
         f.storage
-            .virtual_reset_credit_records("batch-001")
+            .virtual_reset_credit_records("batch-001", &Default::default())
             .await
             .unwrap()["items"],
         json!([])
@@ -107,7 +107,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     );
     assert_eq!(
         f.storage
-            .virtual_reset_credit_records("batch-000")
+            .virtual_reset_credit_records("batch-000", &Default::default())
             .await
             .unwrap()["items"]
             .as_array()

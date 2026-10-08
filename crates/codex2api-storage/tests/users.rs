@@ -107,7 +107,12 @@ async fn administrator_wallet_adjustments_are_atomic_idempotent_and_auditable() 
     let entries = storage.wallet_entries(&user.id).await.unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries.iter().map(|e| e.amount_cents).sum::<i64>(), 2000);
-    let visible = storage.user_store().wallet_entries(&user.id).await.unwrap();
+    let visible = storage
+        .user_store()
+        .wallet_entries(&user.id, &Default::default())
+        .await
+        .unwrap()
+        .items;
     for entry in visible {
         assert!(entry.get("operator_name").is_none());
         assert!(entry.get("reason").is_none());

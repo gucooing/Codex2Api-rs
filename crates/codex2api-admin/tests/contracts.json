@@ -1,7 +1,7 @@
 {
   "session": {
     "authenticated": true,
-    "app_version": "v0.0.26",
+    "app_version": "v0.0.34",
     "codex_cli_version": "0.161.0",
     "grok_build_version": "1.0.45",
     "username": "admin",
@@ -154,7 +154,10 @@
           }
         ]
       }
-    ]
+    ],
+    "total": 7,
+    "page": 1,
+    "page_size": 20
   },
   "models": {
     "items": [
@@ -582,10 +585,16 @@
         "token_prices": [],
         "image_prices": []
       }
-    ]
+    ],
+    "total": 9,
+    "page": 1,
+    "page_size": 20
   },
   "consumer": {
-    "user_id": "fixture-virtual-user",
+    "user_kind": "virtual",
+    "revision": 2,
+    "user_revision": 1,
+    "user_id": "8d8c408c-572f-47b6-ba39-dfda5eece2d9",
     "id": "contract-consumer",
     "provider_id": "chatgpt",
     "username": "contract-consumer",
@@ -598,10 +607,7 @@
     "created_at": "2026-09-22T00:00:00+00:00",
     "effective_plan": "plus",
     "plan_name": "ChatGPT Plus",
-    "subscription_status": "active",
-    "user_kind": "virtual",
-    "revision": 1,
-    "user_revision": 1
+    "subscription_status": "active"
   },
   "routing": {
     "items": [
@@ -664,7 +670,7 @@
       {
         "id": "contract-task",
         "owner": "contract-consumer",
-        "source": "6df1e32e-ec1e-48f9-ac93-9d6d2b7d9dea",
+        "source": "71fcbaf7-31c0-4189-bf66-0cfe9d74b2e2",
         "value": {
           "task": {
             "id": "contract-task",
@@ -675,7 +681,10 @@
         "created_at_ms": 1,
         "updated_at_ms": 1
       }
-    ]
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20
   },
   "subscription_records": {
     "items": [
@@ -710,21 +719,6 @@
         "updated_at_ms": 1
       },
       {
-        "id": "grant",
-        "owner": "contract-consumer",
-        "source": null,
-        "value": {
-          "operation": "grant",
-          "previous_plan_name": "Previous plan",
-          "plan_name": "Plus",
-          "expires_at": "2027-09-22T00:00:00Z",
-          "origin": "admin",
-          "created_at_ms": 1
-        },
-        "created_at_ms": 1,
-        "updated_at_ms": 1
-      },
-      {
         "id": "renew",
         "owner": "contract-consumer",
         "source": null,
@@ -740,26 +734,44 @@
         "updated_at_ms": 1
       },
       {
-        "id": "43fe5471-7530-4ee0-aa08-4d3c4a3cba38",
+        "id": "grant",
         "owner": "contract-consumer",
         "source": null,
         "value": {
           "operation": "grant",
-          "origin": "system",
+          "previous_plan_name": "Previous plan",
+          "plan_name": "Plus",
+          "expires_at": "2027-09-22T00:00:00Z",
+          "origin": "admin",
+          "created_at_ms": 1
+        },
+        "created_at_ms": 1,
+        "updated_at_ms": 1
+      },
+      {
+        "id": "0d3ccc28-ad70-43b7-b42c-e6f917acaa6d",
+        "owner": "contract-consumer",
+        "source": null,
+        "value": {
+          "operation": "grant",
+          "origin": "admin",
           "plan_type": "plus",
           "plan_id": "plus",
           "plan_name": "ChatGPT Plus",
-          "previous_plan_name": null,
-          "previous_plan_id": null,
-          "expires_at": null,
           "previous_plan": null,
+          "previous_plan_id": null,
+          "previous_plan_name": null,
           "previous_expires_at": null,
+          "expires_at": null,
           "created_at_ms": 1
         },
         "created_at_ms": 1,
         "updated_at_ms": 1
       }
-    ]
+    ],
+    "total": 5,
+    "page": 1,
+    "page_size": 20
   },
   "client_state": {
     "key": "cloud_preferences",
@@ -781,7 +793,7 @@
       "longest_running_turn_sec": null,
       "daily_usage_buckets": [
         {
-          "start_date": "2026-10-04",
+          "start_date": "2026-10-08",
           "tokens": 1100
         }
       ]
@@ -796,7 +808,7 @@
         "primary_window": {
           "depth": 1,
           "limit_window_seconds": 18000,
-          "started_at": 1791137537,
+          "started_at": 1791447302,
           "reset_at": 1,
           "reset_after_seconds": 1,
           "used_percent": 0,
@@ -809,7 +821,7 @@
         "secondary_window": {
           "depth": 0,
           "limit_window_seconds": 604800,
-          "started_at": 1790640000,
+          "started_at": 1791244800,
           "reset_at": 1,
           "reset_after_seconds": 1,
           "used_percent": 0,
@@ -823,7 +835,7 @@
           {
             "depth": 0,
             "limit_window_seconds": 604800,
-            "started_at": 1790640000,
+            "started_at": 1791244800,
             "reset_at": 1,
             "reset_after_seconds": 1,
             "used_percent": 0,
@@ -836,7 +848,7 @@
           {
             "depth": 1,
             "limit_window_seconds": 18000,
-            "started_at": 1791137537,
+            "started_at": 1791447302,
             "reset_at": 1,
             "reset_after_seconds": 1,
             "used_percent": 0,
@@ -863,7 +875,7 @@
         "pending_requests": 0,
         "unpriced_requests": 0,
         "legacy_requests": 0,
-        "started_at": "2026-10-04T18:12:12Z"
+        "started_at": "2026-10-08T08:14:59Z"
       }
     }
   },
@@ -872,7 +884,7 @@
       {
         "id": "contract-task",
         "owner": "contract-consumer",
-        "source": "6df1e32e-ec1e-48f9-ac93-9d6d2b7d9dea",
+        "source": "71fcbaf7-31c0-4189-bf66-0cfe9d74b2e2",
         "value": {
           "task_id": "contract-task",
           "model": "gpt-6-astra"
@@ -880,14 +892,17 @@
         "created_at_ms": 1,
         "updated_at_ms": 1
       }
-    ]
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20
   },
   "task_operation_records": {
     "items": [
       {
         "id": "operation-fixture",
         "owner": "contract-consumer",
-        "source": "6df1e32e-ec1e-48f9-ac93-9d6d2b7d9dea",
+        "source": "71fcbaf7-31c0-4189-bf66-0cfe9d74b2e2",
         "value": {
           "task_id": "contract-task",
           "operation": "follow_up",
@@ -898,6 +913,9 @@
         "created_at_ms": 1,
         "updated_at_ms": 1
       }
-    ]
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20
   }
 }

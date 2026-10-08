@@ -72,7 +72,7 @@ test("plan descriptions save as Markdown and user details show complete benefits
     const path = new URL(route.request().url()).pathname.replace("/admin/api", "");
     let value: unknown = { items: [] };
     if (path === "/session") value = contracts.session;
-    if (path === "/plans") value = { items: [plan] };
+    if (path === "/plans") value = { items: [plan], total: 1, page: 1, page_size: 20 };
     if (path === `/plans/${plan.id}` && route.request().method() === "PUT") {
       const input = route.request().postDataJSON();
       expect(input.description).toBe(description);

@@ -13,8 +13,8 @@ import {
 import { Suspense, useId, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { request, query, type List, type Plan } from "@/lib/api";
-import type { User, UserSubscription } from "@/lib/users";
+import { request, query, type List, type PlanOption } from "@/lib/api";
+import type { UserDetail, UserSubscription } from "@/lib/users";
 import { useResource } from "@/lib/hooks";
 import {
   Combobox,
@@ -27,7 +27,7 @@ import {
 import { useUserLookup, userOptionLabel, type UserOption } from "@/lib/user-lookup";
 
 import { useActions, useDialogFocus, useErrorToast } from "@/lib/actions";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { localDate } from "@/lib/domain";
 import { date } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
@@ -93,23 +93,27 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
     initialUserId ? { id: initialUserId, username: "", name: "已选用户" } : null,
   );
   const userLookup = useUserLookup();
-  const resource = useResource<List<UserSubscription>>(
-    `/subscriptions${query({ user_id: applied.user_id, plan_id: applied.plan_id === "all" ? "" : applied.plan_id, include_expired: applied.include_expired })}`,
-  );
-  const users = useResource<List<User>>("/users");
-  const plans = useResource<List<Plan>>("/plans");
-  const selectedUser = users.data?.items.find((user) => user.id === chosenUser?.id) ?? chosenUser;
+  const resource = useListResource<UserSubscription>("/subscriptions", {
+    ...applied,
+    plan_id: applied.plan_id === "all" ? "" : applied.plan_id,
+  });
+  const plans = useResource<List<PlanOption>>("/plans/options");
+  const selectedUser = chosenUser;
   const [editing, setEditing] = useState<Edit>();
+  const editorLookup = useUserLookup();
+  const editorUser = useResource<UserDetail>(
+    editing?.user_id ? `/users/${encodeURIComponent(editing.user_id)}` : null,
+  );
+  const editorPlans = useResource<List<PlanOption>>(
+    `/plans/options${query({ provider_id: editing?.id ? editing.provider_id : "" })}`,
+  );
+  useErrorToast(editorUser.error);
+  useErrorToast(editorPlans.error);
   const actions = useActions();
   const focus = useDialogFocus();
   const id = useId();
-  const pagination = useTablePagination(
-    resource.data?.items ?? [],
-    JSON.stringify(applied),
-    !!resource.data,
-  );
+  const pagination = resource.pagination;
   useErrorToast(resource.error);
-  useErrorToast(users.error);
   useErrorToast(plans.error);
   return (
     <>
@@ -248,7 +252,7 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
         </DropdownMenu>
         <Button
           className="ml-auto"
-          disabled={!resource.ready || !users.ready || !plans.ready}
+          disabled={!resource.ready || !plans.ready}
           onClick={() =>
             setEditing({
               reissue: false,
@@ -390,13 +394,14 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
             noValidate
             onSubmit={(e) =>
               actions.submit(e, "subscription", async () => {
-                if (!editing || !users.ready || !plans.ready || !resource.ready)
+                if (!editing || !editorUser.ready || !plans.ready || !resource.ready)
                   throw new Error("请先加载订阅资料");
                 if (!editing.user_id || !editing.plan_id) throw new Error("请选择用户和套餐");
                 const plan = plans.data?.items.find((p) => p.id === editing.plan_id);
-                const existing = resource.data?.items.find(
-                  (s) => s.user_id === editing.user_id && s.provider_id === plan?.provider_id,
+                const owned = await request<List<UserSubscription>>(
+                  `/subscriptions${query({ user_id: editing.user_id, provider_id: plan?.provider_id, include_expired: true })}`,
                 );
+                const existing = owned.items[0];
                 const target = editing.id || existing?.virtual_account_id;
                 await request(target ? `/subscriptions/${target}` : "/subscriptions", {
                   method: target ? "PUT" : "POST",
@@ -418,32 +423,43 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
           >
             <FieldSet
               disabled={
-                !editing ||
-                !users.ready ||
-                !plans.ready ||
-                !resource.ready ||
-                actions.isBusy("subscription")
+                !editing || !plans.ready || !resource.ready || actions.isBusy("subscription")
               }
             >
               <FieldGroup>
                 <Field>
                   <FieldLabel htmlFor={`${id}-user`}>用户</FieldLabel>
-                  <Select
-                    value={editing?.user_id ?? ""}
+                  <Combobox<UserOption>
+                    items={editorLookup.data?.items ?? []}
+                    value={editorUser.data?.user ?? null}
                     disabled={!!editing?.id}
-                    onValueChange={(user_id) => setEditing((v) => (v ? { ...v, user_id } : v))}
+                    filter={null}
+                    open={editorLookup.open}
+                    onOpenChange={editorLookup.setOpen}
+                    itemToStringLabel={userOptionLabel}
+                    itemToStringValue={(item) => item.id}
+                    isItemEqualToValue={(item, value) => item.id === value.id}
+                    onInputValueChange={(text, details) => {
+                      if (details.reason === "input-change") editorLookup.setSearch(text);
+                    }}
+                    onValueChange={(item) =>
+                      setEditing((v) => (v ? { ...v, user_id: item?.id ?? "" } : v))
+                    }
                   >
-                    <SelectTrigger id={`${id}-user`}>
-                      <SelectValue placeholder="请选择用户" />
-                    </SelectTrigger>
-                    <SelectContent position="popper">
-                      {users.data?.items.map((u) => (
-                        <SelectItem key={u.id} value={u.id}>
-                          {u.username} · {u.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    <ComboboxInput id={`${id}-user`} placeholder="搜索选择用户" />
+                    <ComboboxContent>
+                      <ComboboxEmpty>
+                        {editorLookup.loading ? "加载中…" : "没有匹配用户"}
+                      </ComboboxEmpty>
+                      <ComboboxList>
+                        {(item: UserOption) => (
+                          <ComboboxItem key={item.id} value={item}>
+                            {userOptionLabel(item)}
+                          </ComboboxItem>
+                        )}
+                      </ComboboxList>
+                    </ComboboxContent>
+                  </Combobox>
                 </Field>
                 <Field>
                   <FieldLabel htmlFor={`${id}-plan`}>套餐</FieldLabel>
@@ -455,13 +471,11 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
                       <SelectValue placeholder="请选择套餐" />
                     </SelectTrigger>
                     <SelectContent position="popper">
-                      {plans.data?.items
-                        .filter((p) => !editing?.id || p.provider_id === editing.provider_id)
-                        .map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.name} · {p.provider_id}
-                          </SelectItem>
-                        ))}
+                      {editorPlans.data?.items.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} · {p.provider_id}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </Field>
@@ -497,7 +511,9 @@ function Subscriptions({ initialUserId }: { initialUserId: string }) {
                   <FieldLabel htmlFor={`${id}-enabled`}>允许平台登录</FieldLabel>
                 </Field>
                 <DialogFooter>
-                  <Button type="submit">保存</Button>
+                  <Button type="submit" disabled={!editorUser.ready || !editorPlans.ready}>
+                    保存
+                  </Button>
                 </DialogFooter>
               </FieldGroup>
             </FieldSet>

@@ -34,7 +34,7 @@ ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录�
 
 本地执行两个前端的 lint、typecheck、test 和 build，再执行 `cargo test --workspace --locked`。Windows 可使用已安装的 MSVC 工具链，或同版本 Rust GNU 工具链加 MinGW。浏览器回归必须分别访问管理端与用户端，并验证另一端接口返回不可访问、用户令牌不能进入管理端、确认前不发放授权码、跨账户读写被拒绝及购买重放不重复扣款。
 
-当前 `codex2api-api/tests/virtual_oauth.rs` 有 5 项既有断言待对齐：三项订阅到期时间期望 `Z` 而实际为等价的 `+00:00`，授权失败状态期望 `400` 而实际为 `401`，工作区配置更新期望 `200` 而实际为 `409`。运行完整回归时须保留这些失败结果，不能将其计为通过；它们不由 CLI 版本常量或 Responses 字段顺序控制。
+当前 `codex2api-api/tests/virtual_oauth.rs` 有 5 项既有断言待对齐：三项订阅到期时间期望 `Z` 而实际为等价的 `+00:00`，授权失败状态期望 `400` 而实际为 `401`，工作区配置更新期望 `200` 而实际为 `409`。运行完整回归时须保留这些失败结果，不能将其计为通过；它们不由 CLI 版本常量或 Responses 字段顺序控制。`codex2api-storage` 的 `expiration_cannot_be_overridden_by_a_reset_card` 也存在等价 UTC 字符串（`+00:00` 与 `.000Z`）的断言差异。
 
 用户前端浏览器测试使用 `CODEX2API_TEST_USER_URL`、`CODEX2API_TEST_ADMIN_URL` 和 `CODEX2API_TEST_API_URL` 指定三个本地入口。钱包测试通过管理端余额调整接口在独立测试库准备，不能对正式库制造测试流水。
 迁移 SQL 使用 LF，不能修改已应用的迁移或手工改写校验记录。

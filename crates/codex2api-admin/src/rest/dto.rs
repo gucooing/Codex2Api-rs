@@ -5,24 +5,18 @@ pub struct AccountListQuery {
     pub search: Option<String>,
     pub limit: Option<u32>,
     pub provider_id: Option<String>,
+    pub tag: Option<String>,
     #[serde(default)]
     pub for_routing: bool,
 }
 impl AccountListQuery {
-    pub fn search_params(&self) -> Result<Option<(&str, u32)>, super::error::ApiError> {
-        if self.search.is_none()
-            && self.limit.is_none()
-            && self.provider_id.is_none()
-            && !self.for_routing
-        {
-            return Ok(None);
-        }
+    pub fn search_params(&self) -> Result<(&str, u32), super::error::ApiError> {
         let search = self.search.as_deref().unwrap_or("").trim();
         let limit = self.limit.unwrap_or(5);
         if search.len() > 1024 || !(1..=100).contains(&limit) {
             return Err(super::error::ApiError::bad("账户搜索参数无效"));
         }
-        Ok(Some((search, limit)))
+        Ok((search, limit))
     }
 }
 #[derive(Serialize)]
@@ -113,10 +107,6 @@ pub struct Plan {
 pub struct SpendingWindow {
     pub duration_seconds: i64,
     pub cost_limit_usd: Option<String>,
-}
-#[derive(Serialize)]
-pub struct Plans {
-    pub items: Vec<Plan>,
 }
 #[derive(Serialize)]
 pub struct TokenPrice {

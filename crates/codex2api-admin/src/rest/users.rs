@@ -8,10 +8,13 @@ use codex2api_storage::{SubscriptionChange, User};
 use serde::Deserialize;
 use serde_json::json;
 
-pub async fn list(State(state): State<AdminState>) -> ApiResult {
-    Ok(Json(
-        json!({"items":state.storage.users().await?.iter().map(User::view).collect::<Vec<_>>()}),
-    ))
+pub async fn list(
+    State(state): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(json!(
+        state.storage.user_page(&q).await?.map(|u| u.view())
+    )))
 }
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -43,8 +46,20 @@ pub async fn detail(State(state): State<AdminState>, Path(id): Path<String>) -> 
         .await?
         .ok_or_else(ApiError::missing)?;
     Ok(Json(
-        json!({"user":user.view(),"subscriptions":state.storage.user_subscriptions(Some(&id),true).await?,"wallet_entries":state.storage.wallet_entries(&id).await?}),
+        json!({"user":user.view(),"subscriptions":state.storage.user_subscriptions(Some(&id),true).await?}),
     ))
+}
+pub async fn wallet_entries(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    state
+        .storage
+        .user(&id)
+        .await?
+        .ok_or_else(ApiError::missing)?;
+    Ok(Json(json!(state.storage.wallet_entry_page(&id, &q).await?)))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,34 +135,18 @@ async fn save(state: AdminState, id: Option<String>, input: UserInput) -> ApiRes
             .view()
     )))
 }
-#[derive(Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct SubscriptionQuery {
-    user_id: Option<String>,
-    plan_id: Option<String>,
-    include_expired: bool,
-}
 pub async fn subscriptions(
     State(state): State<AdminState>,
-    Query(query): Query<SubscriptionQuery>,
+    Query(query): Query<codex2api_storage::ListQuery>,
 ) -> ApiResult {
-    let items = state
-        .storage
-        .filter_user_subscriptions(
-            query.user_id.as_deref(),
-            query.plan_id.as_deref(),
-            query.include_expired,
-        )
-        .await?
-        .into_iter()
-        .map(|s| {
+    Ok(Json(json!(
+        state.storage.subscription_page(&query).await?.map(|s| {
             let expired = s.expired();
             let mut value = json!(s);
             value["expired"] = expired.into();
             value
         })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({"items":items})))
+    )))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

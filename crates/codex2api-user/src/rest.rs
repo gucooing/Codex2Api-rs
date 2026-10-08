@@ -27,13 +27,20 @@ pub(crate) async fn session(
 pub(crate) async fn subscriptions(
     State(state): State<UserState>,
     Extension(session): Extension<UserSession>,
+    Query(query): Query<codex2api_storage::ListQuery>,
 ) -> Result<Json<Value>> {
-    Ok(Json(
-        json!({"items":state.storage.subscriptions(&session.user_id).await?}),
-    ))
+    Ok(Json(json!(
+        state
+            .storage
+            .subscriptions(&session.user_id, &query)
+            .await?
+    )))
 }
-pub(crate) async fn plans(State(state): State<UserState>) -> Result<Json<Value>> {
-    Ok(Json(json!({"items":state.storage.plans().await?})))
+pub(crate) async fn plans(
+    State(state): State<UserState>,
+    Query(query): Query<codex2api_storage::ListQuery>,
+) -> Result<Json<Value>> {
+    Ok(Json(json!(state.storage.plans(&query).await?)))
 }
 
 #[derive(Deserialize)]
@@ -132,15 +139,18 @@ pub(crate) async fn cancel_order(
 pub(crate) async fn wallet(
     State(state): State<UserState>,
     Extension(session): Extension<UserSession>,
+    Query(query): Query<codex2api_storage::ListQuery>,
 ) -> Result<Json<Value>> {
     let user = state
         .storage
         .user(&session.user_id)
         .await?
         .ok_or_else(UserError::unauthorized)?;
-    Ok(Json(
-        json!({"currency":"USD","balance_usd":codex2api_storage::format_units(user.wallet_cents,2),"items":state.storage.wallet_entries(&user.id).await?}),
-    ))
+    let mut page = serde_json::to_value(state.storage.wallet_entries(&user.id, &query).await?)
+        .map_err(codex2api_storage::StorageError::from)?;
+    page["currency"] = "USD".into();
+    page["balance_usd"] = codex2api_storage::format_units(user.wallet_cents, 2).into();
+    Ok(Json(page))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,10 +184,11 @@ pub(crate) async fn password(
 pub(crate) async fn devices(
     State(state): State<UserState>,
     Extension(session): Extension<UserSession>,
+    Query(query): Query<codex2api_storage::ListQuery>,
 ) -> Result<Json<Value>> {
-    Ok(Json(
-        json!({"items":state.storage.devices(&session.user_id).await?}),
-    ))
+    Ok(Json(json!(
+        state.storage.devices(&session.user_id, &query).await?
+    )))
 }
 pub(crate) async fn revoke_device(
     State(state): State<UserState>,

@@ -1,4 +1,5 @@
 "use client";
+import { query, type ModelOption } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
 import {
   DropdownMenu,
@@ -12,18 +13,10 @@ import {
 
 import { useId, useState } from "react";
 import { X } from "lucide-react";
-import {
-  request,
-  type Plan,
-  type Plans,
-  type Model,
-  type SupplierTag,
-  type List,
-  type SpendingWindow,
-} from "@/lib/api";
+import { request, type Plan, type SupplierTag, type List, type SpendingWindow } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import { useActions, useDialogFocus, useErrorToast } from "@/lib/actions";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { planWrite, modelKey } from "@/lib/domain";
 import {
   subscriptionChoices,
@@ -93,19 +86,13 @@ export default function PlansPage() {
     ["套餐", "售价 / 有效期", "模型权限", "费用上限", "允许购买", "操作"],
     ["套餐", "售价 / 有效期", "操作"],
   );
-  const resource = useResource<Plans>("/plans");
   const [search, setSearch] = useState("");
   const [applied, setApplied] = useState("");
   const [editing, setEditing] = useState<Plan>();
   const actions = useActions();
   const id = useId();
-  const rows =
-    resource.data?.items.filter((p) =>
-      `${p.name} ${p.provider_id} ${subscriptionLabel(p.plan_type, p.provider_id)}`
-        .toLowerCase()
-        .includes(applied.toLowerCase()),
-    ) ?? [];
-  const pagination = useTablePagination(rows, applied, !!resource.data);
+  const resource = useListResource<Plan>("/plans", { search: applied });
+  const pagination = resource.pagination;
   useErrorToast(resource.error);
   return (
     <>
@@ -116,7 +103,7 @@ export default function PlansPage() {
             onSubmit={(e) => {
               e.preventDefault();
               setApplied(search.trim());
-              resource.reload();
+              resource.reload(1);
             }}
           >
             <Field className="w-56">
@@ -134,7 +121,7 @@ export default function PlansPage() {
               onClick={() => {
                 setSearch("");
                 setApplied("");
-                resource.reload();
+                resource.reload(1);
               }}
             >
               重置
@@ -347,8 +334,13 @@ function PlanEditor({
     plan_type: subscriptionValue(plan.plan_type, plan.provider_id),
   }));
   const [search, setSearch] = useState("");
-  const models = useResource<List<Model>>("/models");
-  const tags = useResource<List<SupplierTag>>("/supplier-tags");
+  const models = useResource<List<ModelOption>>(
+    `/models/options${query({ provider_id: value.provider_id, search, plan_id: plan.id })}`,
+    250,
+  );
+  const tags = useResource<List<SupplierTag>>(
+    `/supplier-tags/options${query({ provider_id: value.provider_id })}`,
+  );
   const actions = useActions();
   const focus = useDialogFocus();
   const id = useId();
@@ -363,13 +355,7 @@ function PlanEditor({
       "spending_windows",
       value.spending_windows.map((w, i) => (i === index ? window : w)),
     );
-  const choices =
-    models.data?.items.filter(
-      (m) =>
-        m.provider_id === value.provider_id &&
-        (m.enabled || value.models.some((v) => modelKey(v) === modelKey(m))) &&
-        m.model.toLowerCase().includes(search.toLowerCase()),
-    ) ?? [];
+  const choices = models.data?.items ?? [];
   useErrorToast(models.error);
   useErrorToast(tags.error);
   return (
@@ -538,13 +524,11 @@ function PlanEditor({
                       </SelectTrigger>
                       <SelectContent position="popper">
                         <SelectItem value="none">未设置</SelectItem>
-                        {tags.data?.items
-                          .filter((t) => t.provider_id === value.provider_id)
-                          .map((t) => (
-                            <SelectItem key={t.id} value={t.id}>
-                              {t.name}
-                            </SelectItem>
-                          ))}
+                        {tags.data?.items.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </Field>

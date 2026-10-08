@@ -33,60 +33,41 @@ async fn require(state: &AdminState, id: &str) -> Result<PlatformAccount, ApiErr
         .await?
         .ok_or_else(ApiError::missing)
 }
-#[derive(Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct ConsumerListQuery {
-    page: Option<u32>,
-    page_size: Option<u32>,
-    search: Option<String>,
-    status: String,
-    subscription: String,
-    limit: Option<u32>,
-    provider_id: Option<String>,
-    for_routing: bool,
-}
-pub async fn list(State(s): State<AdminState>, Query(q): Query<ConsumerListQuery>) -> ApiResult {
-    if q.page.is_some()
-        || q.page_size.is_some()
-        || !q.status.is_empty()
-        || !q.subscription.is_empty()
-    {
-        let filters = codex2api_storage::ConsumerFilters {
-            search: q.search.unwrap_or_default(),
-            status: q.status,
-            subscription: q.subscription,
-        };
-        let (accounts, total, page) = s
-            .storage
-            .platform_account_page(&filters, q.page.unwrap_or(1), q.page_size)
-            .await?;
-        let mut items = Vec::new();
-        for account in accounts {
-            let mut row = dto(&s, &account).await?;
-            row["quota"] = s.storage.virtual_list_quota(&account).await?;
-            items.push(row);
-        }
-        return Ok(Json(
-            json!({"items":items,"total":total,"page":page,"page_size":q.page_size.unwrap_or(20)}),
-        ));
-    }
-    let legacy = super::dto::AccountListQuery {
+pub async fn list(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    q.validate()?;
+    let filters = codex2api_storage::ConsumerFilters {
         search: q.search,
-        limit: q.limit,
-        provider_id: q.provider_id,
-        for_routing: q.for_routing,
+        status: q.status,
+        subscription: q.subscription,
     };
-    let accounts = match legacy.search_params()? {
-        Some((search, limit)) => s.storage.search_platform_accounts(search, limit).await?,
-        None => s.storage.platform_accounts().await?,
-    };
+    let (accounts, total, page) = s
+        .storage
+        .platform_account_page(&filters, q.page, q.page_size)
+        .await?;
     let mut items = Vec::new();
     for account in accounts {
+        let mut row = dto(&s, &account).await?;
+        row["quota"] = s.storage.virtual_list_quota(&account).await?;
+        items.push(row);
+    }
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":q.page_size.unwrap_or(20)}),
+    ))
+}
+pub async fn options(
+    State(s): State<AdminState>,
+    Query(q): Query<super::dto::AccountListQuery>,
+) -> ApiResult {
+    let (search, limit) = q.search_params()?;
+    let mut items = Vec::new();
+    for account in s.storage.search_platform_accounts(search, limit).await? {
         items.push(dto(&s, &account).await?);
     }
     Ok(Json(json!({"items":items})))
 }
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BatchInput {
@@ -271,9 +252,13 @@ pub async fn usage(State(s): State<AdminState>, Path(id): Path<String>) -> ApiRe
         json!({"summary":s.storage.virtual_usage_summary(&id).await?,"quota":s.storage.virtual_quota(&id).await?}),
     ))
 }
-pub async fn reset_credits(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+pub async fn reset_credits(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
     require(&s, &id).await?;
-    Ok(Json(s.storage.virtual_reset_credit_records(&id).await?))
+    Ok(Json(s.storage.virtual_reset_credit_records(&id, &q).await?))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -309,7 +294,11 @@ pub async fn grant_reset_credits(
     s.storage
         .grant_virtual_reset_cards(&id, &request_id, &grant)
         .await?;
-    Ok(Json(s.storage.virtual_reset_credit_records(&id).await?))
+    Ok(Json(
+        s.storage
+            .virtual_reset_credit_records(&id, &codex2api_storage::ListQuery::default())
+            .await?,
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -333,11 +322,21 @@ pub async fn consume_reset_credit(
             .await?,
     ))
 }
-pub async fn devices(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+pub async fn devices(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
     require(&s, &id).await?;
-    Ok(Json(
-        json!({"items":s.storage.virtual_devices(&id).await?,"remote_servers":s.storage.remote_servers(&id).await?}),
-    ))
+    Ok(Json(json!(s.storage.device_page(&id, &q).await?)))
+}
+pub async fn remote_servers(
+    State(s): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    require(&s, &id).await?;
+    Ok(Json(json!(s.storage.remote_server_page(&id, &q).await?)))
 }
 pub async fn revoke(
     State(s): State<AdminState>,
@@ -386,41 +385,26 @@ pub async fn logs(
     if !matches!(q.result.as_str(), "" | "success" | "failed") {
         return Err(ApiError::bad("日志状态无效"));
     }
-    let mut value = s
+    let value = s
         .storage
         .virtual_request_log_page(&id, q.page, q.page_size, &q.path, &q.method, &q.result)
         .await?;
-    value["analytics"] = json!(s.storage.virtual_analytics(&id, 0, i64::MAX).await?);
-    value["site_status"] = json!(s.storage.virtual_resources(&id, "site_status").await?);
     Ok(Json(value))
-}
-#[derive(Deserialize)]
-pub struct RecordQuery {
-    #[serde(default = "task")]
-    kind: String,
-}
-fn task() -> String {
-    "task".into()
 }
 pub async fn records(
     State(s): State<AdminState>,
     Path(id): Path<String>,
-    Query(q): Query<RecordQuery>,
+    Query(q): Query<codex2api_storage::ListQuery>,
 ) -> ApiResult {
     require(&s, &id).await?;
-    if q.kind == "family_notices" {
-        return Ok(Json(
-            json!({"items":s.storage.family_graduation_notices(&id,true).await?}),
-        ));
-    }
     if q.kind == "cloud_environment" {
-        return Ok(Json(
-            json!({"items":s.storage.virtual_cloud_environments(&id).await?}),
-        ));
+        return Ok(Json(json!(
+            s.storage.cloud_environment_page(&id, &q).await?
+        )));
     }
     if !matches!(
         q.kind.as_str(),
-        "task"
+        "" | "task"
             | "realtime_call"
             | "conversation"
             | "connector_catalog"
@@ -432,12 +416,13 @@ pub async fn records(
             | "plugin_operation"
             | "automation_operation"
             | "subscription_operation"
+            | "family_notices"
+            | "analytics"
+            | "site_status"
     ) {
         return Err(ApiError::bad("未知记录类别"));
     }
-    Ok(Json(
-        json!({"items":s.storage.virtual_resource_records(&id,&q.kind).await?}),
-    ))
+    Ok(Json(json!(s.storage.resource_record_page(&id, &q).await?)))
 }
 pub async fn client_state(
     State(s): State<AdminState>,
@@ -450,7 +435,12 @@ pub async fn client_state(
     let value = s.storage.virtual_client_state(&id, &key).await?;
     let mut response = match value {
         Some(v) => {
-            json!({"key":key,"value":v.value,"revision":v.revision,"write_origin":v.write_origin,"updated_at_ms":v.updated_at_ms})
+            let mut value = v.value;
+            if key == "browser_settings" {
+                value["rules"] = json!({});
+            }
+            client_metadata(&mut value);
+            json!({"key":key,"value":value,"revision":v.revision,"write_origin":v.write_origin,"updated_at_ms":v.updated_at_ms})
         }
         None => {
             json!({"key":key,"value":null,"revision":null,"write_origin":null,"updated_at_ms":null})
@@ -458,6 +448,51 @@ pub async fn client_state(
     };
     response["fields"] = json!(codex2api_storage::client_fields(&key));
     Ok(Json(response))
+}
+fn client_metadata(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.clear(),
+        Value::Object(fields) => fields.values_mut().for_each(client_metadata),
+        _ => {}
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientRowsQuery {
+    #[serde(default = "first_page")]
+    page: u32,
+    page_size: Option<u32>,
+    section: String,
+    #[serde(default)]
+    entries: bool,
+}
+fn first_page() -> u32 {
+    1
+}
+pub async fn client_rows(
+    State(s): State<AdminState>,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<ClientRowsQuery>,
+) -> ApiResult {
+    require(&s, &id).await?;
+    if !virtual_config_specs().iter().any(|v| v.key == key) {
+        return Err(ApiError::missing());
+    }
+    Ok(Json(json!(
+        s.storage
+            .client_state_rows(
+                &id,
+                &key,
+                &q.section,
+                q.entries,
+                &codex2api_storage::ListQuery {
+                    page: q.page,
+                    page_size: q.page_size,
+                    ..Default::default()
+                }
+            )
+            .await?
+    )))
 }
 pub async fn configs(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     let account = require(&s, &id).await?;

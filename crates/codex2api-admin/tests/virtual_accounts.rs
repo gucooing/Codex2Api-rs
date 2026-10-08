@@ -293,7 +293,11 @@ async fn consumer_history_and_quota_are_isolated_and_only_have_two_cost_windows(
     );
     assert!(usage["quota"]["billing"].get("used_usd").is_some());
     assert!(!usage.to_string().contains("total_cost_limit"));
-    assert!(f.get(&format!("/admin/api/consumers/{a}/devices")).await["remote_servers"].is_array());
+    assert!(
+        f.get(&format!("/admin/api/consumers/{a}/remote-servers"))
+            .await["items"]
+            .is_array()
+    );
     assert_eq!(
         f.request("GET", "/admin/api/consumers/missing/configs", Value::Null)
             .await

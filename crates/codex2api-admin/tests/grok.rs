@@ -46,7 +46,13 @@ async fn subscription_descriptions_and_available_models_follow_saved_plan_policy
     }
     let saved = first.unwrap();
     let id = saved["id"].as_str().unwrap();
-    let catalog = f.storage.user_store().plans().await.unwrap();
+    let catalog = f
+        .storage
+        .user_store()
+        .plans(&Default::default())
+        .await
+        .unwrap()
+        .items;
     let plan = catalog.iter().find(|p| p["id"] == id).unwrap();
     assert_eq!(plan["name"], "本地套餐 x_basic");
     assert_eq!(plan["description"], description);
@@ -74,7 +80,13 @@ async fn subscription_descriptions_and_available_models_follow_saved_plan_policy
         updated["description"], description,
         "older writes preserve the description"
     );
-    let catalog = f.storage.user_store().plans().await.unwrap();
+    let catalog = f
+        .storage
+        .user_store()
+        .plans(&Default::default())
+        .await
+        .unwrap()
+        .items;
     let plan = catalog.iter().find(|p| p["id"] == id).unwrap();
     assert_eq!(
         plan["models"],
@@ -98,7 +110,13 @@ async fn subscription_descriptions_and_available_models_follow_saved_plan_policy
             .status(),
         StatusCode::OK
     );
-    let catalog = f.storage.user_store().plans().await.unwrap();
+    let catalog = f
+        .storage
+        .user_store()
+        .plans(&Default::default())
+        .await
+        .unwrap()
+        .items;
     let plan = catalog.iter().find(|p| p["id"] == id).unwrap();
     assert_eq!(plan["description"], "");
     assert_eq!(plan["models"], json!([]));
@@ -125,7 +143,7 @@ async fn presets_and_custom_models_are_equal_catalog_entries_and_grok_plans_are_
             StatusCode::OK
         );
     }
-    let models = f.get("/admin/api/models").await;
+    let models = f.get("/admin/api/models?provider_id=grok").await;
     for item in models["items"].as_array().unwrap() {
         assert!(item.get("client_metadata_status").is_none());
         assert!(item.get("codex_metadata_status").is_none());

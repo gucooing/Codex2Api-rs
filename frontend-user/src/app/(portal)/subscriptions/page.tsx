@@ -18,15 +18,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useResource } from "@/lib/resource";
-import { usePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { date, type Subscription } from "@/lib/api";
 import { useErrorToast } from "@/lib/actions";
 export default function SubscriptionsPage() {
-  const subscriptions = useResource<{ items: Subscription[] }>("/subscriptions", 0);
-  const subscriptionPage = usePagination(subscriptions.data?.items ?? [], !!subscriptions.data);
+  const subscriptions = useListResource<Subscription>("/subscriptions");
+  const subscriptionPage = subscriptions.pagination;
   useErrorToast(subscriptions.error);
   return (
     <>

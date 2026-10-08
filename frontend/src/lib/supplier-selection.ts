@@ -1,4 +1,5 @@
 import type { Supplier } from "./api";
+export type SupplierSelection = Pick<Supplier, "id" | "provider_id" | "tag_ids">;
 
 export function toggleSupplierSelection(selected: string[], ids: string[], checked: boolean) {
   const next = new Set(selected);

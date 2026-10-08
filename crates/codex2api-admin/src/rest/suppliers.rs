@@ -59,7 +59,13 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     value["authentication_invalid"] = json!(health.authentication_invalid);
     value["cooldown_until"] = json!(health.cooldown_until);
     value["cooldown_code"] = json!(health.cooldown_code);
-    value["tag_ids"] = json!(s.storage.supplier_tag_ids(&a.id).await?);
+    let tags = s.storage.supplier_tag_labels(&a.id).await?;
+    value["tag_ids"] = json!(tags.iter().map(|(id, _)| id).collect::<Vec<_>>());
+    value["tags"] = json!(
+        tags.into_iter()
+            .map(|(id, name)| json!({"id":id,"name":name}))
+            .collect::<Vec<_>>()
+    );
     value["binding_count"] = json!(s.storage.supplier_binding_count(&a.id).await?);
     value["quota"] = match s.storage.get_account_quota(&a.id).await? {
         Some(snapshot) => crate::quota::summary(&s.storage, &a.id, &snapshot).await?,
@@ -69,20 +75,40 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
 }
 pub async fn list(
     State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    let page = s.storage.supplier_page(&q).await?;
+    let mut items = Vec::with_capacity(page.items.len());
+    for id in page.items {
+        items.push(display(&s, &s.storage.require_account(&id).await?).await?);
+    }
+    Ok(Json(
+        json!({"items":items,"total":page.total,"page":page.page,"page_size":page.page_size}),
+    ))
+}
+pub async fn selection(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(
+        json!({"items":s.storage.supplier_selection(&q).await?}),
+    ))
+}
+pub async fn options(
+    State(s): State<AdminState>,
     Query(q): Query<super::dto::AccountListQuery>,
 ) -> ApiResult {
-    let accounts = match q.search_params()? {
-        Some((search, limit)) => {
-            s.storage
-                .search_supplier_accounts(search, limit, q.provider_id.as_deref(), q.for_routing)
-                .await?
-        }
-        None => s.storage.list_accounts().await?,
-    };
-    let mut items = vec![];
-    for a in accounts {
-        items.push(display(&s, &a).await?);
-    }
+    let (search, limit) = q.search_params()?;
+    let items = s
+        .storage
+        .supplier_options(
+            search,
+            limit,
+            q.provider_id.as_deref(),
+            q.tag.as_deref(),
+            q.for_routing,
+        )
+        .await?;
     Ok(Json(json!({"items":items})))
 }
 pub async fn detail(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {

@@ -103,9 +103,15 @@ pub async fn save_desktop(
     s.storage.save_desktop_support_settings(&f).await?;
     Ok(Json(json!(f)))
 }
-pub async fn resources(State(s): State<AdminState>) -> ApiResult {
-    Ok(Json(json!({"items":s.storage.desktop_resources().await?})))
+pub async fn resources(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(json!(s.storage.desktop_resource_page(&q).await?)))
 }
-pub async fn missing(State(s): State<AdminState>) -> ApiResult {
-    Ok(Json(json!({"items":s.storage.missing_endpoints().await?})))
+pub async fn missing(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(json!(s.storage.missing_endpoint_page(&q).await?)))
 }

@@ -12,11 +12,12 @@ import {
 
 import { useId, useState } from "react";
 import Link from "next/link";
-import { request, type List } from "@/lib/api";
+import { request } from "@/lib/api";
 import type { User, UserDetail } from "@/lib/users";
 import { useResource } from "@/lib/hooks";
 import { useActions, useDialogFocus, useErrorToast } from "@/lib/actions";
-import { useTablePagination } from "@/lib/pagination";
+import type { WalletEntry } from "@/lib/users";
+import { useListResource } from "@/lib/pagination";
 import { date, money } from "@/lib/format";
 import { usdCents } from "@/lib/wallet";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,7 +57,6 @@ export default function UsersPage() {
     ["用户名", "名称", "邮箱", "钱包（USD）", "状态", "操作"],
     ["用户名", "钱包（USD）", "操作"],
   );
-  const resource = useResource<List<User>>("/users");
   const [search, setSearch] = useState("");
   const [applied, setApplied] = useState("");
   const [editing, setEditing] = useState<User & { password: string }>();
@@ -76,11 +76,8 @@ export default function UsersPage() {
   const actions = useActions();
   const focus = useDialogFocus();
   const id = useId();
-  const rows =
-    resource.data?.items.filter((u) =>
-      `${u.username} ${u.name} ${u.email}`.toLowerCase().includes(applied.toLowerCase()),
-    ) ?? [];
-  const pagination = useTablePagination(rows, applied, !!resource.data);
+  const resource = useListResource<User>("/users", { search: applied });
+  const pagination = resource.pagination;
   useErrorToast(resource.error);
   return (
     <>
@@ -91,7 +88,7 @@ export default function UsersPage() {
             onSubmit={(e) => {
               e.preventDefault();
               setApplied(search.trim());
-              resource.reload();
+              resource.reload(1);
             }}
           >
             <Field className="w-56">
@@ -109,7 +106,7 @@ export default function UsersPage() {
               onClick={() => {
                 setSearch("");
                 setApplied("");
-                resource.reload();
+                resource.reload(1);
               }}
             >
               重置
@@ -472,7 +469,9 @@ export default function UsersPage() {
 }
 function UserRecords({ id, close }: { id: string; close: () => void }) {
   const resource = useResource<UserDetail>(`/users/${encodeURIComponent(id)}`);
-  const pagination = useTablePagination(resource.data?.wallet_entries ?? [], id, !!resource.data);
+  const wallet = useListResource<WalletEntry>(`/users/${encodeURIComponent(id)}/wallet-entries`);
+  const pagination = wallet.pagination;
+  useErrorToast(wallet.error);
   useErrorToast(resource.error);
   return (
     <Dialog

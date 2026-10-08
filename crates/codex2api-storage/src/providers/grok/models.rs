@@ -78,6 +78,31 @@ impl Storage {
             json!({"items":items,"observed_at":snapshot.as_ref().map(|s|&s.0),"stale":snapshot.as_ref().is_none_or(|(_,r)|Some(*r)!=current)}),
         )
     }
+    pub async fn grok_catalog_page(&self, id: &str, query: &crate::ListQuery) -> Result<Value> {
+        let page = self
+            .read_list::<(String,)>(
+                query,
+                "descriptor_json",
+                "grok_model_observations",
+                "model",
+                |q| {
+                    q.push(" AND account_id=").push_bind(id.to_owned());
+                },
+            )
+            .await?
+            .try_map(|(text,)| Ok(serde_json::from_str::<Value>(&text)?))?;
+        let snapshot: Option<(String, i64)> = sqlx::query_as(
+            "SELECT observed_at,auth_revision FROM grok_catalog_snapshots WHERE account_id=?",
+        )
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await?;
+        let current = self.supplier_auth_revision(id).await?;
+        let mut value = serde_json::to_value(page)?;
+        value["observed_at"] = json!(snapshot.as_ref().map(|s| &s.0));
+        value["stale"] = json!(snapshot.as_ref().is_none_or(|(_, r)| Some(*r) != current));
+        Ok(value)
+    }
     pub async fn grok_consumer_models(&self, owner: &str) -> Result<Vec<Value>> {
         let allowed = self
             .available_virtual_models(owner, codex2api_core::GROK)

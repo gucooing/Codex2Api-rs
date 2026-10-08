@@ -1,51 +1,24 @@
 "use client";
 import { useState, type InputHTMLAttributes } from "react";
 import { toastError } from "./actions";
-export function usePagination<T>(rows: T[], ready: boolean) {
-  const [size, setSize] = useState(20);
-  const [position, setPosition] = useState(1);
-  const [draft, setDraft] = useState<string>();
-  const pages = Math.max(1, Math.ceil(rows.length / size));
-  const page = Math.min(position, pages);
-  const commit = (value: string) => {
-    const next = Number(value);
-    setDraft(undefined);
-    if (!/^\d+$/.test(value.trim()) || !Number.isSafeInteger(next) || next < 1 || next > pages) {
-      toastError(`请输入 1 到 ${pages} 之间的页码`);
-      return;
-    }
-    setPosition(next);
-  };
-  return {
-    rows: rows.slice((page - 1) * size, page * size),
-    total: ready ? rows.length : undefined,
-    pages: ready ? pages : undefined,
-    size: {
-      value: String(size),
-      disabled: !ready,
-      onValueChange: (value: string) => {
-        setSize(Number(value));
-        setPosition(1);
-        setDraft(undefined);
-      },
-    },
-    first: { disabled: !ready || page <= 1, onClick: () => setPosition(1) },
-    previous: { disabled: !ready || page <= 1, onClick: () => setPosition(page - 1) },
-    next: { disabled: !ready || page >= pages, onClick: () => setPosition(page + 1) },
-    last: { disabled: !ready || page >= pages, onClick: () => setPosition(pages) },
-    input: {
-      value: draft ?? String(page),
-      disabled: !ready,
-      onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value),
-      onBlur: (e: React.FocusEvent<HTMLInputElement>) => commit(e.target.value),
-      onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commit(e.currentTarget.value);
-        }
-      },
-    },
-  };
+import { useResource } from "./resource";
+export type ListPage<T> = { items: T[]; total: number; page: number; page_size: number };
+export function useListResource<T, Extra extends object = Record<never, never>>(path: string) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const resource = useResource<ListPage<T> & Extra>(
+    `${path}${path.includes("?") ? "&" : "?"}page=${page}&page_size=${pageSize}`,
+    0,
+  );
+  const controls = usePageControls(
+    resource.data?.page ?? page,
+    resource.data?.total,
+    setPage,
+    pageSize,
+    !resource.ready,
+    setPageSize,
+  );
+  return { ...resource, pagination: { ...controls, rows: resource.data?.items ?? [] } };
 }
 
 export function pageCount(total: number, pageSize = 20) {

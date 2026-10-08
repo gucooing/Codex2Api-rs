@@ -17,6 +17,7 @@ export type Supplier = {
   enabled: boolean;
   status: "active" | "disabled" | "error" | "payment_required" | "quota_exhausted";
   tag_ids: string[];
+  tags: { id: string; name: string }[];
   binding_count: number;
   cooldown_until: number | null;
   cooldown_code: string | null;
@@ -308,3 +309,7 @@ export type DesktopSettings = {
   proxy_id: string | null;
   resource_cache_minutes: number;
 };
+
+export type PlanOption = Pick<Plan, "id" | "name" | "provider_id" | "plan_type">;
+export type ModelOption = Pick<Model, "provider_id" | "model" | "kind" | "enabled">;
+export type ProxyOption = Pick<Proxy, "id" | "name" | "display_url">;

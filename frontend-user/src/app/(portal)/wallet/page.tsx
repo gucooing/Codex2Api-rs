@@ -18,14 +18,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useResource } from "@/lib/resource";
-import { usePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { Badge } from "@/components/ui/badge";
 import { date, money, type Entry } from "@/lib/api";
 import { useErrorToast } from "@/lib/actions";
 export default function WalletPage() {
-  const wallet = useResource<{ balance_usd: string; items: Entry[] }>("/wallet", 0);
-  const walletPage = usePagination(wallet.data?.items ?? [], !!wallet.data);
+  const wallet = useListResource<Entry, { balance_usd: string }>("/wallet");
+  const walletPage = wallet.pagination;
   useErrorToast(wallet.error);
   return (
     <>

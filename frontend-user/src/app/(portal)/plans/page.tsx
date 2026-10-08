@@ -44,12 +44,15 @@ import {
   type Order,
   type CheckoutPreview,
 } from "@/lib/orders";
+import { useListResource } from "@/lib/pagination";
+import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useResource } from "@/lib/resource";
 import { useActions, useErrorToast } from "@/lib/actions";
 
 export default function PlansPage() {
   const subscriptions = useResource<{ items: Subscription[] }>("/subscriptions", 0);
-  const plans = useResource<{ items: Plan[] }>("/plans", 0);
+  const plans = useListResource<Plan>("/plans");
+  const planPage = plans.pagination;
   const wallet = useResource<{ balance_usd: string }>("/wallet", 0);
   const actions = useActions();
   const [selected, setSelected] = useState<Plan>();
@@ -131,14 +134,7 @@ export default function PlansPage() {
     setPayment("wallet");
     void actions.run("preview", () => loadPreview(plan, "", "wallet"), { success: "" });
   }
-  async function loadPreview(
-    selectedPlan: Plan,
-    code: string,
-    method: string,
-    preserveDraft = false,
-  ) {
-    const plan = plans.data?.items.find((item) => item.id === selectedPlan.id);
-    if (!plan) throw new Error("该套餐已停止购买，请刷新套餐列表");
+  async function loadPreview(plan: Plan, code: string, method: string, preserveDraft = false) {
     const current = subscriptions.data?.items.find((item) => item.provider_id === plan.provider_id);
     const value = await request<CheckoutPreview>("/checkout/preview", {
       method: "POST",
@@ -239,6 +235,50 @@ export default function PlansPage() {
       {plans.data?.items.length === 0 && (
         <p className="text-sm text-muted-foreground">暂无可购买的套餐</p>
       )}
+      <Pagination className="mt-3 justify-end">
+        <PaginationContent className="flex-wrap">
+          <PaginationItem>
+            共 {planPage.total ?? "—"} 条 · {planPage.pages ?? "—"} 页
+          </PaginationItem>
+          <PaginationItem>
+            <Select {...planPage.size}>
+              <SelectTrigger aria-label="每页条数">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent side="bottom">
+                {[10, 20, 30, 50].map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n} 条
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </PaginationItem>
+          <PaginationItem>
+            <Button variant="outline" {...planPage.first}>
+              首页
+            </Button>
+          </PaginationItem>
+          <PaginationItem>
+            <Button variant="outline" {...planPage.previous}>
+              上一页
+            </Button>
+          </PaginationItem>
+          <PaginationItem>
+            <Input className="w-16" aria-label="页码" {...planPage.input} />
+          </PaginationItem>
+          <PaginationItem>
+            <Button variant="outline" {...planPage.next}>
+              下一页
+            </Button>
+          </PaginationItem>
+          <PaginationItem>
+            <Button variant="outline" {...planPage.last}>
+              末页
+            </Button>
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
       <Dialog
         open={!!viewedId}
         onOpenChange={(open) => {

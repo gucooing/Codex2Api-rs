@@ -1,12 +1,15 @@
 "use client";
+import type { ProxyOption } from "@/lib/api";
+import { query } from "@/lib/api";
+import type { SupplierSelection } from "@/lib/supplier-selection";
 import { SupplierTagEditor, SupplierTagsBatchDialog } from "@/components/supplier-tags";
-import { toggleSupplierSelection, selectedSupplierProvider } from "@/lib/supplier-selection";
+import { selectedSupplierProvider } from "@/lib/supplier-selection";
 import { Checkbox } from "@/components/ui/checkbox";
 import { supplierSubscriptionLabel as subscriptionLabel } from "@/lib/subscriptions";
 import type { SupplierTag } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { useDialogFocus, validateForm } from "@/lib/actions";
@@ -71,7 +74,7 @@ import { date } from "@/lib/format";
 import { tokenCount } from "@/lib/usage-display";
 import { Separator } from "@/components/ui/separator";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuotaClock } from "@/hooks/use-supplier-quotas";
 import {
   supplierStatusLabel,
@@ -83,14 +86,7 @@ import {
 } from "@/lib/supplier-state";
 
 import { Plus, Search, RotateCcw, ArrowRight } from "lucide-react";
-import {
-  request,
-  type Fingerprint,
-  type List,
-  type OAuth,
-  type Proxy,
-  type Supplier,
-} from "@/lib/api";
+import { request, type Fingerprint, type List, type OAuth, type Supplier } from "@/lib/api";
 import { mergeOAuth } from "@/lib/domain";
 import { parseRefreshTokenLines } from "@/lib/refresh-tokens";
 import { supplierChannel } from "@/components/providers";
@@ -117,13 +113,10 @@ export function SuppliersPage() {
   const mobile = useIsMobile();
   const fieldId = useId();
   const actions = useActions();
-  const resource = useResource<List<Supplier>>("/suppliers");
   const [add, setAdd] = useState(false);
-  const tags = useResource<List<SupplierTag>>("/supplier-tags");
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<SupplierSelection[]>([]);
   const [batchOpen, setBatchOpen] = useState(false);
-  const [batchAccounts, setBatchAccounts] = useState<Supplier[]>([]);
-  useErrorToast(tags.error);
+  const [batchAccounts, setBatchAccounts] = useState<SupplierSelection[]>([]);
   const empty = { search: "", provider_id: "", status: "", tag: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters(
     "suppliers.filters",
@@ -132,35 +125,38 @@ export function SuppliersPage() {
   );
   const [view, setView] = usePreference<"table" | "cards">("suppliers.view", "table", validView);
   const now = useQuotaClock();
-  const all = (resource.data?.items ?? []).map((item) =>
-    item.cooldown_until && item.cooldown_until * 1000 <= now && item.status === "quota_exhausted"
-      ? { ...item, status: "active" as const }
-      : item,
-  );
-  const items = all.filter(
-    (item) =>
-      `${item.display_name ?? ""} ${item.email ?? ""} ${item.provider_id}`
-        .toLowerCase()
-        .includes(applied.search.trim().toLowerCase()) &&
-      (!applied.provider_id || item.provider_id === applied.provider_id) &&
-      (!applied.status || item.status === applied.status) &&
-      (!applied.tag ||
-        (applied.tag === untaggedFilter
-          ? !item.tag_ids?.length
-          : item.tag_ids?.includes(applied.tag))),
-  );
-  const pagination = useTablePagination(items, applied, resource.data !== undefined);
-  const selectedAccounts = items.filter((item) => selected.includes(item.id));
+  const resource = useListResource<Supplier>("/suppliers", applied);
+  const items = resource.data?.items ?? [];
+  const pagination = resource.pagination;
+  const selectedAccounts = selected;
+  const selectedIds = new Set(selected.map((item) => item.id));
   const selectedProvider = selectedSupplierProvider(selectedAccounts);
-  const tagOptions = (tags.data?.items ?? []).filter(
-    (tag) => !filters.provider_id || tag.provider_id === filters.provider_id,
+  const tags = useResource<List<SupplierTag>>(
+    `/supplier-tags/options${query({ provider_id: filters.provider_id })}`,
   );
+  const tagOptions = tags.data?.items ?? [];
+  useErrorToast(tags.error);
   const pageIds = pagination.rows.map((item) => item.id);
-  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.includes(id));
-  const somePageSelected = pageIds.some((id) => selected.includes(id));
-  const batchBusy = actions.isBusy("supplier-tags-batch");
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const somePageSelected = pageIds.some((id) => selectedIds.has(id));
+  const selectionVersion = useRef(0);
+  const clearSelection = () => {
+    selectionVersion.current++;
+    setSelected([]);
+  };
+  const batchBusy = actions.isBusy("supplier-tags-batch") || actions.isBusy("supplier-select");
   const toggleSelection = (ids: string[], checked: boolean) =>
-    setSelected((current) => toggleSupplierSelection(current, ids, checked));
+    setSelected((current) => {
+      const remaining = current.filter((item) => !ids.includes(item.id));
+      return checked
+        ? [
+            ...remaining,
+            ...items
+              .filter((item) => ids.includes(item.id))
+              .map(({ id, provider_id, tag_ids }) => ({ id, provider_id, tag_ids })),
+          ]
+        : remaining;
+    });
 
   const supplierActions = (item: Supplier) => (
     <DropdownMenu>
@@ -249,8 +245,8 @@ export function SuppliersPage() {
               onSubmit={(event) => {
                 event.preventDefault();
                 setApplied({ ...filters });
-                setSelected([]);
-                resource.reload();
+                clearSelection();
+                resource.reload(1);
               }}
             >
               <Field className="min-w-0 sm:w-40">
@@ -340,8 +336,8 @@ export function SuppliersPage() {
                   onClick={() => {
                     setFilters(empty);
                     setApplied(empty);
-                    setSelected([]);
-                    resource.reload();
+                    clearSelection();
+                    resource.reload(1);
                   }}
                 >
                   <RotateCcw />
@@ -424,17 +420,27 @@ export function SuppliersPage() {
                 type="button"
                 size="sm"
                 variant="ghost"
-                disabled={!resource.ready || batchBusy || selectedAccounts.length === items.length}
-                onClick={() => setSelected(items.map((item) => item.id))}
+                disabled={
+                  !resource.ready || batchBusy || selectedAccounts.length === resource.data?.total
+                }
+                onClick={() =>
+                  void actions.run("supplier-select", async () => {
+                    const version = ++selectionVersion.current;
+                    const result = await request<List<SupplierSelection>>(
+                      `/suppliers/selection${query(applied)}`,
+                    );
+                    if (version === selectionVersion.current) setSelected(result.items);
+                  })
+                }
               >
-                全选筛选结果（{items.length}）
+                全选筛选结果（{resource.data?.total ?? "—"}）
               </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
                 disabled={batchBusy}
-                onClick={() => setSelected([])}
+                onClick={() => clearSelection()}
               >
                 清除选择
               </Button>
@@ -493,12 +499,12 @@ export function SuppliersPage() {
                       <TableRow
                         role="row"
                         key={item.id}
-                        data-state={selected.includes(item.id) ? "selected" : undefined}
+                        data-state={selectedIds.has(item.id) ? "selected" : undefined}
                       >
                         <TableCell role="cell" className="w-9" data-label="选择">
                           <Checkbox
                             aria-label={`选择供应账户 ${item.email || item.display_name || item.id}`}
-                            checked={selected.includes(item.id)}
+                            checked={selectedIds.has(item.id)}
                             disabled={!resource.ready || batchBusy}
                             onCheckedChange={(checked) =>
                               toggleSelection([item.id], checked === true)
@@ -655,8 +661,7 @@ export function SuppliersPage() {
                                   <div className="flex flex-wrap items-center gap-1">
                                     {(item.tag_ids ?? []).map((id) => (
                                       <Badge variant="secondary" key={id}>
-                                        {tags.data?.items.find((tag) => tag.id === id)?.name ??
-                                          "标签"}
+                                        {item.tags?.find((tag) => tag.id === id)?.name ?? "标签"}
                                       </Badge>
                                     ))}
                                     {!item.tag_ids?.length && (
@@ -787,7 +792,7 @@ export function SuppliersPage() {
                             {(item.tag_ids ?? []).slice(0, 2).map((id) => (
                               <Badge variant="secondary" className="max-w-32" key={id}>
                                 <span className="truncate">
-                                  {tags.data?.items.find((tag) => tag.id === id)?.name ?? "标签"}
+                                  {item.tags?.find((tag) => tag.id === id)?.name ?? "标签"}
                                 </span>
                               </Badge>
                             ))}
@@ -815,8 +820,7 @@ export function SuppliersPage() {
                                         className="h-auto max-w-full whitespace-normal break-all"
                                         key={id}
                                       >
-                                        {tags.data?.items.find((tag) => tag.id === id)?.name ??
-                                          "标签"}
+                                        {item.tags?.find((tag) => tag.id === id)?.name ?? "标签"}
                                       </Badge>
                                     ))}
                                   </div>
@@ -876,7 +880,7 @@ export function SuppliersPage() {
                 <div className="flex items-start justify-between gap-2">
                   <Checkbox
                     aria-label={`选择供应账户 ${item.email || item.display_name || item.id}`}
-                    checked={selected.includes(item.id)}
+                    checked={selectedIds.has(item.id)}
                     disabled={!resource.ready || batchBusy}
                     onCheckedChange={(checked) => toggleSelection([item.id], checked === true)}
                   />
@@ -930,7 +934,7 @@ export function SuppliersPage() {
                       {(item.tag_ids ?? []).slice(0, 2).map((id) => (
                         <Badge variant="secondary" className="max-w-32" key={id}>
                           <span className="truncate">
-                            {tags.data?.items.find((tag) => tag.id === id)?.name ?? "标签"}
+                            {item.tags?.find((tag) => tag.id === id)?.name ?? "标签"}
                           </span>
                         </Badge>
                       ))}
@@ -958,7 +962,7 @@ export function SuppliersPage() {
                                   className="h-auto max-w-full whitespace-normal break-all"
                                   key={id}
                                 >
-                                  {tags.data?.items.find((tag) => tag.id === id)?.name ?? "标签"}
+                                  {item.tags?.find((tag) => tag.id === id)?.name ?? "标签"}
                                 </Badge>
                               ))}
                             </div>
@@ -1102,7 +1106,7 @@ export function SuppliersPage() {
         disabled={!resource.ready}
         onSaved={() => {
           setBatchOpen(false);
-          setSelected([]);
+          clearSelection();
           resource.reload();
           tags.reload();
         }}
@@ -1364,7 +1368,7 @@ function FingerprintEditor({
   disabled: boolean;
 }) {
   const actions = useActions();
-  const proxies = useResource<List<Proxy>>("/proxies");
+  const proxies = useResource<List<ProxyOption>>("/proxies/options");
   const [changes, setChanges] = useState<Partial<Fingerprint>>({});
   const value: Fingerprint = {
     ...(account?.fingerprint ?? {
@@ -1475,7 +1479,7 @@ export function OAuthWizard({
   const setup = useResource<{ fingerprint: Fingerprint }>(
     supplierId ? null : `${channel.oauthPrefix}/setup`,
   );
-  const proxies = useResource<List<Proxy>>(supplierId ? null : "/proxies");
+  const proxies = useResource<List<ProxyOption>>(supplierId ? null : "/proxies/options");
   useErrorToast(setup.error);
   useErrorToast(proxies.error);
   const [step, setStep] = useState(supplierId ? 1 : 0);

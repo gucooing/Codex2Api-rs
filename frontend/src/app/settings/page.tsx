@@ -1,4 +1,5 @@
 "use client";
+import type { ProxyOption } from "@/lib/api";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -18,7 +19,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -57,13 +58,7 @@ import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { date } from "@/lib/format";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  request,
-  type DesktopSettings,
-  type GatewaySettings,
-  type List,
-  type Proxy,
-} from "@/lib/api";
+import { request, type DesktopSettings, type GatewaySettings, type List } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import { PublicUrls } from "@/components/public-url-settings";
 
@@ -527,7 +522,7 @@ function Desktop() {
   const fieldId = useId();
   const actions = useActions();
   const resource = useResource<DesktopSettings>("/settings/desktop");
-  const proxies = useResource<List<Proxy>>("/proxies");
+  const proxies = useResource<List<ProxyOption>>("/proxies/options");
   const [value, setValue] = useState<DesktopSettings>();
   useErrorToast(resource.error ? resource.error : undefined);
   useErrorToast(proxies.error);
@@ -721,14 +716,11 @@ function ResourceTable({
     columns.slice(0, 2),
   );
 
-  const resource = useResource<{ items: Record<string, unknown>[] }>(path);
+  const resource = useListResource<Record<string, unknown>>(path);
   useErrorToast(resource.error);
-  const pagination = useTablePagination(
-    resource.data?.items ?? [],
-    path,
-    resource.data !== undefined,
-  );
+  const pagination = resource.pagination;
   const items = pagination.rows;
+
   return (
     <Card>
       <CardHeader>

@@ -148,12 +148,12 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
       }
     : null;
   const suppliers = useResource<List<Supplier>>(
-    supplierOpen ? `/suppliers${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
+    supplierOpen ? `/suppliers/options${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
     supplierSearch.trim() ? 250 : 0,
   );
   const consumers = useResource<List<Consumer>>(
     consumerOpen && !consumerId
-      ? `/consumers${query({ search: consumerSearch.trim(), limit: 5 })}`
+      ? `/consumers/options${query({ search: consumerSearch.trim(), limit: 5 })}`
       : null,
     consumerSearch.trim() ? 250 : 0,
   );

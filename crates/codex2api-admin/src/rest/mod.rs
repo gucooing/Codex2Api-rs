@@ -23,9 +23,11 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/users", get(users::list).post(users::create))
         .route("/users/options", get(users::options))
         .route("/users/{id}/wallet-adjustments", post(users::adjust_wallet))
+        .route("/users/{id}/wallet-entries", get(users::wallet_entries))
         .route("/users/{id}", get(users::detail).put(users::update));
     let virtual_routes = platform_resources("/consumers")
         .route("/consumers", get(consumers::list).post(consumers::create))
+        .route("/consumers/options", get(consumers::options))
         .route("/consumers/batch", post(consumers::batch))
         .route(
             "/consumers/{id}",
@@ -82,7 +84,10 @@ pub(crate) fn router(state: AdminState) -> Router {
         .route("/overview", get(settings::overview))
         .route("/overview/usage", get(usage::statistics))
         .route("/suppliers", get(suppliers::list))
+        .route("/suppliers/options", get(suppliers::options))
+        .route("/suppliers/selection", get(suppliers::selection))
         .route("/supplier-tags", get(tags::list).post(tags::create))
+        .route("/supplier-tags/options", get(tags::options))
         .route(
             "/supplier-tags/{id}",
             put(tags::update).delete(tags::delete),
@@ -121,21 +126,28 @@ pub(crate) fn router(state: AdminState) -> Router {
         )
         .route("/suppliers/{id}/official", get(crate::providers::official))
         .route(
+            "/suppliers/chatgpt/{id}/official/rows",
+            get(crate::providers::chatgpt::official_rows),
+        )
+        .route(
             "/suppliers/{id}/credits/consume",
             post(crate::providers::credit),
         )
         .route("/suppliers/{id}/relogin", post(crate::providers::relogin))
         .route("/plans", get(catalog::plans).post(catalog::create_plan))
+        .route("/plans/options", get(catalog::plan_options))
         .route(
             "/plans/{id}",
             put(catalog::update_plan).delete(catalog::delete_plan),
         )
         .route("/models", get(catalog::models).post(catalog::save_model))
+        .route("/models/options", get(catalog::model_options))
         .route("/models/presets", get(catalog::model_presets))
         .route("/models/status", post(catalog::model_status))
         .route("/models/delete", post(catalog::delete_model))
         .route("/usage", get(usage::page))
         .route("/proxies", get(proxies::list).post(proxies::create))
+        .route("/proxies/options", get(proxies::options))
         .route(
             "/proxies/{id}",
             get(proxies::detail)
@@ -225,7 +237,15 @@ fn platform_resources(prefix: &str) -> Router<AdminState> {
             &format!("{prefix}/{{id}}/client-state/{{key}}"),
             get(consumers::client_state),
         )
+        .route(
+            &format!("{prefix}/{{id}}/client-state/{{key}}/rows"),
+            get(consumers::client_rows),
+        )
         .route(&format!("{prefix}/{{id}}/devices"), get(consumers::devices))
+        .route(
+            &format!("{prefix}/{{id}}/remote-servers"),
+            get(consumers::remote_servers),
+        )
         .route(
             &format!("{prefix}/{{id}}/devices/{{device}}/revoke"),
             post(consumers::revoke),

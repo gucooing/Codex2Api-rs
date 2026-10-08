@@ -15,7 +15,7 @@ import {
 
 import { useActions } from "@/lib/actions";
 
-import { request, type Fingerprint, type Proxy } from "@/lib/api";
+import { request, type Fingerprint, type ProxyOption } from "@/lib/api";
 
 export function ChatgptFingerprintFields({
   value,
@@ -24,7 +24,7 @@ export function ChatgptFingerprintFields({
 }: {
   value: Fingerprint;
   onChange: (value: Fingerprint) => void;
-  proxies: Proxy[];
+  proxies: ProxyOption[];
 }) {
   const fieldId = useId();
   const actions = useActions();

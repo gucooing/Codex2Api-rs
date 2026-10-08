@@ -192,8 +192,15 @@ async fn administrator_wallet_route_requires_csrf_and_records_each_change_once()
         ))
         .await;
     assert_eq!(detail["user"]["wallet_balance_usd"], "12.34");
-    assert_eq!(detail["wallet_entries"].as_array().unwrap().len(), 1);
-    assert_eq!(detail["wallet_entries"][0]["kind"], "system_adjustment");
+    let entries = f
+        .get(&format!(
+            "/admin/api/users/{}/wallet-entries",
+            user["id"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(entries["total"], 1);
+    assert_eq!(entries["items"].as_array().unwrap().len(), 1);
+    assert_eq!(entries["items"][0]["kind"], "system_adjustment");
     let choices = f.get("/admin/api/users/options?search=WALLET").await;
     assert_eq!(choices["items"][0]["id"], user["id"]);
     assert!(choices["items"][0].get("password_hash").is_none());

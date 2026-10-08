@@ -2,12 +2,18 @@ use super::error::ApiResult;
 use crate::AdminState;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use codex2api_storage::CouponInput;
 
-pub async fn list(State(state): State<AdminState>) -> ApiResult {
-    Ok(Json(state.storage.coupons().await?))
+pub async fn list(
+    State(state): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(
+        serde_json::to_value(state.storage.coupon_page(&q).await?)
+            .map_err(codex2api_storage::StorageError::from)?,
+    ))
 }
 pub async fn create(State(state): State<AdminState>, Json(input): Json<CouponInput>) -> ApiResult {
     Ok(Json(

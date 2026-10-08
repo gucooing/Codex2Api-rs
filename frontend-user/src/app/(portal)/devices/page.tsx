@@ -18,13 +18,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useResource } from "@/lib/resource";
-import { usePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { request, date, type Device } from "@/lib/api";
 import { useActions, useErrorToast } from "@/lib/actions";
 export default function DevicesPage() {
-  const devices = useResource<{ items: Device[] }>("/devices", 0);
-  const devicePage = usePagination(devices.data?.items ?? [], !!devices.data);
+  const devices = useListResource<Device>("/devices");
+  const devicePage = devices.pagination;
   const actions = useActions();
   useErrorToast(devices.error);
   return (

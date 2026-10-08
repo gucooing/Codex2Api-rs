@@ -174,7 +174,7 @@ test("account filters search their own list endpoints with five results and subm
       page.waitForResponse((response) => {
         const url = new URL(response.url());
         return (
-          url.pathname === `/admin/api/${path}` &&
+          url.pathname === `/admin/api/${path}/options` &&
           url.searchParams.get("limit") === "5" &&
           (url.searchParams.get("search") ?? "") === search
         );

@@ -495,9 +495,10 @@ async fn publication_is_the_only_catalog_gate_and_unknown_prices_never_become_fr
         .unwrap();
     let listed = storage
         .user_store()
-        .plans()
+        .plans(&Default::default())
         .await
         .unwrap()
+        .items
         .into_iter()
         .find(|item| item["id"] == "plus")
         .unwrap();
@@ -513,9 +514,10 @@ async fn publication_is_the_only_catalog_gate_and_unknown_prices_never_become_fr
     assert!(
         !storage
             .user_store()
-            .plans()
+            .plans(&Default::default())
             .await
             .unwrap()
+            .items
             .iter()
             .any(|item| item["id"] == "plus")
     );
@@ -605,7 +607,8 @@ async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_suppl
     let two = preview(&storage, &user, "plus", "SAVE-FIVE").await.unwrap();
     assert_eq!(one["amount_cents"], 2500);
     assert_eq!(
-        storage.coupons().await.unwrap()["items"][0]["reserved_count"],
+        serde_json::to_value(storage.coupon_page(&Default::default()).await.unwrap()).unwrap()["items"]
+            [0]["reserved_count"],
         0
     );
     let proof = one["preview_token"].as_str().unwrap();
@@ -632,7 +635,8 @@ async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_suppl
         .await
         .unwrap();
     assert_eq!(
-        storage.coupons().await.unwrap()["items"][0]["reserved_count"],
+        serde_json::to_value(storage.coupon_page(&Default::default()).await.unwrap()).unwrap()["items"]
+            [0]["reserved_count"],
         1
     );
     assert!(
@@ -681,7 +685,8 @@ async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_suppl
     assert_eq!(paid.amount_cents, 2500);
     assert_eq!(paid.discount_cents, 500);
     assert_eq!(paid.balance_cents, Some(97500));
-    let stats = storage.coupons().await.unwrap();
+    let stats =
+        serde_json::to_value(storage.coupon_page(&Default::default()).await.unwrap()).unwrap();
     assert_eq!(stats["items"][0]["used_count"], 1);
     assert_eq!(stats["items"][0]["reserved_count"], 0);
     let upgrade = preview(&storage, &user, "pro", "").await.unwrap();

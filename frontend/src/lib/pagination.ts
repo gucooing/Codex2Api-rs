@@ -4,6 +4,8 @@ import { useState, type InputHTMLAttributes } from "react";
 import { toastError } from "./actions";
 import { usePathname } from "next/navigation";
 import { usePreference, validPageSize } from "./preferences";
+import { useResource } from "./hooks";
+import { query } from "./api";
 
 export const TABLE_PAGE_SIZE = 20;
 
@@ -84,23 +86,42 @@ export function usePageControls(
   };
 }
 
-export function useTablePagination<T>(rows: T[], scope: unknown = "", ready = true) {
+export type ListPage<T> = { items: T[]; total: number; page: number; page_size: number };
+
+export function useListResource<T, Extra extends object = Record<never, never>>(
+  path: string | null,
+  filters: Record<string, string | number | boolean | null | undefined> = {},
+  ready = true,
+) {
+  const scope = `${path}:${JSON.stringify(filters)}`;
   const [position, setPosition] = useState({ scope, page: 1 });
   const pathname = usePathname();
-  const [pageSize, setPageSize] = usePreference<number>(
+  const [pageSize, setPageSize, preferencesReady] = usePreference<number>(
     `page-size:${pathname}`,
     TABLE_PAGE_SIZE,
     validPageSize,
   );
-  const page =
-    position.scope === scope ? Math.min(position.page, pageCount(rows.length, pageSize)) : 1;
+  const page = position.scope === scope ? position.page : 1;
+  const params = query({ ...filters, page, page_size: pageSize });
+  const resource = useResource<ListPage<T> & Extra>(
+    path && ready && preferencesReady
+      ? `${path}${path.includes("?") ? "&" + params.slice(1) : params}`
+      : null,
+  );
   const controls = usePageControls(
-    page,
-    ready ? rows.length : undefined,
+    resource.data?.page ?? page,
+    resource.data?.total,
     (page) => setPosition({ scope, page }),
     pageSize,
-    false,
+    resource.refreshing,
     setPageSize,
   );
-  return { ...controls, rows: rows.slice((page - 1) * pageSize, page * pageSize) };
+  return {
+    ...resource,
+    reload: (firstPage?: unknown) => {
+      if (firstPage === 1) setPosition({ scope, page: firstPage });
+      resource.reload();
+    },
+    pagination: { ...controls, rows: resource.data?.items ?? [] },
+  };
 }

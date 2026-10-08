@@ -2,15 +2,25 @@ use super::error::{ApiError, ApiResult, ok};
 use crate::AdminState;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use serde::Deserialize;
 use serde_json::json;
 
-pub async fn list(State(s): State<AdminState>) -> ApiResult {
-    Ok(Json(json!({"items":s.storage.supplier_tags().await?})))
+pub async fn list(
+    State(s): State<AdminState>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
+    Ok(Json(json!(s.storage.tag_page(&q).await?)))
 }
-
+pub async fn options(
+    State(s): State<AdminState>,
+    Query(q): Query<super::catalog::OptionsQuery>,
+) -> ApiResult {
+    Ok(Json(
+        json!({"items":s.storage.tag_options(&q.provider_id).await?}),
+    ))
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TagInput {
@@ -40,7 +50,7 @@ async fn save(s: AdminState, id: String, f: TagInput) -> ApiResult {
     s.storage
         .save_supplier_tag(&id, &f.provider_id, &f.name)
         .await?;
-    list(State(s)).await
+    Ok(ok())
 }
 
 pub async fn delete(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {

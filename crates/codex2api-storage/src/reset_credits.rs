@@ -181,7 +181,10 @@ mod tests {
         assert_eq!(list["available_count"], 1);
         assert!(!list.to_string().contains("private admin note"));
         assert_eq!(
-            storage.virtual_reset_credit_records("a").await.unwrap()["items"][0]["note"],
+            storage
+                .virtual_reset_credit_records("a", &Default::default())
+                .await
+                .unwrap()["items"][0]["note"],
             "private admin note"
         );
         let id = response["credit"]["id"].as_str().unwrap();
@@ -423,10 +426,16 @@ mod tests {
             "0"
         );
         assert_eq!(
-            storage.virtual_reset_credit_records("a").await.unwrap()["items"][0]["source"],
+            storage
+                .virtual_reset_credit_records("a", &Default::default())
+                .await
+                .unwrap()["items"][0]["source"],
             "admin_reset"
         );
-        let records = storage.virtual_reset_credit_records("a").await.unwrap();
+        let records = storage
+            .virtual_reset_credit_records("a", &Default::default())
+            .await
+            .unwrap();
         let internal = records["items"][0]["id"].as_str().unwrap();
         assert_eq!(
             storage
@@ -443,7 +452,10 @@ mod tests {
             "nothing_to_reset"
         );
         assert_eq!(
-            storage.virtual_reset_credit_records("a").await.unwrap()["items"]
+            storage
+                .virtual_reset_credit_records("a", &Default::default())
+                .await
+                .unwrap()["items"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -469,7 +481,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let records = storage.virtual_reset_credit_records("a").await.unwrap();
+        let records = storage
+            .virtual_reset_credit_records("a", &Default::default())
+            .await
+            .unwrap();
         let id = records["items"][0]["id"].as_str().unwrap();
         assert_eq!(
             storage.virtual_reset_credits("a").await.unwrap(),
@@ -514,7 +529,10 @@ mod tests {
             "no_credit"
         );
         assert_eq!(
-            storage.virtual_reset_credit_records("a").await.unwrap()["items"][0]["status"],
+            storage
+                .virtual_reset_credit_records("a", &Default::default())
+                .await
+                .unwrap()["items"][0]["status"],
             "expired"
         );
         assert_eq!(
@@ -552,20 +570,36 @@ impl Storage {
         )
     }
 
-    pub async fn virtual_reset_credit_records(&self, owner: &str) -> Result<Value> {
-        let rows: Vec<(String, i64, Option<i64>, Option<String>, i64, String, i64, Option<i64>, String)> = sqlx::query_as(
-            "SELECT c.id,c.granted_at_ms,c.redeemed_at_ms,c.redeemed_by,c.windows_reset,g.note,c.available_at_ms,c.expires_at_ms,c.source
-             FROM virtual_reset_credits c JOIN virtual_reset_grants g ON g.virtual_account_id=c.virtual_account_id AND g.request_id=c.grant_request_id
-             WHERE c.virtual_account_id=? ORDER BY c.granted_at_ms DESC,c.id")
-            .bind(owner).fetch_all(self.pool()).await?;
+    pub async fn virtual_reset_credit_records(
+        &self,
+        owner: &str,
+        filter: &crate::ListQuery,
+    ) -> Result<Value> {
+        type Row = (
+            String,
+            i64,
+            Option<i64>,
+            Option<String>,
+            i64,
+            String,
+            i64,
+            Option<i64>,
+            String,
+        );
+        let page = self.read_list::<Row>(filter,
+            "c.id,c.granted_at_ms,c.redeemed_at_ms,c.redeemed_by,c.windows_reset,g.note,c.available_at_ms,c.expires_at_ms,c.source",
+            "virtual_reset_credits c JOIN virtual_reset_grants g ON g.virtual_account_id=c.virtual_account_id AND g.request_id=c.grant_request_id",
+            "c.granted_at_ms DESC,c.id", |q| { q.push(" AND c.virtual_account_id=").push_bind(owner.to_owned()); }).await?;
         let now = Utc::now().timestamp_millis();
-        Ok(
-            json!({"available_count":rows.iter().filter(|r|r.2.is_none() && r.6<=now && r.7.is_none_or(|at|at>now) && r.8=="card").count(),"items":rows.into_iter().map(|(id,granted,redeemed,actor,windows,note,active,expires,source)|json!({
+        let available:i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_reset_credits WHERE virtual_account_id=? AND redeemed_at_ms IS NULL AND available_at_ms<=? AND (expires_at_ms IS NULL OR expires_at_ms>?) AND source='card'")
+            .bind(owner).bind(now).bind(now).fetch_one(self.pool()).await?;
+        let mut value = serde_json::to_value(page.map(|(id,granted,redeemed,actor,windows,note,active,expires,source)|json!({
             "id":id,"status":if redeemed.is_some(){"redeemed"}else if source=="admin_reset"{"not_applied"}else if expires.is_some_and(|at|at<=now){"expired"}else if active>now{"pending"}else{"available"},
             "granted_at":timestamp(granted),"redeemed_at":redeemed.map(timestamp),"available_at":timestamp(active),"expires_at":expires.map(timestamp),
             "redeemed_by":actor,"windows_reset":windows,"note":note,"source":source
-        })).collect::<Vec<_>>() }),
-        )
+        })))?;
+        value["available_count"] = available.into();
+        Ok(value)
     }
 
     pub async fn grant_virtual_reset_credits(

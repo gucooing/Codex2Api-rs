@@ -1,9 +1,10 @@
 "use client";
+import type { PlanOption } from "@/lib/api";
 import { useId, useState } from "react";
-import { request, type Plan } from "@/lib/api";
+import { request } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import { useActions, useErrorToast } from "@/lib/actions";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { cents, orderTime } from "@/lib/orders";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -78,20 +79,14 @@ function amount(text: string) {
   return result;
 }
 export default function CouponsPage() {
-  const resource = useResource<{ items: Coupon[] }>("/coupons");
-  const plans = useResource<{ items: Plan[] }>("/plans");
+  const plans = useResource<{ items: PlanOption[] }>("/plans/options?paid_only=true");
   const [edit, setEdit] = useState<Edit>();
   const [search, setSearch] = useState("");
   const [applied, setApplied] = useState("");
   const actions = useActions();
   const id = useId();
-  const pagination = useTablePagination(
-    resource.data?.items.filter((c) =>
-      `${c.code} ${c.name}`.toLowerCase().includes(applied.toLowerCase()),
-    ) ?? [],
-    "coupons",
-    !!resource.data,
-  );
+  const resource = useListResource<Coupon>("/coupons", { search: applied });
+  const pagination = resource.pagination;
   const update = (patch: Partial<Edit>) =>
     setEdit((value) => (value ? { ...value, ...patch } : value));
   const busy = actions.isBusy("save-coupon");
@@ -107,7 +102,7 @@ export default function CouponsPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied(search.trim());
-              resource.reload();
+              resource.reload(1);
             }}
           >
             <Field className="w-60">
@@ -342,13 +337,11 @@ export default function CouponsPage() {
                     </SelectTrigger>
                     <SelectContent position="popper">
                       <SelectItem value="all">全部付费套餐</SelectItem>
-                      {plans.data?.items
-                        .filter((p) => p.plan_type !== "free")
-                        .map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
+                      {plans.data?.items.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </Field>

@@ -13,9 +13,10 @@ import {
 import { Field, FieldLabel, FieldDescription, FieldSet, FieldLegend } from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useActions, useErrorToast } from "@/lib/actions";
-import { request, type Supplier, type SupplierTag, type List } from "@/lib/api";
+import { request, query, type SupplierTag, type List } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import {
+  type SupplierSelection,
   commonSupplierTags,
   selectedSupplierProvider,
   supplierTagChecked,
@@ -28,17 +29,19 @@ export function SupplierTagEditor({
   batch = false,
   onSaved,
 }: {
-  accounts: Supplier[];
+  accounts: SupplierSelection[];
   disabled: boolean;
   batch?: boolean;
   onSaved: () => void;
 }) {
   const fieldId = useId();
-  const tags = useResource<List<SupplierTag>>("/supplier-tags");
   const [draft, setDraft] = useState<string[]>();
   const actions = useActions();
   const provider = selectedSupplierProvider(accounts);
-  const choices = (tags.data?.items ?? []).filter((tag) => tag.provider_id === provider);
+  const tags = useResource<List<SupplierTag>>(
+    provider ? `/supplier-tags/options${query({ provider_id: provider })}` : null,
+  );
+  const choices = tags.data?.items ?? [];
   const common = commonSupplierTags(accounts);
   const changed =
     draft !== undefined &&
@@ -152,7 +155,7 @@ export function SupplierTagsBatchDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  accounts: Supplier[];
+  accounts: SupplierSelection[];
   disabled: boolean;
   onSaved: () => void;
 }) {

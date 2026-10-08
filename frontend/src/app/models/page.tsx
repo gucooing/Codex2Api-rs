@@ -4,7 +4,7 @@ import { SearchBilling } from "@/components/providers/chatgpt/billing";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 
 import { useDialogFocus } from "@/lib/actions";
@@ -122,21 +122,12 @@ function ModelPricing() {
 
   const fieldId = useId();
   const actions = useActions();
-  const resource = useResource<List<Model>>("/models");
   const presets = useResource<List<ModelPreset>>("/models/presets");
   const [editing, setEditing] = useState<Model>();
   const empty = { search: "", kind: "", status: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters("models.filters", empty);
-  const items =
-    resource.data?.items.filter(
-      (model) =>
-        `${model.model} ${model.provider_id}`
-          .toLowerCase()
-          .includes(applied.search.trim().toLowerCase()) &&
-        (!applied.kind || model.kind === applied.kind) &&
-        (!applied.status || model.enabled === (applied.status === "enabled")),
-    ) ?? [];
-  const pagination = useTablePagination(items, applied, resource.data !== undefined);
+  const resource = useListResource<Model>("/models", applied);
+  const pagination = resource.pagination;
   useErrorToast(resource.error);
   useErrorToast(presets.error);
   return (
@@ -148,7 +139,7 @@ function ModelPricing() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
-              resource.reload();
+              resource.reload(1);
             }}
           >
             <Field className="w-40">
@@ -292,7 +283,7 @@ function ModelPricing() {
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
-                  resource.reload();
+                  resource.reload(1);
                 }}
               >
                 <RotateCcw />
@@ -391,7 +382,7 @@ function ModelPricing() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.length ? (
+                {pagination.rows.length ? (
                   <>
                     {pagination.rows.map((model) => (
                       <TableRow role="row" key={`${model.provider_id}/${model.model}`}>

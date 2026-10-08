@@ -66,7 +66,22 @@ async function fixture(page: Page, includeGrok = false) {
   const allocations: { supplier_id: string | null; tag_id: string | null; revision: number }[] = [];
   await page.emulateMedia({ colorScheme: "dark" });
   await page.route("**/admin/api/**", async (route) => {
-    const path = new URL(route.request().url()).pathname.slice("/admin/api".length);
+    const url = new URL(route.request().url());
+    const path = url.pathname.slice("/admin/api".length);
+    const params = url.searchParams;
+    const paginate = <T>(items: T[]) => {
+      const size = Number(params.get("page_size") || 20);
+      const page = Math.max(
+        1,
+        Math.min(Number(params.get("page") || 1), Math.ceil(items.length / size)),
+      );
+      return {
+        items: items.slice((page - 1) * size, page * size),
+        total: items.length,
+        page,
+        page_size: size,
+      };
+    };
     const method = route.request().method();
     let value: unknown = { items: [] };
     if (path === "/session")
@@ -94,15 +109,62 @@ async function fixture(page: Page, includeGrok = false) {
       supplier.status = "active";
       supplier.cooldown_until = null;
       value = supplier;
-    } else if (path === "/suppliers") value = { items: suppliers };
-    else if (path.startsWith("/suppliers/"))
-      value = suppliers.find((supplier) => supplier.id === path.split("/")[2]);
+    } else if (["/suppliers", "/suppliers/options", "/suppliers/selection"].includes(path)) {
+      const search = (params.get("search") || "").trim().toLowerCase();
+      const rows = suppliers.filter(
+        (item) =>
+          (!params.get("provider_id") || item.provider_id === params.get("provider_id")) &&
+          (!params.get("status") || item.status === params.get("status")) &&
+          (!params.get("tag") ||
+            (params.get("tag") === "__untagged__"
+              ? !item.tag_ids.length
+              : item.tag_ids.includes(params.get("tag")!))) &&
+          `${item.display_name} ${item.email} ${item.provider_id}`.toLowerCase().includes(search) &&
+          (params.get("for_routing") !== "true" || item.status === "active"),
+      );
+      value =
+        path === "/suppliers"
+          ? paginate(
+              rows.map((item) => ({
+                ...item,
+                tags: tags
+                  .filter((tag) => item.tag_ids.includes(tag.id))
+                  .map(({ id, name }) => ({ id, name })),
+              })),
+            )
+          : {
+              items: path.endsWith("/options")
+                ? rows.slice(0, Number(params.get("limit") || 5))
+                : rows.map(({ id, provider_id, tag_ids }) => ({ id, provider_id, tag_ids })),
+            };
+    } else if (path.startsWith("/suppliers/")) {
+      const supplier = suppliers.find((supplier) => supplier.id === path.split("/")[2]);
+      value = supplier
+        ? {
+            ...supplier,
+            tags: tags
+              .filter((tag) => supplier.tag_ids.includes(tag.id))
+              .map(({ id, name }) => ({ id, name })),
+          }
+        : undefined;
+    } else if (path === "/supplier-tags/options")
+      value = {
+        items: tags.filter(
+          (t) => !params.get("provider_id") || t.provider_id === params.get("provider_id"),
+        ),
+      };
     else if (path === "/supplier-tags") {
       if (method === "POST") {
         const input = route.request().postDataJSON();
         tags.push({ id: "created", ...input, supplier_count: 0, binding_count: 0 });
       }
-      value = { items: tags };
+      value = paginate(
+        tags.filter(
+          (t) =>
+            (!params.get("provider_id") || t.provider_id === params.get("provider_id")) &&
+            t.name.toLowerCase().includes((params.get("search") || "").toLowerCase()),
+        ),
+      );
     } else if (path.startsWith("/supplier-tags/")) {
       const tag = tags.find((item) => item.id === path.split("/")[2]);
       if (tag && method === "PUT") tag.name = route.request().postDataJSON().name;
@@ -137,11 +199,39 @@ async function fixture(page: Page, includeGrok = false) {
       };
     } else if (path === "/consumers/v1/rate-limit")
       value = { rpm: null, default_rpm: 20, effective_rpm: 20 };
-    else if (path === "/plans") value = contracts.plans;
+    else if (path === "/plans/options") value = contracts.plans;
+    else if (path === "/plans") value = paginate(contracts.plans.items);
     await route.fulfill({ json: value });
   });
   return { writes, suppliers, tags, state, allocations };
 }
+
+test("list requests carry filters and page boundaries to the server", async ({ page }) => {
+  await fixture(page);
+  const reads: URL[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/admin/api/suppliers") reads.push(url);
+  });
+  await page.goto("/admin/suppliers/");
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(21);
+  expect(reads.at(-1)?.searchParams.get("page_size")).toBe("20");
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(4);
+  expect(reads.at(-1)?.searchParams.get("page")).toBe("2");
+  await page.getByLabel("搜索账户", { exact: true }).fill("supplier2@");
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(page.getByRole("table").getByRole("row")).toHaveCount(2);
+  expect(reads.at(-1)?.searchParams.get("page")).toBe("1");
+  expect(reads.at(-1)?.searchParams.get("search")).toBe("supplier2@");
+  const before = reads.length;
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect.poll(() => reads.length).toBe(before + 1);
+  await page.getByLabel("搜索账户", { exact: true }).fill("' OR 1=1 --");
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(page.getByText("共 0 条", { exact: false })).toBeVisible();
+  expect(reads.at(-1)?.searchParams.get("search")).toBe("' OR 1=1 --");
+});
 
 test("list query retries an initial failure without requesting quotas", async ({ page }) => {
   await fixture(page);
@@ -154,7 +244,7 @@ test("list query retries an initial failure without requesting quotas", async ({
   page.on("request", (request) => {
     if (new URL(request.url()).pathname.endsWith("/quota")) quotaReads++;
   });
-  await page.route("**/admin/api/suppliers", async (route) => {
+  await page.route(/\/admin\/api\/suppliers(?:\?.*)?$/, async (route) => {
     listReads++;
     if (listReads === 1) {
       await route.fulfill({
@@ -171,7 +261,7 @@ test("list query retries an initial failure without requesting quotas", async ({
   await expect(page.getByRole("button", { name: "刷新供应账户", exact: true })).toHaveCount(0);
   await expect(page.getByText("供应列表暂时不可用", { exact: true })).toBeVisible();
   await expect(query).toBeEnabled();
-  const retry = page.waitForRequest("**/admin/api/suppliers");
+  const retry = page.waitForRequest(/\/admin\/api\/suppliers(?:\?.*)?$/);
   await query.click();
   await retry;
   try {
@@ -194,7 +284,7 @@ test("failed list query preserves rows and can retry without quota requests", as
   page.on("request", (request) => {
     if (new URL(request.url()).pathname.endsWith("/quota")) quotaReads++;
   });
-  await page.route("**/admin/api/suppliers", async (route) => {
+  await page.route(/\/admin\/api\/suppliers(?:\?.*)?$/, async (route) => {
     if (failList) {
       await route.abort("failed");
       return;
@@ -323,7 +413,7 @@ test("list load, query, view changes and clock ticks never request stale or miss
   page.on("request", (request) => {
     if (new URL(request.url()).pathname.endsWith("/quota")) reads++;
   });
-  await page.route("**/admin/api/suppliers", async (route) => {
+  await page.route(/\/admin\/api\/suppliers(?:\?.*)?$/, async (route) => {
     await route.fulfill({
       json: {
         items: suppliers.map((item, index) => (index === 2 ? { ...item, quota: null } : item)),
@@ -437,8 +527,8 @@ test("allocation shows the assigned account or unassigned state without operatio
 }, info) => {
   const { state, allocations } = await fixture(page);
   await page.goto("/admin/consumers/detail/?id=v1");
-  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toContainText(
-    "账户01",
+  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveValue(
+    "supplier1@example.test",
   );
   await expect(page.getByText("当前临时绑定 / 手动选择", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/自动选择绑定数最少|保留健康绑定|内部换号不重复计数/)).toHaveCount(0);
@@ -446,17 +536,18 @@ test("allocation shows the assigned account or unassigned state without operatio
   await page.getByRole("combobox", { name: "标签号池", exact: true }).click();
   await page.getByRole("option", { name: /^标准池/ }).click();
   await page.getByRole("combobox", { name: "分配账户", exact: true }).click();
-  await page.getByRole("option", { name: "账户02", exact: true }).click();
+  await page.getByRole("option", { name: "supplier2@example.test", exact: true }).click();
   await page.getByRole("button", { name: "保存绑定", exact: true }).click();
   await expect.poll(() => allocations.length).toBe(1);
   expect(allocations[0]).toEqual({ tag_id: "a", supplier_id: "s2", revision: 1 });
-  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toContainText(
-    "账户02",
+  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveValue(
+    "supplier2@example.test",
   );
 
   state.assigned = null;
   await page.reload();
-  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toContainText(
+  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveAttribute(
+    "placeholder",
     "暂未分配",
   );
   await page.screenshot({ path: info.outputPath("unassigned-account.png"), fullPage: true });

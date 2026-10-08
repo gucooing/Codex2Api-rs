@@ -1,7 +1,7 @@
 "use client";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useTablePagination } from "@/lib/pagination";
+import { useListResource } from "@/lib/pagination";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
 import { useDialogFocus } from "@/lib/actions";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -53,8 +53,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { date } from "@/lib/format";
 import { useState } from "react";
 import { Plus, Pencil, Search, RotateCcw } from "lucide-react";
-import { request, type List, type Proxy, type ProxyWrite } from "@/lib/api";
-import { useResource } from "@/lib/hooks";
+import { request, type Proxy, type ProxyWrite } from "@/lib/api";
 import { useSavedFilters } from "@/lib/preferences";
 
 export default function ProxiesPage() {
@@ -66,21 +65,11 @@ export default function ProxiesPage() {
 
   const fieldId = useId();
   const actions = useActions();
-  const resource = useResource<List<Proxy>>("/proxies");
   const [editing, setEditing] = useState<Proxy | "new">();
   const empty = { search: "", protocol: "", result: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters("proxies.filters", empty);
-  const items =
-    resource.data?.items.filter(
-      (proxy) =>
-        `${proxy.name} ${proxy.host}`.toLowerCase().includes(applied.search.trim().toLowerCase()) &&
-        (!applied.protocol || proxy.protocol === applied.protocol) &&
-        (!applied.result ||
-          (applied.result === "unchecked"
-            ? proxy.connection_ok === null
-            : proxy.connection_ok === (applied.result === "success"))),
-    ) ?? [];
-  const pagination = useTablePagination(items, applied, resource.data !== undefined);
+  const resource = useListResource<Proxy>("/proxies", applied);
+  const pagination = resource.pagination;
   const check = async (proxy: Proxy, action: string) => {
     await request(`/proxies/${proxy.id}/check/${action}`, { method: "POST", body: {} });
     resource.reload();
@@ -95,7 +84,7 @@ export default function ProxiesPage() {
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
-              resource.reload();
+              resource.reload(1);
             }}
           >
             <Field className="w-40">
@@ -249,7 +238,7 @@ export default function ProxiesPage() {
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
-                  resource.reload();
+                  resource.reload(1);
                 }}
               >
                 <RotateCcw />
@@ -331,7 +320,7 @@ export default function ProxiesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.length ? (
+                {pagination.rows.length ? (
                   <>
                     {pagination.rows.map((proxy) => (
                       <TableRow role="row" key={proxy.id}>
