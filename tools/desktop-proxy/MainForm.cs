@@ -92,7 +92,7 @@ internal sealed class MainForm : Form
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(60));
         var client = await Resolve(timeout.Token);
         var settings = ReadForm();settings.Server = root;settings.Save(Settings.FilePath);
-        var pid = await Launcher.Start(client, root, new Progress<string>(s => Report(s)), timeout.Token);
+        var pid = await Launcher.Start(client, root, s => Report(s), timeout.Token);
         Report("客户端已启动，可以关闭本启动器。");
     }
     private Task Export()

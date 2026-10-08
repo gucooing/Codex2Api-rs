@@ -30,7 +30,7 @@ internal static class Program
                 if (input.TryGetProperty("sharedHome", out var sharedHome)) environment["CODEX2API_SHARED_HOME"] = sharedHome.GetString()!;
                 if (input.TryGetProperty("notificationProbe", out var notificationProbe)) environment["CODEX2API_NOTIFICATION_TEST_REPORT"] = notificationProbe.GetString()!;
                 using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                var pid=Launcher.Start(client,server,new Progress<string>(),timeout.Token,environment).GetAwaiter().GetResult();
+                var pid=Launcher.Start(client,server,_ => {},timeout.Token,environment).GetAwaiter().GetResult();
                 File.WriteAllText(args[2],JsonSerializer.Serialize(new {processId=pid,nativeHookInstalled=true}));
             }
             catch(Exception e) {File.WriteAllText(args[2],e.ToString());Environment.ExitCode=1;}

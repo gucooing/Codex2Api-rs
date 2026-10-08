@@ -138,7 +138,7 @@ internal static class NotificationHost
         var launch = JsonSerializer.Deserialize<NotificationLaunch>(File.ReadAllText(input))!;
         using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var client = File.Exists(launch.Executable) ? await ClientInstallation.ResolvePath(launch.Executable, cancel.Token) : await ClientInstallation.Detect(cancel.Token);
-        await Launcher.Start(client, launch.Server, new Progress<string>(), cancel.Token);
+        await Launcher.Start(client, launch.Server, _ => { }, cancel.Token);
     }
 }
 

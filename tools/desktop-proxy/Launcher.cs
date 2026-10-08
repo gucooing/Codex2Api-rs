@@ -66,7 +66,7 @@ internal static class Launcher
         return file;
     }
 
-    public static async Task<int> Start(ClientInstallation client, string server, IProgress<string> log, CancellationToken cancel, IReadOnlyDictionary<string, string>? testEnvironment = null)
+    public static async Task<int> Start(ClientInstallation client, string server, Action<string> log, CancellationToken cancel, IReadOnlyDictionary<string, string>? testEnvironment = null)
     {
         var profile = testEnvironment is null ? ClientProfile.ForServer(server)
             : new ClientProfile(testEnvironment["CODEX_HOME"], testEnvironment["CODEX_ELECTRON_USER_DATA_PATH"], server, testEnvironment.GetValueOrDefault("CODEX2API_SHARED_HOME"));
@@ -91,7 +91,7 @@ internal static class Launcher
                 if (attempt >= 200) throw new TimeoutException("独立通知服务启动超时。");
                 await Task.Delay(100, cancel);
             }
-            log.Report("正在启动客户端…");
+            log("正在启动客户端…");
             cancel.ThrowIfCancellationRequested();
             if (client.AppUserModelId is not null)
                 PackagedApplication.StartHost(client.AppUserModelId, Environment.ProcessPath!, ["--native-launch", input, output]);
@@ -112,7 +112,7 @@ internal static class Launcher
                     if (state.StartsWith("ERROR:")) throw new InvalidOperationException(state);
                     if (state == "routing-installed" && process is not null)
                     {
-                        success = true; log.Report("客户端已启动。"); return process.Id;
+                        success = true; log("客户端已启动。"); return process.Id;
                     }
                 }
                 if (process?.HasExited == true) throw new InvalidOperationException("客户端在启动完成前退出。");
