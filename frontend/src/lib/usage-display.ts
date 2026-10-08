@@ -3,6 +3,13 @@ import type { UsageRecord } from "./api";
 export const failedUsage = (record: Pick<UsageRecord, "status">) =>
   ["failed", "incomplete", "interrupted"].includes(record.status);
 
+export function requestSpeed(record: Pick<UsageRecord, "service_tier">) {
+  const tier = record.service_tier;
+  if (tier == null || tier === "default") return "standard";
+  if (tier === "priority") return "fast";
+  return tier;
+}
+
 export function tokenCount(value: number | null | undefined) {
   if (value == null) return "-";
   if (value < 1000) return value.toLocaleString("en-US");

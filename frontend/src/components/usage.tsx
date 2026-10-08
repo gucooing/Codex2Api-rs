@@ -81,6 +81,7 @@ import {
   usageStatus,
   usageStatuses,
   imageUsageLabel,
+  requestSpeed,
 } from "@/lib/usage-display";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -787,8 +788,7 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
                       role="cell"
                       className="text-xs "
                     >
-                      {record.reasoning_effort ?? "默认"} /{" "}
-                      {record.billing_tier ?? record.service_tier ?? "标准"}
+                      {record.reasoning_effort ?? "默认"} / {requestSpeed(record)}
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("用量")}
@@ -990,7 +990,8 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
                 ],
                 ["计费状态", billingLabel(selected.billing_status)],
 
-                ["命中计费挡位", selected.billing_tier ?? selected.service_tier ?? "标准"],
+                ["请求速度", requestSpeed(selected)],
+                ["命中计费挡位", selected.billing_tier ?? "-"],
               ].map(([label, value]) => (
                 <Field key={String(label)}>
                   <FieldTitle>{label}</FieldTitle>

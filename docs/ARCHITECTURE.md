@@ -411,6 +411,11 @@ Concurrent requests not yet settled can temporarily exceed a spending window.
 Pricing checks use the configured spending limits even before the optional
 five-hour window starts and appears in client quota responses.
 
+The request ledger preserves the client's `service_tier` for both speed display
+and billing, including supplier retries. `priority` means `fast`; an omitted tier
+uses `standard`. Response tiers never overwrite it. Historical records whose
+request tier was overwritten cannot be reconstructed or repriced without evidence.
+
 Client usage JSON, HTTP headers, SSE and WS quota events read the same virtual
 ledger. Client percentages are integers; local dollar summaries belong only in
 administration. Supplier quota synchronization into virtual clients is prohibited.

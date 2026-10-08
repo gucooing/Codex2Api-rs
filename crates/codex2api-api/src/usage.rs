@@ -151,7 +151,6 @@ struct ResponseMetadata {
     size: Option<String>,
     usage: Option<Tokens>,
     status: Option<String>,
-    service_tier: Option<String>,
     data: Option<Vec<ImageOutput>>,
 }
 #[derive(Default, Deserialize)]
@@ -176,7 +175,6 @@ struct Event {
     // Error envelopes use a numeric HTTP status; response events use a string.
     status: Option<serde_json::Value>,
     error: Option<serde_json::Value>,
-    service_tier: Option<String>,
     data: Option<Vec<ImageOutput>>,
 }
 
@@ -375,12 +373,7 @@ impl RequestLog {
         {
             record.upstream_request_id = Some(id);
         }
-        if let Some(tier) = response
-            .and_then(|r| r.service_tier.as_ref())
-            .or(event.service_tier.as_ref())
-        {
-            record.service_tier = Some(tier.clone());
-        }
+        // Speed and billing use the client's request tier, never the response tier.
         if let Some(model) = response
             .and_then(|r| r.headers.as_ref())
             .and_then(reported_model)
@@ -1360,6 +1353,128 @@ mod tests {
     use axum::{Router, response::Response, routing::post};
     use codex2api_storage::UsageFilter;
     use futures::StreamExt;
+
+    #[tokio::test]
+    async fn request_service_tier_controls_speed_and_billing_across_transports() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("service-tier.sqlite"))
+            .await
+            .unwrap();
+        let ws_context = execution_context(storage.clone(), "/v1/responses", "websocket").await;
+        let mut count = 0;
+        for transport in ["json", "sse", "websocket"] {
+            for (requested, reported, billing_tier, cost) in [
+                (Some("priority"), "default", Some("fast"), Some(28_200_000)),
+                (Some("fast"), "flex", Some("fast"), Some(28_200_000)),
+                (Some("flex"), "priority", Some("flex"), Some(7_050_000)),
+                (None, "priority", Some("standard"), Some(14_100_000)),
+                (
+                    Some("default"),
+                    "priority",
+                    Some("standard"),
+                    Some(14_100_000),
+                ),
+                (Some("custom-speed"), "default", None, None),
+            ] {
+                count += 1;
+                let request = serde_json::json!({
+                    "model":"gpt-6-astra", "service_tier":requested
+                });
+                let metadata = codex2api_upstream::request_metadata(
+                    &serde_json::to_vec(&request).unwrap(),
+                    &http::HeaderMap::new(),
+                )
+                .unwrap();
+                let mut log = context(storage.clone(), "/v1/responses", transport)
+                    .start(metadata, Instant::now(), count as i64)
+                    .await
+                    .unwrap();
+                let id = log.record.as_ref().unwrap().id.clone();
+                let response = serde_json::json!({
+                    "id":format!("response-{count}"), "model":"gpt-6-astra",
+                    "status":"completed", "service_tier":reported,
+                    "usage":{"input_tokens":1000,"output_tokens":100,
+                        "input_tokens_details":{"cached_tokens":100}}
+                });
+                let created = serde_json::json!({
+                    "type":"response.created", "service_tier":reported,
+                    "response":{"id":response["id"],"service_tier":reported}
+                });
+                let completed = serde_json::json!({
+                    "type":"response.completed", "response":response
+                });
+                if transport == "websocket" {
+                    let mut ledger = WsLedger::new(ws_context.clone());
+                    ledger.push(Some(log));
+                    ledger
+                        .observe(created.to_string().as_bytes())
+                        .await
+                        .unwrap();
+                    ledger
+                        .observe(completed.to_string().as_bytes())
+                        .await
+                        .unwrap();
+                } else {
+                    let sse = transport == "sse";
+                    let body = if sse {
+                        format!("data: {created}\n\ndata: {completed}\n\n")
+                    } else {
+                        response.to_string()
+                    };
+                    let mut parser = BodyParser::default();
+                    log.http_status(200);
+                    for chunk in body.as_bytes().chunks(17) {
+                        parser.feed(chunk, sse, &mut log);
+                    }
+                    parser.end(sse, &mut log);
+                    log.finish("completed");
+                }
+                let rows = finalized(&storage, count).await;
+                let row = rows.iter().find(|row| row.id == id).unwrap();
+                assert_eq!(row.service_tier.as_deref(), requested, "{transport}");
+                assert_eq!(row.billing_tier.as_deref(), billing_tier, "{transport}");
+                assert_eq!(row.cost_nano_usd, cost, "{transport}");
+                assert_eq!(
+                    row.billing_status,
+                    if cost.is_some() { "priced" } else { "unpriced" }
+                );
+                assert_eq!(row.status, "completed");
+            }
+        }
+        storage.close().await;
+    }
+
+    #[tokio::test]
+    async fn supplier_retry_keeps_the_original_request_service_tier() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("service-tier-retry.sqlite"))
+            .await
+            .unwrap();
+        let mut log = context(storage.clone(), "/v1/responses", "sse")
+            .start(
+                RequestMetadata {
+                    model: Some("gpt-6-astra".into()),
+                    service_tier: Some("priority".into()),
+                    ..Default::default()
+                },
+                Instant::now(),
+                1,
+            )
+            .await
+            .unwrap();
+        log.parse_at(
+            br#"{"type":"response.created","response":{"service_tier":"default"}}"#,
+            Instant::now(),
+        );
+        log.retry_generation();
+        log.parse_at(br#"{"type":"response.completed","response":{"usage":{"input_tokens":1000,"output_tokens":100,"input_tokens_details":{"cached_tokens":100}}}}"#, Instant::now());
+        log.finish("completed");
+        let rows = finalized(&storage, 1).await;
+        assert_eq!(rows[0].service_tier.as_deref(), Some("priority"));
+        assert_eq!(rows[0].billing_tier.as_deref(), Some("fast"));
+        assert_eq!(rows[0].cost_nano_usd, Some(28_200_000));
+        storage.close().await;
+    }
 
     #[tokio::test]
     async fn http_disconnect_drains_unpolled_and_partial_bodies_and_settles_final_usage() {
@@ -2408,7 +2523,7 @@ mod tests {
             first
         );
         // The client receives the first bytes while upstream is still open.
-        let completed=b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"actual\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":10}}}}\r\n\r\ndata: [DONE]\r\n\r\n";
+        let completed=b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"actual\",\"service_tier\":\"default\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":10}}}}\r\n\r\ndata: [DONE]\r\n\r\n";
         for chunk in completed.chunks(61) {
             tx.send(Ok(Bytes::copy_from_slice(chunk))).await.unwrap();
         }
@@ -2507,7 +2622,9 @@ mod tests {
         ledger
             .lock()
             .await
-            .observe(br#"{"type":"response.failed","response":{"id":"r1"}}"#)
+            .observe(
+                br#"{"type":"response.failed","response":{"id":"r1","service_tier":"default"}}"#,
+            )
             .await
             .unwrap();
         ws_start(

@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn keeps_incremental_websocket_session_data() {
         let original = serde_json::json!({"type":"response.create", "previous_response_id":"previous",
-            "generate":false, "input":[{"content":"do not change"}],
+            "generate":false, "service_tier":"priority", "input":[{"content":"do not change"}],
             "client_metadata":{"x-codex-installation-id":"caller", "turn_id":"turn", "session_id":"session"}});
         let out: serde_json::Value = serde_json::from_str(
             &prepare_message(&original.to_string(), "account", None, false).unwrap(),
@@ -1437,6 +1437,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(configured["previous_response_id"], "previous");
+        assert_eq!(configured["service_tier"], "priority");
         assert!(
             configured["input"]
                 .to_string()
