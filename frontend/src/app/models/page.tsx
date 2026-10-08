@@ -1,5 +1,7 @@
 "use client";
 import { GrokModelSync } from "@/components/providers/grok/models";
+import { SearchBilling } from "@/components/providers/chatgpt/billing";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import { useTablePagination } from "@/lib/pagination";
@@ -94,7 +96,24 @@ const emptyModel = (): Model => ({
   token_prices: [tokenRule()],
   image_prices: [{ resolution: "", price: "" }],
 });
-export default function ModelsPage() {
+export default function BillingPage() {
+  return (
+    <Tabs defaultValue="models">
+      <TabsList>
+        <TabsTrigger value="models">模型计费</TabsTrigger>
+        <TabsTrigger value="requests">其他计费</TabsTrigger>
+      </TabsList>
+      <TabsContent value="models" className="space-y-3">
+        <ModelPricing />
+      </TabsContent>
+      <TabsContent value="requests">
+        <SearchBilling />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function ModelPricing() {
   const tableColumns0 = useColumnVisibility(
     "app/models/page.tsx:0",
     ["模型", "计费方式", "价格规则", "状态", "操作"],

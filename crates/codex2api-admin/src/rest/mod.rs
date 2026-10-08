@@ -38,6 +38,11 @@ pub(crate) fn router(state: AdminState) -> Router {
         get(consumers::detail).put(users::update_subscription),
     );
     let protected = Router::new()
+        .route(
+            "/billing/chatgpt/search",
+            get(crate::providers::chatgpt::billing::search_price)
+                .put(crate::providers::chatgpt::billing::save_search_price),
+        )
         .merge(user_routes)
         .merge(virtual_routes)
         .merge(subscription_routes)

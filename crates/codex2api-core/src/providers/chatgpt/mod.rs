@@ -1,4 +1,10 @@
 use crate::TokenPricePreset;
+
+pub const SEARCH_OPERATION: &str = "search";
+
+pub fn billing_operation(endpoint: &str) -> Option<&'static str> {
+    matches!(endpoint, "/v1/alpha/search").then_some(SEARCH_OPERATION)
+}
 /// Verified public Standard/Fast/Flex prices; unsupported prices remain absent.
 pub fn model_price_preset(model: &str) -> Option<Vec<TokenPricePreset>> {
     // Source: https://developers.openai.com/api/docs/pricing and each model page,

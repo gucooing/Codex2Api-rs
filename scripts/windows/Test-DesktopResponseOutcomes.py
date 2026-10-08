@@ -16,6 +16,7 @@ cli = os.environ["CODEX2API_TEST_CLI"]
 version = subprocess.check_output([cli, "--version"], text=True).strip()
 base_url, expected = sys.argv[1:3]
 websocket = len(sys.argv) > 3 and sys.argv[3] == "websocket"
+search_billing = expected == "search-billing"
 with tempfile.TemporaryDirectory(prefix="desktop-response-outcomes-") as profile:
     env = os.environ.copy()
     env.update(CODEX_HOME=profile, CODEX_SQLITE_HOME=str(Path(profile, "sqlite")))
@@ -28,6 +29,9 @@ with tempfile.TemporaryDirectory(prefix="desktop-response-outcomes-") as profile
         'model_providers.fixture={name="fixture",base_url="' + base_url + '",wire_api="responses",supports_websockets=' + str(websocket).lower() + ',requires_openai_auth=false,request_max_retries=0,stream_max_retries=0,websocket_max_retries=0}',
     ]:
         args.extend(["-c", setting])
+    if search_billing:
+        for setting in ['features.standalone_web_search=true', 'web_search="live"', 'model_providers.fixture.supports_standalone_web_search=true']:
+            args.extend(["-c", setting])
     process = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     messages = queue.Queue()
     def read():
@@ -59,10 +63,17 @@ with tempfile.TemporaryDirectory(prefix="desktop-response-outcomes-") as profile
                 observed.append(value["params"])
                 break
         rendered = json.dumps(observed)
-        assert expected.lower() in rendered.lower(), rendered
-        assert '"status": "failed"' in rendered, rendered
+        if search_billing:
+            assert '"status": "completed"' in rendered, rendered
+            assert not any("error" in event and event["error"] for event in observed), rendered
+        else:
+            assert expected.lower() in rendered.lower(), rendered
+            assert '"status": "failed"' in rendered, rendered
         assert "Connection reset without closing handshake" not in rendered, rendered
         print(json.dumps({"runtime": version, "expected": expected, "observed": observed}))
     finally:
-        process.terminate()
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        else:
+            process.terminate()
         process.wait(timeout=5)

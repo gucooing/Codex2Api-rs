@@ -90,6 +90,14 @@ pub enum ExecutionKind {
     Image,
     Unpriced,
     InspectModel,
+    Operation(&'static str),
+}
+
+pub fn billing_operation(provider: &str, endpoint: &str) -> Option<&'static str> {
+    match provider {
+        CHATGPT => providers::chatgpt::billing_operation(endpoint),
+        _ => None,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

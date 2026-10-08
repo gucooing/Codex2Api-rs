@@ -32,7 +32,7 @@ export default function Overview() {
             href: "/users/",
             hint: "当日活跃 / 总数",
           },
-          { label: "模型配置", value: data?.models_count ?? "—", href: "/models/" },
+          { label: "计费配置", value: data?.models_count ?? "—", href: "/models/" },
         ].map((item) => (
           <Button
             key={item.label}

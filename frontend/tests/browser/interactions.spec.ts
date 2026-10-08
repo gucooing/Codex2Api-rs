@@ -218,7 +218,7 @@ test("failed reads keep all pages visible and settings disabled until retry succ
     ["供应账户", "搜索账户"],
     ["虚拟账户", "搜索账户"],
     ["套餐管理", "搜索套餐"],
-    ["模型配置", "搜索模型"],
+    ["计费配置", "搜索模型"],
     ["出站代理", "搜索代理"],
     ["用量记录", "模型"],
   ]) {
@@ -495,9 +495,9 @@ test("desktop navigation, mobile drawer and long forms respect viewport and redu
   await page.keyboard.press("Control+k");
   const search = page.getByRole("dialog");
   await search.getByRole("combobox").fill("模型");
-  await search.getByRole("option", { name: /模型配置/ }).click();
+  await search.getByRole("option", { name: /计费配置/ }).click();
   await expect(
-    page.locator("[data-slot=breadcrumb-page]").filter({ hasText: "模型配置" }),
+    page.locator("[data-slot=breadcrumb-page]").filter({ hasText: "计费配置" }),
   ).toBeVisible();
   await expect(search).not.toBeVisible();
 

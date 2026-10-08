@@ -111,7 +111,7 @@ export const navigation = [
   },
   {
     href: "/models/",
-    label: "模型配置",
+    label: "计费配置",
     group: "系统配置",
     icon: Boxes,
     keywords: "model 价格 计费",

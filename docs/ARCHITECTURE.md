@@ -456,11 +456,33 @@ Supplier lists read SQLite snapshots. Missing/expired quota data uses the existi
 ten-minute cache and per-account lock; failures retain the previous snapshot.
 UI filters, view changes and countdown ticks never call the provider.
 
+ChatGPT execution also updates these snapshots from official `x-codex-*` response
+headers and `codex.rate_limits` SSE/WebSocket events before consumer quota rewriting.
+Window percentages, durations and reset times follow the pinned Codex parser;
+named model limits remain separate from the main account allowance. Partial updates
+preserve unreported windows and anchor older relative resets to their original
+observation time. Atomic writes reject older observations and superseded credentials.
+Empty or invalid observations leave the cache unchanged. These passive updates do
+not infer supplier availability, clear billing/authentication failures, trigger quota
+requests or change virtual consumer quotas; the existing recovery probes remain.
+
 Render only windows actually returned, using their reported duration and reset
 time, including 30-day windows. Do not invent absent primary/secondary windows.
 Supplier cycle summaries aggregate local execution records using the actual
 snapshot boundaries and request-start prices. They remain distinct from virtual
 consumer quotas.
+
+### Search billing
+
+Administrator **Billing configuration / Other billing** provides the ChatGPT **Search**
+price in USD per successful request. The operation is independent of the model
+catalog; it does not publish a synthetic model. An absent price remains unknown.
+Model authorization, subscription checks and spending windows still apply.
+Prices are snapshotted at request start in the existing usage ledger. A completed
+search is charged once, including requests with several search commands; an explicit
+failure is not charged, and an interrupted request without a confirmed completion
+retains unknown cost. Price edits do not reprice history. The administrator form uses
+revision checks, and usage details display the per-request billing tier.
 
 ## Administration and frontend
 

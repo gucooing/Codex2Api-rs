@@ -118,4 +118,57 @@ impl Storage {
             .await?;
         Ok(())
     }
+
+    /// Merge a partial observation atomically, without replacing a newer snapshot
+    /// or accepting data from superseded credentials. The provider owns the format.
+    pub async fn update_account_quota<F>(
+        &self,
+        account_id: &str,
+        auth_revision: i64,
+        observed_at: DateTime<Utc>,
+        update: F,
+    ) -> Result<bool>
+    where
+        F: FnOnce(Option<QuotaSnapshot>) -> Value + Send,
+    {
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let current: Option<i64> =
+            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
+                .bind(account_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if current != Some(auth_revision) {
+            return Ok(false);
+        }
+        let row: Option<(String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT response_json, observed_at FROM account_quota_cache WHERE account_id=?",
+        )
+        .bind(account_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if row.as_ref().is_some_and(|(_, at)| *at > observed_at) {
+            return Ok(false);
+        }
+        let previous = row
+            .map(|(raw, at)| {
+                Ok::<_, crate::StorageError>(QuotaSnapshot {
+                    value: serde_json::from_str(&raw)?,
+                    observed_at: at,
+                })
+            })
+            .transpose()?;
+        let value = update(previous);
+        sqlx::query(
+            "INSERT INTO account_quota_cache(account_id,response_json,observed_at) VALUES(?,?,?)
+             ON CONFLICT(account_id) DO UPDATE SET response_json=excluded.response_json,
+                 observed_at=excluded.observed_at",
+        )
+        .bind(account_id)
+        .bind(serde_json::to_string(&value)?)
+        .bind(observed_at)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
 }

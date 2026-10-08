@@ -348,3 +348,95 @@ async fn installed_desktop_reads_actual_sse_failure_events() {
     server.abort();
     storage.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_desktop_search_completes_with_one_snapshotted_charge() {
+    if std::env::var_os("CODEX2API_TEST_CLI").is_none() {
+        return;
+    }
+    use axum::{Json, Router, routing::post};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("search.sqlite"))
+        .await
+        .unwrap();
+    storage
+        .save_operation_price(
+            &codex2api_storage::OperationPrice {
+                provider_id: "chatgpt".into(),
+                operation: "search".into(),
+                price_nano_usd: Some(5_000_000),
+                revision: 0,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let search_requests = Arc::new(AtomicUsize::new(0));
+    let counted = requests.clone();
+    let search_counted = search_requests.clone();
+    let saved = storage.clone();
+    let app = Router::new().route("/v1/responses", post(move |Json(body):Json<serde_json::Value>| {
+        let requests = counted.clone();
+        async move {
+            let n = requests.fetch_add(1, Ordering::SeqCst);
+            let output = if n == 0 {
+                json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"search-1","namespace":"web","name":"run","arguments":json!({"search_query":[{"q":"fixture query"}]}).to_string()}})
+            } else {
+                assert!(body.to_string().contains("Search billing fixture result"), "native reader must pass the search result into the next generation");
+                json!({"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Search completed"}]}})
+            };
+            let events = [json!({"type":"response.created","response":{"id":format!("r-{n}")}}),output,json!({"type":"response.completed","response":{"id":format!("r-{n}"),"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}})];
+            ([("content-type","text/event-stream")],events.into_iter().map(|e|format!("data: {e}\n\n")).collect::<String>())
+        }
+    })).route("/v1/alpha/search", post(move |Json(body):Json<serde_json::Value>| {
+        let storage = saved.clone(); let search_requests = search_counted.clone();
+        async move {
+            assert_eq!(body["model"],"gpt-test");
+            assert_eq!(body["commands"]["search_query"][0]["q"],"fixture query");
+            assert!(body["id"].is_string());
+            assert_eq!(body["settings"]["allowed_callers"],json!(["direct"]));
+            let id = search_requests.fetch_add(1, Ordering::SeqCst).to_string();
+            let log = RequestLog::begin(storage, UsageRecord {id,model:Some("gpt-test".into()),endpoint:"/v1/alpha/search".into(),status:"in_progress".into(),..Default::default()},Instant::now()).await.unwrap();
+            let response = reqwest::Response::from(http::Response::builder().header("content-type","application/json").body(Bytes::from(json!({"output":"Search billing fixture result","encrypted_output":null,"results":[]}).to_string())).unwrap());
+            http::Response::builder().header("content-type","application/json").body(log.wrap(response)).unwrap()
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("python")
+            .args(["-X", "utf8"])
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-DesktopResponseOutcomes.py"),
+            )
+            .arg(format!("http://{address}/v1"))
+            .arg("search-billing")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        result.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    println!("{}", String::from_utf8_lossy(&result.stdout));
+    assert_eq!(search_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    let record = rows(&storage, 1).await.pop().unwrap();
+    assert_eq!(record.status, "completed");
+    assert_eq!(record.cost_nano_usd, Some(5_000_000));
+    assert_eq!(record.billing_tier.as_deref(), Some("request"));
+    assert_eq!(record.input_tokens, None);
+    server.abort();
+    storage.close().await;
+}

@@ -1,4 +1,10 @@
+use futures::{Sink, Stream};
 use std::time::Duration;
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use http::HeaderMap;
 use reqwest::cookie::CookieStore;
@@ -10,7 +16,99 @@ use tungstenite::protocol::WebSocketConfig;
 
 use crate::{Endpoint, Result, UpstreamClient, UpstreamError, normalize_response_identity};
 
-pub type UpstreamWebSocket = WebSocketStream<MaybeTlsStream<MaybeTlsStream<TcpStream>>>;
+type RawWebSocket = WebSocketStream<MaybeTlsStream<MaybeTlsStream<TcpStream>>>;
+
+/// Observe supplier quotas before any downstream identity/quota rewriting.
+pub struct UpstreamWebSocket {
+    socket: RawWebSocket,
+    observer: Option<super::quota::QuotaObserver>,
+    pending: Option<Pin<Box<dyn Future<Output = tungstenite::Message> + Send>>>,
+}
+
+impl From<RawWebSocket> for UpstreamWebSocket {
+    fn from(socket: RawWebSocket) -> Self {
+        Self {
+            socket,
+            observer: None,
+            pending: None,
+        }
+    }
+}
+
+impl UpstreamWebSocket {
+    pub async fn close(
+        &mut self,
+        frame: Option<tungstenite::protocol::CloseFrame>,
+    ) -> std::result::Result<(), tungstenite::Error> {
+        self.socket.close(frame).await
+    }
+}
+
+impl Stream for UpstreamWebSocket {
+    type Item = std::result::Result<tungstenite::Message, tungstenite::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            if let Some(pending) = &mut this.pending {
+                let message = std::task::ready!(pending.as_mut().poll(cx));
+                this.pending = None;
+                return Poll::Ready(Some(Ok(message)));
+            }
+            let message = match std::task::ready!(Pin::new(&mut this.socket).poll_next(cx)) {
+                Some(Ok(message)) => message,
+                other => return Poll::Ready(other),
+            };
+            if let Some(observer) = &this.observer
+                && matches!(
+                    message,
+                    tungstenite::Message::Text(_) | tungstenite::Message::Binary(_)
+                )
+                && message
+                    .to_text()
+                    .is_ok_and(|text| text.contains("codex.rate_limits"))
+            {
+                let observer = observer.clone();
+                this.pending = Some(Box::pin(async move {
+                    if let Ok(text) = message.to_text() {
+                        observer.event(text).await;
+                    }
+                    message
+                }));
+            } else {
+                return Poll::Ready(Some(Ok(message)));
+            }
+        }
+    }
+}
+
+impl Sink<tungstenite::Message> for UpstreamWebSocket {
+    type Error = tungstenite::Error;
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().socket).poll_ready(cx)
+    }
+    fn start_send(
+        self: Pin<&mut Self>,
+        item: tungstenite::Message,
+    ) -> std::result::Result<(), Self::Error> {
+        Pin::new(&mut self.get_mut().socket).start_send(item)
+    }
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().socket).poll_flush(cx)
+    }
+    fn poll_close(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().socket).poll_close(cx)
+    }
+}
 
 pub fn websocket_config() -> WebSocketConfig {
     let mut extensions = ExtensionsConfig::default();
@@ -196,9 +294,21 @@ impl UpstreamClient {
                     if let Some(connection) = &connection {
                         connection.check_current().await?;
                     }
+                    let observer = self.quota_observer(auth.revision);
+                    if let Some(observer) = &observer {
+                        observer.headers(response.headers()).await;
+                    }
+                    let socket = UpstreamWebSocket {
+                        socket,
+                        observer,
+                        pending: None,
+                    };
                     return Ok((socket, response.headers().clone(), connection));
                 }
                 Err(tungstenite::Error::Http(response)) => {
+                    if let Some(observer) = self.quota_observer(auth.revision) {
+                        observer.headers(response.headers()).await;
+                    }
                     self.cookies.set_cookies(
                         &mut response.headers().get_all("set-cookie").iter(),
                         &cookie_url,

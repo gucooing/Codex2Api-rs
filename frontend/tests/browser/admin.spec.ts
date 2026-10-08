@@ -127,8 +127,8 @@ test("real admin actions, isolation and public consumer authorization", async ({
   const plan = plans.items.find((item: { name: string }) => item.name === `回归套餐 ${suffix}`);
   expect(plan.models).toEqual([{ provider_id: "chatgpt", model: "gpt-6-astra" }]);
 
-  await page.getByRole("link", { name: "模型配置", exact: true }).click();
-  await expect(page.locator("[data-slot=breadcrumb-page]")).toHaveText("模型配置");
+  await page.getByRole("link", { name: "计费配置", exact: true }).click();
+  await expect(page.locator("[data-slot=breadcrumb-page]")).toHaveText("计费配置");
   await expect(page.getByRole("columnheader", { name: "计费方式", exact: true })).toBeVisible();
   const modelRow = page
     .getByRole("row")

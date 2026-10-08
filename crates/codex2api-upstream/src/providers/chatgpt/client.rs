@@ -256,6 +256,9 @@ impl UpstreamClient {
             response
                 .extensions_mut()
                 .insert(crate::SupplierAuthRevision(auth.revision));
+            if let Some(observer) = self.quota_observer(auth.revision) {
+                response = observer.response(response).await;
+            }
             return Ok(response);
         }
     }

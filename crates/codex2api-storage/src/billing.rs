@@ -35,6 +35,8 @@ pub(crate) enum BillingSnapshot {
     Current {
         tokens: Vec<ModelPrice>,
         images: Vec<crate::ImagePrice>,
+        #[serde(default)]
+        operations: Vec<crate::OperationPrice>,
     },
 }
 
@@ -43,9 +45,37 @@ impl BillingSnapshot {
         &self,
         record: &UsageRecord,
     ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
+        if let Some(operation) =
+            codex2api_core::billing_operation(&record.provider_id, &record.endpoint)
+        {
+            let model = record.actual_model.clone().or(record.model.clone());
+            if record.status == "failed" {
+                return (Some(0), "not_charged", model, Some("request".into()));
+            }
+            if record.status != "completed" {
+                return (None, "missing_usage", model, Some("request".into()));
+            }
+            let price = match self {
+                Self::Current { operations, .. } => operations
+                    .iter()
+                    .find(|p| p.provider_id == record.provider_id && p.operation == operation)
+                    .and_then(|p| p.price_nano_usd),
+                Self::Legacy(_) => None,
+            };
+            return (
+                price,
+                if price.is_some() {
+                    "priced"
+                } else {
+                    "unpriced"
+                },
+                model,
+                Some("request".into()),
+            );
+        }
         let (tokens, images) = match self {
             Self::Legacy(tokens) => (tokens.as_slice(), None),
-            Self::Current { tokens, images } => (tokens.as_slice(), Some(images)),
+            Self::Current { tokens, images, .. } => (tokens.as_slice(), Some(images)),
         };
         if !record.endpoint.contains("/images/") {
             return charge(record, tokens);
@@ -282,10 +312,16 @@ impl Storage {
         .bind(provider)
         .fetch_all(&mut *tx)
         .await?;
+        let operations =
+            sqlx::query_as("SELECT * FROM operation_prices WHERE provider_id=? ORDER BY operation")
+                .bind(provider)
+                .fetch_all(&mut *tx)
+                .await?;
         tx.commit().await?;
         Ok(serde_json::to_string(&BillingSnapshot::Current {
             tokens,
             images,
+            operations,
         })?)
     }
     pub async fn model_prices(&self, provider: &str) -> Result<Vec<ModelPrice>> {
@@ -315,7 +351,7 @@ impl Storage {
         .await?;
         if !usable {
             return Err(StorageError::InvalidAdminUpdate(
-                "请在模型配置中恢复模型或选择正确的计费方式",
+                "请在计费配置中恢复模型或选择正确的计费方式",
             ));
         }
         let mut affected=sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,max_input_tokens,source,revision) SELECT ?,?,?,?,?,?,?,?,?,'custom',1 WHERE ?=0 ON CONFLICT(provider_id,model,tier,min_input_tokens) DO NOTHING")
@@ -368,6 +404,7 @@ mod tests {
         };
         let snapshot = BillingSnapshot::Current {
             tokens: vec![],
+            operations: vec![],
             images: vec![crate::ImagePrice {
                 provider_id: "chatgpt".into(),
                 model: "image-test".into(),

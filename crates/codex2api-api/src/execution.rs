@@ -51,6 +51,10 @@ impl ExecutionContext {
         use codex2api_core::ExecutionKind;
         let kind = if inspect_only {
             ExecutionKind::InspectModel
+        } else if let Some(operation) =
+            codex2api_core::billing_operation(&self.provider_id, &self.endpoint)
+        {
+            ExecutionKind::Operation(operation)
         } else if self.endpoint.ends_with("/responses/compact") {
             ExecutionKind::Compact
         } else if self.endpoint.ends_with("/responses")

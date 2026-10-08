@@ -687,7 +687,7 @@ mod tests {
                     upgrade.on_upgrade(move |socket| {
                         bridge_recorded(
                             socket,
-                            upstream,
+                            upstream.into(),
                             "installation".into(),
                             false,
                             compaction.then(|| "Asia/Taipei".into()),
@@ -1248,7 +1248,7 @@ mod tests {
                     upgrade.on_upgrade(move |socket| {
                         bridge_recorded(
                             socket,
-                            upstream,
+                            upstream.into(),
                             "installation".into(),
                             realtime,
                             None,
@@ -1354,7 +1354,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                upgrade.on_upgrade(move |socket| transport_fixture(socket, upstream))
+                upgrade.on_upgrade(move |socket| transport_fixture(socket, upstream.into()))
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

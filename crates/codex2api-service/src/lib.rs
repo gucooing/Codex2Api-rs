@@ -124,6 +124,11 @@ impl ExecutionService {
                     })
             }
             ExecutionKind::InspectModel => true,
+            ExecutionKind::Operation(operation) => self
+                .storage
+                .operation_price(provider, operation)
+                .await?
+                .is_some_and(|price| price.price_nano_usd.is_some()),
             ExecutionKind::Unpriced => false,
         };
         if !priced {

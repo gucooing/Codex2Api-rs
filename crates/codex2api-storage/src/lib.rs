@@ -9,6 +9,8 @@ pub use account_scope::AccountScope;
 #[cfg(test)]
 extern crate self as codex2api_storage;
 mod billing;
+mod operation_prices;
+pub use operation_prices::OperationPrice;
 mod model_catalog;
 mod model_presets;
 pub use model_presets::preset_model_prices;

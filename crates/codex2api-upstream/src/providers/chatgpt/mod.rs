@@ -7,6 +7,7 @@ pub(crate) mod compat;
 pub(crate) mod endpoint;
 pub(crate) mod headers;
 pub(crate) mod proxy;
+pub(crate) mod quota;
 pub(crate) mod realtime;
 pub(crate) mod request;
 pub(crate) mod routing;

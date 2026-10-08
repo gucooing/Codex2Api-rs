@@ -991,7 +991,10 @@ function UsageTable({ records, empty }: { records: UsageRecord[]; empty?: string
                 ["计费状态", billingLabel(selected.billing_status)],
 
                 ["请求速度", requestSpeed(selected)],
-                ["命中计费挡位", selected.billing_tier ?? "-"],
+                [
+                  "命中计费挡位",
+                  selected.billing_tier === "request" ? "按次" : (selected.billing_tier ?? "-"),
+                ],
               ].map(([label, value]) => (
                 <Field key={String(label)}>
                   <FieldTitle>{label}</FieldTitle>

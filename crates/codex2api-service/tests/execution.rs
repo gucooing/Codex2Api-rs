@@ -44,6 +44,86 @@ fn chrono_timestamp() -> String {
 }
 
 #[tokio::test]
+async fn configured_search_price_allows_limited_accounts_without_bypassing_model_or_budget_checks()
+{
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().join("search.sqlite"))
+        .await
+        .unwrap();
+    let account = consumer(&storage, "consumer").await;
+    let mut plan = storage
+        .virtual_plan(&account.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.config["spending_windows"] = json!([{"duration_seconds":604800,"cost_limit_usd":"1"}]);
+    plan.config["model_access"] = json!("selected");
+    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-6-astra"}]);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    let service = ExecutionService::new(storage.clone());
+    let search = || ExecutionRequest {
+        kind: ExecutionKind::Operation("search"),
+        ..request("gpt-6-astra")
+    };
+    assert!(matches!(
+        service.authorize(&account.id, "chatgpt", search()).await,
+        Err(ServiceError::PricingUnavailable)
+    ));
+    storage
+        .save_operation_price(
+            &codex2api_storage::OperationPrice {
+                provider_id: "chatgpt".into(),
+                operation: "search".into(),
+                price_nano_usd: Some(100_000_000),
+                revision: 0,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    service
+        .authorize(&account.id, "chatgpt", search())
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .authorize(
+                &account.id,
+                "chatgpt",
+                ExecutionRequest {
+                    model: Some("gpt-5.6-luna"),
+                    ..search()
+                }
+            )
+            .await,
+        Err(ServiceError::Policy(PolicyError::ModelNotEntitled))
+    ));
+    let mut record = codex2api_storage::UsageRecord {
+        id: "search".into(),
+        subject_id: account.id.clone(),
+        endpoint: "/v1/alpha/search".into(),
+        model: Some("gpt-6-astra".into()),
+        requested_at_ms: chrono::Utc::now().timestamp_millis(),
+        status: "in_progress".into(),
+        ..Default::default()
+    };
+    for i in 0..10 {
+        record.id = format!("search-{i}");
+        record.status = "in_progress".into();
+        storage.insert_usage(&record).await.unwrap();
+        record.status = "completed".into();
+        storage.finish_usage(&record).await.unwrap();
+    }
+    assert!(matches!(
+        service.authorize(&account.id, "chatgpt", search()).await,
+        Err(ServiceError::BudgetExceeded)
+    ));
+}
+
+#[tokio::test]
 async fn model_permissions_are_exact_current_and_provider_scoped() {
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().join("policy.sqlite"))

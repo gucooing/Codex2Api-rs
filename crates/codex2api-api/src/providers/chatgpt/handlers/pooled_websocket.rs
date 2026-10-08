@@ -529,6 +529,7 @@ mod tests {
         .await
         .unwrap()
         .0
+        .into()
     }
 
     #[tokio::test]
