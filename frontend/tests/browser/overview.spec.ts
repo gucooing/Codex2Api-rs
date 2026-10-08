@@ -91,13 +91,65 @@ test("overview statistics aggregate real records, filter dimensions, and retain 
       .locator(".recharts-legend-wrapper")
       .getByText("模型：review-cycle-model", { exact: true }),
   ).toHaveCount(0);
-  await form.getByLabel("虚拟账户", { exact: true }).fill("review-consumer");
-  await page.getByRole("option", { name: "review-consumer", exact: true }).click();
+  const subject = form.getByLabel("用户/账户", { exact: true });
+  const supplier = form.getByLabel("供应账户", { exact: true });
+  await subject.fill("review-consumer");
+  await page.getByRole("option", { name: "账户 · review-consumer", exact: true }).click();
   await choose(page, "统计维度", "按虚拟账户");
   const account = await submit();
   expect(account.summary.request_count).toBe(1);
   expect(account.rows[0].key).toBe("review-consumer");
   await expect(modelChart.getByText("review-consumer", { exact: true })).toBeVisible();
+
+  const session = await (await page.request.get("/admin/api/session")).json();
+  const username = `overview-${Date.now().toString(36)}`;
+  const created = await page.request.post("/admin/api/users", {
+    headers: { "x-csrf-token": session.csrf_token },
+    data: {
+      username,
+      name: username,
+      email: `${username}@example.test`,
+      password: "overview-test-password",
+      enabled: true,
+    },
+  });
+  expect(created.ok()).toBeTruthy();
+  const user = await created.json();
+  await subject.fill(username);
+  await page.getByRole("option", { name: `用户 · ${username}`, exact: true }).click();
+  const userResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.pathname === "/admin/api/overview/usage" && url.searchParams.get("user_id") === user.id
+    );
+  });
+  expect((await submit()).summary.request_count).toBe(0);
+  expect(new URL((await userResponse).url()).searchParams.has("virtual_account")).toBe(false);
+
+  await supplier.fill("review-supplier-disabled@example.test");
+  await page.getByRole("option", { name: /^本地验收停用账户/ }).click();
+  expect((await submit()).summary.request_count).toBe(0);
+  const restored = page.waitForResponse((response) =>
+    response.url().includes("/admin/api/overview/usage?"),
+  );
+  await page.reload();
+  const restoredQuery = new URL((await restored).url()).searchParams;
+  expect(restoredQuery.get("user_id")).toBe(user.id);
+  expect(restoredQuery.get("supplier_id")).toBe("review-supplier-disabled");
+  expect(restoredQuery.has("virtual_account")).toBe(false);
+  await expect(subject).toHaveValue(`用户 · ${username}`);
+  await expect(supplier).toHaveValue("本地验收停用账户");
+
+  await subject.fill("review-consumer");
+  await page.getByRole("option", { name: "账户 · review-consumer", exact: true }).click();
+  expect((await submit()).summary.request_count).toBe(1);
+  await supplier.fill("review-supplier-active@example.test");
+  await page.getByRole("option", { name: /^本地验收供应账户/ }).click();
+  expect((await submit()).summary.request_count).toBe(0);
+  await supplier.fill("review-supplier-disabled@example.test");
+  await page.getByRole("option", { name: /^本地验收停用账户/ }).click();
+  expect((await submit()).summary.request_count).toBe(1);
+
   let statisticsRequests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/overview/usage?")) statisticsRequests++;
@@ -160,7 +212,8 @@ test("overview statistics aggregate real records, filter dimensions, and retain 
   await form.getByRole("button", { name: "重置", exact: true }).click();
   await reset;
   await expect(form.getByLabel("模型", { exact: true })).toHaveValue("");
-  await expect(form.getByLabel("虚拟账户", { exact: true })).toHaveValue("");
+  await expect(subject).toHaveValue("");
+  await expect(supplier).toHaveValue("");
   const evidence = resolve(process.env.CODEX2API_TEST_OUTPUT_DIR!, "screenshots");
   await mkdir(evidence, { recursive: true });
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);

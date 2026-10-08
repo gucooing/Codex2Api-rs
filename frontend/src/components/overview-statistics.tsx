@@ -34,9 +34,10 @@ import {
 } from "@/components/ui/chart";
 import { useResource } from "@/lib/hooks";
 import { usePreference, useSavedFilters } from "@/lib/preferences";
-import { query, type Consumer, type List } from "@/lib/api";
+import { query, type Consumer, type Supplier, type List } from "@/lib/api";
 import { toastError, useErrorToast, validateForm } from "@/lib/actions";
 import { tokenCount, usageStatuses } from "@/lib/usage-display";
+import { useUserLookup, userOptionLabel } from "@/lib/user-lookup";
 import {
   percent,
   overviewChart,
@@ -48,8 +49,12 @@ import {
 } from "@/lib/usage-statistics";
 
 const defaults = {
+  user_id: "",
+  user_label: "",
   virtual_account: "",
   consumer_label: "",
+  supplier_id: "",
+  supplier_label: "",
   model: "",
   status: "",
   group_by: "day" as UsageGroup,
@@ -57,6 +62,11 @@ const defaults = {
   from: "",
   until: "",
 };
+type SubjectOption = { id: string; kind: "user" | "virtual_account"; label: string };
+type SupplierOption = Pick<Supplier, "id" | "display_name" | "email">;
+const subjectOptionLabel = (item: SubjectOption) =>
+  `${item.kind === "user" ? "用户" : "账户"} · ${item.label}`;
+const supplierOptionLabel = (item: SupplierOption) => item.display_name || item.email || item.id;
 const chartConfig = {
   total_tokens: { label: "Token 用量", color: "var(--chart-1)" },
   request_count: { label: "请求数", color: "var(--chart-2)" },
@@ -90,26 +100,54 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
     defaults,
     (value) =>
       ["today", "1", "7", "30", "custom"].includes(value.preset) &&
-      Object.hasOwn(usageGroups, value.group_by),
+      Object.hasOwn(usageGroups, value.group_by) &&
+      !(value.user_id && value.virtual_account),
   );
   const applied = useMemo(
     () => ({ ...saved, ...(saved.preset === "custom" ? {} : statisticsRange(saved.preset)) }),
     [saved],
   );
   const [visible, setVisible] = usePreference("overview.series", defaultVisibility);
-  const [consumerOpen, setConsumerOpen] = useState(false);
-  const [consumerSearch, setConsumerSearch] = useState("");
-  const selectedConsumer = filters.virtual_account
-    ? { id: filters.virtual_account, username: filters.consumer_label || filters.virtual_account }
+  const userLookup = useUserLookup();
+  const [supplierOpen, setSupplierOpen] = useState(false);
+  const [supplierSearch, setSupplierSearch] = useState("");
+  const selectedSubject: SubjectOption | null = filters.user_id
+    ? { id: filters.user_id, kind: "user", label: filters.user_label || filters.user_id }
+    : filters.virtual_account
+      ? {
+          id: filters.virtual_account,
+          kind: "virtual_account",
+          label: filters.consumer_label || filters.virtual_account,
+        }
+      : null;
+  const selectedSupplier = filters.supplier_id
+    ? { id: filters.supplier_id, display_name: filters.supplier_label, email: "" }
     : null;
   const consumers = useResource<List<Consumer>>(
-    consumerOpen ? `/consumers${query({ search: consumerSearch.trim(), limit: 5 })}` : null,
-    consumerSearch.trim() ? 250 : 0,
+    userLookup.open ? `/consumers${query({ search: userLookup.search.trim(), limit: 5 })}` : null,
+    userLookup.search.trim() ? 250 : 0,
   );
-  const path = `/overview/usage${query({ virtual_account: applied.virtual_account, model: applied.model, status: applied.status, group_by: applied.group_by, from: applied.from, until: applied.until, tz_offset: new Date().getTimezoneOffset() })}`;
+  const subjects: SubjectOption[] = [
+    ...(userLookup.data?.items ?? []).map((item) => ({
+      id: item.id,
+      kind: "user" as const,
+      label: userOptionLabel(item),
+    })),
+    ...(consumers.data?.items ?? []).map((item) => ({
+      id: item.id,
+      kind: "virtual_account" as const,
+      label: item.username,
+    })),
+  ];
+  const suppliers = useResource<List<Supplier>>(
+    supplierOpen ? `/suppliers${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
+    supplierSearch.trim() ? 250 : 0,
+  );
+  const path = `/overview/usage${query({ user_id: applied.user_id, virtual_account: applied.virtual_account, supplier_id: applied.supplier_id, model: applied.model, status: applied.status, group_by: applied.group_by, from: applied.from, until: applied.until, tz_offset: new Date().getTimezoneOffset() })}`;
   const resource = useResource<UsageStatistics>(preferencesReady ? path : null);
   useErrorToast(resource.error);
   useErrorToast(consumers.error);
+  useErrorToast(suppliers.error);
   const update = (key: keyof typeof filters, value: string) =>
     setFilters((current) => ({ ...current, [key]: value }));
   const apply = (values: typeof filters) => {
@@ -152,33 +190,39 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
             }}
           >
             <Field className="w-40">
-              <FieldLabel htmlFor="overview-consumer">虚拟账户</FieldLabel>
-              <Combobox<Pick<Consumer, "id" | "username">>
-                items={consumers.data?.items ?? []}
-                value={selectedConsumer}
+              <FieldLabel htmlFor="overview-subject">用户/账户</FieldLabel>
+              <Combobox<SubjectOption>
+                items={subjects}
+                value={selectedSubject}
                 onValueChange={(item) => {
                   setFilters((current) => ({
                     ...current,
-                    virtual_account: item?.id ?? "",
-                    consumer_label: item?.username ?? "",
+                    user_id: item?.kind === "user" ? item.id : "",
+                    user_label: item?.kind === "user" ? item.label : "",
+                    virtual_account: item?.kind === "virtual_account" ? item.id : "",
+                    consumer_label: item?.kind === "virtual_account" ? item.label : "",
                   }));
-                  setConsumerSearch("");
+                  userLookup.setSearch("");
                 }}
-                itemToStringLabel={(item) => item.username}
-                itemToStringValue={(item) => item.id}
-                isItemEqualToValue={(item, value) => item.id === value.id}
+                itemToStringLabel={subjectOptionLabel}
+                itemToStringValue={(item) => `${item.kind}:${item.id}`}
+                isItemEqualToValue={(item, value) =>
+                  item.kind === value.kind && item.id === value.id
+                }
                 filter={null}
-                open={consumerOpen}
+                open={userLookup.open}
                 onOpenChange={(open, details) => {
-                  setConsumerOpen(open);
-                  if (open && details.reason !== "input-change") setConsumerSearch("");
+                  userLookup.setOpen(open);
+                  if (open && details.reason !== "input-change") userLookup.setSearch("");
                 }}
                 onInputValueChange={(text, details) => {
                   if (details.reason === "input-change") {
-                    setConsumerSearch(text);
+                    userLookup.setSearch(text);
                     if (!text) {
                       setFilters((current) => ({
                         ...current,
+                        user_id: "",
+                        user_label: "",
                         virtual_account: "",
                         consumer_label: "",
                       }));
@@ -187,23 +231,87 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 }}
               >
                 <ComboboxInput
-                  id="overview-consumer"
-                  placeholder="全部账户"
+                  id="overview-subject"
+                  placeholder="全部用户/账户"
                   showClear
                   className="w-full"
                 />
                 <ComboboxContent>
                   <ComboboxEmpty>
-                    {consumers.loading
+                    {userLookup.loading || consumers.loading
                       ? "正在加载…"
-                      : consumers.error
+                      : userLookup.error || consumers.error
+                        ? "加载失败，请重新搜索"
+                        : "没有匹配用户/账户"}
+                  </ComboboxEmpty>
+                  <ComboboxList aria-busy={userLookup.loading || consumers.loading}>
+                    {(item: SubjectOption) => (
+                      <ComboboxItem key={`${item.kind}:${item.id}`} value={item}>
+                        {subjectOptionLabel(item)}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            </Field>
+            <Field className="w-40">
+              <FieldLabel htmlFor="overview-supplier">供应账户</FieldLabel>
+              <Combobox<SupplierOption>
+                items={suppliers.data?.items ?? []}
+                value={selectedSupplier}
+                onValueChange={(item) => {
+                  setFilters((current) => ({
+                    ...current,
+                    supplier_id: item?.id ?? "",
+                    supplier_label: item ? supplierOptionLabel(item) : "",
+                  }));
+                  setSupplierSearch("");
+                }}
+                itemToStringLabel={supplierOptionLabel}
+                itemToStringValue={(item) => item.id}
+                isItemEqualToValue={(item, value) => item.id === value.id}
+                filter={null}
+                open={supplierOpen}
+                onOpenChange={(open, details) => {
+                  setSupplierOpen(open);
+                  if (open && details.reason !== "input-change") setSupplierSearch("");
+                }}
+                onInputValueChange={(text, details) => {
+                  if (details.reason === "input-change") {
+                    setSupplierSearch(text);
+                    if (!text) {
+                      setFilters((current) => ({
+                        ...current,
+                        supplier_id: "",
+                        supplier_label: "",
+                      }));
+                    }
+                  }
+                }}
+              >
+                <ComboboxInput
+                  id="overview-supplier"
+                  placeholder="全部供应账户"
+                  showClear
+                  className="w-full"
+                />
+                <ComboboxContent>
+                  <ComboboxEmpty>
+                    {suppliers.loading
+                      ? "正在加载…"
+                      : suppliers.error
                         ? "加载失败，请重新搜索"
                         : "没有匹配账户"}
                   </ComboboxEmpty>
-                  <ComboboxList aria-busy={consumers.loading}>
-                    {(item: Pick<Consumer, "id" | "username">) => (
+                  <ComboboxList aria-busy={suppliers.loading}>
+                    {(item: SupplierOption) => (
                       <ComboboxItem key={item.id} value={item}>
-                        {item.username}
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate">{supplierOptionLabel(item)}</span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {item.email}
+                          </span>
+                        </span>
                       </ComboboxItem>
                     )}
                   </ComboboxList>
@@ -319,7 +427,8 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
               size="sm"
               onClick={() => {
                 setFilters(defaults);
-                setConsumerSearch("");
+                userLookup.setSearch("");
+                setSupplierSearch("");
                 setVisible(defaultVisibility);
                 apply(defaults);
               }}
