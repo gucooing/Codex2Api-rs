@@ -235,7 +235,7 @@ mod tests {
         };
         storage.save_account_fixture(&account).await.unwrap();
         storage
-            .save_execution_route(&account.id, "chatgpt", Some(&first.id), None)
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&first.id), None)
             .await
             .unwrap();
         let device = storage
@@ -356,7 +356,7 @@ mod tests {
         );
         assert!(check_virtual_quota(&storage, &account.id).await.is_err());
         storage
-            .save_execution_route(&account.id, "chatgpt", Some(&second.id), Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&second.id), Some(1))
             .await
             .unwrap();
         storage.save_account_fixture(&account).await.unwrap();

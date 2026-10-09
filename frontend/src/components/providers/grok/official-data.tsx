@@ -1,16 +1,13 @@
 "use client";
-import { useState } from "react";
-import { useResource } from "@/lib/hooks";
-import { useErrorToast } from "@/lib/actions";
-import { date } from "@/lib/format";
-import type { Json, SupplierQuota } from "@/lib/api";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Field, FieldTitle, FieldDescription, FieldGroup } from "@/components/ui/field";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldDescription, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { Progress } from "@/components/ui/progress";
-import { quotaWindowLabel, percentLabel, quotaResetLabel } from "@/lib/supplier-state";
-import { useQuotaClock } from "@/hooks/use-supplier-quotas";
+import type { Json } from "@/lib/api";
+import { date } from "@/lib/format";
+import { useGrokOfficialData } from "@/lib/providers/grok/data";
 import { subscriptionLabel } from "@/lib/providers/grok/subscriptions";
+import { percentLabel, quotaResetLabel, quotaWindowLabel } from "@/lib/supplier-state";
 
 function at(root: Json | undefined, path: string[]): Json | undefined {
   return path.reduce<Json | undefined>(
@@ -27,42 +24,7 @@ export function GrokOfficialData({
   onUsername?: (username: string | undefined) => void;
   onUpdated?: () => void;
 }) {
-  const [refresh, setRefresh] = useState(0);
-  const now = useQuotaClock();
-  const resource = useResource<{
-    value: Json;
-    quota?: SupplierQuota;
-    observed_at?: string;
-    refresh_error?: string;
-  }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
-  useErrorToast(resource.error);
-  useErrorToast(resource.data?.refresh_error);
-  const fields =
-    section === "details"
-      ? [
-          ["用户编号", ["userId"]],
-          ["邮箱", ["email"]],
-          ["名字", ["firstName"]],
-          ["姓氏", ["lastName"]],
-          ["身份类型", ["principalType"]],
-          ["团队编号", ["teamId"]],
-          ["团队名称", ["teamName"]],
-          ["订阅", ["subscriptionTierDisplay"]],
-        ]
-      : section === "usage"
-        ? [
-            ["订阅", ["subscription_tier_display"]],
-            ["Grok Build 权限", ["allow_access"]],
-            ["按需使用", ["on_demand_enabled"]],
-            ["服务提示", ["gate_message"]],
-          ]
-        : [
-            ["已用比例", ["config", "creditUsagePercent"]],
-            ["周期开始", ["config", "currentPeriod", "start"]],
-            ["周期结束", ["config", "currentPeriod", "end"]],
-            ["预付余额（美分）", ["config", "prepaidBalance", "val"]],
-            ["按需已用（美分）", ["config", "onDemandUsed", "val"]],
-          ];
+  const { setRefresh, now, resource, fields } = useGrokOfficialData({ id, section });
   return (
     <Card>
       <CardHeader>

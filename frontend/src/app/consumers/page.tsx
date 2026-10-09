@@ -1,1 +1,1 @@
-export { ConsumersPage as default } from "@/components/consumers";
+export { default } from "@/app/components/consumers/consumers-page";

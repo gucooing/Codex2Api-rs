@@ -1,21 +1,19 @@
 "use client";
+import { useChatgptFingerprintFields } from "@/lib/providers/chatgpt/data";
 
 import { Button } from "@/components/ui/button";
 
 import { Field, FieldLabel } from "@/components/ui/field";
-import { useId } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Select,
-  SelectTrigger,
-  SelectValue,
   SelectContent,
   SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 
-import { useActions } from "@/lib/actions";
-
-import { request, type Fingerprint, type ProxyOption } from "@/lib/api";
+import { type Fingerprint, type ProxyOption } from "@/lib/api";
 
 export function ChatgptFingerprintFields({
   value,
@@ -26,8 +24,7 @@ export function ChatgptFingerprintFields({
   onChange: (value: Fingerprint) => void;
   proxies: ProxyOption[];
 }) {
-  const fieldId = useId();
-  const actions = useActions();
+  const { fieldId, actions, handleClick } = useChatgptFingerprintFields({ value, onChange });
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       {(
@@ -86,7 +83,6 @@ export function ChatgptFingerprintFields({
           <SelectTrigger
             id={fieldId + "-field-9" + "-" + encodeURIComponent(String("出站代理"))}
             aria-label={"出站代理"}
-            data-required={false ? "true" : undefined}
             data-empty={String(value.proxy_id ?? "") === "" ? "true" : undefined}
             className="w-full"
           >
@@ -139,22 +135,10 @@ export function ChatgptFingerprintFields({
           {value.proxy_id && proxies.some((proxy) => proxy.id === value.proxy_id) && (
             <Button
               type="button"
-              variant={false ? "destructive" : "outline"}
+              variant="outline"
               className="shrink-0"
               disabled={false || actions.isBusy("components\\suppliers.tsx:action:11")}
-              onClick={() =>
-                void actions.run(
-                  "components\\suppliers.tsx:action:11",
-                  async () => {
-                    const result = await request<{ timezone: string }>(
-                      `/proxies/${value.proxy_id}/check/timezone`,
-                      { method: "POST", body: {} },
-                    );
-                    onChange({ ...value, timezone: result.timezone });
-                  },
-                  { confirm: undefined, danger: false, success: undefined },
-                )
-              }
+              onClick={() => handleClick()}
             >
               应用代理时区
             </Button>

@@ -162,13 +162,13 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
         .unwrap();
     assert!(
         storage
-            .save_execution_route(&account.id, "chatgpt", Some(&supplier.id), None)
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&supplier.id), None)
             .await
             .unwrap()
     );
     assert!(
         storage
-            .save_execution_route(&account.id, "chatgpt", None, Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", None, Some(1))
             .await
             .unwrap()
     );
@@ -183,19 +183,19 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
     );
     assert!(
         !storage
-            .save_execution_route(&account.id, "chatgpt", Some(&supplier.id), Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&supplier.id), Some(1))
             .await
             .unwrap()
     );
     assert!(
         storage
-            .save_execution_route(&account.id, "chatgpt", Some(&supplier.id), Some(2))
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&supplier.id), Some(2))
             .await
             .unwrap()
     );
     assert!(
         !storage
-            .save_execution_route(&account.id, "chatgpt", None, Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", None, Some(1))
             .await
             .unwrap()
     );
@@ -209,7 +209,7 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
     assert!(cleared.supplier_account_id.is_none());
     assert!(
         storage
-            .save_execution_route("missing", "chatgpt", None, None)
+            .bind_supplier_fixture("missing", "chatgpt", None, None)
             .await
             .is_err()
     );

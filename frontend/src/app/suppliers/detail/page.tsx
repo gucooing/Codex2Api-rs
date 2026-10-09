@@ -1,6 +1,6 @@
+import { SupplierDetail } from "@/app/components/suppliers/supplier-detail";
 import { Spinner } from "@/components/ui/spinner";
 import { Suspense } from "react";
-import { SupplierDetail } from "@/components/suppliers";
 
 export default function Page() {
   return (

@@ -1,19 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore, type FormEvent } from "react";
+import { useEffect, useSyncExternalStore, type FormEvent } from "react";
 import { toast } from "sonner";
 
 type Action = {
   key: string;
   execute: () => Promise<unknown>;
-  confirm?: string;
-  danger?: boolean;
   success?: string;
 };
-type State = { running: ReadonlySet<string>; pending?: Action };
+type State = { running: ReadonlySet<string> };
 const idle: State = { running: new Set() };
 let state = idle;
-let focusTarget: HTMLElement | null = null;
 const listeners = new Set<() => void>();
 function publish(next: State) {
   state = next;
@@ -36,50 +33,10 @@ export function toastError(error: unknown) {
           : "操作失败，请重试。";
   toast.error(message, { id: `error-${message}`, duration: 5000 });
 }
-
-export async function copyElementText(element: HTMLElement | null) {
-  if (!element) throw new Error("授权地址不可用");
-  const text = element.textContent ?? "";
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      /* HTTP origins and denied permissions use selection copying below. */
-    }
-  }
-  const selection = window.getSelection();
-  if (!selection) throw new Error("复制失败，请手动复制授权地址");
-  const previous = Array.from({ length: selection.rangeCount }, (_, index) =>
-    selection.getRangeAt(index).cloneRange(),
-  );
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  try {
-    if (!document.execCommand("copy")) throw new Error("复制失败，请手动复制授权地址");
-  } finally {
-    selection.removeAllRanges();
-    previous.forEach((range) => selection.addRange(range));
-  }
-}
 export function useErrorToast(message: string | undefined | null) {
   useEffect(() => {
     if (message) toastError(message);
   }, [message]);
-}
-export function useDialogFocus() {
-  const trigger = useRef<HTMLElement | null>(null);
-  return {
-    onOpenAutoFocus: () => {
-      trigger.current = document.activeElement as HTMLElement | null;
-    },
-    onCloseAutoFocus: (event: Event) => {
-      event.preventDefault();
-      if (trigger.current?.isConnected) trigger.current.focus();
-    },
-  };
 }
 export function validateForm(form: HTMLFormElement): boolean {
   const requiredSelect = form.querySelector<HTMLElement>(
@@ -117,7 +74,6 @@ async function execute(action: Action) {
   try {
     await action.execute();
     if (action.success !== "") toast.success(action.success ?? "操作已完成");
-    if (state.pending === action) publish({ ...state, pending: undefined });
   } catch (error) {
     toastError(error);
   } finally {
@@ -132,21 +88,7 @@ function run(
   options: Omit<Partial<Action>, "key" | "execute"> = {},
 ) {
   if (state.running.has(key)) return;
-  const action = { key, execute: callback, ...options };
-  if (!action.confirm) return execute(action);
-  const active = document.activeElement as HTMLElement | null;
-  const menu = active?.closest('[role="menu"]');
-  focusTarget = menu?.getAttribute("aria-labelledby")
-    ? document.getElementById(menu.getAttribute("aria-labelledby")!)
-    : active;
-  publish({ ...state, pending: action });
-}
-export function dismissConfirmation() {
-  if (state.pending && state.running.has(state.pending.key)) return;
-  publish({ ...state, pending: undefined });
-}
-export function restoreConfirmationFocus() {
-  if (focusTarget?.isConnected) focusTarget.focus();
+  return execute({ key, execute: callback, ...options });
 }
 function submit(
   event: FormEvent<HTMLFormElement>,
@@ -168,9 +110,5 @@ export function useActions() {
     isBusy: (key: string) => current.running.has(key),
     run,
     submit,
-    confirm: () => {
-      if (state.pending) void execute(state.pending);
-    },
-    dismiss: dismissConfirmation,
   };
 }

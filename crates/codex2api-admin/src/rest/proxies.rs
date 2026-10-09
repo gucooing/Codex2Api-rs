@@ -1,12 +1,24 @@
-use super::error::{ApiError, ApiResult, ok};
-use crate::{AdminState, proxy_checks};
+use crate::{
+    AdminState, proxy_checks,
+    rest::error::{ApiError, ApiResult, ok},
+};
 use axum::{
-    Json,
+    Json, Router,
     extract::{Path, Query, State},
+    routing::{get, post},
 };
 use codex2api_storage::OutboundProxy;
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+pub(super) fn router() -> Router<AdminState> {
+    Router::new()
+        .route("/proxies", get(list).post(create))
+        .route("/proxies/options", get(options))
+        .route("/proxies/{id}", get(detail).put(update).delete(delete))
+        .route("/proxies/{id}/check/{action}", post(check))
+}
+
 fn dto(p: &OutboundProxy, count: i64) -> Value {
     let url = url::Url::parse(&p.url).ok();
     json!({"id":p.id,"name":p.name,"protocol":url.as_ref().map(|u|u.scheme()),"host":url.as_ref().and_then(|u|u.host_str()),"port":url.as_ref().and_then(|u|u.port_or_known_default()).unwrap_or(1080),"username":url.as_ref().map(|u|urlencoding::decode(u.username()).unwrap_or_default().into_owned()),"has_password":url.as_ref().is_some_and(|u|u.password().is_some()),"display_url":p.display_url(),"account_count":count,"exit_ip":p.exit_ip,"country_code":p.country_code,"country":p.country,"region":p.region,"city":p.city,"timezone":p.timezone,"connection_ok":p.connection_ok,"connection_latency_ms":p.connection_latency_ms,"connection_error":p.connection_error,"connection_checked_at":p.connection_checked_at,"quality_ok":p.quality_ok,"quality_latency_ms":p.quality_latency_ms,"quality_http_status":p.quality_http_status,"quality_error":p.quality_error,"quality_checked_at":p.quality_checked_at})

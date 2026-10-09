@@ -1,13 +1,11 @@
 "use client";
-import { useEffect, useId, useState } from "react";
-import Link from "next/link";
-import { request } from "@/lib/api";
-import { useActions, useErrorToast } from "@/lib/actions";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel, FieldSet, FieldGroup } from "@/components/ui/field";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { useAuthorization } from "@/lib/authorization";
+import Link from "next/link";
 
 const scopeLabels: Record<string, string> = {
   openid: "本人登录身份",
@@ -23,82 +21,28 @@ const scopeLabels: Record<string, string> = {
   "api.connectors.read": "读取本账户连接器",
   "api.connectors.invoke": "调用本账户连接器",
 };
-type Identity = {
-  account_id: string;
-  username: string;
-  name: string;
-  email: string;
-  provider_id: string;
-};
-type Flow = {
-  request_id: string;
-  csrf_token: string;
-  client_name: string;
-  provider_id: string;
-  scope: string;
-  identity: Identity | null;
-  user: { name: string; username: string; email: string } | null;
-  account_unavailable: boolean;
-};
+
 export function Authorization({ device = false }: { device?: boolean }) {
-  const actions = useActions();
-  const id = useId();
-  const prefix = `/oauth/${device ? "device" : "authorize"}`;
-  const [flow, setFlow] = useState<Flow>();
-  const [error, setError] = useState("");
-  const [revision, setRevision] = useState(0);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [completed, setCompleted] = useState(false);
-  const [cancelled, setCancelled] = useState(false);
-  useErrorToast(error);
-  useEffect(() => {
-    const controller = new AbortController();
-    request<Flow>(`${prefix}/bootstrap${window.location.search}`, {
-      signal: controller.signal,
-    })
-      .then((value) => {
-        if (!controller.signal.aborted) {
-          setFlow(value);
-          if (device)
-            setCode(
-              (previous) =>
-                previous || new URLSearchParams(window.location.search).get("user_code") || "",
-            );
-          setError("");
-        }
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted)
-          setError(reason instanceof Error ? reason.message : "无法读取授权请求");
-      });
-    return () => controller.abort();
-  }, [prefix, device, revision]);
-  const reset = async () => {
-    if (!flow) return;
-    await request(`${prefix}/reset`, {
-      method: "POST",
-      body: { request_id: flow.request_id, csrf_token: flow.csrf_token },
-    });
-    setFlow({ ...flow, identity: null, user: null, account_unavailable: false });
-    setPassword("");
-  };
-  const cancel = async () => {
-    if (!flow) return;
-    const result = await request<{ redirect_uri?: string; cancelled?: boolean }>(
-      `${prefix}/cancel`,
-      {
-        method: "POST",
-        body: { request_id: flow.request_id, csrf_token: flow.csrf_token },
-      },
-    );
-    setPassword("");
-    setFlow(undefined);
-    if (result.redirect_uri) window.location.assign(result.redirect_uri);
-    else if (result.cancelled) setCancelled(true);
-    else throw new Error("取消授权失败，请重新发起登录");
-  };
+  const {
+    actions,
+    id,
+    flow,
+    error,
+    setRevision,
+    username,
+    setUsername,
+    password,
+    setPassword,
+    code,
+    setCode,
+    completed,
+    cancelled,
+    handleClick,
+    handleSubmit2,
+    handleSubmit3,
+    handleClick4,
+    handleClick5,
+  } = useAuthorization({ device });
   return (
     <main className="flex min-h-svh items-center justify-center p-4">
       <Card className="w-full max-w-md">
@@ -141,37 +85,14 @@ export function Authorization({ device = false }: { device?: boolean }) {
               <Button
                 variant="outline"
                 disabled={actions.isBusy("switch")}
-                onClick={() => void actions.run("switch", reset, { success: "" })}
+                onClick={() => handleClick()}
               >
                 切换账户
               </Button>
             </>
           )}
           {!flow?.identity && !flow?.account_unavailable && !completed && !cancelled && (
-            <form
-              noValidate
-              onSubmit={(event) =>
-                actions.submit(
-                  event,
-                  "identify",
-                  async () => {
-                    if (!flow) throw new Error("请先加载授权请求");
-                    const result = await request<{ identity: Identity }>(`${prefix}/identify`, {
-                      method: "POST",
-                      body: {
-                        request_id: flow.request_id,
-                        csrf_token: flow.csrf_token,
-                        username,
-                        password,
-                      },
-                    });
-                    setPassword("");
-                    setFlow({ ...flow, identity: result.identity });
-                  },
-                  "",
-                )
-              }
-            >
+            <form noValidate onSubmit={(event) => handleSubmit2(event)}>
               <FieldSet disabled={!flow || !!error || actions.isBusy("identify")}>
                 <FieldGroup>
                   <Field>
@@ -225,35 +146,7 @@ export function Authorization({ device = false }: { device?: boolean }) {
                   .join("、")}
                 。
               </CardDescription>
-              <form
-                noValidate
-                onSubmit={(event) =>
-                  actions.submit(
-                    event,
-                    "approve",
-                    async () => {
-                      if (!flow.identity) return;
-                      const result = await request<{ redirect_uri?: string; authorized?: boolean }>(
-                        `${prefix}/approve`,
-                        {
-                          method: "POST",
-                          body: {
-                            request_id: flow.request_id,
-                            csrf_token: flow.csrf_token,
-                            account_id: flow.identity.account_id,
-                            confirmed: true,
-                            ...(device ? { user_code: code } : {}),
-                          },
-                        },
-                      );
-                      if (device && result.authorized) setCompleted(true);
-                      else if (result.redirect_uri) window.location.assign(result.redirect_uri);
-                      else throw new Error("授权响应不完整，请重新发起登录");
-                    },
-                    "",
-                  )
-                }
-              >
+              <form noValidate onSubmit={(event) => handleSubmit3(event)}>
                 <FieldSet disabled={actions.isBusy("approve") || !!error}>
                   <FieldGroup>
                     {device && (
@@ -276,7 +169,7 @@ export function Authorization({ device = false }: { device?: boolean }) {
                       type="button"
                       variant="outline"
                       disabled={actions.isBusy("switch")}
-                      onClick={() => void actions.run("switch", reset, { success: "" })}
+                      onClick={() => handleClick4()}
                     >
                       切换账户
                     </Button>
@@ -290,7 +183,7 @@ export function Authorization({ device = false }: { device?: boolean }) {
               type="button"
               variant="ghost"
               disabled={!flow || actions.running.size > 0}
-              onClick={() => void actions.run("cancel-authorization", cancel, { success: "" })}
+              onClick={() => handleClick5()}
             >
               取消授权
             </Button>

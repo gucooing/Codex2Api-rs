@@ -1,12 +1,24 @@
-use super::error::{ApiError, ApiResult, ok};
-use crate::AdminState;
-use axum::{
-    Json,
-    extract::{Path, Query, State},
+use crate::{
+    AdminState,
+    rest::error::{ApiError, ApiResult},
 };
-use codex2api_storage::{SubscriptionChange, User};
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    routing::{get, post},
+};
+use codex2api_storage::User;
 use serde::Deserialize;
 use serde_json::json;
+
+pub(super) fn router() -> Router<AdminState> {
+    Router::new()
+        .route("/users", get(list).post(create))
+        .route("/users/options", get(options))
+        .route("/users/{id}/wallet-adjustments", post(adjust_wallet))
+        .route("/users/{id}/wallet-entries", get(wallet_entries))
+        .route("/users/{id}", get(detail).put(update))
+}
 
 pub async fn list(
     State(state): State<AdminState>,
@@ -16,29 +28,20 @@ pub async fn list(
         state.storage.user_page(&q).await?.map(|u| u.view())
     )))
 }
+
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct UserOptionsQuery {
     search: String,
 }
+
 pub async fn options(
     State(state): State<AdminState>,
     Query(query): Query<UserOptionsQuery>,
 ) -> ApiResult {
     Ok(Json(state.storage.user_options(&query.search).await?))
 }
-pub async fn adjust_wallet(
-    State(state): State<AdminState>,
-    Path(id): Path<String>,
-    Json(input): Json<codex2api_storage::WalletAdjustment>,
-) -> ApiResult {
-    let administrator = state.storage.require_admin_user().await?;
-    let entry = state
-        .storage
-        .adjust_user_wallet(&id, administrator.id, input)
-        .await?;
-    Ok(Json(json!({"entry":entry})))
-}
+
 pub async fn detail(State(state): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     let user = state
         .storage
@@ -49,18 +52,7 @@ pub async fn detail(State(state): State<AdminState>, Path(id): Path<String>) -> 
         json!({"user":user.view(),"subscriptions":state.storage.user_subscriptions(Some(&id),true).await?}),
     ))
 }
-pub async fn wallet_entries(
-    State(state): State<AdminState>,
-    Path(id): Path<String>,
-    Query(q): Query<codex2api_storage::ListQuery>,
-) -> ApiResult {
-    state
-        .storage
-        .user(&id)
-        .await?
-        .ok_or_else(ApiError::missing)?;
-    Ok(Json(json!(state.storage.wallet_entry_page(&id, &q).await?)))
-}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UserInput {
@@ -71,9 +63,11 @@ pub struct UserInput {
     enabled: bool,
     revision: Option<i64>,
 }
+
 pub async fn create(State(state): State<AdminState>, Json(input): Json<UserInput>) -> ApiResult {
     save(state, None, input).await
 }
+
 pub async fn update(
     State(state): State<AdminState>,
     Path(id): Path<String>,
@@ -81,6 +75,7 @@ pub async fn update(
 ) -> ApiResult {
     save(state, Some(id), input).await
 }
+
 async fn save(state: AdminState, id: Option<String>, input: UserInput) -> ApiResult {
     let previous = match &id {
         Some(id) => Some(
@@ -135,71 +130,29 @@ async fn save(state: AdminState, id: Option<String>, input: UserInput) -> ApiRes
             .view()
     )))
 }
-pub async fn subscriptions(
-    State(state): State<AdminState>,
-    Query(query): Query<codex2api_storage::ListQuery>,
-) -> ApiResult {
-    Ok(Json(json!(
-        state.storage.subscription_page(&query).await?.map(|s| {
-            let expired = s.expired();
-            let mut value = json!(s);
-            value["expired"] = expired.into();
-            value
-        })
-    )))
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubscriptionInput {
-    reissue: bool,
-    user_id: String,
-    plan_id: String,
-    expires_at: Option<String>,
-    enabled: bool,
-    revision: Option<i64>,
-}
-pub async fn grant(
-    State(state): State<AdminState>,
-    Json(input): Json<SubscriptionInput>,
-) -> ApiResult {
-    if input.revision.is_some() {
-        return Err(ApiError::bad("新增订阅不能指定已有版本"));
-    }
-    save_subscription(state, input).await
-}
-pub async fn update_subscription(
+
+pub async fn adjust_wallet(
     State(state): State<AdminState>,
     Path(id): Path<String>,
-    Json(input): Json<SubscriptionInput>,
+    Json(input): Json<codex2api_storage::WalletAdjustment>,
 ) -> ApiResult {
-    let current = state
+    let administrator = state.storage.require_admin_user().await?;
+    let entry = state
         .storage
-        .user_subscriptions(Some(&input.user_id), true)
-        .await?
-        .into_iter()
-        .find(|s| s.virtual_account_id == id)
-        .ok_or_else(ApiError::missing)?;
-    let plan = state
-        .storage
-        .virtual_plan(&input.plan_id)
-        .await?
-        .ok_or_else(ApiError::missing)?;
-    if current.provider_id != plan.provider_id || input.revision != Some(current.revision) {
-        return Err(ApiError::conflict());
-    }
-    save_subscription(state, input).await
+        .adjust_user_wallet(&id, administrator.id, input)
+        .await?;
+    Ok(Json(json!({"entry":entry})))
 }
-async fn save_subscription(state: AdminState, input: SubscriptionInput) -> ApiResult {
+
+pub async fn wallet_entries(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+    Query(q): Query<codex2api_storage::ListQuery>,
+) -> ApiResult {
     state
         .storage
-        .save_user_subscription(SubscriptionChange {
-            reissue: input.reissue,
-            user_id: &input.user_id,
-            plan_id: &input.plan_id,
-            expires_at: input.expires_at.as_deref(),
-            enabled: input.enabled,
-            revision: input.revision,
-        })
-        .await?;
-    Ok(ok())
+        .user(&id)
+        .await?
+        .ok_or_else(ApiError::missing)?;
+    Ok(Json(json!(state.storage.wallet_entry_page(&id, &q).await?)))
 }

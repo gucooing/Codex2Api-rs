@@ -1,8 +1,8 @@
-import { useListResource } from "@/lib/pagination";
-import { useErrorToast } from "@/lib/actions";
-import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
+"use client";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import {
   Select,
   SelectContent,
@@ -10,7 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -19,8 +18,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Json } from "@/lib/api";
 import { atPath } from "@/lib/domain";
+import { useChatgptPluginRecords } from "@/lib/providers/chatgpt/data";
 import { scalar } from "@/lib/records";
 
 const scopes: Record<string, string> = {
@@ -30,10 +29,7 @@ const scopes: Record<string, string> = {
 };
 
 export function ChatgptPluginRecords({ path }: { path: string }) {
-  const resource = useListResource<Json>(path, { section: "$.plugins" });
-  const pagination = resource.pagination;
-  const rows = pagination.rows;
-  useErrorToast(resource.error);
+  const { resource, pagination, rows } = useChatgptPluginRecords({ path });
   return (
     <>
       <Table>

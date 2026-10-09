@@ -1,10 +1,16 @@
-use super::error::ApiResult;
-use crate::AdminState;
+use crate::{AdminState, rest::error::ApiResult};
 use axum::{
-    Json,
+    Json, Router,
     extract::{Path, Query, State},
+    routing::{get, put},
 };
 use codex2api_storage::CouponInput;
+
+pub(super) fn router() -> Router<AdminState> {
+    Router::new()
+        .route("/coupons", get(list).post(create))
+        .route("/coupons/{id}", put(update))
+}
 
 pub async fn list(
     State(state): State<AdminState>,

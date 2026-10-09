@@ -105,9 +105,3 @@ export async function request<T>(
 export const money = (value: string | number) => `$${Number(value).toFixed(2)}`;
 export const date = (value: string | null) =>
   value ? new Date(value).toLocaleString() : "长期有效";
-
-export function requestId() {
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
-    value.toString(16).padStart(2, "0"),
-  ).join("");
-}

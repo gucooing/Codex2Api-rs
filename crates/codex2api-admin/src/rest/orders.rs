@@ -1,11 +1,23 @@
-use super::error::{ApiError, ApiResult};
-use crate::AdminState;
+use crate::{
+    AdminState,
+    rest::error::{ApiError, ApiResult},
+};
 use axum::{
-    Json,
+    Json, Router,
     extract::{Path, Query, State},
+    routing::{get, post},
 };
 use codex2api_storage::OrderFilter;
 use serde::Deserialize;
+
+pub(super) fn router() -> Router<AdminState> {
+    Router::new()
+        .route("/orders", get(list))
+        .route("/orders/plans", get(plans))
+        .route("/orders/{id}", get(detail))
+        .route("/orders/{id}/cancel", post(cancel))
+}
+
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Filters {

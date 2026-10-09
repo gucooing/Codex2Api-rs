@@ -1,70 +1,62 @@
 "use client";
+import { AccountRecordDialog } from "@/components/providers/chatgpt/account-record-dialog";
+import { CreditRecordDialog } from "@/components/providers/chatgpt/credit-record-dialog";
+import {
+  useChatgptOfficialData,
+  useOfficialCredits,
+  useOfficialFields,
+} from "@/lib/providers/chatgpt/data";
 
 import { subscriptionLabel } from "@/lib/subscriptions";
 
-import { useColumnVisibility } from "@/lib/columns";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
-import { useListResource } from "@/lib/pagination";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Columns3 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Columns3 } from "lucide-react";
 
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Button } from "@/components/ui/button";
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import {
   DropdownMenu,
-  DropdownMenuTrigger,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldTitle } from "@/components/ui/field";
 
 import { Input } from "@/components/ui/input";
 import {
   Select,
-  SelectTrigger,
-  SelectValue,
   SelectContent,
   SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 
+import { Empty, EmptyDescription } from "@/components/ui/empty";
 import {
   Table,
-  TableHeader,
-  TableRow,
-  TableHead,
   TableBody,
   TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table";
-import { Empty, EmptyDescription } from "@/components/ui/empty";
-
-import { useActions, useErrorToast } from "@/lib/actions";
-
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogDescription,
-} from "@/components/ui/dialog";
 
 import { Progress } from "@/components/ui/progress";
 
 import { date } from "@/lib/format";
 
-import { useEffect, useState } from "react";
+import { percentLabel, quotaWindowLabel } from "@/lib/supplier-state";
+import { tokenCount } from "@/lib/usage-display";
 
-import { quotaWindowLabel, percentLabel } from "@/lib/supplier-state";
-import { duration, tokenCount } from "@/lib/usage-display";
+import { type Json } from "@/lib/api";
 
-import { request, type SupplierQuota, type Json } from "@/lib/api";
-
-import { ResourceRefreshContext, useResource } from "@/lib/hooks";
+import { ResourceRefreshContext } from "@/lib/hooks";
 
 export function ChatgptOfficialData({
   id,
@@ -75,26 +67,7 @@ export function ChatgptOfficialData({
   section: string;
   onUpdated?: () => void;
 }) {
-  const [refresh, setRefresh] = useState(0);
-  const resource = useResource<{
-    value: Json;
-    quota?: SupplierQuota;
-    observed_at?: string;
-    refresh_error?: string | null;
-    routing?: {
-      status: "not_observed" | "ready" | "stale" | "invalid";
-      backend_origin: string | null;
-      constraint: "NO_CONSTRAINT" | "us" | "us_cr" | null;
-      message: string | null;
-    };
-  }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
-  const root = resource.data?.value;
-  const value = root && typeof root === "object" && !Array.isArray(root) ? root : {};
-  useErrorToast(resource.error);
-  useErrorToast(resource.data?.refresh_error ?? undefined);
-  useEffect(() => {
-    if (section === "quota" && resource.data) onUpdated?.();
-  }, [section, resource.data, onUpdated]);
+  const { setRefresh, resource, value } = useChatgptOfficialData({ id, section, onUpdated });
   return (
     <Card>
       <CardHeader>
@@ -194,73 +167,11 @@ export function ChatgptOfficialData({
   );
 }
 function OfficialFields({ value, section, id }: { value: Json; section: string; id: string }) {
-  const tableColumns1 = useColumnVisibility(
-    "components/suppliers.tsx:1",
-    ["账户", "类型", "订阅"],
-    ["账户", "类型", "订阅"],
-  );
-
-  const root = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const profile =
-    root.profile && typeof root.profile === "object" && !Array.isArray(root.profile)
-      ? root.profile
-      : root;
-  const statsValue =
-    root.stats && typeof root.stats === "object" && !Array.isArray(root.stats)
-      ? root.stats
-      : profile.stats && typeof profile.stats === "object" && !Array.isArray(profile.stats)
-        ? profile.stats
-        : {};
-  const stats =
-    statsValue.stats && typeof statsValue.stats === "object" && !Array.isArray(statsValue.stats)
-      ? statsValue.stats
-      : statsValue;
-  const resource = useListResource<Json>(
-    section === "details" ? `/suppliers/chatgpt/${id}/official/rows` : null,
-    { kind: "details" },
-  );
-  const pagination = resource.pagination;
-  const rows = pagination.rows;
-  useErrorToast(resource.error);
-  const days = Array.isArray(stats.daily_usage_buckets) ? stats.daily_usage_buckets : [];
-  const fields =
-    section === "usage"
-      ? [
-          {
-            label: "累计 Token",
-            value: tokenCount(
-              typeof stats.lifetime_tokens === "number" ? stats.lifetime_tokens : null,
-            ),
-          },
-          {
-            label: "单日最高 Token",
-            value: tokenCount(
-              typeof stats.peak_daily_tokens === "number" ? stats.peak_daily_tokens : null,
-            ),
-          },
-          {
-            label: "当前连续使用天数",
-            value:
-              typeof stats.current_streak_days === "number"
-                ? `${stats.current_streak_days}天`
-                : "—",
-          },
-          {
-            label: "最长连续使用天数",
-            value:
-              typeof stats.longest_streak_days === "number"
-                ? `${stats.longest_streak_days}天`
-                : "—",
-          },
-          {
-            label: "最长任务时长",
-            value:
-              typeof stats.longest_running_turn_sec === "number"
-                ? duration(stats.longest_running_turn_sec * 1000)
-                : "—",
-          },
-        ]
-      : [{ label: "默认账户", value: root.default_account_id }];
+  const { tableColumns1, pagination, rows, days, fields } = useOfficialFields({
+    value,
+    section,
+    id,
+  });
   return (
     <div className="space-y-4">
       <FieldGroup className="grid gap-3 sm:grid-cols-2">
@@ -396,58 +307,7 @@ function OfficialFields({ value, section, id }: { value: Json; section: string; 
                           <div className="max-md:hidden">
                             {String(account.name ?? account.account_id ?? account.id ?? "—")}
                           </div>
-                          <Dialog>
-                            <DialogTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
-                                aria-label={
-                                  "查看详情：" +
-                                  String(
-                                    String(account.name ?? account.account_id ?? account.id ?? "—"),
-                                  )
-                                }
-                              >
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate font-medium">
-                                    {String(
-                                      account.name ?? account.account_id ?? account.id ?? "—",
-                                    )}
-                                  </span>
-                                </span>
-                                <ChevronRight className="size-3 shrink-0" />
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-                              <DialogHeader>
-                                <DialogTitle>记录详情</DialogTitle>
-                                <DialogDescription>当前记录的完整字段</DialogDescription>
-                              </DialogHeader>
-                              <FieldGroup className="gap-3">
-                                <Field>
-                                  <FieldTitle>账户</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {String(
-                                      account.name ?? account.account_id ?? account.id ?? "—",
-                                    )}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>类型</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {String(account.structure ?? "—")}
-                                  </div>
-                                </Field>
-                                <Field>
-                                  <FieldTitle>订阅</FieldTitle>
-                                  <div className="min-w-0 break-words [&_*]:max-w-full">
-                                    {subscriptionLabel(account.plan_type)}
-                                  </div>
-                                </Field>
-                              </FieldGroup>
-                            </DialogContent>
-                          </Dialog>
+                          <AccountRecordDialog account={account} />
                         </TableCell>
                         <TableCell
                           hidden={!tableColumns1.isVisible("类型")}
@@ -563,27 +423,8 @@ function OfficialCredits({
   id: string;
   onRefresh: () => void;
 }) {
-  const tableColumns2 = useColumnVisibility(
-    "components/suppliers.tsx:2",
-    ["名称", "类型", "状态", "到期时间", "操作"],
-    ["名称", "状态", "操作"],
-  );
-
-  const actions = useActions();
-  const resource = useListResource<{ [key: string]: Json }>(
-    `/suppliers/chatgpt/${id}/official/rows`,
-    { kind: "credits" },
-  );
-  const pagination = resource.pagination;
-  const credits = pagination.rows;
-  useErrorToast(resource.error);
-  const consume = async (creditId?: string) => {
-    await request(`/suppliers/${id}/credits/consume`, {
-      method: "POST",
-      body: creditId ? { credit_id: creditId } : {},
-    });
-    onRefresh();
-  };
+  const { tableColumns2, actions, pagination, credits, handleClick, handleClick2 } =
+    useOfficialCredits({ id, onRefresh });
   return (
     <div className="space-y-4">
       <CardDescription>
@@ -663,59 +504,7 @@ function OfficialCredits({
                       <div className="max-md:hidden">
                         {String(credit.title ?? credit.id ?? "—")}
                       </div>
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="h-auto w-full min-w-0 justify-start gap-1 px-0 py-1 text-left md:hidden"
-                            aria-label={
-                              "查看详情：" + String(String(credit.title ?? credit.id ?? "—"))
-                            }
-                          >
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate font-medium">
-                                {String(credit.title ?? credit.id ?? "—")}
-                              </span>
-                            </span>
-                            <ChevronRight className="size-3 shrink-0" />
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-                          <DialogHeader>
-                            <DialogTitle>记录详情</DialogTitle>
-                            <DialogDescription>当前记录的完整字段</DialogDescription>
-                          </DialogHeader>
-                          <FieldGroup className="gap-3">
-                            <Field>
-                              <FieldTitle>名称</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {String(credit.title ?? credit.id ?? "—")}
-                              </div>
-                            </Field>
-                            <Field>
-                              <FieldTitle>类型</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {String(credit.reset_type ?? "—")}
-                              </div>
-                            </Field>
-                            <Field>
-                              <FieldTitle>状态</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {String(credit.status ?? "—")}
-                              </div>
-                            </Field>
-                            <Field>
-                              <FieldTitle>到期时间</FieldTitle>
-                              <div className="min-w-0 break-words [&_*]:max-w-full">
-                                {date(
-                                  typeof credit.expires_at === "string" ? credit.expires_at : null,
-                                )}
-                              </div>
-                            </Field>
-                          </FieldGroup>
-                        </DialogContent>
-                      </Dialog>
+                      <CreditRecordDialog credit={credit} />
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns2.isVisible("类型")}
@@ -752,19 +541,9 @@ function OfficialCredits({
                       {credit.status === "available" && typeof credit.id === "string" ? (
                         <Button
                           type="button"
-                          variant={false ? "destructive" : "outline"}
+                          variant="outline"
                           disabled={false || actions.isBusy("components\\suppliers.tsx:action:20")}
-                          onClick={() =>
-                            void actions.run(
-                              "components\\suppliers.tsx:action:20",
-                              () => consume(String(credit.id)),
-                              {
-                                confirm: "使用此供应账户的一次官方重置额度？",
-                                danger: false,
-                                success: undefined,
-                              },
-                            )
-                          }
+                          onClick={() => handleClick(credit)}
                         >
                           使用重置额度
                         </Button>
@@ -858,15 +637,9 @@ function OfficialCredits({
       {typeof value.available_count === "number" && value.available_count > 0 && (
         <Button
           type="button"
-          variant={false ? "destructive" : "outline"}
+          variant="outline"
           disabled={false || actions.isBusy("components\\suppliers.tsx:action:21")}
-          onClick={() =>
-            void actions.run("components\\suppliers.tsx:action:21", () => consume(), {
-              confirm: "使用此供应账户的一次官方重置额度？",
-              danger: false,
-              success: undefined,
-            })
-          }
+          onClick={() => handleClick2()}
         >
           使用一次可用重置额度
         </Button>

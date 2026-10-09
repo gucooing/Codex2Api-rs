@@ -1,4 +1,4 @@
-import type { BusinessField, Json, ModelRef, Plan, Model, OAuth } from "./api";
+import type { BusinessField, Json, Model, ModelRef, OAuth, Plan } from "./api";
 
 export const clientOwnedKeys = new Set([
   "cloud_preferences",
@@ -33,9 +33,6 @@ export function allowedFields(key: string, fields: BusinessField[]) {
 }
 export function modelKey(model: ModelRef) {
   return `${model.provider_id}/${model.model}`;
-}
-export function sameProviderModels(models: ModelRef[], provider: string) {
-  return models.filter((model) => model.provider_id === provider);
 }
 export function planWrite(value: Plan) {
   return {

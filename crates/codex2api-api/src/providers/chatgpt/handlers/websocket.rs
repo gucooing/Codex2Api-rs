@@ -618,7 +618,7 @@ mod tests {
         };
         storage.save_account_fixture(&consumer).await.unwrap();
         storage
-            .save_execution_route(&consumer.id, "chatgpt", Some(&supplier.id), None)
+            .bind_supplier_fixture(&consumer.id, "chatgpt", Some(&supplier.id), None)
             .await
             .unwrap();
         let device = storage
@@ -1175,7 +1175,7 @@ mod tests {
         };
         storage.save_account_fixture(&account).await.unwrap();
         storage
-            .save_execution_route(&account.id, "chatgpt", Some(&real.id), None)
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&real.id), None)
             .await
             .unwrap();
         let device = storage

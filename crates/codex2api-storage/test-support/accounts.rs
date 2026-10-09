@@ -5,8 +5,40 @@ use codex2api_storage::{PlatformAccount, Result, Storage, User, UserKind, Virtua
 #[allow(dead_code, async_fn_in_trait)]
 pub trait AccountFixture {
     async fn save_account_fixture(&self, account: &PlatformAccount) -> Result<()>;
+    async fn bind_supplier_fixture(
+        &self,
+        owner: &str,
+        provider: &str,
+        supplier: Option<&str>,
+        expected: Option<i64>,
+    ) -> Result<bool>;
 }
 impl AccountFixture for Storage {
+    async fn bind_supplier_fixture(
+        &self,
+        owner: &str,
+        provider: &str,
+        supplier: Option<&str>,
+        expected: Option<i64>,
+    ) -> Result<bool> {
+        if self
+            .execution_route(owner, provider)
+            .await?
+            .map(|route| route.revision)
+            != expected
+        {
+            return Ok(false);
+        }
+        let tag = supplier.map(|id| format!("fixture-{id}"));
+        if let (Some(supplier), Some(tag)) = (supplier, &tag) {
+            self.save_supplier_tag(tag, provider, tag).await?;
+            self.edit_supplier_tags(&[supplier.into()], std::slice::from_ref(tag), false)
+                .await?;
+        }
+        self.save_pool_route(owner, provider, tag.as_deref(), supplier, expected)
+            .await
+    }
+
     async fn save_account_fixture(&self, account: &PlatformAccount) -> Result<()> {
         let plan = self.virtual_plan(&account.plan_id).await?;
         if plan.as_ref().is_none_or(|p| {

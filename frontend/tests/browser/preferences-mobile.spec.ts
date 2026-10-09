@@ -80,15 +80,12 @@ test("filters, list views, page size and overview series survive reload locally"
   await page.getByRole("link", { name: "供应账户", exact: true }).click();
   await page.getByLabel("搜索账户", { exact: true }).fill("本地验收");
   await page.getByRole("button", { name: "查询", exact: true }).click();
-  await page.getByRole("radio", { name: "卡片视图", exact: true }).click();
+  await page.getByRole("button", { name: "切换为卡片视图", exact: true }).click();
   await page.getByRole("combobox", { name: "每页条数", exact: true }).click();
   await page.getByRole("option", { name: "30 条/页", exact: true }).click();
   await page.reload();
   await expect(page.getByLabel("搜索账户", { exact: true })).toHaveValue("本地验收");
-  await expect(page.getByRole("radio", { name: "卡片视图", exact: true })).toHaveAttribute(
-    "data-state",
-    "on",
-  );
+  await expect(page.getByRole("button", { name: "切换为表格视图", exact: true })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "每页条数", exact: true })).toContainText("30");
   await expect(page.getByRole("table")).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -98,10 +95,7 @@ test("filters, list views, page size and overview series survive reload locally"
   await expect(page.getByRole("table")).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 1100 });
   await expect(page.getByRole("table")).toHaveCount(0);
-  await expect(page.getByRole("radio", { name: "卡片视图", exact: true })).toHaveAttribute(
-    "data-state",
-    "on",
-  );
+  await expect(page.getByRole("button", { name: "切换为表格视图", exact: true })).toBeVisible();
   // Unsubmitted text should not silently turn into a new query after reloading.
   await page.getByLabel("搜索账户", { exact: true }).fill("未提交的搜索");
   await page.reload();
@@ -109,20 +103,14 @@ test("filters, list views, page size and overview series survive reload locally"
   await page.getByRole("button", { name: "重置", exact: true }).click();
   await page.reload();
   await expect(page.getByLabel("搜索账户", { exact: true })).toHaveValue("");
-  await expect(page.getByRole("radio", { name: "卡片视图", exact: true })).toHaveAttribute(
-    "data-state",
-    "on",
-  );
+  await expect(page.getByRole("button", { name: "切换为表格视图", exact: true })).toBeVisible();
 
   const independent = await browser.newContext({
     storageState: { cookies: await page.context().cookies(), origins: [] },
   });
   const other = await independent.newPage();
   await other.goto(new URL("/admin/suppliers/", page.url()).href);
-  await expect(other.getByRole("radio", { name: "表格视图", exact: true })).toHaveAttribute(
-    "data-state",
-    "on",
-  );
+  await expect(other.getByRole("button", { name: "切换为卡片视图", exact: true })).toBeVisible();
   await independent.close();
 
   await page.getByRole("link", { name: "概览", exact: true }).click();
@@ -157,10 +145,7 @@ test("filters, list views, page size and overview series survive reload locally"
 
   await page.evaluate(() => localStorage.setItem("codex2api-ui-v1:suppliers.view", '"invalid"'));
   await page.goto("/admin/suppliers/");
-  await expect(page.getByRole("radio", { name: "表格视图", exact: true })).toHaveAttribute(
-    "data-state",
-    "on",
-  );
+  await expect(page.getByRole("button", { name: "切换为卡片视图", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -189,7 +174,7 @@ test("mobile tables keep compact aligned rows and open full fields on demand", a
   expect(proxy.ok()).toBe(true);
   const evidence = resolve(process.env.CODEX2API_TEST_OUTPUT_DIR!, "screenshots");
   await mkdir(evidence, { recursive: true });
-  for (const route of ["suppliers", "consumers", "models", "plans", "proxies", "usage"]) {
+  for (const route of ["suppliers", "consumers", "models", "proxies", "usage"]) {
     const response = page.waitForResponse(
       (response) => new URL(response.url()).pathname === `/admin/api/${route}`,
     );

@@ -108,7 +108,6 @@ import {
   modelWrite,
   planWrite,
   mergeOAuth,
-  sameProviderModels,
   withPath,
 } from "../src/lib/domain.ts";
 
@@ -127,18 +126,6 @@ test("mixed user settings only expose service flags and preserve preferences", (
   assert.deepEqual(after.settings, before.settings);
   assert.deepEqual(before.flags, {});
   assert.throws(() => withPath(before, ["__proto__", "admin"], true));
-});
-test("provider model selection remains isolated", () => {
-  assert.deepEqual(
-    sameProviderModels(
-      [
-        { provider_id: "chatgpt", model: "gpt-5" },
-        { provider_id: "grok", model: "gpt-5" },
-      ],
-      "chatgpt",
-    ),
-    [{ provider_id: "chatgpt", model: "gpt-5" }],
-  );
 });
 test("mutation DTOs exclude read only metadata", () => {
   const model = {

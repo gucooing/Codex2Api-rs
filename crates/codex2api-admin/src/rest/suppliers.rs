@@ -1,12 +1,79 @@
-use super::error::{ApiError, ApiResult, ok};
-use crate::AdminState;
+use crate::{
+    AdminState,
+    rest::error::{ApiError, ApiResult, ok},
+};
 use axum::{
-    Json,
+    Json, Router,
     extract::{Path, Query, State},
+    routing::{get, post, put},
 };
 use codex2api_storage::{SupplierAccount, SupplierInfoSection, SupplierStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+pub(super) fn router() -> Router<AdminState> {
+    Router::new()
+        .route(
+            "/suppliers/grok/{id}/profile",
+            post(crate::providers::grok::refresh_profile),
+        )
+        .nest(
+            "/suppliers/chatgpt/oauth",
+            crate::providers::chatgpt_oauth_routes(),
+        )
+        .nest(
+            "/suppliers/grok/oauth",
+            crate::providers::grok::oauth_routes(),
+        )
+        .route(
+            "/suppliers/grok/{id}/models",
+            get(crate::providers::grok::model_catalog)
+                .post(crate::providers::grok::sync_model_catalog),
+        )
+        .route("/suppliers", get(list))
+        .route("/suppliers/options", get(options))
+        .route("/suppliers/selection", get(selection))
+        .route("/suppliers/tags", post(super::supplier_tags::batch))
+        .route(
+            "/suppliers/oauth/setup",
+            get(crate::providers::chatgpt::setup),
+        )
+        .route(
+            "/suppliers/oauth/start",
+            post(crate::providers::chatgpt::start),
+        )
+        .route(
+            "/suppliers/oauth/callback",
+            post(crate::providers::chatgpt::callback),
+        )
+        .route(
+            "/suppliers/oauth/poll",
+            post(crate::providers::chatgpt::poll),
+        )
+        .route(
+            "/suppliers/oauth/cancel",
+            post(crate::providers::chatgpt::cancel),
+        )
+        .route("/suppliers/{id}", get(detail).delete(delete))
+        .route("/suppliers/{id}/status", post(status))
+        .route("/suppliers/{id}/reset-state", post(reset_state))
+        .route("/suppliers/{id}/quota", get(quota))
+        .route(
+            "/suppliers/{id}/fingerprint",
+            put(crate::providers::fingerprint),
+        )
+        .route("/suppliers/{id}/official", get(crate::providers::official))
+        .route(
+            "/suppliers/chatgpt/{id}/official/rows",
+            get(crate::providers::chatgpt::official_rows),
+        )
+        .route(
+            "/suppliers/{id}/credits/consume",
+            post(crate::providers::credit),
+        )
+        .route("/suppliers/{id}/relogin", post(crate::providers::relogin))
+}
+
 pub(crate) fn dto(a: &SupplierAccount) -> Value {
     json!({"id":a.id,"provider_id":a.provider_id,"proxy_id":a.proxy_id,"status":a.status,"display_name":a.display_name,"chatgpt_account_id":a.chatgpt_account_id,"chatgpt_user_id":a.chatgpt_user_id,"email":a.email,"plan_type":a.plan_type,"installation_id":a.installation_id,"originator":a.originator,"user_agent":a.user_agent,"os_type":a.os_type,"os_version":a.os_version,"arch":a.arch,"created_at":a.created_at,"updated_at":a.updated_at,"last_used_at":a.last_used_at})
 }
@@ -96,7 +163,7 @@ pub async fn selection(
 }
 pub async fn options(
     State(s): State<AdminState>,
-    Query(q): Query<super::dto::AccountListQuery>,
+    Query(q): Query<crate::rest::dto::AccountListQuery>,
 ) -> ApiResult {
     let (search, limit) = q.search_params()?;
     let items = s

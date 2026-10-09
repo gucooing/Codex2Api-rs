@@ -1,34 +1,18 @@
 "use client";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Session, useAdminShell, useAppShell } from "@/lib/session";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useId,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
-import { ArrowRightLeft, LogOut, Monitor, Moon, Search, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
-import { ApiError, request, setCsrf } from "@/lib/http";
-import {
-  useActions,
-  useErrorToast,
-  dismissConfirmation,
-  restoreConfirmationFocus,
-} from "@/lib/actions";
-import { isCurrentPage, navigation, navigationGroups } from "./navigation";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -37,6 +21,35 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
@@ -52,88 +65,21 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
-  useSidebar,
 } from "@/components/ui/sidebar";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Spinner } from "@/components/ui/spinner";
+import { restoreConfirmationFocus } from "@/lib/actions";
+import { isCurrentPage, navigation, navigationGroups } from "@/lib/navigation";
+import { ArrowRightLeft, LogOut, Monitor, Moon, Search, Sun } from "lucide-react";
+import Link from "next/link";
+import { createContext, useContext, type ReactNode } from "react";
 
-type Session = {
-  authenticated: boolean;
-  username: string;
-  csrf_token: string;
-  app_version: string;
-  codex_cli_version: string;
-  grok_build_version: string;
-};
-const signedOut: Session = {
-  authenticated: false,
-  username: "",
-  csrf_token: "",
-  app_version: "",
-  codex_cli_version: "",
-  grok_build_version: "",
-};
-async function readSession(signal?: AbortSignal): Promise<Session> {
-  try {
-    const value = await request<Session>("/session", { signal });
-    if (
-      value?.authenticated !== true ||
-      typeof value.username !== "string" ||
-      typeof value.csrf_token !== "string"
-    )
-      throw new ApiError(200, "invalid_response", "无法读取有效的管理员会话，请重试。");
-    return value;
-  } catch (reason) {
-    if (reason instanceof ApiError && reason.status === 401 && reason.code === "unauthorized")
-      return signedOut;
-    throw reason;
-  }
-}
 const Context = createContext<{ session?: Session; refresh: () => Promise<void> }>({
   refresh: async () => {},
 });
 export const useSession = () => useContext(Context);
-const subscribeMounted = () => () => {};
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
-  const actions = useActions();
-  useEffect(() => {
-    dismissConfirmation();
-  }, [pathname]);
+  const { actions } = useAppShell();
   return (
     <>
       <SidebarProvider>
@@ -179,69 +125,32 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 function AdminShell({ children }: { children: ReactNode }) {
-  const id = useId();
-  const actions = useActions();
-  const [session, setSession] = useState<Session>();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const pathname = usePathname();
-  const router = useRouter();
-  const { state, isMobile, openMobile, setOpenMobile } = useSidebar();
-  const { theme, setTheme } = useTheme();
-  const mounted = useSyncExternalStore(
-    subscribeMounted,
-    () => true,
-    () => false,
-  );
-  const page = navigation.find((item) => isCurrentPage(pathname, item.href));
-  useErrorToast(error);
-  const acceptSession = useCallback((value: Session) => {
-    setSession(value);
-    setCsrf(value.csrf_token);
-    setError("");
-    if (!value.authenticated) dismissConfirmation();
-  }, []);
-  async function refresh() {
-    acceptSession(await readSession());
-  }
-  useEffect(() => {
-    const controller = new AbortController();
-    readSession(controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted) acceptSession(value);
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted)
-          setError(reason instanceof Error ? reason.message : "无法读取管理员会话");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    const expired = () => {
-      setSession(signedOut);
-      setCsrf("");
-      dismissConfirmation();
-    };
-    window.addEventListener("admin-session-expired", expired);
-    return () => {
-      controller.abort();
-      window.removeEventListener("admin-session-expired", expired);
-    };
-  }, [acceptSession]);
-  useEffect(() => {
-    if (!session?.authenticated) return;
-    const shortcut = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSearchOpen((open) => !open);
-      }
-    };
-    document.addEventListener("keydown", shortcut);
-    return () => document.removeEventListener("keydown", shortcut);
-  }, [session?.authenticated]);
+  const {
+    refresh,
+    id,
+    actions,
+    session,
+    loading,
+    username,
+    setUsername,
+    password,
+    setPassword,
+    searchOpen,
+    setSearchOpen,
+    pathname,
+    router,
+    state,
+    isMobile,
+    openMobile,
+    setOpenMobile,
+    theme,
+    setTheme,
+    mounted,
+    page,
+    handleClick,
+    handleSubmit2,
+    handleClick3,
+  } = useAdminShell();
   if (loading)
     return (
       <main className="flex min-h-svh w-full items-center justify-center">
@@ -254,7 +163,7 @@ function AdminShell({ children }: { children: ReactNode }) {
         <Button
           variant="outline"
           disabled={actions.isBusy("admin-session-retry")}
-          onClick={() => void actions.run("admin-session-retry", () => refresh(), { success: "" })}
+          onClick={() => handleClick()}
         >
           {actions.isBusy("admin-session-retry") && <Spinner />}
           重新连接
@@ -273,26 +182,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               <CardDescription>Codex2API · 供应账户与虚拟账户管理</CardDescription>
             </CardHeader>
             <CardContent>
-              <form
-                noValidate
-                onSubmit={(event) =>
-                  actions.submit(
-                    event,
-                    "admin-login",
-                    async () => {
-                      const value = await request<Session>("/login", {
-                        method: "POST",
-                        body: { username, password },
-                      });
-                      setSession(value);
-                      setCsrf(value.csrf_token);
-                      setPassword("");
-                      setError("");
-                    },
-                    "登录成功",
-                  )
-                }
-              >
+              <form noValidate onSubmit={(event) => handleSubmit2(event)}>
                 <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-12rem)]">
                   <FieldSet disabled={actions.isBusy("admin-login")}>
                     <FieldGroup className="gap-4">
@@ -329,7 +219,6 @@ function AdminShell({ children }: { children: ReactNode }) {
         </main>
       </Context>
     );
-  // Official shadcn sidebar-07 structure with the application's real routes.
   return (
     <Context value={{ session, refresh }}>
       <Sidebar collapsible="icon">
@@ -382,18 +271,7 @@ function AdminShell({ children }: { children: ReactNode }) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                onClick={() =>
-                  void actions.run(
-                    "admin-logout",
-                    async () => {
-                      await request("/logout", { method: "POST" });
-                      setSession(signedOut);
-                      setCsrf("");
-                      dismissConfirmation();
-                    },
-                    { success: "已退出登录" },
-                  )
-                }
+                onClick={() => handleClick3()}
                 disabled={actions.isBusy("admin-logout")}
                 tooltip="退出登录"
               >

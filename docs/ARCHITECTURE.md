@@ -36,7 +36,13 @@ One Rust process runs three listeners: AI API (8080), administration (8081), and
 | codex2api | Startup, dependency composition, listener and graceful shutdown |
 
 Incoming routes are explicit in `codex2api-api/src/providers/chatgpt/routes.rs` and
-`codex2api-admin/src/rest/mod.rs`. Handlers adapt requests to services; they do not
+the resource modules under `codex2api-admin/src/rest/` and `codex2api-user/src/rest/`.
+Each administrator business resource owns its router and handlers in one module.
+Plans, models, users and subscriptions have separate business modules; identical
+platform-account operations share one module instead of duplicating their handlers.
+The root routers assemble these resources and apply session and account-scope
+middleware. Virtual users and regular subscriptions have separate namespace routers;
+only identical platform-resource operations share handlers. Handlers adapt requests to services; they do not
 derive routes from outbound endpoint enums. HTTP fingerprint and wire rules stay
 in auth/upstream. SQLite code neither calls providers nor registers HTTP routes.
 

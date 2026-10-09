@@ -7477,7 +7477,7 @@ async fn bind_test_supplier(
         .unwrap();
     assert!(
         storage
-            .save_execution_route(
+            .bind_supplier_fixture(
                 &account.id,
                 "chatgpt",
                 supplier.as_deref(),

@@ -78,7 +78,7 @@ async fn real_rest_contracts_match_frontend_fixture() {
             .unwrap()
     );
     f.storage
-        .save_execution_route(&consumer.id, "chatgpt", None, None)
+        .bind_supplier_fixture(&consumer.id, "chatgpt", None, None)
         .await
         .unwrap();
     let mut record = codex2api_storage::UsageRecord {

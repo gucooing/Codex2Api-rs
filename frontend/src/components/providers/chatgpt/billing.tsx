@@ -1,48 +1,21 @@
 "use client";
+import { useSearchBilling } from "@/lib/providers/chatgpt/data";
 
-import { useId, useState } from "react";
-import { RefreshCw } from "lucide-react";
-import { request } from "@/lib/api";
-import { useResource } from "@/lib/hooks";
-import { useActions, useErrorToast } from "@/lib/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-
-type SearchPrice = { price: string | null; revision: number | null };
+import { RefreshCw } from "lucide-react";
 
 export function SearchBilling() {
-  const id = useId();
-  const resource = useResource<SearchPrice>("/billing/chatgpt/search");
-  const [draft, setDraft] = useState<SearchPrice>();
-  const actions = useActions();
-  const busy = actions.isBusy("search-price");
-  useErrorToast(resource.error);
-  const price = draft?.price ?? resource.data?.price ?? "";
-
+  const { id, resource, draft, setDraft, busy, price, handleSubmit } = useSearchBilling();
   return (
     <Card>
       <CardContent>
         <form
           noValidate
           className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!resource.ready || !draft || busy) return;
-            void actions.run(
-              "search-price",
-              async () => {
-                await request<SearchPrice>("/billing/chatgpt/search", {
-                  method: "PUT",
-                  body: { ...draft, price: price.trim() || null },
-                });
-                setDraft(undefined);
-                resource.reload();
-              },
-              { success: "搜索价格已保存" },
-            );
-          }}
+          onSubmit={(event) => handleSubmit(event)}
         >
           <Field className="w-32">
             <FieldLabel>提供商</FieldLabel>

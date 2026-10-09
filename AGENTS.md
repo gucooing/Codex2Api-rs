@@ -165,6 +165,25 @@ validation are complete.
 
 ### Frontend
 
+- Keep App Router route folders as page entries. Each list, detail, dialog and
+  business subview has its own file in `src/app/components/<business>/`; put the
+  corresponding data modules in `src/app/data/<business>/`. Do not nest
+  `_components/` or `_data/` under routes or detail routes. Reusable business
+  components belong in `src/components/`, and shared forms in `src/components/forms/`.
+  Do not combine unrelated pages in one component.
+- Separate views from data and business state. Business-specific hooks and request
+  logic belong in `src/app/data/<business>/`; keep related reads, writes, state and
+  DTOs together in a cohesive business module rather than one file per hook or
+  component. Shared data hooks, DTOs and helpers belong in `src/lib/`.
+  Views bind values and events and use the official UI components; they do not
+  fetch resources, submit requests or implement save validation. Data modules do
+  not import business view components. Keep reactive state scoped to its page or
+  component, and preserve mobile/desktop layout behavior.
+- Backend REST handlers are grouped by business responsibility. Keep simple
+  resources in one file rather than adding `mod.rs`/`handlers.rs` layers. Root
+  routers compose business routes and apply authentication and account-scope
+  middleware. Share handlers only when behavior and permission semantics are
+  identical; never select a different business domain in a generic page handler.
 - Keep Next.js static export embedded in the single Rust process; production must not require a Node.js server.
 - Use official shadcn/ui components directly. Do not create custom visual wrappers, controls, or handwritten component CSS. Keep only required business data/state/event logic outside the official component source.
 - Keep all pages compact. Do not add duplicate page-title/description banners in the content area; put refresh, view switches and create actions inside the top filter bar.

@@ -170,3 +170,12 @@ pub struct Routes {
 pub fn value<T: Serialize>(v: T) -> serde_json::Value {
     serde_json::to_value(v).expect("admin DTO serialization")
 }
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct OptionsQuery {
+    pub provider_id: String,
+    pub search: String,
+    pub paid_only: bool,
+    pub plan_id: String,
+}

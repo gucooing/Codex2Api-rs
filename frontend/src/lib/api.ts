@@ -1,4 +1,4 @@
-export { request, query, ApiError } from "./http";
+export { ApiError, query, request } from "./http";
 
 export type List<T> = { items: T[] };
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -114,7 +114,6 @@ export type SpendingWindow = {
   duration_seconds: 18000 | 604800 | 2592000;
   cost_limit_usd: string | null;
 };
-export type Plans = List<Plan>;
 export type TokenPrice = {
   tier: "standard" | "fast" | "flex";
   min_input_tokens: number;

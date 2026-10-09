@@ -1,11 +1,19 @@
-use super::error::{ApiError, ApiResult};
-use crate::AdminState;
+use crate::{
+    AdminState,
+    rest::error::{ApiError, ApiResult},
+};
 use axum::{
-    Json,
+    Json, Router,
     extract::{Query, State},
+    routing::get,
 };
 use codex2api_storage::UsageFilter;
 use serde::Deserialize;
+
+pub(super) fn router() -> Router<AdminState> {
+    Router::new().route("/usage", get(page))
+}
+
 #[derive(Default, Deserialize)]
 pub(crate) struct Filters {
     #[serde(default)]
@@ -102,7 +110,7 @@ impl Filters {
 pub async fn page(State(s): State<AdminState>, Query(f): Query<Filters>) -> ApiResult {
     let filter = f.storage_filter().map_err(ApiError::bad)?;
     let page = s.storage.query_usage(&filter).await?;
-    Ok(Json(super::dto::value(super::dto::Usage {
+    Ok(Json(crate::rest::dto::value(crate::rest::dto::Usage {
         records: page.records,
         total: page.total,
         page: page.page,
@@ -135,7 +143,7 @@ pub async fn statistics(
             codex2api_storage::StorageError::Constraint(message) => ApiError::bad(message),
             error => ApiError::from(error),
         })?;
-    Ok(Json(super::dto::value(statistics)))
+    Ok(Json(crate::rest::dto::value(statistics)))
 }
 #[cfg(test)]
 mod tests {

@@ -1,10 +1,8 @@
 "use client";
-import Link from "next/link";
-import { toast } from "sonner";
-import { request, type List, type Json } from "@/lib/api";
-import { useListResource } from "@/lib/pagination";
-import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
 import {
   Select,
   SelectContent,
@@ -12,64 +10,36 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useActions, useErrorToast } from "@/lib/actions";
-import { date } from "@/lib/format";
-import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
-  TableHeader,
   TableBody,
-  TableHead,
-  TableRow,
   TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table";
-import { Card, CardContent, CardDescription } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
+import { date } from "@/lib/format";
+import { useGrokModelCatalog, useGrokModelSync } from "@/lib/providers/grok/data";
+import Link from "next/link";
 
 export function GrokModelSync({ onSynced }: { onSynced: () => void }) {
-  const actions = useActions();
-  const key = "grok-model-sync";
+  const { actions, key, handleClick } = useGrokModelSync({ onSynced });
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
       disabled={actions.isBusy(key)}
-      onClick={() =>
-        void actions.run(
-          key,
-          async () => {
-            const result = await request<List<{ success: boolean; models?: number }>>(
-              "/models/grok/sync",
-              { method: "POST" },
-            );
-            onSynced();
-            const failed = result.items.filter((i) => !i.success).length;
-            if (failed) toast.error(`${failed} 个 Grok 账户同步失败，其余目录已更新`);
-            else toast.success("Grok 真实模型目录与可用价格预设已同步");
-          },
-          { success: "" },
-        )
-      }
+      onClick={() => handleClick()}
     >
       {actions.isBusy(key) && <Spinner />}同步 Grok 模型
     </Button>
   );
 }
-type GrokModel = {
-  id: string;
-  model: string;
-  name?: string;
-  context_window?: number;
-  api_backend: string;
-};
+
 export function GrokModelCatalog({ id }: { id: string }) {
-  const resource = useListResource<GrokModel, { observed_at: string | null; stale: boolean }>(
-    `/suppliers/grok/${encodeURIComponent(id)}/models`,
-  );
-  const pagination = resource.pagination;
-  const actions = useActions();
-  useErrorToast(resource.error);
+  const { resource, pagination, actions, handleClick } = useGrokModelCatalog({ id });
   return (
     <Card>
       <CardContent className="space-y-3">
@@ -77,14 +47,7 @@ export function GrokModelCatalog({ id }: { id: string }) {
           <Button
             variant="outline"
             disabled={actions.isBusy("grok-catalog")}
-            onClick={() =>
-              void actions.run("grok-catalog", async () => {
-                await request<Json>(`/suppliers/grok/${encodeURIComponent(id)}/models`, {
-                  method: "POST",
-                });
-                resource.reload();
-              })
-            }
+            onClick={() => handleClick()}
           >
             从 Grok Build 同步
           </Button>
