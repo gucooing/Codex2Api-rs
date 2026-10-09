@@ -67,7 +67,7 @@ async function renderer(file) {
       bindings[local] = imported[original];
     }
   }
-  return {...source, name, text, bindings};
+  return {...source, name, text, bindings, shared, sharedText};
 }
 
 module.exports = {archive, between, renderer, statsigSdk};

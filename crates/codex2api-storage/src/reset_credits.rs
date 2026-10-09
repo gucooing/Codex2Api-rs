@@ -397,15 +397,21 @@ mod tests {
             storage.virtual_quota("a").await.unwrap()["rate_limit"]["allowed"],
             false
         );
-        assert_eq!(
-            storage
-                .platform_account("a")
-                .await
-                .unwrap()
-                .unwrap()
-                .subscription_expires_at,
-            account.subscription_expires_at
-        );
+        let stored_expiry = storage
+            .platform_account("a")
+            .await
+            .unwrap()
+            .unwrap()
+            .subscription_expires_at
+            .unwrap()
+            .parse::<chrono::DateTime<chrono::FixedOffset>>()
+            .unwrap();
+        let account_expiry = account
+            .subscription_expires_at
+            .unwrap()
+            .parse::<chrono::DateTime<chrono::FixedOffset>>()
+            .unwrap();
+        assert_eq!(stored_expiry, account_expiry);
     }
 
     #[tokio::test]

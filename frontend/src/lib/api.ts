@@ -115,7 +115,7 @@ export type SpendingWindow = {
   cost_limit_usd: string | null;
 };
 export type TokenPrice = {
-  tier: "standard" | "fast" | "flex";
+  tier: "standard" | "fast" | "flex" | "ultrafast";
   min_input_tokens: number;
   max_input_tokens?: number | null;
   input_rate: string;

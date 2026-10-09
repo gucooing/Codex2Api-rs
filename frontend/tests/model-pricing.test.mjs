@@ -34,11 +34,13 @@ test("base and context prices round trip through tier multipliers without changi
     long,
     ...[ordinary, long].map((r) => scale(r, "fast", "2")),
     ...[ordinary, long].map((r) => scale(r, "flex", "0.5")),
+    ...[ordinary, long].map((r) => scale(r, "ultrafast", "6")),
   ];
   const draft = pricingDraft(prices);
   assert.equal(draft.fast.mode, "multiplier");
   assert.equal(draft.fast.multiplier, "2");
   assert.equal(draft.flex.multiplier, "0.5");
+  assert.equal(draft.ultrafast.multiplier, "6");
   assert.deepEqual(sort(pricingRows(draft)), sort(prices));
   draft.fast.multiplier = "3";
   assert.equal(
@@ -55,8 +57,18 @@ test("non-proportional legacy tiers and missing tiers stay exact and explicit", 
   const draft = pricingDraft(prices);
   assert.equal(draft.fast.mode, "custom");
   assert.equal(draft.flex.mode, "off");
+  assert.equal(draft.ultrafast.mode, "off");
   assert.deepEqual(sort(pricingRows(draft)), sort(prices));
   assert.deepEqual(pricingRows(pricingDraft([])), []);
+});
+test("Ultrafast remains independent of Fast and custom prices survive edits", () => {
+  const prices = [base(), { ...base(), tier: "ultrafast", input_rate: "19", output_rate: "71" }];
+  const draft = pricingDraft(prices);
+  assert.equal(draft.ultrafast.mode, "custom");
+  assert.equal(draft.fast.mode, "off");
+  assert.deepEqual(sort(pricingRows(draft)), sort(prices));
+  draft.ultrafast.mode = "off";
+  assert.deepEqual(pricingRows(draft), [base()]);
 });
 test("prices use exact decimals and reject lost precision or ambiguous intervals", () => {
   assert.equal(multiplyPrice("0.000001", "2"), "0.000002");

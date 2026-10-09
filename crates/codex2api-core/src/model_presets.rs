@@ -1,7 +1,7 @@
 //! Initial service prices, shared by administration and catalog registration.
 //! Existing prices and request snapshots are never updated from these presets.
 
-pub const MODEL_PRESET_VERSION: &str = "2026-10-03";
+pub const MODEL_PRESET_VERSION: &str = "2026-10-09";
 
 #[derive(Clone, Debug)]
 pub struct SupportedModel {

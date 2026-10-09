@@ -169,7 +169,7 @@ mod tests {
     fn endpoints_and_version_are_official_and_not_caller_selected() {
         assert_eq!(
             Endpoint::Models.url(),
-            "https://chatgpt.com/backend-api/codex/models?client_version=0.161.0"
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.162.0"
         );
         assert_eq!(
             Endpoint::Usage.url(),

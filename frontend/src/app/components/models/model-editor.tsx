@@ -23,7 +23,12 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { type Model, type ModelPreset } from "@/lib/api";
-import { emptyBasePrice, priceFields } from "@/lib/model-pricing";
+import {
+  additionalPriceTiers,
+  emptyBasePrice,
+  priceFields,
+  priceTierLabels,
+} from "@/lib/model-pricing";
 import { Plus, Trash2, X } from "lucide-react";
 
 export function ModelEditor({
@@ -402,12 +407,12 @@ export function ModelEditor({
                     </Button>
                     <FieldSet className="gap-3">
                       <FieldLegend>服务档位倍率</FieldLegend>
-                      {(["fast", "flex"] as const).map((tier) => (
+                      {additionalPriceTiers.map((tier) => (
                         <section className="space-y-3" key={tier}>
                           <div className="grid gap-3 sm:grid-cols-2">
                             <Field>
                               <FieldLabel htmlFor={`${fieldId}-${tier}-mode`}>
-                                {tier === "fast" ? "Fast" : "Flex"}
+                                {priceTierLabels[tier]}
                               </FieldLabel>
                               <Select
                                 value={pricing[tier].mode}
@@ -431,7 +436,7 @@ export function ModelEditor({
                             {pricing[tier].mode === "multiplier" && (
                               <Field>
                                 <FieldLabel htmlFor={`${fieldId}-${tier}-multiplier`}>
-                                  {tier === "fast" ? "Fast" : "Flex"} 倍率
+                                  {priceTierLabels[tier]} 倍率
                                 </FieldLabel>
                                 <Input
                                   id={`${fieldId}-${tier}-multiplier`}

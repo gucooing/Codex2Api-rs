@@ -169,7 +169,10 @@ pub(crate) fn validate_model_price(price: &ModelPrice) -> Result<()> {
             .model
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-._:/".contains(&b))
-        || !matches!(price.tier.as_str(), "standard" | "fast" | "flex")
+        || !matches!(
+            price.tier.as_str(),
+            "standard" | "fast" | "flex" | "ultrafast"
+        )
         || !(0..=10_000_000).contains(&price.min_input_tokens)
         || price
             .max_input_tokens
@@ -235,6 +238,7 @@ pub fn price_tier(tier: Option<&str>) -> Option<&'static str> {
         None | Some("auto" | "default" | "standard") => Some("standard"),
         Some("priority" | "fast") => Some("fast"),
         Some("flex") => Some("flex"),
+        Some("ultrafast") => Some("ultrafast"),
         _ => None,
     }
 }
@@ -590,6 +594,20 @@ mod tests {
         assert_eq!(charge(&record, &prices).0, Some(139_500_000));
         record.service_tier = Some("priority".into());
         assert_eq!(charge(&record, &prices).0, Some(279_000_000));
+        let mut ultrafast_price = price.clone();
+        ultrafast_price.tier = "ultrafast".into();
+        ultrafast_price.input_rate *= 6;
+        ultrafast_price.cached_rate *= 6;
+        ultrafast_price.cache_write_rate *= 6;
+        ultrafast_price.output_rate *= 6;
+        let mut ultrafast_record = record.clone();
+        ultrafast_record.service_tier = Some("ultrafast".into());
+        let mut ultrafast_prices = prices.clone();
+        ultrafast_prices.push(ultrafast_price);
+        assert_eq!(
+            charge(&ultrafast_record, &ultrafast_prices).0,
+            Some(3_507_000_000)
+        );
         record.input_tokens = Some(272001);
         assert_eq!(charge(&record, &prices).0, Some(10_988_040_000));
         record.actual_model = Some("unknown".into());

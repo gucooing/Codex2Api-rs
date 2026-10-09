@@ -138,6 +138,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif opcode in (1, 2):
                 value = json.loads(payload)
                 requests.append({"method": "WS", "path": self.path, "type": value.get("type"), "generate": value.get("generate")})
+                if sample.get("service_tier") and value.get("type") == "response.create" and value.get("generate") is not False:
+                    requests[-1]["service_tier"] = value.get("service_tier")
+                    assert value.get("service_tier") == sample["service_tier"], "native client dropped service tier"
                 send(1, json.dumps(completion()).encode())
 
 with tempfile.TemporaryDirectory(prefix="codex-native-contract-") as scratch:
@@ -197,8 +200,11 @@ with tempfile.TemporaryDirectory(prefix="codex-native-contract-") as scratch:
         quota = call(4, "account/rateLimits/read", {})
         assert quota["rateLimits"]["primary"]["usedPercent"] == sample["quota"]["rate_limit"]["primary_window"]["used_percent"]
         catalog = call(5, "model/list", {"includeHidden": True})
-        model = sample["models"]["models"][0]["slug"]
+        model = sample.get("model", sample["models"]["models"][0]["slug"])
         assert any(row["model"] == model for row in catalog["data"])
+        if sample.get("service_tier"):
+            row = next(row for row in catalog["data"] if row["model"] == model)
+            assert any(tier["id"] == sample["service_tier"] for tier in row["serviceTiers"]), row
         if sample.get("reset_cases"):
             summary = quota["rateLimitResetCredits"]
             assert summary["availableCount"] == sample["credits_before_reset"]["available_count"], summary
@@ -216,7 +222,10 @@ with tempfile.TemporaryDirectory(prefix="codex-native-contract-") as scratch:
             assert any(r.get("body", {}).get("redeem_request_id") == "reset-use" for r in requests), requests
         if sample.get("generation", True):
             thread = call(6, "thread/start", {"cwd": str(scratch), "model": model, "ephemeral": True})
-            call(7, "turn/start", {"threadId": thread["thread"]["id"], "input": [{"type": "text", "text": "Reply with fixture text.", "text_elements": []}]})
+            params = {"threadId": thread["thread"]["id"], "input": [{"type": "text", "text": "Reply with fixture text.", "text_elements": []}]}
+            if sample.get("service_tier"):
+                params["serviceTier"] = sample["service_tier"]
+            call(7, "turn/start", params)
             deadline = time.monotonic() + 35
             while not any(event.get("method") == "turn/completed" for event in events):
                 events.append(messages.get(timeout=max(.1, deadline - time.monotonic())))
@@ -224,6 +233,8 @@ with tempfile.TemporaryDirectory(prefix="codex-native-contract-") as scratch:
             completed = next(event for event in events if event.get("method") == "turn/completed")
             assert completed["params"]["turn"]["status"] == "completed", completed
             assert any(r["method"] == "POST" and r["path"].endswith("/responses") or r["method"] == "WS" and r.get("generate") is not False for r in requests)
+            if sample.get("service_tier"):
+                assert any(r.get("service_tier") == sample["service_tier"] for r in requests), requests
         assert any(r["path"].endswith("/accounts/check") for r in requests)
         print(json.dumps({"client": initialized.get("userAgent"), "requests": requests, "native_readers": ["account/read", "account/rateLimits/read", "model/list"], "turn_completed": bool(sample.get("generation", True)), "auth": "process-local external fixture tokens", "profile": "default; no override"}))
     finally:

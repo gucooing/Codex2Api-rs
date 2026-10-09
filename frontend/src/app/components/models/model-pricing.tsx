@@ -2,6 +2,7 @@
 import { ModelEditor } from "@/app/components/models/model-editor";
 import { ModelRecordDialog } from "@/app/components/models/model-record-dialog";
 import { emptyModel, useModelPricing } from "@/app/data/models";
+import { priceTierLabels } from "@/lib/model-pricing";
 import { GrokModelSync } from "@/components/providers/grok/models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -356,12 +357,7 @@ export function ModelPricing() {
                               <CardDescription>
                                 {[
                                   ...new Set(
-                                    model.token_prices.map(
-                                      (rule) =>
-                                        ({ standard: "标准", fast: "快速", flex: "Flex" })[
-                                          rule.tier
-                                        ],
-                                    ),
+                                    model.token_prices.map((rule) => priceTierLabels[rule.tier]),
                                   ),
                                 ].join(" · ") || "尚未配置价格"}
                               </CardDescription>

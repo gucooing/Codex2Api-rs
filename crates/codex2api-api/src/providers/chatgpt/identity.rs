@@ -78,6 +78,7 @@ pub(crate) async fn model_catalog(
         .map(|m| m.model.as_str())
         .collect();
     let permits = |value: &Value| value.as_str().is_some_and(|slug| allowed.contains(slug));
+    let ultrafast = super::model_tiers::ultrafast_models(storage).await?;
     if let Some(models) = value["models"].as_array_mut() {
         models.retain(|m| permits(&m["slug"]));
     }
@@ -131,7 +132,8 @@ pub(crate) async fn model_catalog(
         && (value["versions"].as_array().is_some_and(|a| !a.is_empty())
             || value["categories"]
                 .as_array()
-                .is_some_and(|a| !a.is_empty()))
+                .is_some_and(|a| !a.is_empty())
+            || allowed.iter().any(|model| ultrafast.contains(*model)))
     {
         let mut presets: Vec<Value> = value["versions"]
             .as_array()
@@ -152,8 +154,11 @@ pub(crate) async fn model_catalog(
         let version = json!({"id":"service-model-catalog","display_text":"可用模型","slugs":allowed,"intelligence_presets":presets});
         if let Some(versions) = value["versions"].as_array_mut() {
             versions.insert(0, version);
+        } else {
+            value["versions"] = json!([version]);
         }
     }
+    super::model_tiers::desktop_options(value, &ultrafast);
     if let Some(policy) = value.get_mut("workspace_model_policy")
         && !policy["selection"]["model"].is_null()
         && !permits(&policy["selection"]["model"])
@@ -165,13 +170,14 @@ pub(crate) async fn model_catalog(
 }
 
 pub(crate) async fn codex_model_catalog(storage: &Storage, owner: &str) -> crate::Result<Value> {
+    let ultrafast = super::model_tiers::ultrafast_models(storage).await?;
     let models = storage
         .available_virtual_models(owner, codex2api_core::CHATGPT)
         .await?;
     let descriptors = models
         .iter()
         .filter(|m| m.kind == "text")
-        .map(|model| codex2api_upstream::configured_model_descriptor(&model.model))
+        .map(|model| super::model_tiers::codex_descriptor(&model.model, &ultrafast))
         .collect::<Vec<_>>();
     Ok(json!({"models":descriptors}))
 }
@@ -447,6 +453,57 @@ pub async fn websocket_message(storage: &Storage, hash: &str, text: &str) -> cra
 #[cfg(test)]
 mod isolation_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn responses_events_keep_partial_answers_and_nested_retry_advice() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("events.sqlite"))
+            .await
+            .unwrap();
+        let events = [
+            json!({"type":"response.output_item.done","item":{"id":"msg_partial","type":"message","role":"assistant","phase":"partial_answer","content":[{"type":"output_text","text":"Partial fixture"}]}}),
+            json!({"type":"response.completed","response":{"id":"resp_partial","end_turn":false}}),
+            json!({"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"supplier-secret","headers":{"Retry-After":"Wed, 21 Oct 2026 07:28:00 GMT","X-Account":"supplier-secret"}}}}),
+        ];
+        let input = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        let chunks = input
+            .as_bytes()
+            .chunks(7)
+            .map(|chunk| Ok::<_, std::io::Error>(axum::body::Bytes::copy_from_slice(chunk)))
+            .collect::<Vec<_>>();
+        let output = axum::body::to_bytes(
+            isolate_sse(
+                axum::body::Body::from_stream(futures::stream::iter(chunks)),
+                storage.clone(),
+                "fixture".into(),
+            ),
+            64 * 1024,
+        )
+        .await
+        .unwrap();
+        let text = std::str::from_utf8(&output).unwrap();
+        let actual = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(actual[0], events[0]);
+        assert_eq!(actual[1], events[1]);
+        assert_eq!(
+            actual[2]["response"]["error"]["headers"],
+            json!({"retry-after":"Wed, 21 Oct 2026 07:28:00 GMT"})
+        );
+        assert!(!text.contains("supplier-secret"));
+        for (event, expected) in events.iter().zip(actual) {
+            let websocket = websocket_message(&storage, "fixture", &event.to_string())
+                .await
+                .unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&websocket).unwrap(), expected);
+        }
+    }
     #[tokio::test]
     async fn sse_quota_is_replaced_across_split_frames_without_changing_model_output() {
         let dir = tempfile::tempdir().unwrap();

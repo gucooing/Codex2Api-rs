@@ -90,7 +90,7 @@ async function fixture(page: Page, includeGrok = false) {
         username: "admin",
         csrf_token: "test-only",
         app_version: "test",
-        codex_cli_version: "0.161.0",
+        codex_cli_version: "0.162.0",
         grok_build_version: "1.0.45",
       };
     else if (path === "/suppliers/tags" && method === "POST") {

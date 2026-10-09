@@ -35,7 +35,17 @@ export const priceFields = [
 ] as const;
 export type BasePrice = Omit<TokenPrice, "tier">;
 type Tier = { mode: "off" | "multiplier" | "custom"; multiplier: string; rows: TokenPrice[] };
-export type PricingDraft = { ranges: BasePrice[]; fast: Tier; flex: Tier };
+export const additionalPriceTiers = ["fast", "flex", "ultrafast"] as const;
+export const priceTierLabels = {
+  standard: "标准",
+  fast: "Fast",
+  flex: "Flex",
+  ultrafast: "Ultrafast",
+};
+export type PricingDraft = { ranges: BasePrice[] } & Record<
+  (typeof additionalPriceTiers)[number],
+  Tier
+>;
 export const emptyBasePrice = (start = 0): BasePrice => ({
   min_input_tokens: start,
   input_rate: "",
@@ -68,7 +78,7 @@ export function pricingDraft(prices: TokenPrice[]): PricingDraft {
       void _tier;
       return row;
     });
-  const tier = (name: "fast" | "flex"): Tier => {
+  const tier = (name: (typeof additionalPriceTiers)[number]): Tier => {
     const rows = prices.filter((row) => row.tier === name).map((row) => ({ ...row }));
     if (!rows.length) return { mode: "off", multiplier: "1", rows };
     let ratio: bigint | undefined;
@@ -98,7 +108,7 @@ export function pricingDraft(prices: TokenPrice[]): PricingDraft {
       return { mode: "custom", multiplier: "1", rows };
     }
   };
-  return { ranges, fast: tier("fast"), flex: tier("flex") };
+  return { ranges, fast: tier("fast"), flex: tier("flex"), ultrafast: tier("ultrafast") };
 }
 export function pricingRows(draft: PricingDraft): TokenPrice[] {
   const starts = draft.ranges.map((row) => row.min_input_tokens);
@@ -113,7 +123,7 @@ export function pricingRows(draft: PricingDraft): TokenPrice[] {
     throw new Error("上下文区间起点须递增，基础区间从 0 开始，最大为 10000000 Token。");
   }
   const result: TokenPrice[] = draft.ranges.map((row) => ({ ...row, tier: "standard" }));
-  for (const name of ["fast", "flex"] as const) {
+  for (const name of additionalPriceTiers) {
     const tier = draft[name];
     if (tier.mode === "off") continue;
     if (tier.mode === "custom") {

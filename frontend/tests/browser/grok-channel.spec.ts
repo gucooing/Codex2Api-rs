@@ -14,7 +14,7 @@ test("Grok uses its own login contract, accepts pasted codes and imports indepen
         username: "admin",
         csrf_token: "fixture-csrf",
         app_version: "test",
-        codex_cli_version: "0.161.0",
+        codex_cli_version: "0.162.0",
       };
     if (path.endsWith("/oauth/setup"))
       value = {
@@ -87,7 +87,7 @@ test("supplier details display the email and Grok's observed subscription", asyn
         username: "admin",
         csrf_token: "fixture-csrf",
         app_version: "test",
-        codex_cli_version: "0.161.0",
+        codex_cli_version: "0.162.0",
       };
     if (path === "/suppliers/grok-fixture")
       value = {
@@ -125,7 +125,7 @@ for (const provider of ["chatgpt", "grok"]) {
           username: "admin",
           csrf_token: "fixture-csrf",
           app_version: "test",
-          codex_cli_version: "0.161.0",
+          codex_cli_version: "0.162.0",
           grok_build_version: "1.0.45",
         };
       if (path === "/suppliers/existing")

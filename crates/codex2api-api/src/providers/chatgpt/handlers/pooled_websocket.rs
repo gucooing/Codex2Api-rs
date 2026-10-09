@@ -631,7 +631,7 @@ mod tests {
             let failure = if payment {
                 json!({"type":"error","status":402,"error":{"message":"Payment Required"}})
             } else {
-                json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if throttle {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600}},"headers":{"retry-after":"7"}})
+                json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if throttle {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600,"headers":{"Retry-After":5,"Authorization":"supplier-secret"}}},"headers":{"retry-after":"7"}})
             };
             socket
                 .send(UpstreamMessage::Text(failure.to_string().into()))
@@ -707,6 +707,11 @@ mod tests {
             let error: Value = serde_json::from_slice(&frame.into_data()).unwrap();
             assert_eq!(error["response"]["error"]["code"], "rate_limit_exceeded");
             assert_eq!(error["headers"]["retry-after"], "7");
+            assert_eq!(
+                error["response"]["error"]["headers"],
+                json!({"retry-after":"5"})
+            );
+            assert!(!error.to_string().contains("supplier-secret"));
             assert!(matches!(
                 client.next().await.unwrap().unwrap(),
                 UpstreamMessage::Close(Some(_))

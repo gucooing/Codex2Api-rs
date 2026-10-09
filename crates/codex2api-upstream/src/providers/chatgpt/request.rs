@@ -198,6 +198,34 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn ultrafast_lite_input_and_partial_answers_survive_http_compression() {
+        let original = json!({"model":"custom-astra","service_tier":"ultrafast","stream":true,"input":[
+            {"type":"message","id":"msg_stable","role":"developer","content":[{"type":"input_text","text":"Fixture instructions"}]},
+            {"type":"additional_tools","id":"at_stable","role":"developer","tools":[{"type":"function","name":"fixture_tool","parameters":{"type":"object"}}]},
+            {"type":"message","role":"assistant","phase":"partial_answer","content":[{"type":"output_text","text":"Partial fixture"}]},
+            {"type":"compaction_trigger"}
+        ],"previous_response_id":"resp_previous","future_field":{"keep":true}});
+        let prepared = prepare_responses(
+            &serde_json::to_vec(&original).unwrap(),
+            &HeaderMap::new(),
+            "installation",
+            None,
+        )
+        .unwrap();
+        let bytes = zstd::stream::decode_all(prepared.body.as_ref()).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["input"], original["input"]);
+        assert_eq!(value["service_tier"], "ultrafast");
+        assert_eq!(
+            prepared.headers["x-codex-routing-hint"],
+            "model=custom-astra;tier=ultrafast"
+        );
+        assert_eq!(value["previous_response_id"], "resp_previous");
+        assert_eq!(value["future_field"], original["future_field"]);
+        assert!(value.get("instructions").is_none());
+    }
+
+    #[test]
     fn routing_prefix_keeps_optional_fields_and_guardian_rules() {
         for (stream, tier, reviewer) in [
             (None, None, false),

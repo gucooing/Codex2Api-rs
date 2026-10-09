@@ -3,12 +3,12 @@
 ## Official protocol baseline
 
 - Official repository: https://github.com/openai/codex
-- Release: `0.161.0` / `rust-v0.161.0`
-- Commit: `979011409de0a60b52f179721948e65531d26144`
-- Commit time: `2026-10-06T22:34:37Z`
+- Release: `0.162.0` / `rust-v0.162.0`
+- Commit: `c1382380de69521303b416720a52f42d51af6248`
+- Commit time: `2026-10-08T16:56:07Z`
 - Reference-only checkout: `reference/codex`; constants: `crates/codex2api-version`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
-- Fork integration commit: `9995ddd7cd50b9397305a76b1fdac6d26f435588`
+- Fork integration commit: `ba3e0a1b0ce46bfba9ea50d38de67fc0bc8034a5`
 
 The maintained client inherits the exact official release. Its customizations are
 `BASE_OAUTH_URL`, the `ccodex` executable, `.ccodex` default home and its release
@@ -76,7 +76,7 @@ See [Grok](GROK.md) for its authentication, model and client contracts.
 ## Upstream identity and transport
 
 The supplier UA formula is
-`codex_cli_rs/0.161.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
+`codex_cli_rs/0.162.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
 Official headers include `originator`, `User-Agent`, bearer authorization,
 `ChatGPT-Account-ID` and `x-codex-installation-id`; request-specific session,
 thread, turn and request IDs retain their actual lifecycle.
@@ -406,7 +406,7 @@ rules. Fast short-context rates are $12.50/$1.25/$75 and carry a 272,000 input-t
 upper bound; a longer request is explicitly unpriced instead of inheriting that
 short-context rate. See [pricing](https://developers.openai.com/api/docs/pricing)
 and [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
-Ultrafast and unsupported modalities are not silently mapped to other billing tiers.
+Ultrafast is an independent service tier. The administrator model price configuration publishes it to Codex Desktop through both model `service_tiers` and Desktop version `service_tier_options`; only models with an explicit Ultrafast price expose the option. Requests preserve `service_tier: "ultrafast"` through HTTP, SSE and WebSocket, and settlement uses the snapshotted Ultrafast prices. Missing Ultrafast prices remain explicitly unpriced and are never charged as Fast or Standard. Unsupported modalities are not silently mapped to another billing tier.
 
 Image billing uses actual successful image count and resolution bands based on
 the longer edge: 0.5K/512, 1K/1024, 2K/2560, 4K/4096 and 8K/8192.

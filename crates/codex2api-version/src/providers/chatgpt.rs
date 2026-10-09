@@ -12,13 +12,13 @@ pub const APP_VERSION: &str = env!("CODEX2API_BUILD_TAG");
 pub const CODEX_REPO: &str = "https://github.com/openai/codex";
 
 /// Official Git ref the local snapshot was taken from.
-pub const CODEX_REF_BRANCH: &str = "rust-v0.161.0";
+pub const CODEX_REF_BRANCH: &str = "rust-v0.162.0";
 
 /// Exact official source commit used for the supplier contract.
-pub const CODEX_REF_COMMIT: &str = "979011409de0a60b52f179721948e65531d26144";
+pub const CODEX_REF_COMMIT: &str = "c1382380de69521303b416720a52f42d51af6248";
 
 /// Commit timestamp (UTC).
-pub const CODEX_REF_COMMIT_DATE: &str = "2026-10-06T22:34:37Z";
+pub const CODEX_REF_COMMIT_DATE: &str = "2026-10-08T16:56:07Z";
 
 /// First-line commit message of the reference snapshot.
 pub const CODEX_REF_COMMIT_MESSAGE: &str = "## New Features";
@@ -28,15 +28,15 @@ pub const CODEX_REF_PATH: &str = "reference/codex";
 
 /// Current official packaged CLI release this proxy pretends to be.
 ///
-/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.161.0
+/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.162.0
 /// (`CARGO_PKG_VERSION` stamped into that binary). Not the source-tree `0.0.0`.
-pub const CODEX_RELEASE_VERSION: &str = "0.161.0";
+pub const CODEX_RELEASE_VERSION: &str = "0.162.0";
 
 /// GitHub release tag for [`CODEX_RELEASE_VERSION`].
-pub const CODEX_RELEASE_TAG: &str = "rust-v0.161.0";
+pub const CODEX_RELEASE_TAG: &str = "rust-v0.162.0";
 
-/// Commit the `rust-v0.161.0` tag points at.
-pub const CODEX_RELEASE_COMMIT: &str = "979011409de0a60b52f179721948e65531d26144";
+/// Commit the `rust-v0.162.0` tag points at.
+pub const CODEX_RELEASE_COMMIT: &str = "c1382380de69521303b416720a52f42d51af6248";
 
 /// User-Agent version token. Always the packaged release, never source `0.0.0`.
 pub const CODEX_PACKAGE_VERSION: &str = CODEX_RELEASE_VERSION;
@@ -140,8 +140,8 @@ mod tests {
     #[test]
     fn commit_is_pinned() {
         assert_eq!(CODEX_REF_COMMIT.len(), 40);
-        assert_eq!(CODEX_PACKAGE_VERSION, "0.161.0");
-        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.161.0");
+        assert_eq!(CODEX_PACKAGE_VERSION, "0.162.0");
+        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.162.0");
         assert_eq!(DEFAULT_ORIGINATOR, "codex_cli_rs");
         assert_eq!(OAUTH_CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
     }

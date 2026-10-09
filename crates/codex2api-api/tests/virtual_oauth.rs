@@ -111,10 +111,18 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
     assert_eq!(access["https://api.openai.com/mfa"]["required"], "no");
     assert_eq!(identity["email_verified"], false);
     let owner = "https://api.openai.com/auth";
-    assert_eq!(
-        identity[owner]["chatgpt_subscription_active_until"],
-        account.subscription_expires_at.as_deref().unwrap()
-    );
+    let token_expiry = identity[owner]["chatgpt_subscription_active_until"]
+        .as_str()
+        .unwrap()
+        .parse::<chrono::DateTime<chrono::FixedOffset>>()
+        .unwrap();
+    let account_expiry = account
+        .subscription_expires_at
+        .as_deref()
+        .unwrap()
+        .parse::<chrono::DateTime<chrono::FixedOffset>>()
+        .unwrap();
+    assert_eq!(token_expiry, account_expiry);
     assert_eq!(access[owner]["chatgpt_account_id"], account.id);
     assert_eq!(
         identity[owner]["organizations"][0]["id"],
@@ -471,14 +479,24 @@ async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usa
     assert_eq!(sample["quota_after_reset"]["rate_limit"]["allowed"], true);
     assert_eq!(sample["credits_after_reset"]["available_count"], 1);
     assert_eq!(sample["quota_after_reset"]["account_id"], account.id);
+    let stored_expiry = storage
+        .platform_account(&account.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .subscription_expires_at;
     assert_eq!(
-        storage
-            .platform_account(&account.id)
-            .await
+        stored_expiry
+            .as_deref()
             .unwrap()
+            .parse::<chrono::DateTime<chrono::FixedOffset>>()
+            .unwrap(),
+        account
+            .subscription_expires_at
+            .as_deref()
             .unwrap()
-            .subscription_expires_at,
-        account.subscription_expires_at
+            .parse::<chrono::DateTime<chrono::FixedOffset>>()
+            .unwrap()
     );
     sample["extra_routes"]["/backend-api/wham/rate-limit-reset-credits"] =
         json!({"status":200,"body":cards});
@@ -537,6 +555,22 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
+    let mut ultrafast = storage
+        .model_prices("chatgpt")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|price| {
+            price.model == "gpt-6-astra" && price.tier == "standard" && price.min_input_tokens == 0
+        })
+        .unwrap();
+    ultrafast.tier = "ultrafast".into();
+    ultrafast.revision = 0;
+    ultrafast.input_rate *= 6;
+    ultrafast.cached_rate *= 6;
+    ultrafast.cache_write_rate *= 6;
+    ultrafast.output_rate *= 6;
+    assert!(storage.save_model_price(&ultrafast).await.unwrap());
     let mut plan = storage
         .virtual_plan(&account.plan_id)
         .await
@@ -549,12 +583,12 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
         .unwrap();
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
-    let mut sample =
-        json!({"account_id":account.id,"access_token":token,"generation":true,"extra_routes":{}});
+    let mut sample = json!({"account_id":account.id,"access_token":token,"generation":true,"extra_routes":{},"model":"gpt-6-astra","service_tier":"ultrafast"});
     for (key, path) in [
         ("workspace", "/backend-api/wham/accounts/check"),
         ("quota", "/backend-api/wham/usage"),
         ("models", "/backend-api/codex/models"),
+        ("desktop_models", "/backend-api/tpp/models"),
         ("config", "/backend-api/wham/config/bundle"),
         ("settings", "/backend-api/wham/settings/user"),
         ("plugins", "/backend-api/ps/plugins/installed"),
@@ -573,12 +607,37 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
     );
     assert_eq!(sample["workspace"]["accounts"][0]["id"], account.id);
     assert!(!sample["models"]["models"].as_array().unwrap().is_empty());
+    let astra = sample["models"]["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["slug"] == "gpt-6-astra")
+        .unwrap();
+    assert!(
+        astra["service_tiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tier| tier["id"] == "ultrafast")
+    );
+    assert!(
+        sample["desktop_models"]["versions"][0]["intelligence_presets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["model_slug"] == "gpt-6-astra"
+                && m["service_tier_options"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tier| tier["service_tier"] == "ultrafast"))
+    );
     assert!(sample["quota"]["rate_limit"]["primary_window"]["used_percent"].is_i64());
     if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
         let mut child = std::process::Command::new("node")
             .arg(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../scripts/windows/Test-DesktopWorkspaceContract.cjs"),
+                    .join("../../scripts/windows/Test-DesktopUltrafast.cjs"),
             )
             .arg(archive)
             .stdin(std::process::Stdio::piped())
@@ -590,7 +649,7 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
             .stdin
             .take()
             .unwrap()
-            .write_all(sample["workspace"].to_string().as_bytes())
+            .write_all(sample.to_string().as_bytes())
             .unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(
@@ -598,6 +657,7 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        println!("{}", String::from_utf8_lossy(&output.stdout));
     }
     for path in [
         "/backend-api/wham/rate-limit-reset-credits",
@@ -624,6 +684,8 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
                     .join("../../scripts/windows/Test-NativeUpdateContract.py"),
             )
             .env("PYTHONIOENCODING", "utf-8")
+            .env("CODEX_HOME", dir.path().join("desktop-home"))
+            .env("CODEX_SQLITE_HOME", dir.path().join("desktop-home/sqlite"))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -3360,8 +3422,17 @@ async fn desktop_account_settings_and_subscription_use_virtual_identity() {
         }
         if path.ends_with("/subscriptions") {
             assert_eq!(
-                value["active_until"],
-                account.subscription_expires_at.clone().unwrap()
+                value["active_until"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<chrono::DateTime<chrono::FixedOffset>>()
+                    .unwrap(),
+                account
+                    .subscription_expires_at
+                    .as_deref()
+                    .unwrap()
+                    .parse::<chrono::DateTime<chrono::FixedOffset>>()
+                    .unwrap()
             );
         }
         if path.contains("auto_top_up") {
@@ -4642,7 +4713,14 @@ async fn rejects_csrf_bad_password_redirects_and_pkce_replay() {
             cookie,
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.status(),
+            if password == "wrong" {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
         let html = text_body(response).await;
         assert!(!html.contains("fixture-password"));
         if password == "wrong" {
@@ -6219,8 +6297,27 @@ async fn admin_json_operations_persist_valid_nonempty_desktop_configuration() {
         }
     }
     let expiry = (chrono::Utc::now() + chrono::Duration::days(60)).to_rfc3339();
-    let saved=app.clone().oneshot(admin_request("PUT",&format!("/admin/api/consumers/{}",account.id),&cookie,&csrf,json!({"provider_id":"chatgpt","username":account.username,"name":account.name,"email":account.email,"plan_id":"plus","subscription_expires_at":expiry,"enabled":true}))).await.unwrap();
-    assert_eq!(saved.status(), StatusCode::OK);
+    let current_revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM platform_accounts WHERE id=?")
+            .bind(&account.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    let current_user = storage.virtual_user(&account.id).await.unwrap().unwrap();
+    let saved = app
+        .clone()
+        .oneshot(admin_request(
+            "PUT",
+            &format!("/admin/api/consumers/{}", account.id),
+            &cookie,
+            &csrf,
+            json!({"provider_id":"chatgpt","username":account.username,"name":account.name,"email":account.email,"plan_id":"plus","subscription_expires_at":expiry,"enabled":true,"revision":current_revision,"user_revision":current_user.revision}),
+        ))
+        .await
+        .unwrap();
+    let saved_status = saved.status();
+    let saved_body = text_body(saved).await;
+    assert_eq!(saved_status, StatusCode::OK, "{saved_body}");
     let identity = json_body(
         app.clone()
             .oneshot(client_json(

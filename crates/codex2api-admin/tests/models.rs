@@ -9,7 +9,7 @@ async fn presets_create_complete_prices_and_reject_stale_or_ambiguous_writes() {
     let catalog = f.get("/admin/api/models/presets").await;
     let items = catalog["items"].as_array().unwrap();
     let preset = items.iter().find(|p| p["model"] == "gpt-6.1-sol").unwrap();
-    assert_eq!(preset["token_prices"].as_array().unwrap().len(), 6);
+    assert_eq!(preset["token_prices"].as_array().unwrap().len(), 8);
     assert!(
         preset["source_url"]
             .as_str()
@@ -62,7 +62,13 @@ async fn presets_create_complete_prices_and_reject_stale_or_ambiguous_writes() {
         .into_iter()
         .filter(|p| p.model == "gpt-6.1-sol")
         .collect::<Vec<_>>();
-    assert_eq!(saved.len(), 6);
+    assert_eq!(saved.len(), 8);
+    let ultrafast = saved
+        .iter()
+        .find(|p| p.tier == "ultrafast" && p.min_input_tokens == 0)
+        .unwrap();
+    assert_eq!(ultrafast.input_rate, 12_000_000);
+    assert_eq!(ultrafast.output_rate, 60_000_000);
     assert!(saved.iter().all(|p| p.source.starts_with("preset:")));
     let rows = f.get("/admin/api/models?search=gpt-6.1-sol").await;
     let model = rows["items"]
@@ -72,7 +78,7 @@ async fn presets_create_complete_prices_and_reject_stale_or_ambiguous_writes() {
         .find(|p| p["model"] == "gpt-6.1-sol")
         .unwrap();
     assert_eq!(model["enabled"], true);
-    assert_eq!(model["token_prices"].as_array().unwrap().len(), 6);
+    assert_eq!(model["token_prices"].as_array().unwrap().len(), 8);
 }
 #[tokio::test]
 async fn model_prices_and_lifecycle_share_revision_checked_persisted_configuration() {

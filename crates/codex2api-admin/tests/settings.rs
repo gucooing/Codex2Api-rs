@@ -173,7 +173,10 @@ async fn admin_cookie_security_uses_configured_origin_for_login_logout_and_passw
                 cookie.split(';').any(|part| part.trim() == "Secure"),
                 secure
             );
-            assert!(cookie.contains("HttpOnly; Path=/admin; SameSite=Lax"));
+            let attributes = cookie.split(';').map(str::trim).collect::<Vec<_>>();
+            assert!(attributes.contains(&"HttpOnly"));
+            assert!(attributes.contains(&"Path=/admin"));
+            assert!(attributes.contains(&"SameSite=Lax"));
             let session = body(response).await;
             let input = if action == "logout" {
                 json!({})

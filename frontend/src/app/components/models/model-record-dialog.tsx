@@ -13,6 +13,7 @@ import {
 import { Field, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { type Model } from "@/lib/api";
 import { money } from "@/lib/format";
+import { priceTierLabels } from "@/lib/model-pricing";
 import { ChevronRight } from "lucide-react";
 
 type Props = {
@@ -69,16 +70,7 @@ export function ModelRecordDialog({ model }: Props) {
                   </span>
                   <CardDescription>
                     {[
-                      ...new Set(
-                        model.token_prices.map(
-                          (rule) =>
-                            ({
-                              standard: "标准",
-                              fast: "快速",
-                              flex: "Flex",
-                            })[rule.tier],
-                        ),
-                      ),
+                      ...new Set(model.token_prices.map((rule) => priceTierLabels[rule.tier])),
                     ].join(" · ") || "尚未配置价格"}
                   </CardDescription>
                   <CardDescription>美元 / 百万 Token</CardDescription>
