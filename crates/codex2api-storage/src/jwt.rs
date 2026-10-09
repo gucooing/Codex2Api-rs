@@ -26,27 +26,33 @@ struct Header {
 #[derive(Clone, Copy, Debug)]
 pub enum TokenPurpose {
     AdminSession,
+    AdminRefresh,
     UserSession,
+    UserRefresh,
     CheckoutPreview,
 }
 impl TokenPurpose {
     pub fn account_type(self) -> &'static str {
         match self {
-            Self::AdminSession => "admin",
-            Self::UserSession | Self::CheckoutPreview => "user",
+            Self::AdminSession | Self::AdminRefresh => "admin",
+            Self::UserSession | Self::UserRefresh | Self::CheckoutPreview => "user",
         }
     }
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AdminSession => "admin_session",
+            Self::AdminRefresh => "admin_refresh",
             Self::UserSession => "user_session",
+            Self::UserRefresh => "user_refresh",
             Self::CheckoutPreview => "checkout_preview",
         }
     }
     fn audience(self) -> &'static str {
         match self {
             Self::AdminSession => "codex2api-admin",
+            Self::AdminRefresh => "codex2api-admin-refresh",
             Self::UserSession => "codex2api-user",
+            Self::UserRefresh => "codex2api-user-refresh",
             Self::CheckoutPreview => "codex2api-checkout",
         }
     }
@@ -54,7 +60,7 @@ impl TokenPurpose {
         "codex2api"
     }
     fn slot(self) -> usize {
-        usize::from(!matches!(self, Self::AdminSession))
+        usize::from(!matches!(self, Self::AdminSession | Self::AdminRefresh))
     }
 }
 pub(crate) struct JwtKey {

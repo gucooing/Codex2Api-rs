@@ -333,8 +333,17 @@ Administrator and user **web sessions** use JWTs, with independent RSA keys in
 Only the server's fixed RS256 algorithm is accepted; none, empty/other algorithms,
 unsupported headers and unknown kid are rejected. Verification checks signature,
 account_type, token_use, audience, issuer, lifetime and the live role/session record.
-Web JWTs expire after 24 hours and cannot authorize AI/client endpoints. No opaque
-web sessions or failed-Bearer-to-cookie fallback is accepted.
+Web access JWTs last 15 minutes; separate refresh JWTs last 30 days and rotate on
+successful renewal. Both are HttpOnly cookies with distinct role/purpose/audience
+checks. Refresh uses POST on each website's `/api/session/refresh` with the same
+login CSRF token; a readable CSRF cookie permits renewal after a page reload.
+The browser retries an unauthorized request once after a shared refresh, and checks
+renewal every 10 minutes while visible. Concurrent tabs share a 30-second rotation
+grace period; the earlier refresh generation is rejected after it. One persisted
+session owns both tokens, so logout, password changes and account disablement
+revoke the whole login. Migrating from single-token sessions requires one new login.
+Web tokens cannot authorize AI/client endpoints. No opaque web sessions or
+failed-Bearer-to-cookie fallback is accepted.
 
 Codex OAuth belongs to the AI API protocol and retains its own SQLite-backed RSA
 signer, official claim shape, token lifetimes, refresh/revoke contract and auxiliary
@@ -498,7 +507,7 @@ revision checks, and usage details display the per-request billing tier.
 ## Administration and frontend
 
 The single administrator defaults to admin/admin on first initialization.
-The admin and user websites store their own purpose-bound JWT in an HttpOnly cookie.
+The admin and user websites store their own access and refresh JWTs in separate HttpOnly cookies.
 `CODEX2API_PUBLIC_ADMIN_URL` declares the administrator browser origin. HTTPS
 enables `Secure` on session creation and deletion, including password changes;
 HTTP origins retain local development support. Client-supplied `Forwarded` and

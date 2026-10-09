@@ -61,6 +61,8 @@ pub struct AdminSession {
     pub admin_user_id: i64,
     pub created_at: String,
     pub expires_at: String,
+    pub refresh_version: i64,
+    pub refresh_issued_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

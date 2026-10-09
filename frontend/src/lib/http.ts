@@ -1,28 +1,56 @@
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-  ) {
+  status: number;
+  code: string;
+  constructor(status: number, code: string, message: string) {
     super(status === 409 ? `保存冲突：${message}。请重新加载后再保存。` : message);
+    this.status = status;
+    this.code = code;
   }
 }
 let csrf = "";
+let sessionRevision = 0;
+let refreshing: Promise<void> | undefined;
 export function setCsrf(value: string) {
   csrf = value;
+  sessionRevision++;
 }
-export async function request<T>(
-  path: string,
-  options: {
-    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-    body?: unknown;
-    signal?: AbortSignal;
-  } = {},
-): Promise<T> {
+function currentCsrf() {
+  return (
+    (typeof document !== "undefined" &&
+      document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith("c2a_admin_csrf="))
+        ?.slice("c2a_admin_csrf=".length)) ||
+    csrf
+  );
+}
+export function refreshSession(): Promise<void> {
+  if (!refreshing)
+    refreshing = send("/session/refresh", { method: "POST" }, false)
+      .then(() => {
+        sessionRevision++;
+      })
+      .finally(() => {
+        refreshing = undefined;
+      });
+  return refreshing;
+}
+type RequestOptions = {
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  body?: unknown;
+  signal?: AbortSignal;
+};
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return send<T>(path, options, true);
+}
+async function send<T>(path: string, options: RequestOptions, retry: boolean): Promise<T> {
+  const revision = sessionRevision;
   const method = options.method ?? "GET";
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  if (method !== "GET" && csrf) headers["X-CSRF-Token"] = csrf;
+  const sessionCsrf = currentCsrf();
+  if (method !== "GET" && sessionCsrf) headers["X-CSRF-Token"] = sessionCsrf;
   const body = options.body === undefined ? undefined : JSON.stringify(options.body);
   let response: Response;
   try {
@@ -60,6 +88,21 @@ export async function request<T>(
     if (
       response.status === 401 &&
       error?.code === "unauthorized" &&
+      !options.signal?.aborted &&
+      retry &&
+      currentCsrf() === sessionCsrf &&
+      path !== "/session/refresh" &&
+      path !== "/login"
+    ) {
+      if (revision === sessionRevision) await refreshSession();
+      options.signal?.throwIfAborted();
+      return send<T>(path, options, false);
+    }
+    if (
+      response.status === 401 &&
+      error?.code === "unauthorized" &&
+      !options.signal?.aborted &&
+      currentCsrf() === sessionCsrf &&
       path !== "/login" &&
       path !== "/session"
     )

@@ -41,6 +41,8 @@ async fn jwt_domains_purposes_algorithms_and_registered_claims_are_enforced() {
         TokenPurpose::AdminSession,
         TokenPurpose::UserSession,
         TokenPurpose::CheckoutPreview,
+        TokenPurpose::AdminRefresh,
+        TokenPurpose::UserRefresh,
     ];
     let mut tokens = Vec::new();
     for purpose in purposes {

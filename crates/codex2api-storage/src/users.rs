@@ -56,9 +56,11 @@ impl User {
 #[derive(Clone, FromRow)]
 pub struct UserSession {
     pub user_id: String,
-    pub token_hash: String,
+    pub id: String,
     pub csrf_token: String,
     pub expires_at: i64,
+    pub refresh_version: i64,
+    pub refresh_issued_at: i64,
 }
 
 impl Storage {
@@ -159,12 +161,13 @@ impl Storage {
             return Ok(None);
         }
         let now = Utc::now().timestamp();
-        let expires = now + 86400;
+        let expires = now + i64::from(crate::WEB_REFRESH_TTL_SECONDS);
+        let id = uuid::Uuid::new_v4().to_string();
         let token = self
             .sign_jwt(
                 crate::TokenPurpose::UserSession,
                 serde_json::json!({
-                    "sub":user.id,"jti":uuid::Uuid::new_v4().to_string(),"iat":now,"exp":expires
+                    "sub":user.id,"jti":id,"iat":now,"exp":now+i64::from(crate::WEB_ACCESS_TTL_SECONDS)
                 }),
             )
             .await?;
@@ -173,8 +176,8 @@ impl Storage {
             .bind(Utc::now().timestamp())
             .execute(&mut *tx)
             .await?;
-        let inserted=sqlx::query("INSERT INTO user_sessions(token_hash,user_id,csrf_token,expires_at) SELECT ?,id,?,? FROM regular_users WHERE id=? AND enabled=1 AND password_hash=?")
-            .bind(hash_token(&token)).bind(csrf).bind(expires)
+        let inserted=sqlx::query("INSERT INTO user_sessions(id,user_id,csrf_token,expires_at,refresh_issued_at) SELECT ?,id,?,?,unixepoch() FROM regular_users WHERE id=? AND enabled=1 AND password_hash=?")
+            .bind(id).bind(csrf).bind(expires)
             .bind(&user.id).bind(&user.password_hash).execute(&mut *tx).await?.rows_affected();
         tx.commit().await?;
         Ok((inserted == 1).then_some(token))
@@ -188,15 +191,85 @@ impl Storage {
             Err(StorageError::InvalidJwt) => return Ok(None),
             Err(error) => return Err(error),
         };
-        Ok(sqlx::query_as("SELECT s.* FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1 AND u.id=?")
-            .bind(hash_token(token)).bind(Utc::now().timestamp()).bind(claims["sub"].as_str()).fetch_optional(self.pool()).await?)
+        Ok(sqlx::query_as("SELECT s.* FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>? AND u.enabled=1 AND u.id=?")
+            .bind(claims["jti"].as_str()).bind(Utc::now().timestamp()).bind(claims["sub"].as_str()).fetch_optional(self.pool()).await?)
     }
-    pub async fn revoke_user_session(&self, hash: &str) -> Result<()> {
-        sqlx::query("DELETE FROM user_sessions WHERE token_hash=?")
-            .bind(hash)
+    pub async fn revoke_user_session(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM user_sessions WHERE id=?")
+            .bind(id)
             .execute(self.pool())
             .await?;
         Ok(())
+    }
+
+    pub async fn user_session_tokens(
+        &self,
+        session: &UserSession,
+    ) -> Result<crate::WebSessionTokens> {
+        self.web_session_tokens(
+            crate::TokenPurpose::UserSession,
+            crate::TokenPurpose::UserRefresh,
+            &session.user_id,
+            &session.id,
+            session.expires_at,
+            (session.refresh_version, session.refresh_issued_at),
+        )
+        .await
+    }
+
+    pub async fn user_refresh_session(&self, token: &str) -> Result<Option<UserSession>> {
+        let claims = match self
+            .verify_jwt(crate::TokenPurpose::UserRefresh, token)
+            .await
+        {
+            Ok(claims) => claims,
+            Err(StorageError::InvalidJwt) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let Some(version) = claims["version"].as_i64().filter(|v| *v >= 0) else {
+            return Ok(None);
+        };
+        Ok(sqlx::query_as(
+            "SELECT s.* FROM user_sessions s JOIN regular_users u ON u.id=s.user_id
+             WHERE s.id=? AND s.user_id=? AND s.expires_at>? AND u.enabled=1
+             AND (s.refresh_version=? OR (s.refresh_version-1=? AND s.refresh_issued_at>?))",
+        )
+        .bind(claims["jti"].as_str())
+        .bind(claims["sub"].as_str())
+        .bind(Utc::now().timestamp())
+        .bind(version)
+        .bind(version)
+        .bind(Utc::now().timestamp() - crate::web_sessions::REFRESH_GRACE_SECONDS)
+        .fetch_optional(self.pool())
+        .await?)
+    }
+
+    pub async fn renew_user_session(&self, session: &UserSession) -> Result<Option<UserSession>> {
+        let now = Utc::now().timestamp();
+        let cutoff = now - crate::web_sessions::REFRESH_GRACE_SECONDS;
+        Ok(sqlx::query_as(
+            "UPDATE user_sessions SET
+             expires_at=CASE WHEN refresh_issued_at<=? THEN ? ELSE expires_at END,
+             refresh_version=refresh_version+CASE WHEN refresh_issued_at<=? THEN 1 ELSE 0 END,
+             refresh_issued_at=CASE WHEN refresh_issued_at<=? THEN ? ELSE refresh_issued_at END
+             WHERE id=? AND user_id=? AND expires_at>?
+             AND (refresh_version=? OR (refresh_version-1=? AND refresh_issued_at>?))
+             AND EXISTS(SELECT 1 FROM regular_users WHERE id=user_id AND enabled=1)
+             RETURNING *",
+        )
+        .bind(cutoff)
+        .bind(now + i64::from(crate::WEB_REFRESH_TTL_SECONDS))
+        .bind(cutoff)
+        .bind(cutoff)
+        .bind(now)
+        .bind(&session.id)
+        .bind(&session.user_id)
+        .bind(now)
+        .bind(session.refresh_version)
+        .bind(session.refresh_version)
+        .bind(cutoff)
+        .fetch_optional(self.pool())
+        .await?)
     }
     pub async fn user_platform_account(
         &self,
@@ -236,14 +309,14 @@ impl Storage {
         &self,
         flow: &str,
         account: &PlatformAccount,
-        session_hash: Option<&str>,
+        session_id: Option<&str>,
     ) -> Result<bool> {
-        let changed=sqlx::query("INSERT INTO oauth_browser_identities(flow_id,virtual_account_id,password_hash,session_hash) SELECT ?,id,password_hash,? FROM platform_principals v WHERE id=? AND password_hash=? AND enabled=1 ON CONFLICT(flow_id) DO UPDATE SET virtual_account_id=excluded.virtual_account_id,password_hash=excluded.password_hash,session_hash=excluded.session_hash")
-            .bind(flow).bind(session_hash).bind(&account.id).bind(&account.password_hash).execute(self.pool()).await?.rows_affected();
+        let changed=sqlx::query("INSERT INTO oauth_browser_identities(flow_id,virtual_account_id,password_hash,session_id) SELECT ?,id,password_hash,? FROM platform_principals v WHERE id=? AND password_hash=? AND enabled=1 ON CONFLICT(flow_id) DO UPDATE SET virtual_account_id=excluded.virtual_account_id,password_hash=excluded.password_hash,session_id=excluded.session_id")
+            .bind(flow).bind(session_id).bind(&account.id).bind(&account.password_hash).execute(self.pool()).await?.rows_affected();
         Ok(changed == 1)
     }
     pub async fn browser_identity(&self, flow: &str) -> Result<Option<PlatformAccount>> {
-        Ok(sqlx::query_as("SELECT v.* FROM oauth_browser_identities i JOIN oauth_browser_flows f ON f.id=i.flow_id JOIN platform_principals v ON v.id=i.virtual_account_id WHERE i.flow_id=? AND f.expires_at>? AND v.enabled=1 AND v.password_hash=i.password_hash AND (i.session_hash IS NULL OR EXISTS(SELECT 1 FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.token_hash=i.session_hash AND s.expires_at>? AND u.enabled=1 AND s.user_id=v.user_id))")
+        Ok(sqlx::query_as("SELECT v.* FROM oauth_browser_identities i JOIN oauth_browser_flows f ON f.id=i.flow_id JOIN platform_principals v ON v.id=i.virtual_account_id WHERE i.flow_id=? AND f.expires_at>? AND v.enabled=1 AND v.password_hash=i.password_hash AND (i.session_id IS NULL OR EXISTS(SELECT 1 FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.id=i.session_id AND s.expires_at>? AND u.enabled=1 AND s.user_id=v.user_id))")
             .bind(flow).bind(Utc::now().timestamp()).bind(Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
 }
@@ -253,7 +326,7 @@ pub(crate) async fn confirmed_browser_identity(
     flow: &str,
     account: &PlatformAccount,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_browser_identities i JOIN platform_principals v ON v.id=i.virtual_account_id WHERE i.flow_id=? AND v.id=? AND v.password_hash=? AND i.password_hash=v.password_hash AND v.enabled=1 AND (i.session_hash IS NULL OR EXISTS(SELECT 1 FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.token_hash=i.session_hash AND s.expires_at>? AND u.enabled=1 AND s.user_id=v.user_id)))")
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_browser_identities i JOIN platform_principals v ON v.id=i.virtual_account_id WHERE i.flow_id=? AND v.id=? AND v.password_hash=? AND i.password_hash=v.password_hash AND v.enabled=1 AND (i.session_id IS NULL OR EXISTS(SELECT 1 FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.id=i.session_id AND s.expires_at>? AND u.enabled=1 AND s.user_id=v.user_id)))")
         .bind(flow).bind(&account.id).bind(&account.password_hash).bind(Utc::now().timestamp()).fetch_one(connection).await?)
 }
 

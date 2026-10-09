@@ -14,7 +14,8 @@ use crate::types::{
 };
 use crate::{DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME};
 
-pub const DEFAULT_ADMIN_SESSION_TTL: Duration = Duration::from_secs(60 * 60 * 24);
+pub const DEFAULT_ADMIN_SESSION_TTL: Duration =
+    Duration::from_secs(crate::WEB_REFRESH_TTL_SECONDS as u64);
 pub const DEFAULT_OAUTH_PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, \
@@ -237,10 +238,10 @@ impl Storage {
             (Utc::now() + duration_to_chrono(ttl)).to_rfc3339_opts(SecondsFormat::Millis, true);
         // Do not issue a session if credentials changed after password verification.
         Ok(sqlx::query_as::<_, AdminSession>(
-            "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at)
-             SELECT ?, id, ?, ? FROM admin_identities
+            "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at, refresh_issued_at)
+             SELECT ?, id, ?, ?, unixepoch() FROM admin_identities
              WHERE id = ? AND username = ? AND password_hash = ?
-             RETURNING id, admin_user_id, created_at, expires_at",
+             RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(now)
@@ -309,6 +310,13 @@ impl Storage {
     // --- admin sessions ---
 
     pub async fn admin_session_token(&self, session: &AdminSession) -> Result<String> {
+        Ok(self.admin_session_tokens(session).await?.access_token)
+    }
+
+    pub async fn admin_session_tokens(
+        &self,
+        session: &AdminSession,
+    ) -> Result<crate::WebSessionTokens> {
         let owner: String =
             sqlx::query_scalar("SELECT account_id FROM admin_identities WHERE id=?")
                 .bind(session.admin_user_id)
@@ -317,11 +325,13 @@ impl Storage {
         let expires = chrono::DateTime::parse_from_rfc3339(&session.expires_at)
             .map_err(|_| StorageError::InvalidJwt)?
             .timestamp();
-        self.sign_jwt(
+        self.web_session_tokens(
             crate::TokenPurpose::AdminSession,
-            serde_json::json!({
-                "sub":owner,"jti":session.id,"iat":Utc::now().timestamp(),"exp":expires
-            }),
+            crate::TokenPurpose::AdminRefresh,
+            &owner,
+            &session.id,
+            expires,
+            (session.refresh_version, session.refresh_issued_at),
         )
         .await
     }
@@ -336,9 +346,70 @@ impl Storage {
             Err(error) => return Err(error),
         };
         let session: Option<AdminSession> = sqlx::query_as(
-            "SELECT s.id,s.admin_user_id,s.created_at,s.expires_at FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=? AND a.account_id=?"
+            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=? AND a.account_id=?"
         ).bind(claims["jti"].as_str()).bind(claims["sub"].as_str()).fetch_optional(self.pool()).await?;
         Ok(session.filter(|s| !is_expired(&s.expires_at)))
+    }
+
+    pub async fn admin_refresh_session(&self, token: &str) -> Result<Option<AdminSession>> {
+        let claims = match self
+            .verify_jwt(crate::TokenPurpose::AdminRefresh, token)
+            .await
+        {
+            Ok(claims) => claims,
+            Err(StorageError::InvalidJwt) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let Some(version) = claims["version"].as_i64().filter(|v| *v >= 0) else {
+            return Ok(None);
+        };
+        let session: Option<AdminSession> = sqlx::query_as(
+            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id
+             WHERE s.id=? AND a.account_id=? AND (s.refresh_version=? OR
+             (s.refresh_version-1=? AND s.refresh_issued_at>?))",
+        )
+        .bind(claims["jti"].as_str())
+        .bind(claims["sub"].as_str())
+        .bind(version)
+        .bind(version)
+        .bind(Utc::now().timestamp() - crate::web_sessions::REFRESH_GRACE_SECONDS)
+        .fetch_optional(self.pool())
+        .await?;
+        Ok(session.filter(|s| !is_expired(&s.expires_at)))
+    }
+
+    /// Rotate once, reusing the result briefly for concurrent browser tabs.
+    pub async fn renew_admin_session(
+        &self,
+        session: &AdminSession,
+    ) -> Result<Option<AdminSession>> {
+        let now = Utc::now();
+        let cutoff = now.timestamp() - crate::web_sessions::REFRESH_GRACE_SECONDS;
+        let expires_at = (now + duration_to_chrono(DEFAULT_ADMIN_SESSION_TTL))
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+        Ok(sqlx::query_as(
+            "UPDATE admin_sessions SET
+             expires_at=CASE WHEN refresh_issued_at<=? THEN ? ELSE expires_at END,
+             refresh_version=refresh_version+CASE WHEN refresh_issued_at<=? THEN 1 ELSE 0 END,
+             refresh_issued_at=CASE WHEN refresh_issued_at<=? THEN ? ELSE refresh_issued_at END
+             WHERE id = ? AND admin_user_id = ? AND expires_at > ?
+             AND (refresh_version=? OR (refresh_version-1=? AND refresh_issued_at>?))
+             AND EXISTS(SELECT 1 FROM admin_identities WHERE id = admin_user_id)
+             RETURNING *",
+        )
+        .bind(cutoff)
+        .bind(expires_at)
+        .bind(cutoff)
+        .bind(cutoff)
+        .bind(now.timestamp())
+        .bind(&session.id)
+        .bind(session.admin_user_id)
+        .bind(now.to_rfc3339_opts(SecondsFormat::Millis, true))
+        .bind(session.refresh_version)
+        .bind(session.refresh_version)
+        .bind(cutoff)
+        .fetch_optional(self.pool())
+        .await?)
     }
 
     pub async fn create_admin_session(&self, ttl: Duration) -> Result<AdminSession> {
@@ -355,9 +426,9 @@ impl Storage {
         let expires_at =
             (Utc::now() + duration_to_chrono(ttl)).to_rfc3339_opts(SecondsFormat::Millis, true);
         let session = sqlx::query_as::<_, AdminSession>(
-            "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at)
-             SELECT ?,id,?,? FROM admin_identities WHERE id=?
-             RETURNING id, admin_user_id, created_at, expires_at",
+            "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at, refresh_issued_at)
+             SELECT ?,id,?,?,unixepoch() FROM admin_identities WHERE id=?
+             RETURNING *",
         )
         .bind(&id)
         .bind(&created_at)
@@ -370,7 +441,7 @@ impl Storage {
 
     pub async fn get_admin_session(&self, id: &str) -> Result<Option<AdminSession>> {
         let session = sqlx::query_as::<_, AdminSession>(
-            "SELECT s.id,s.admin_user_id,s.created_at,s.expires_at FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=?",
+            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=?",
         )
         .bind(id)
         .fetch_optional(&self.pool)

@@ -64,19 +64,49 @@ export type Device = {
 };
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code: string;
+  constructor(status: number, message: string, code = "request_failed") {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 let csrf = "";
+let sessionRevision = 0;
+let refreshing: Promise<void> | undefined;
 export function setSessionCsrf(value: string) {
   csrf = value;
+  sessionRevision++;
 }
-export async function request<T>(
-  path: string,
-  options: { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal } = {},
-): Promise<T> {
+function currentCsrf() {
+  return (
+    (typeof document !== "undefined" &&
+      document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith("c2a_user_csrf="))
+        ?.slice("c2a_user_csrf=".length)) ||
+    csrf
+  );
+}
+export function refreshSession(): Promise<void> {
+  if (!refreshing)
+    refreshing = send("/session/refresh", { method: "POST" }, false)
+      .then(() => {
+        sessionRevision++;
+      })
+      .finally(() => {
+        refreshing = undefined;
+      });
+  return refreshing;
+}
+type RequestOptions = { method?: "GET" | "POST"; body?: unknown; signal?: AbortSignal };
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return send<T>(path, options, true);
+}
+async function send<T>(path: string, options: RequestOptions, retry: boolean): Promise<T> {
+  const revision = sessionRevision;
+  const sessionCsrf = currentCsrf();
   const response = await fetch(`/user/api${path}`, {
     method: options.method ?? "GET",
     credentials: "same-origin",
@@ -85,21 +115,41 @@ export async function request<T>(
     headers: {
       Accept: "application/json",
       ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(options.method === "POST" && csrf ? { "X-CSRF-Token": csrf } : {}),
+      ...(options.method === "POST" && sessionCsrf ? { "X-CSRF-Token": sessionCsrf } : {}),
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const value = await response.json().catch(() => undefined);
   if (
     response.status === 401 &&
+    value?.error?.code === "unauthorized" &&
+    !options.signal?.aborted &&
+    retry &&
+    currentCsrf() === sessionCsrf &&
+    path !== "/session/refresh" &&
+    path !== "/login" &&
+    !path.startsWith("/oauth/")
+  ) {
+    if (revision === sessionRevision) await refreshSession();
+    options.signal?.throwIfAborted();
+    return send<T>(path, options, false);
+  }
+  if (
+    response.status === 401 &&
+    value?.error?.code === "unauthorized" &&
     !options.signal?.aborted &&
     path !== "/login" &&
+    currentCsrf() === sessionCsrf &&
     !path.startsWith("/oauth/") &&
     typeof window !== "undefined"
   )
     window.dispatchEvent(new Event("user-session-expired"));
   if (!response.ok || value === undefined)
-    throw new ApiError(response.status, value?.error?.message ?? "暂时无法连接服务，请重试");
+    throw new ApiError(
+      response.status,
+      value?.error?.message ?? "暂时无法连接服务，请重试",
+      value?.error?.code,
+    );
   return value;
 }
 export const money = (value: string | number) => `$${Number(value).toFixed(2)}`;

@@ -7,6 +7,275 @@ use codex2api_storage::{Storage, SubscriptionChange, User};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+#[tokio::test]
+async fn web_refresh_recovers_expired_access_and_revokes_the_whole_login() {
+    let (_dir, storage, app, user) = setup().await;
+    let login = request(
+        &app,
+        "/user/api/login",
+        Some(json!({"username":"alice","password":"user-password"})),
+        None,
+        None,
+    )
+    .await;
+    let cookies: Vec<String> = login
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|h| h.to_str().unwrap().split(';').next().unwrap().to_owned())
+        .collect();
+    let login_body = body(login).await;
+    let csrf = login_body["csrf_token"].as_str().unwrap();
+    let refresh_cookie = cookies
+        .iter()
+        .find(|v| v.starts_with("c2a_user_refresh="))
+        .unwrap();
+    let access = cookies[0].split_once('=').unwrap().1;
+    let session = storage.user_session(access).await.unwrap().unwrap();
+    let mut claims = storage
+        .verify_jwt(codex2api_storage::TokenPurpose::UserSession, access)
+        .await
+        .unwrap();
+    claims["iat"] = json!(chrono::Utc::now().timestamp() - 901);
+    claims["exp"] = json!(chrono::Utc::now().timestamp() - 1);
+    let expired = storage
+        .sign_jwt(codex2api_storage::TokenPurpose::UserSession, claims)
+        .await
+        .unwrap();
+    let combined = format!("c2a_user_session={expired}; {refresh_cookie}");
+    assert_eq!(
+        request(&app, "/user/api/session", None, Some(&combined), None)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &app,
+            "/user/api/session/refresh",
+            Some(json!({})),
+            Some(&combined),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query("UPDATE user_sessions SET refresh_issued_at=unixepoch()-31 WHERE id=?")
+        .bind(&session.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        request(
+            &app,
+            "/user/api/session/refresh",
+            Some(json!({})),
+            Some(&combined),
+            Some(csrf)
+        ),
+        request(
+            &app,
+            "/user/api/session/refresh",
+            Some(json!({})),
+            Some(&combined),
+            Some(csrf)
+        ),
+    );
+    assert_eq!(a.status(), StatusCode::OK);
+    assert_eq!(b.status(), StatusCode::OK);
+    let refresh = |response: &axum::response::Response| {
+        response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|h| h.to_str().unwrap())
+            .find(|v| v.starts_with("c2a_user_refresh="))
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let fresh_access = cookie(&a);
+    let fresh_refresh = refresh(&a);
+    assert_eq!(fresh_refresh, refresh(&b));
+    let refresh_claims = storage
+        .verify_jwt(
+            codex2api_storage::TokenPurpose::UserRefresh,
+            fresh_refresh.split_once('=').unwrap().1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        refresh_claims["exp"].as_i64().unwrap() - refresh_claims["iat"].as_i64().unwrap(),
+        30 * 86400
+    );
+    assert_eq!(
+        body(request(&app, "/user/api/session", None, Some(&fresh_access), None).await).await["csrf_token"],
+        csrf
+    );
+    assert_eq!(
+        request(
+            &app,
+            "/user/api/session/refresh",
+            Some(json!({})),
+            Some(&format!("c2a_user_refresh={access}")),
+            Some(csrf)
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            &app,
+            "/user/api/session",
+            None,
+            Some(&fresh_refresh.replace("c2a_user_refresh=", "c2a_user_session=")),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let blocked = app
+        .clone()
+        .oneshot(
+            Request::post("/user/api/session/refresh")
+                .header("cookie", &fresh_refresh)
+                .header("origin", "https://other.example")
+                .header("x-csrf-token", csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+    let explicit = app
+        .clone()
+        .oneshot(
+            Request::post("/user/api/session/refresh")
+                .header("cookie", &fresh_refresh)
+                .header("authorization", "Bearer invalid")
+                .header("x-csrf-token", csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(explicit.status(), StatusCode::UNAUTHORIZED);
+    sqlx::query("UPDATE user_sessions SET refresh_issued_at=unixepoch()-31 WHERE id=?")
+        .bind(&session.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        request(
+            &app,
+            "/user/api/session/refresh",
+            Some(json!({})),
+            Some(refresh_cookie),
+            Some(csrf)
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let logout = request(
+        &app,
+        "/user/api/logout",
+        Some(json!({})),
+        Some(&fresh_access),
+        Some(csrf),
+    )
+    .await;
+    assert_eq!(logout.status(), StatusCode::OK);
+    assert_eq!(
+        logout
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter(|h| h.to_str().unwrap().contains("Max-Age=0"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        request(
+            &app,
+            "/user/api/session/refresh",
+            Some(json!({})),
+            Some(&fresh_refresh),
+            Some(csrf)
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        storage
+            .renew_user_session(&session)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for change in ["password", "disable", "expire"] {
+        let token = storage
+            .create_user_session(&user, "test-csrf")
+            .await
+            .unwrap()
+            .unwrap();
+        let session = storage.user_session(&token).await.unwrap().unwrap();
+        let tokens = storage.user_session_tokens(&session).await.unwrap();
+        match change {
+            "password" => {
+                sqlx::query(
+                    "UPDATE accounts SET password_hash=password_hash||'changed' WHERE id=?",
+                )
+                .bind(&user.id)
+                .execute(storage.pool())
+                .await
+                .unwrap();
+            }
+            "disable" => {
+                sqlx::query("UPDATE accounts SET enabled=0 WHERE id=?")
+                    .bind(&user.id)
+                    .execute(storage.pool())
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                sqlx::query("UPDATE user_sessions SET expires_at=unixepoch()-1 WHERE id=?")
+                    .bind(&session.id)
+                    .execute(storage.pool())
+                    .await
+                    .unwrap();
+            }
+        }
+        assert!(
+            storage
+                .user_refresh_session(&tokens.refresh_token)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .renew_user_session(&session)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        sqlx::query("UPDATE accounts SET enabled=1,password_hash=? WHERE id=?")
+            .bind(&user.password_hash)
+            .bind(&user.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+    }
+}
+
 async fn request(
     app: &Router,
     path: &str,

@@ -48,8 +48,20 @@ impl UserStore {
     pub async fn user_session(&self, token: &str) -> Result<Option<UserSession>> {
         self.storage.user_session(token).await
     }
-    pub async fn revoke_user_session(&self, hash: &str) -> Result<()> {
-        self.storage.revoke_user_session(hash).await
+    pub async fn user_refresh_session(&self, token: &str) -> Result<Option<UserSession>> {
+        self.storage.user_refresh_session(token).await
+    }
+    pub async fn user_session_tokens(
+        &self,
+        session: &UserSession,
+    ) -> Result<crate::WebSessionTokens> {
+        self.storage.user_session_tokens(session).await
+    }
+    pub async fn renew_user_session(&self, session: &UserSession) -> Result<Option<UserSession>> {
+        self.storage.renew_user_session(session).await
+    }
+    pub async fn revoke_user_session(&self, id: &str) -> Result<()> {
+        self.storage.revoke_user_session(id).await
     }
     pub async fn change_password(&self, user: &User, password_hash: String) -> Result<bool> {
         let mut changed = user.clone();

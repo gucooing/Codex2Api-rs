@@ -127,7 +127,7 @@ async fn start(
         {
             if state
                 .storage
-                .bind_browser_identity(&flow, &account, Some(&session.token_hash))
+                .bind_browser_identity(&flow, &account, Some(&session.id))
                 .await?
             {
                 identity = identity_view(&state, &account).await?;

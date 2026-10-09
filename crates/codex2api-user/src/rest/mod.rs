@@ -37,6 +37,7 @@ pub(crate) fn router(state: UserState) -> Router {
             Router::new()
                 .merge(protected)
                 .route("/login", post(auth::login))
+                .route("/session/refresh", post(auth::refresh))
                 .route("/oauth/authorize/bootstrap", get(oauth::bootstrap))
                 .route("/oauth/authorize/identify", post(oauth::identify))
                 .route("/oauth/authorize/reset", post(oauth::reset))

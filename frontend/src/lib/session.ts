@@ -1,8 +1,9 @@
 "use client";
 import { useSidebar } from "@/components/ui/sidebar";
-import { dismissConfirmation, useActions, useErrorToast } from "@/lib/actions";
-import { ApiError, request, setCsrf } from "@/lib/http";
+import { dismissConfirmation, toastError, useActions, useErrorToast } from "@/lib/actions";
+import { ApiError, refreshSession, request, setCsrf } from "@/lib/http";
 import { isCurrentPage, navigation } from "@/lib/navigation";
+import { keepSessionAlive } from "@/lib/session-refresh";
 import { useTheme } from "next-themes";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useState, useSyncExternalStore } from "react";
@@ -97,6 +98,10 @@ export function useAdminShell() {
       window.removeEventListener("admin-session-expired", expired);
     };
   }, [acceptSession]);
+  useEffect(() => {
+    if (!session?.authenticated) return;
+    return keepSessionAlive(() => refreshSession(), toastError);
+  }, [session?.authenticated]);
   useEffect(() => {
     if (!session?.authenticated) return;
     const shortcut = (event: KeyboardEvent) => {

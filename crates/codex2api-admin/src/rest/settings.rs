@@ -6,7 +6,6 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::header,
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -126,9 +125,5 @@ pub async fn save_security(
             &f.new_password,
         )
         .await?;
-    Ok((
-        [(header::SET_COOKIE, session::clear_session_cookie(&s).await?)],
-        ok(),
-    )
-        .into_response())
+    Ok((session::session_cookies(&s, None, "").await?, ok()).into_response())
 }

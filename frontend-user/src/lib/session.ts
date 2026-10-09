@@ -1,8 +1,9 @@
 "use client";
 import { useSidebar } from "@/components/ui/sidebar";
-import { useActions, useErrorToast } from "@/lib/actions";
-import { ApiError, request, setSessionCsrf, type Session } from "@/lib/api";
+import { toastError, useActions, useErrorToast } from "@/lib/actions";
+import { ApiError, refreshSession, request, setSessionCsrf, type Session } from "@/lib/api";
 import { isUserPage, userNavigation } from "@/lib/navigation";
+import { keepSessionAlive } from "@/lib/session-refresh";
 import { useTheme } from "next-themes";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useState } from "react";
@@ -36,11 +37,16 @@ export function useUserShell() {
       })
       .catch((reason) => {
         if (controller.signal.aborted) return;
-        if (reason instanceof ApiError && reason.status === 401) signOut();
+        if (reason instanceof ApiError && reason.status === 401 && reason.code === "unauthorized")
+          signOut();
         else setError(reason instanceof Error ? reason.message : "无法读取会话");
       });
     return () => controller.abort();
   }, [retry, signOut]);
+  useEffect(() => {
+    if (!session?.csrf_token) return;
+    return keepSessionAlive(() => refreshSession(), toastError);
+  }, [session?.csrf_token]);
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(
       event,

@@ -13,6 +13,7 @@ use codex2api_storage::{User, UserSession};
 use serde::Deserialize;
 use serde_json::json;
 pub(crate) const COOKIE: &str = "c2a_user_session";
+const REFRESH_COOKIE: &str = "c2a_user_refresh";
 // Missing users still incur the normal password-verification cost, without
 // consulting administrator credentials. This value can never authenticate a user.
 const MISSING_USER_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -27,18 +28,54 @@ pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
             (k == name && !v.is_empty()).then(|| v.to_owned())
         })
 }
-pub(crate) async fn session_cookie(state: &UserState, token: &str, max_age: u32) -> Result<String> {
+async fn session_cookies(
+    state: &UserState,
+    tokens: Option<&codex2api_storage::WebSessionTokens>,
+    csrf: &str,
+) -> Result<axum::response::AppendHeaders<[(header::HeaderName, String); 3]>> {
     let origin = state
         .storage
         .public_user_url(&state.public_base_url)
         .await?;
-    Ok(format!(
-        "{COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/user; Max-Age={max_age}{}",
-        if origin.starts_with("https://") {
-            "; Secure"
-        } else {
-            ""
-        }
+    let secure = if origin.starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
+    };
+    Ok(axum::response::AppendHeaders(
+        [
+            (
+                COOKIE,
+                tokens.map_or("", |t| t.access_token.as_str()),
+                "/user",
+                true,
+                codex2api_storage::WEB_ACCESS_TTL_SECONDS,
+            ),
+            (
+                REFRESH_COOKIE,
+                tokens.map_or("", |t| t.refresh_token.as_str()),
+                "/user/api",
+                true,
+                codex2api_storage::WEB_REFRESH_TTL_SECONDS,
+            ),
+            (
+                "c2a_user_csrf",
+                csrf,
+                "/user",
+                false,
+                codex2api_storage::WEB_REFRESH_TTL_SECONDS,
+            ),
+        ]
+        .map(|(name, value, path, http_only, ttl)| {
+            (
+                header::SET_COOKIE,
+                format!(
+                    "{name}={value}; Path={path}; SameSite=Lax; Max-Age={}{}{secure}",
+                    if tokens.is_some() { ttl } else { 0 },
+                    if http_only { "; HttpOnly" } else { "" },
+                ),
+            )
+        }),
     ))
 }
 pub(crate) async fn load_session(
@@ -211,14 +248,24 @@ pub(crate) async fn login(
         .create_user_session(&user, &csrf)
         .await?
         .ok_or_else(UserError::unauthorized)?;
-    if let Some(old) = load_session(&state, &headers).await? {
-        state.storage.revoke_user_session(&old.token_hash).await?;
+    let mut old = load_session(&state, &headers).await?;
+    if old.is_none()
+        && !headers.contains_key(header::AUTHORIZATION)
+        && let Some(token) = cookie(&headers, REFRESH_COOKIE)
+    {
+        old = state.storage.user_refresh_session(&token).await?;
     }
+    if let Some(old) = old {
+        state.storage.revoke_user_session(&old.id).await?;
+    }
+    let session = state
+        .storage
+        .user_session(&token)
+        .await?
+        .ok_or_else(UserError::unauthorized)?;
+    let tokens = state.storage.user_session_tokens(&session).await?;
     Ok((
-        [(
-            header::SET_COOKIE,
-            session_cookie(&state, &token, 86400).await?,
-        )],
+        session_cookies(&state, Some(&tokens), &csrf).await?,
         Json(json!({"user":user.view(),"csrf_token":csrf})),
     )
         .into_response())
@@ -227,12 +274,44 @@ pub(crate) async fn logout(
     State(state): State<UserState>,
     Extension(session): Extension<UserSession>,
 ) -> Result<Response> {
-    state
-        .storage
-        .revoke_user_session(&session.token_hash)
-        .await?;
+    state.storage.revoke_user_session(&session.id).await?;
     Ok((
-        [(header::SET_COOKIE, session_cookie(&state, "", 0).await?)],
+        session_cookies(&state, None, "").await?,
+        Json(json!({"ok":true})),
+    )
+        .into_response())
+}
+
+pub(crate) async fn refresh(
+    State(state): State<UserState>,
+    headers: HeaderMap,
+) -> Result<Response> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        return Err(UserError::unauthorized());
+    }
+    let token = cookie(&headers, REFRESH_COOKIE).ok_or_else(UserError::unauthorized)?;
+    let session = state
+        .storage
+        .user_refresh_session(&token)
+        .await?
+        .ok_or_else(UserError::unauthorized)?;
+    if headers.get("x-csrf-token").and_then(|v| v.to_str().ok())
+        != Some(session.csrf_token.as_str())
+    {
+        return Err(UserError(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "CSRF 校验失败，请刷新后重试",
+        ));
+    }
+    let session = state
+        .storage
+        .renew_user_session(&session)
+        .await?
+        .ok_or_else(UserError::unauthorized)?;
+    let tokens = state.storage.user_session_tokens(&session).await?;
+    Ok((
+        session_cookies(&state, Some(&tokens), &session.csrf_token).await?,
         Json(json!({"ok":true})),
     )
         .into_response())

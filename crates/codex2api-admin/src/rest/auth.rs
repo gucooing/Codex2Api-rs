@@ -28,7 +28,13 @@ pub async fn login(
     if form.username.len() > 128 || form.password.len() > 1024 {
         return Err(ApiError::bad("用户名或密码过长"));
     }
-    let old = session::load_session(&state.storage, &headers).await?;
+    let mut old = session::load_session(&state.storage, &headers).await?;
+    if old.is_none()
+        && !headers.contains_key(header::AUTHORIZATION)
+        && let Some(token) = session::cookie_value(&headers, session::REFRESH_COOKIE)
+    {
+        old = state.storage.admin_refresh_session(&token).await?;
+    }
     let ttl = codex2api_storage::DEFAULT_ADMIN_SESSION_TTL;
     let value = state
         .storage
@@ -41,15 +47,12 @@ pub async fn login(
                 "用户名或密码错误".into(),
             )
         })?;
-    let token = state.storage.admin_session_token(&value).await?;
+    let tokens = state.storage.admin_session_tokens(&value).await?;
     if let Some(old) = old {
         state.storage.delete_admin_session(&old.id).await?;
     }
     Ok((
-        [(
-            header::SET_COOKIE,
-            session::set_session_cookie(&state, &token, ttl).await?,
-        )],
+        session::session_cookies(&state, Some(&tokens), &session::csrf_token(&value.id)).await?,
         Json(dto::Session {
             authenticated: true,
             app_version: codex2api_version::APP_VERSION,
@@ -82,11 +85,39 @@ pub async fn logout(
     if let Some(session) = session::load_session(&state.storage, &headers).await? {
         state.storage.delete_admin_session(&session.id).await?;
     }
+    Ok((session::session_cookies(&state, None, "").await?, ok()).into_response())
+}
+
+pub async fn refresh(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        return Err(ApiError::unauthorized());
+    }
+    let token = session::cookie_value(&headers, session::REFRESH_COOKIE)
+        .ok_or_else(ApiError::unauthorized)?;
+    let value = state
+        .storage
+        .admin_refresh_session(&token)
+        .await?
+        .ok_or_else(ApiError::unauthorized)?;
+    if headers.get("x-csrf-token").and_then(|v| v.to_str().ok())
+        != Some(session::csrf_token(&value.id).as_str())
+        || headers
+            .get("sec-fetch-site")
+            .is_some_and(|v| v == "cross-site")
+    {
+        return Err(ApiError::forbidden("CSRF 校验失败，请重新加载页面"));
+    }
+    let value = state
+        .storage
+        .renew_admin_session(&value)
+        .await?
+        .ok_or_else(ApiError::unauthorized)?;
+    let tokens = state.storage.admin_session_tokens(&value).await?;
     Ok((
-        [(
-            header::SET_COOKIE,
-            session::clear_session_cookie(&state).await?,
-        )],
+        session::session_cookies(&state, Some(&tokens), &session::csrf_token(&value.id)).await?,
         ok(),
     )
         .into_response())

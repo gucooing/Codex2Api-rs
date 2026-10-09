@@ -53,6 +53,7 @@ pub(crate) fn router(state: AdminState) -> Router {
             Router::new()
                 .route("/login", post(auth::login))
                 .route("/session", get(auth::current))
+                .route("/session/refresh", post(auth::refresh))
                 .merge(protected),
         )
         .with_state(state)
