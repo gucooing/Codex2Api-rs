@@ -53,7 +53,7 @@ impl Storage {
     }
 
     pub async fn tag_options(&self, provider: &str) -> Result<Vec<SupplierTag>> {
-        Ok(sqlx::query_as("SELECT t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,(SELECT COUNT(*) FROM execution_routes r WHERE r.tag_id=t.id) AS binding_count FROM supplier_tags t WHERE (?='' OR t.provider_id=?) ORDER BY t.provider_id,t.name,t.id")
+        Ok(sqlx::query_as("SELECT t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,(SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id) AS binding_count FROM supplier_tags t WHERE (?='' OR t.provider_id=?) ORDER BY t.provider_id,t.name,t.id")
             .bind(provider).bind(provider).fetch_all(self.pool()).await?)
     }
 
@@ -263,7 +263,7 @@ impl Storage {
     }
 
     pub async fn tag_page(&self, filter: &ListQuery) -> Result<ListPage<SupplierTag>> {
-        self.read_list(filter, "t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,(SELECT COUNT(*) FROM execution_routes r WHERE r.tag_id=t.id) AS binding_count",
+        self.read_list(filter, "t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,(SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id) AS binding_count",
             "supplier_tags t", "t.provider_id,t.name,t.id", |q| {
                 search(q, &["t.name"], &filter.search);
                 exact(q, "t.provider_id", &filter.provider_id);

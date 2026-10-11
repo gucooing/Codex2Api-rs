@@ -1,10 +1,10 @@
 "use client";
 import { useSubscriptionDetail } from "@/app/data/subscriptions";
+import { RateLimitForm } from "@/components/forms/platform-rate-limit-form";
 import { ClientRecords } from "@/components/platform-account/client-records";
 import { ConfigPanel } from "@/components/platform-account/config/config-panel";
 import { Devices } from "@/components/platform-account/devices";
 import { ConsumerResetCredits } from "@/components/platform-account/reset-credits";
-import { Routing } from "@/components/platform-account/routing";
 import { ConsumerUsage } from "@/components/platform-account/usage";
 import { supplierChannel } from "@/components/providers";
 import { Badge } from "@/components/ui/badge";
@@ -170,7 +170,16 @@ export function SubscriptionDetail() {
                       }
                     </CardContent>
                   </Card>
-                  <Routing key={id} id={id} account={account} />
+                  <Card size="sm">
+                    <CardHeader>
+                      <CardTitle role="heading" aria-level={2}>
+                        请求限制
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <RateLimitForm key={id} id={id} />
+                    </CardContent>
+                  </Card>
                 </div>
               ) : (
                 <ConfigPanel key={id} id={id} group={group} />

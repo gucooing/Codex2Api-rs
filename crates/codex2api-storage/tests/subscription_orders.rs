@@ -112,6 +112,296 @@ async fn grant(storage: &Storage, user: &User, plan: &str, expiry: &str) {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn purchased_subscriptions_follow_current_plan_pools_without_changing_history() {
+    use codex2api_storage::{NewSupplierAccount, SupplierTokens};
+    let (dir, storage, user) = setup().await;
+    for tag in ["replacement", "free-pool"] {
+        storage
+            .save_supplier_tag(tag, "chatgpt", tag)
+            .await
+            .unwrap();
+    }
+    for (id, tag) in [
+        ("s1", "private-pool"),
+        ("s2", "replacement"),
+        ("s3", "free-pool"),
+    ] {
+        let mut supplier = NewSupplierAccount::pending_identity(
+            id,
+            "codex_cli_rs",
+            "fixture",
+            "Linux",
+            "6",
+            "x86_64",
+            "",
+            "{}",
+        );
+        supplier.id = Some(id.into());
+        supplier.chatgpt_account_id = Some(id.into());
+        supplier.chatgpt_user_id = Some(format!("user-{id}"));
+        storage
+            .save_authorized_account(
+                supplier,
+                SupplierTokens {
+                    access_token: Some("fixture".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        storage
+            .replace_supplier_tags(&[id.into()], &[tag.into()])
+            .await
+            .unwrap();
+    }
+    let before = storage
+        .user_platform_account(&user.id, "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    let order = quote(&storage, &user, "plus").await.unwrap();
+    let paid = storage
+        .pay_subscription_order(&user.id, &order.id)
+        .await
+        .unwrap();
+    let subscription = storage
+        .user_platform_account(&user.id, "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(subscription.id, before.id);
+    assert_eq!(
+        storage
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("s1")
+    );
+    let anchor: String =
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
+            .bind(&subscription.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    let pricing: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id,starts_at_ms,ends_at_ms FROM subscription_pricing_periods WHERE subscription_id=?")
+        .bind(&subscription.id).fetch_all(storage.pool()).await.unwrap();
+
+    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+    plan.config["supplier_tag_id"] = json!("replacement");
+    assert!(
+        storage
+            .save_virtual_plan(&plan, Some(plan.revision))
+            .await
+            .unwrap()
+    );
+    let route = storage
+        .execution_route(&subscription.id, "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(route.tag_id.as_deref(), Some("replacement"));
+    assert!(route.supplier_account_id.is_none());
+    let persisted: Option<String> =
+        sqlx::query_scalar("SELECT tag_id FROM execution_routes WHERE virtual_account_id=?")
+            .bind(&subscription.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert!(
+        persisted.is_none(),
+        "a subscription must never store its own pool"
+    );
+    assert_eq!(
+        storage
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("s2")
+    );
+    assert_eq!(storage.supplier_binding_count("s1").await.unwrap(), 0);
+    assert_eq!(
+        storage
+            .supplier_tags()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == "replacement")
+            .unwrap()
+            .binding_count,
+        1
+    );
+    // No API or direct SQL write can restore a subscription-level override.
+    assert!(
+        storage
+            .save_pool_route(
+                &subscription.id,
+                "chatgpt",
+                Some("private-pool"),
+                Some("s1"),
+                Some(route.revision)
+            )
+            .await
+            .is_err()
+    );
+    assert!(sqlx::query("UPDATE execution_routes SET tag_id='private-pool',supplier_account_id='s1' WHERE virtual_account_id=?")
+        .bind(&subscription.id).execute(storage.pool()).await.is_err());
+    assert!(
+        sqlx::query(
+            "UPDATE execution_routes SET supplier_account_id='s1' WHERE virtual_account_id=?"
+        )
+        .bind(&subscription.id)
+        .execute(storage.pool())
+        .await
+        .is_err()
+    );
+    // Removing membership and recovering supply both use the inherited pool.
+    storage
+        .replace_supplier_tags(&["s2".into()], &[])
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .execution_route(&subscription.id, "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .supplier_account_id
+            .is_none()
+    );
+    storage
+        .replace_supplier_tags(&["s2".into()], &["replacement".into()])
+        .await
+        .unwrap();
+    storage.refresh_supplier_bindings("s2").await.unwrap();
+    assert_eq!(
+        storage
+            .execution_route(&subscription.id, "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .supplier_account_id
+            .as_deref(),
+        Some("s2")
+    );
+    // Unrelated plan edits preserve the current assignment and its revision.
+    let route = storage
+        .execution_route(&subscription.id, "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+    plan.name = "Renamed plan".into();
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .execution_route(&subscription.id, "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        route.revision
+    );
+    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+    plan.config["supplier_tag_id"] = serde_json::Value::Null;
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(storage.supplier_binding_count("s2").await.unwrap(), 0);
+
+    let unchanged = storage
+        .user_platform_account(&user.id, "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.id, subscription.id);
+    assert_eq!(
+        unchanged.subscription_expires_at,
+        subscription.subscription_expires_at
+    );
+    let current_anchor: String =
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
+            .bind(&subscription.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(current_anchor, anchor);
+    let current_pricing: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id,starts_at_ms,ends_at_ms FROM subscription_pricing_periods WHERE subscription_id=?")
+        .bind(&subscription.id).fetch_all(storage.pool()).await.unwrap();
+    assert_eq!(current_pricing, pricing);
+    assert_eq!(storage.wallet_entries(&user.id).await.unwrap().len(), 1);
+    let replay = storage
+        .pay_subscription_order(&user.id, &order.id)
+        .await
+        .unwrap();
+    assert_eq!(replay.amount_cents, paid.amount_cents);
+    assert_eq!(replay.balance_cents, paid.balance_cents);
+
+    let mut free = storage.virtual_plan("free").await.unwrap().unwrap();
+    free.config["supplier_tag_id"] = json!("free-pool");
+    storage
+        .save_virtual_plan(&free, Some(free.revision))
+        .await
+        .unwrap();
+    let expires = (Utc::now() - Duration::seconds(1)).to_rfc3339();
+    sqlx::query("UPDATE platform_accounts SET subscription_expires_at=? WHERE id=?")
+        .bind(&expires)
+        .bind(&subscription.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("s3")
+    );
+    let mut free = storage.virtual_plan("free").await.unwrap().unwrap();
+    free.config["supplier_tag_id"] = json!("replacement");
+    storage
+        .save_virtual_plan(&free, Some(free.revision))
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("s2")
+    );
+    storage.close().await;
+    let reopened = Storage::open(dir.path().join("orders.sqlite"))
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("s2")
+    );
+    reopened.close().await;
+}
+
 #[tokio::test]
 async fn order_filters_and_plan_options_preserve_user_ownership() {
     let (_dir, storage, user) = setup().await;

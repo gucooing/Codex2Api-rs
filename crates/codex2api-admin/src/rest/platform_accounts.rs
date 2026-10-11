@@ -47,10 +47,6 @@ pub(super) fn router(prefix: &str) -> Router<AdminState> {
             &format!("{prefix}/{{id}}/devices/{{device}}/revoke"),
             post(revoke),
         )
-        .route(
-            &format!("{prefix}/{{id}}/routing"),
-            get(routes).put(save_route),
-        )
         .route(&format!("{prefix}/{{id}}/logs"), get(logs))
         .route(&format!("{prefix}/{{id}}/records"), get(records))
 }

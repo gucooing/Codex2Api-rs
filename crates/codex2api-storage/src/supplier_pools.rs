@@ -32,7 +32,7 @@ impl Storage {
     /// Recheck under each assignment transaction so stale health observations or
     /// concurrent administrator changes never force a healthy route elsewhere.
     pub async fn refresh_supplier_bindings(&self, supplier: &str) -> Result<()> {
-        let owners: Vec<(String,String)> = sqlx::query_as("SELECT virtual_account_id,provider_id FROM execution_routes WHERE supplier_account_id=? OR (supplier_account_id IS NULL AND tag_id IN (SELECT tag_id FROM supplier_tag_members WHERE account_id=?)) ORDER BY virtual_account_id")
+        let owners: Vec<(String,String)> = sqlx::query_as("SELECT virtual_account_id,provider_id FROM effective_execution_routes WHERE supplier_account_id=? OR (supplier_account_id IS NULL AND tag_id IN (SELECT tag_id FROM supplier_tag_members WHERE account_id=?)) ORDER BY virtual_account_id")
             .bind(supplier).bind(supplier).fetch_all(self.pool()).await?;
         for (owner, provider) in owners {
             self.select_pool_supplier(&owner, &provider, &[]).await?;
@@ -43,7 +43,7 @@ impl Storage {
         Ok(sqlx::query_as(
             "SELECT t.*,
             (SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,
-            (SELECT COUNT(*) FROM execution_routes r WHERE r.tag_id=t.id) AS binding_count
+            (SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id) AS binding_count
             FROM supplier_tags t ORDER BY t.provider_id,t.name,t.id",
         )
         .fetch_all(self.pool())
@@ -81,7 +81,7 @@ impl Storage {
                 .await?;
         if bound {
             return Err(StorageError::Constraint(
-                "此标签仍绑定虚拟账户，请先更换其号池".into(),
+                "此标签仍用于套餐或虚拟账户，请先更换其号池".into(),
             ));
         }
         sqlx::query("DELETE FROM supplier_tags WHERE id=?")
@@ -205,6 +205,8 @@ impl Storage {
         expected: Option<i64>,
     ) -> Result<bool> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::VirtualAccount)
+            .await?;
         let current: Option<ExecutionRoute> = sqlx::query_as(
             "SELECT * FROM execution_routes WHERE virtual_account_id=? AND provider_id=?",
         )
@@ -254,23 +256,17 @@ impl Storage {
         excluded: &[String],
     ) -> Result<Option<String>> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        // User platforms inherit the current plan's pool. An expired paid plan
-        // uses the platform Free pool, so paid supply is not an expired benefit.
-        let inherited:Option<(Option<String>,bool)>=sqlx::query_as("SELECT json_extract(p.config,'$.supplier_tag_id'),(v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch()) FROM regular_platforms v JOIN platform_free_plans f ON f.provider_id=v.provider_id JOIN virtual_plans p ON p.id=CASE WHEN v.plan_type!='free' AND v.subscription_expires_at IS NOT NULL AND unixepoch(v.subscription_expires_at)<=unixepoch() THEN f.plan_id ELSE v.plan_id END WHERE v.id=? AND v.provider_id=?")
-            .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
-        if let Some((tag, expired)) = inherited {
-            sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,supplier_account_id) VALUES(?,?,?,NULL) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id,supplier_account_id=NULL,revision=revision+1 WHERE (? OR execution_routes.tag_id IS NULL) AND execution_routes.tag_id IS NOT excluded.tag_id")
-                .bind(owner).bind(provider).bind(tag).bind(expired).execute(&mut *tx).await?;
-        }
-        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM execution_routes r JOIN platform_principals v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
+        // The view resolves regular subscriptions through the current effective
+        // plan, including Free on expiration. No subscription pool is persisted.
+        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM effective_execution_routes r JOIN platform_principals v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
             .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
         let Some(route) = route else {
             return Ok(None);
         };
-        let Some(tag) = &route.tag_id else {
-            return Ok(None);
+        let available = match &route.tag_id {
+            Some(tag) => candidates(&mut tx, tag, chrono::Utc::now().timestamp()).await?,
+            None => Vec::new(),
         };
-        let available = candidates(&mut tx, tag, chrono::Utc::now().timestamp()).await?;
         let eligible = |id: &String| !excluded.contains(id);
         let selected = route
             .supplier_account_id

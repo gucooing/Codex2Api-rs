@@ -381,6 +381,30 @@ export type RoutingResponse = {
   }[];
 };
 
+export function useRateLimitForm({ id: accountId }: { id: string }) {
+  const platformPrefix = usePlatformPrefix();
+  const id = useId();
+  const actions = useActions();
+  const rpm = useResource<RpmLimit>(`${platformPrefix}/${accountId}/rate-limit`);
+  const [draft, setDraft] = useState<string>();
+  const value = draft ?? (rpm.data?.rpm == null ? "" : String(rpm.data.rpm));
+  useErrorToast(rpm.error);
+  const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
+    actions.submit(event, "consumer-rpm", async () => {
+      if (!rpm.ready) throw new Error("请先加载 RPM 配置");
+      const limit = value.trim() === "" ? null : Number(value);
+      if (limit !== null && (!Number.isInteger(limit) || limit < 0 || limit > 1_000_000))
+        throw new Error("RPM 须为 0 到 1000000 的整数");
+      await request(`${platformPrefix}/${accountId}/rate-limit`, {
+        method: "PUT",
+        body: { rpm: limit },
+      });
+      setDraft(undefined);
+      rpm.reload();
+    });
+  return { id, actions, rpm, value, setDraft, handleSubmit } as const;
+}
+
 export function useRoutingForm({
   account,
   data,
@@ -395,12 +419,9 @@ export function useRoutingForm({
   const platformPrefix = usePlatformPrefix();
   const id = useId();
   const actions = useActions();
-  const rpm = useResource<RpmLimit>(account ? `${platformPrefix}/${account.id}/rate-limit` : null);
   const route = data.items.find((r) => r.provider_id === account?.provider_id);
   const [draft, setDraft] = useState<{ tag: string; supplier: string }>();
   const current = draft ?? { tag: route?.tag_id ?? "", supplier: route?.supplier_account_id ?? "" };
-  const [rpmDraft, setRpm] = useState<string>();
-  const rpmValue = rpmDraft ?? (rpm.data?.rpm == null ? "" : String(rpm.data.rpm));
   const [supplierSearch, setSupplierSearch] = useState("");
   const [supplierOpen, setSupplierOpen] = useState(false);
   const tags = useResource<List<SupplierTag>>(
@@ -419,7 +440,6 @@ export function useRoutingForm({
   useErrorToast(assignedResource.error);
   useErrorToast(tags.error);
   useErrorToast(suppliers.error);
-  useErrorToast(rpm.error);
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(event, "pool-route", async () => {
       if (disabled || !account || !tags.ready) throw new Error("请先加载号池和供应账户");
@@ -435,27 +455,11 @@ export function useRoutingForm({
       onSaved();
       suppliers.reload();
     });
-  const handleSubmit2 = (event: React.SubmitEvent<HTMLFormElement>) =>
-    actions.submit(event, "consumer-rpm", async () => {
-      if (!account || !rpm.ready) throw new Error("请先加载 RPM 配置");
-      const value = rpmValue.trim() === "" ? null : Number(rpmValue);
-      if (value !== null && (!Number.isInteger(value) || value < 0 || value > 1_000_000))
-        throw new Error("RPM 须为 0 到 1000000 的整数");
-      await request(`${platformPrefix}/${account.id}/rate-limit`, {
-        method: "PUT",
-        body: { rpm: value },
-      });
-      setRpm(undefined);
-      rpm.reload();
-    });
   return {
     id,
     actions,
-    rpm,
     setDraft,
     current,
-    setRpm,
-    rpmValue,
     setSupplierSearch,
     supplierOpen,
     setSupplierOpen,
@@ -463,6 +467,5 @@ export function useRoutingForm({
     suppliers,
     assigned,
     handleSubmit,
-    handleSubmit2,
   } as const;
 }

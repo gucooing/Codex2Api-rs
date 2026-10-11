@@ -16,6 +16,10 @@ use serde_json::json;
 pub(super) fn router() -> Router<AdminState> {
     Router::new()
         .merge(super::platform_accounts::router("/consumers"))
+        .route(
+            "/consumers/{id}/routing",
+            get(super::platform_accounts::routes).put(super::platform_accounts::save_route),
+        )
         .route("/consumers", get(list).post(create))
         .route("/consumers/options", get(options))
         .route("/consumers/batch", post(batch))

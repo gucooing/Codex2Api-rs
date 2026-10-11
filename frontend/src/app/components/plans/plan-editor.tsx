@@ -196,7 +196,7 @@ export function PlanEditor({
                     />
                   </Field>
                   <Field>
-                    <FieldLabel htmlFor={`${id}-pool`}>用户订阅默认供应号池</FieldLabel>
+                    <FieldLabel htmlFor={`${id}-pool`}>套餐供应号池</FieldLabel>
                     <Select
                       value={value.supplier_tag_id ?? "none"}
                       onValueChange={(v) => update("supplier_tag_id", v === "none" ? null : v)}

@@ -49,6 +49,117 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bindings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("subscription-pools.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version < 73)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at)
+        VALUES('regular','user','regular','hash',1,'2026-01-01','2026-01-01'),('virtual','user','virtual','hash',1,'2026-01-01','2026-01-01');
+        INSERT INTO users(id,name,email,kind) VALUES('regular','Regular','r@example.test','regular'),('virtual','Virtual','v@example.test','virtual');
+        INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,subscription_expires_at,subscription_started_at,created_at)
+        VALUES('paid','regular','chatgpt','plus','plus','2099-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01'),
+              ('standalone','virtual','chatgpt','plus','plus',NULL,'2026-01-01T00:00:00Z','2026-01-01');
+        INSERT INTO supplier_accounts(id,status,installation_id,originator,user_agent,os_type,os_version,arch,home_dir,created_at,updated_at)
+        VALUES('supplier','active','installation','codex_cli_rs','fixture','Windows','11','x86_64','','2026-01-01','2026-01-01');
+        INSERT INTO supplier_tags(id,provider_id,name) VALUES('old','chatgpt','Old'),('current','chatgpt','Current');
+        INSERT INTO supplier_tag_members(tag_id,account_id) VALUES('old','supplier');
+        UPDATE virtual_plans SET config=json_set(config,'$.supplier_tag_id','current') WHERE id='plus';
+        INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,supplier_account_id,revision)
+        VALUES('paid','chatgpt','old','supplier',7),('standalone','chatgpt','old','supplier',4);")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+
+    let storage = Storage::open(&path).await.unwrap();
+    let subscription = storage.platform_account("paid").await.unwrap().unwrap();
+    assert_eq!(subscription.plan_id, "plus");
+    assert_eq!(
+        subscription.subscription_expires_at.as_deref(),
+        Some("2099-01-01T00:00:00Z")
+    );
+    assert_eq!(storage.platform_revision("paid").await.unwrap(), 1);
+    let raw: (Option<String>, Option<String>, i64) = sqlx::query_as("SELECT tag_id,supplier_account_id,revision FROM execution_routes WHERE virtual_account_id='paid'")
+        .fetch_one(storage.pool()).await.unwrap();
+    assert_eq!(raw, (None, None, 8));
+    let inherited = storage
+        .execution_route("paid", "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(inherited.tag_id.as_deref(), Some("current"));
+    let standalone = storage
+        .execution_route("standalone", "chatgpt")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(standalone.tag_id.as_deref(), Some("old"));
+    assert_eq!(standalone.supplier_account_id.as_deref(), Some("supplier"));
+    assert_eq!(standalone.revision, 4);
+    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+    plan.config["supplier_tag_id"] = serde_json::Value::Null;
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .execution_route("paid", "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .tag_id
+            .is_none()
+    );
+    assert_eq!(
+        storage
+            .execution_route("standalone", "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        4
+    );
+    let violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(storage.pool())
+        .await
+        .unwrap();
+    assert!(violations.is_empty());
+    storage.close().await;
+    let reopened = Storage::open(&path).await.unwrap();
+    assert!(
+        reopened
+            .execution_route("paid", "chatgpt")
+            .await
+            .unwrap()
+            .unwrap()
+            .tag_id
+            .is_none()
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
 async fn removing_desktop_diagnostics_deletes_records_and_settings_but_keeps_resources() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("remove-diagnostics.sqlite");

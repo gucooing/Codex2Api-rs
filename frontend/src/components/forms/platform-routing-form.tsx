@@ -1,4 +1,5 @@
 "use client";
+import { RateLimitForm } from "@/components/forms/platform-rate-limit-form";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -8,8 +9,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { Field, FieldDescription, FieldLabel, FieldSet } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { Field, FieldLabel, FieldSet } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -21,11 +21,13 @@ import { type Consumer, type Supplier } from "@/lib/api";
 import { RoutingResponse, useRoutingForm } from "@/lib/platform-account";
 
 export function RoutingForm({
+  id: accountId,
   account,
   data,
   disabled,
   onSaved,
 }: {
+  id: string;
   account?: Consumer;
   data: RoutingResponse;
   disabled: boolean;
@@ -34,11 +36,8 @@ export function RoutingForm({
   const {
     id,
     actions,
-    rpm,
     setDraft,
     current,
-    setRpm,
-    rpmValue,
     setSupplierSearch,
     supplierOpen,
     setSupplierOpen,
@@ -46,7 +45,6 @@ export function RoutingForm({
     suppliers,
     assigned,
     handleSubmit,
-    handleSubmit2,
   } = useRoutingForm({ account, data, disabled, onSaved });
   return (
     <div className="space-y-4">
@@ -122,32 +120,12 @@ export function RoutingForm({
             onSaved();
             tags.reload();
             suppliers.reload();
-            rpm.reload();
           }}
         >
           刷新
         </Button>
       </form>
-      <form noValidate className="space-y-3" onSubmit={(event) => handleSubmit2(event)}>
-        <FieldSet disabled={!rpm.ready || actions.isBusy("consumer-rpm")}>
-          <Field>
-            <FieldLabel htmlFor={`${id}-rpm`}>RPM 限制</FieldLabel>
-            <Input
-              id={`${id}-rpm`}
-              type="number"
-              min={0}
-              step={1}
-              value={rpmValue}
-              placeholder="继承默认限制"
-              onChange={(event) => setRpm(event.target.value)}
-            />
-            <FieldDescription>
-              留空用默认值（{rpm.data?.default_rpm ?? "—"}），0 为无限。
-            </FieldDescription>
-          </Field>
-          <Button type="submit">保存 RPM</Button>
-        </FieldSet>
-      </form>
+      <RateLimitForm id={accountId} />
     </div>
   );
 }

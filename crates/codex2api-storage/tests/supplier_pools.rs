@@ -12,6 +12,9 @@ use codex2api_storage::{
 };
 
 async fn supplier(storage: &Storage, id: &str) {
+    supplier_for(storage, id, "chatgpt").await;
+}
+async fn supplier_for(storage: &Storage, id: &str, provider: &str) {
     let mut new = NewSupplierAccount::pending_identity(
         id,
         "codex_cli_rs",
@@ -23,6 +26,7 @@ async fn supplier(storage: &Storage, id: &str) {
         "{}",
     );
     new.id = Some(id.into());
+    new.provider_id = provider.into();
     new.chatgpt_account_id = Some(id.into());
     new.chatgpt_user_id = Some(format!("user-{id}"));
     storage
@@ -54,6 +58,98 @@ async fn consumer(storage: &Storage, id: &str) {
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("granted.sqlite"))
+        .await
+        .unwrap();
+    let user = codex2api_storage::User {
+        id: "user".into(),
+        username: "user".into(),
+        password_hash: "fixture".into(),
+        name: "User".into(),
+        email: "user@example.test".into(),
+        enabled: true,
+        wallet_cents: 0,
+        revision: 1,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        kind: codex2api_storage::UserKind::Regular,
+    };
+    storage.save_user(&user, None).await.unwrap();
+    for (provider, tier) in [("chatgpt", "plus"), ("grok", "supergrok")] {
+        for suffix in ["first", "second"] {
+            let id = format!("{provider}-{suffix}");
+            supplier_for(&storage, &id, provider).await;
+            storage.save_supplier_tag(&id, provider, &id).await.unwrap();
+            storage
+                .replace_supplier_tags(std::slice::from_ref(&id), std::slice::from_ref(&id))
+                .await
+                .unwrap();
+        }
+        let mut plan = storage.platform_free_plan(provider).await.unwrap();
+        plan.id = format!("paid-{provider}");
+        plan.plan_type = tier.into();
+        plan.config["supplier_tag_id"] = serde_json::json!(format!("{provider}-first"));
+        storage.save_virtual_plan(&plan, None).await.unwrap();
+        let subscription = storage
+            .user_platform_account(&user.id, provider)
+            .await
+            .unwrap()
+            .unwrap();
+        storage
+            .save_user_subscription(codex2api_storage::SubscriptionChange {
+                reissue: false,
+                user_id: &user.id,
+                plan_id: &plan.id,
+                expires_at: None,
+                enabled: true,
+                revision: Some(1),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .select_pool_supplier(&subscription.id, provider, &[])
+                .await
+                .unwrap(),
+            Some(format!("{provider}-first"))
+        );
+        let mut plan = storage.virtual_plan(&plan.id).await.unwrap().unwrap();
+        plan.config["supplier_tag_id"] = serde_json::json!(format!("{provider}-second"));
+        storage
+            .save_virtual_plan(&plan, Some(plan.revision))
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .select_pool_supplier(&subscription.id, provider, &[])
+                .await
+                .unwrap(),
+            Some(format!("{provider}-second"))
+        );
+        if provider == "grok" {
+            let mut plan = storage.virtual_plan(&plan.id).await.unwrap().unwrap();
+            plan.config["supplier_tag_id"] = serde_json::json!("chatgpt-first");
+            assert!(
+                storage
+                    .save_virtual_plan(&plan, Some(plan.revision))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                storage
+                    .select_pool_supplier(&subscription.id, provider, &[])
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("grok-second")
+            );
+        }
+    }
+    storage.close().await;
 }
 
 #[tokio::test]

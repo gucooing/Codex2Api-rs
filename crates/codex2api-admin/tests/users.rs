@@ -449,6 +449,40 @@ async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_route
             .await["user_kind"],
         "regular"
     );
+    // Subscription supply belongs to the plan; the old read/write resource is gone.
+    for method in ["GET", "PUT"] {
+        assert_eq!(
+            f.request(
+                method,
+                &format!("/admin/api/subscriptions/{}/routing", regular_platform.id),
+                json!({"tag_id":null,"supplier_id":null,"revision":null})
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        f.request(
+            "PUT",
+            &format!(
+                "/admin/api/subscriptions/{}/rate-limit",
+                regular_platform.id
+            ),
+            json!({"rpm":12})
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.get(&format!(
+            "/admin/api/subscriptions/{}/rate-limit",
+            regular_platform.id
+        ))
+        .await["rpm"],
+        12
+    );
     // Missing revision is rejected by the store, independently of the UI.
     let missing_revision = f.with_auth("PUT", &format!("/admin/api/consumers/{special_platform}"), json!({"username":"isolated-virtual","name":"Virtual","email":"virtual@example.test","password":"","provider_id":"chatgpt","plan_id":"plus","subscription_expires_at":null,"enabled":true}), Some(&f.cookie), Some(&f.csrf)).await;
     assert_eq!(missing_revision.status(), StatusCode::CONFLICT);

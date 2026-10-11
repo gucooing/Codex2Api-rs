@@ -17,6 +17,7 @@ export function Routing({ account, id }: { account?: Consumer; id: string }) {
         {
           <RoutingForm
             key={id}
+            id={id}
             account={account}
             data={resource.data ?? { items: [] }}
             disabled={!resource.ready || !account}

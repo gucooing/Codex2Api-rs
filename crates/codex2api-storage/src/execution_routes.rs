@@ -13,7 +13,7 @@ pub struct ExecutionRoute {
 impl Storage {
     pub async fn execution_routes(&self, owner: &str) -> Result<Vec<ExecutionRoute>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM execution_routes WHERE virtual_account_id=? ORDER BY provider_id",
+            "SELECT * FROM effective_execution_routes WHERE virtual_account_id=? ORDER BY provider_id",
         )
         .bind(owner)
         .fetch_all(self.pool())
@@ -26,7 +26,7 @@ impl Storage {
         provider: &str,
     ) -> Result<Option<ExecutionRoute>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM execution_routes WHERE virtual_account_id=? AND provider_id=?",
+            "SELECT * FROM effective_execution_routes WHERE virtual_account_id=? AND provider_id=?",
         )
         .bind(owner)
         .bind(provider)
