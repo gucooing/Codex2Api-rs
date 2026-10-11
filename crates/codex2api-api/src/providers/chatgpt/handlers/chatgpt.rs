@@ -58,20 +58,16 @@ pub async fn virtual_settings(
         .virtual_config(&access.virtual_account_id, "user_settings")
         .await?
         .value;
-    let voice = state
-        .storage
-        .virtual_config(&access.virtual_account_id, "voice")
-        .await?
-        .value;
-    if let Some(selected) = voice["selected"].as_str() {
-        value["settings"]["voice_name"] = selected.into();
-    } else {
-        // Desktop's complete user-settings schema accepts an absent voice name,
-        // but not null. A null here disables unrelated settings (including Ultra).
-        value["settings"]
-            .as_object_mut()
-            .unwrap()
-            .remove("voice_name");
+    value["settings"]["voice_enabled"] = false.into();
+    if let Some(settings) = value["settings"].as_object_mut() {
+        for key in [
+            "voice_name",
+            "voice_mode",
+            "voice_main_language",
+            "wingman_thinking_effort",
+        ] {
+            settings.remove(key);
+        }
     }
     Ok(crate::providers::chatgpt::identity::json_response(value))
 }
@@ -130,24 +126,15 @@ pub async fn forward(
         }
         let feature = features[0].1.as_ref();
         let raw = values[0].1.as_ref();
-        if feature == "voice_name" {
-            if raw.is_empty()
-                || raw.len() > 128
-                || !raw
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-            {
-                return Err(crate::ApiError::bad_request("Invalid voice selection."));
-            }
-            let saved = state.storage.virtual_config(&id, "voice").await?;
-            super::virtual_data::save_config(
-                &state,
-                &oauth.0,
-                "voice",
-                &serde_json::json!({"selected":raw}),
-                saved.revision,
-            )
-            .await?;
+        if matches!(
+            feature,
+            "voice_name"
+                | "voice_enabled"
+                | "voice_mode"
+                | "voice_main_language"
+                | "wingman_thinking_effort"
+        ) {
+            return super::realtime::unavailable().await;
         } else {
             if feature.is_empty() || feature.len() > 128 {
                 return Err(crate::ApiError::bad_request("Invalid user preference."));
@@ -277,8 +264,7 @@ pub async fn forward(
         | ChatgptEndpoint::StatsigBootstrap
         | ChatgptEndpoint::Traces
         | ChatgptEndpoint::ConnectorDirectory
-        | ChatgptEndpoint::SiteStatus
-        | ChatgptEndpoint::Voices => {}
+        | ChatgptEndpoint::SiteStatus => {}
     }
     if matches!(
         endpoint,
@@ -337,24 +323,6 @@ pub async fn forward(
             serde_json::json!({"feature_status":features}),
         ));
     }
-    if endpoint == ChatgptEndpoint::Voices && response.status().is_success() {
-        let mut value: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|_| crate::ApiError::internal("Invalid voices response."))?;
-        if !value.get("voices").is_some_and(serde_json::Value::is_array) {
-            return Err(crate::ApiError::internal("Missing voice catalog."));
-        }
-        crate::public_output::metadata(&mut value);
-        value["selected"] = state
-            .storage
-            .virtual_client_state(&id, "voice")
-            .await?
-            .map(|s| s.value["selected"].clone())
-            .unwrap_or(serde_json::Value::Null);
-        return Ok(crate::providers::chatgpt::identity::json_response(value));
-    }
-
     Ok(crate::response::forward_response(
         response.status(),
         response.headers().clone(),

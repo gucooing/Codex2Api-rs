@@ -284,7 +284,6 @@ pub(crate) async fn initialize(
                 provider_id: "chatgpt".into(),
                 virtual_account_id: saved.owner,
                 device_id: saved.device,
-                account_id: None,
                 name: String::new(),
                 token_hash: String::new(),
             },

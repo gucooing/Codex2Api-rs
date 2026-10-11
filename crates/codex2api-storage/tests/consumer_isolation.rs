@@ -92,7 +92,7 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         .edit_supplier_tags(&[supplier.id.clone()], &["other-pool".into()], false)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id,tag_id) VALUES(?,'grok',?,'other-pool')").bind(&b.id).bind(&supplier.id).execute(storage.pool()).await.unwrap();
+    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id) VALUES(?,'grok','other-pool')").bind(&b.id).execute(storage.pool()).await.unwrap();
     storage
         .save_virtual_resource(
             &b.id,
@@ -114,11 +114,9 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     assert!(storage.platform_account(&b.id).await.unwrap().is_some());
     assert!(
         storage
-            .execution_route(&b.id, "grok")
+            .select_pool_supplier(&b.id, "grok", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .is_none()
     );
     assert!(
@@ -205,8 +203,14 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cleared.revision, 4);
-    assert!(cleared.supplier_account_id.is_none());
+    assert_eq!(cleared.revision, 3);
+    assert!(
+        storage
+            .select_pool_supplier(&account.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         storage
             .bind_supplier_fixture("missing", "chatgpt", None, None)

@@ -249,16 +249,6 @@ async fn authorized(s: &AdminState, id: &str, reused: bool) -> ApiResult {
         json!({"status":"complete","supplier_id":id,"reused_existing":reused}),
     ))
 }
-pub async fn model_catalog(
-    State(s): State<AdminState>,
-    Path(id): Path<String>,
-    Query(q): Query<codex2api_storage::ListQuery>,
-) -> ApiResult {
-    if s.storage.require_account(&id).await?.provider_id != codex2api_core::GROK {
-        return Err(ApiError::bad("提供商不匹配"));
-    }
-    Ok(Json(s.storage.grok_catalog_page(&id, &q).await?))
-}
 pub async fn refresh_profile(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     s.upstream
         .grok()
@@ -268,37 +258,6 @@ pub async fn refresh_profile(State(s): State<AdminState>, Path(id): Path<String>
         .map_err(|e| ApiError::upstream(e.to_string()))?;
     Ok(Json(json!({"ok":true})))
 }
-pub async fn sync_model_catalog(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
-    Ok(Json(
-        s.upstream
-            .grok()
-            .sync_models(&id)
-            .await
-            .map_err(|e| ApiError::upstream(e.to_string()))?,
-    ))
-}
-pub async fn sync_all_models(State(s): State<AdminState>) -> ApiResult {
-    let accounts = s
-        .storage
-        .list_accounts()
-        .await?
-        .into_iter()
-        .filter(|a| {
-            a.provider_id == codex2api_core::GROK
-                && a.status == codex2api_storage::SupplierStatus::Active
-        })
-        .collect::<Vec<_>>();
-    if accounts.is_empty() {
-        return Err(ApiError::bad("请先授权至少一个 Grok 供应账户"));
-    }
-    let mut results = Vec::new();
-    for account in accounts {
-        let result = s.upstream.grok().sync_models(&account.id).await;
-        results.push(match result {Ok(value)=>json!({"supplier_id":account.id,"success":true,"models":value["items"].as_array().map(Vec::len).unwrap_or(0)}),Err(error)=>{tracing::warn!(%error,"Grok model discovery failed");json!({"supplier_id":account.id,"success":false,"error":"模型目录同步失败，请检查授权或网络"})}});
-    }
-    Ok(Json(json!({"items":results})))
-}
-
 pub async fn quota(s: &AdminState, id: &str, refresh: bool) -> Result<QuotaSnapshot, String> {
     s.supplier_cache
         .get_or_fetch(id, SupplierInfoSection::Quota, refresh, || async {

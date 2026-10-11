@@ -17,6 +17,13 @@ pub struct GatewaySettings {
     pub ua_mode: UaMode,
     pub ua_rules: Vec<String>,
     pub default_rpm: u32,
+    pub default_concurrency: u32,
+    pub scheduler_mode: String,
+    pub sticky_weighted: bool,
+    pub sticky_escape: bool,
+    pub sticky_ttl_seconds: u64,
+    pub pool_top_k: usize,
+    pub pool_wait_ms: u64,
 }
 
 impl Default for GatewaySettings {
@@ -25,6 +32,13 @@ impl Default for GatewaySettings {
             ua_mode: UaMode::default(),
             ua_rules: Vec::new(),
             default_rpm: 20,
+            default_concurrency: 5,
+            scheduler_mode: "advanced".into(),
+            sticky_weighted: false,
+            sticky_escape: true,
+            sticky_ttl_seconds: 3600,
+            pool_top_k: 7,
+            pool_wait_ms: 10000,
         }
     }
 }
@@ -40,6 +54,7 @@ impl GatewaySettings {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
                 .collect(),
+            ..Self::default()
         }
     }
 
@@ -71,20 +86,40 @@ impl GatewaySettings {
 
 impl Storage {
     pub async fn gateway_settings(&self) -> Result<GatewaySettings> {
+        if let Some(value) = self.runtime.cached("gateway-settings") {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
         let value: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key = 'gateway_settings'")
                 .fetch_optional(self.pool())
                 .await?;
-        Ok(match value {
+        let value = match value {
             Some(value) => serde_json::from_str(&value)?,
             None => GatewaySettings::default(),
-        })
+        };
+        self.runtime.affinity_ttl.store(
+            value.sticky_ttl_seconds,
+            std::sync::atomic::Ordering::Release,
+        );
+        self.runtime.cache(
+            "gateway-settings".into(),
+            &value,
+            epoch,
+            std::time::Duration::from_secs(30),
+        );
+        Ok(value)
     }
 
     pub async fn save_gateway_settings(&self, settings: &GatewaySettings) -> Result<()> {
         sqlx::query("INSERT INTO meta (key, value) VALUES ('gateway_settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             .bind(serde_json::to_string(settings)?)
             .execute(self.pool()).await?;
+        self.runtime.affinity_ttl.store(
+            settings.sticky_ttl_seconds,
+            std::sync::atomic::Ordering::Release,
+        );
+        self.invalidate_runtime_cache();
         Ok(())
     }
 }

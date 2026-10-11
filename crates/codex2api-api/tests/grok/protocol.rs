@@ -281,28 +281,38 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .await
         .unwrap();
     let upstream = codex2api_upstream::grok::GrokUpstream::new(grok);
-    let discovered = upstream.sync_models(&supplier.id).await.unwrap();
+    storage
+        .sync_supported_models(&[codex2api_core::SupportedModel {
+            provider_id: "grok".into(),
+            model: "grok-4.7".into(),
+            kind: "text".into(),
+        }])
+        .await
+        .unwrap();
+    let discovered = upstream
+        .discover_supplier_models(&supplier.id)
+        .await
+        .unwrap();
     assert_eq!(discovered["items"].as_array().unwrap().len(), 2);
     assert!(!discovered.to_string().contains("must-not-leak"));
     assert!(!discovered.to_string().contains("private-supplier"));
     assert!(
-        !storage
+        storage
             .model_config("grok", "future-grok-model")
             .await
             .unwrap()
-            .unwrap()
-            .enabled
+            .is_none()
     );
     let prices = storage.model_prices("grok").await.unwrap();
     let custom_model = "operator-only-model-91e8";
     assert!(codex2api_core::model_price_preset("grok", custom_model).is_none());
     assert!(
         !storage
-            .grok_model_descriptors()
+            .supplier_models(&supplier.id)
             .await
             .unwrap()
             .iter()
-            .any(|m| m["model"] == custom_model)
+            .any(|m| m.model == custom_model)
     );
     let custom = codex2api_storage::ModelConfig {
         provider_id: "grok".into(),
@@ -325,6 +335,11 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .await
         .unwrap();
 
+    storage
+        .add_supplier_model(&supplier.id, custom_model)
+        .await
+        .unwrap();
+
     assert!(
         prices
             .iter()
@@ -339,13 +354,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .await
         .unwrap();
     storage
-        .save_pool_route(
-            &account.id,
-            "grok",
-            Some("grok-pool"),
-            Some(&supplier.id),
-            None,
-        )
+        .save_pool_route(&account.id, "grok", Some("grok-pool"), None)
         .await
         .unwrap();
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());

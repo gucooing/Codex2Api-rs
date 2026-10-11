@@ -47,6 +47,7 @@ impl Storage {
             sqlx::query("INSERT INTO operation_prices(provider_id,operation,price_nano_usd) VALUES(?,?,?) ON CONFLICT(provider_id,operation) DO NOTHING")
                 .bind(&price.provider_id).bind(&price.operation).bind(price.price_nano_usd).execute(self.pool()).await?
         };
+        self.invalidate_runtime_cache();
         Ok(changed.rows_affected() == 1)
     }
 }

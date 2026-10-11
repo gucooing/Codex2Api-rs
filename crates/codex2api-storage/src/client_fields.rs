@@ -117,12 +117,6 @@ pub fn client_fields(key: &str) -> Vec<ClientField> {
                 "客户端选择是否将 Ultra 显示为模型选择器滑块的最高档位。",
             ),
             (
-                "voice_enabled",
-                "启用语音界面",
-                "语音与听写",
-                "客户端默认开启；实际语音执行仍依赖可用服务。",
-            ),
-            (
                 "dictation_enabled",
                 "启用听写",
                 "语音与听写",
@@ -221,15 +215,6 @@ pub fn client_fields(key: &str) -> Vec<ClientField> {
             ("black", "黑色"),
         ];
         fields.push(theme);
-        let mut effort = field(
-            "settings.wingman_thinking_effort",
-            "语音思考强度",
-            "语音与听写",
-            "select",
-            "客户端支持即时、中等和高三档。",
-        );
-        effort.choices = vec![("instant", "即时"), ("medium", "中等"), ("high", "高")];
-        fields.push(effort);
         fields.push(field(
             "settings.birthday",
             "生日",
@@ -240,8 +225,6 @@ pub fn client_fields(key: &str) -> Vec<ClientField> {
         for (path, label, group) in [
             ("settings.accessory_id", "所选配饰", "外观"),
             ("settings.contrast_mode", "对比度模式", "外观"),
-            ("settings.voice_main_language", "语音主要语言", "语音与听写"),
-            ("settings.voice_mode", "语音模式", "语音与听写"),
         ] {
             fields.push(field(path, label, group, "string", "由客户端选择并保存。"));
         }

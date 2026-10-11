@@ -732,7 +732,7 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
         (
             "/backend-api/wham/realtime/calls?intent=quicksilver&architecture=avas",
             json!({"sdp":"v=0","session":{"model":"not-entitled"}}),
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/v1/responses/input_tokens",
@@ -747,37 +747,37 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
         (
             "/backend-api/codex/realtime/calls",
             json!({"sdp":"v=0","session":{"model":"not-entitled"}}),
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/codex/realtime/calls",
             json!({"sdp":"v=0","session":{}}),
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/codex/realtime/calls?model=gpt-6-astra",
             json!({"sdp":"v=0","session":{"model":"not-entitled"}}),
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/codex/realtime/calls?model=gpt-6-astra&model=not-entitled",
             json!({"sdp":"v=0","session":{"model":"gpt-6-astra"}}),
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/codex/realtime/calls?call_id=foreign",
             json!({"sdp":"v=0","session":{"model":"gpt-6-astra"}}),
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/codex/realtime/calls",
             json!({"sdp":"v=0","session":{"model":"gpt-6-astra","audio":{"input":{"transcription":{"model":"not-entitled"}}}}}),
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/codex/realtime/calls",
             json!({"sdp":"v=0","session":{"model":"gpt-6-astra","audio":{"input":{"transcription":{}}}}}),
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_IMPLEMENTED,
         ),
         (
             "/backend-api/f/conversation/prepare",
@@ -835,10 +835,10 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     assert_eq!(
         json_body(response).await["error"]["code"],
-        "model_pricing_unavailable"
+        "voice_calls_unavailable"
     );
     assert_eq!(
         storage
@@ -853,10 +853,13 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     for (query, status) in [
-        ("call_id=foreign&model=gpt-6-astra", StatusCode::NOT_FOUND),
+        (
+            "call_id=foreign&model=gpt-6-astra",
+            StatusCode::NOT_IMPLEMENTED,
+        ),
         (
             "call_id=a&call_id=b&model=gpt-6-astra",
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_IMPLEMENTED,
         ),
     ] {
         let response = client
@@ -3250,7 +3253,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
         ))
         .await
         .unwrap();
-    assert_eq!(selected.status(), StatusCode::OK);
+    assert_eq!(selected.status(), StatusCode::NOT_IMPLEMENTED);
     let other_id = uuid::Uuid::new_v4().to_string();
     let mut other = account.clone();
     other.id = other_id.clone();
@@ -3282,7 +3285,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
             if path.ends_with("/traces") {
                 StatusCode::OK
             } else {
-                StatusCode::SERVICE_UNAVAILABLE
+                StatusCode::NOT_IMPLEMENTED
             },
             "{path}"
         );
@@ -3320,14 +3323,12 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
         .unwrap();
     assert_eq!(onboarding.value["role"], "coding");
     assert!(onboarding.value["desktop_onboarding_completed_at"].is_string());
-    assert_eq!(
+    assert!(
         storage
             .virtual_client_state(&account.id, "voice")
             .await
             .unwrap()
-            .unwrap()
-            .value["selected"],
-        "cedar"
+            .is_none()
     );
     assert!(
         storage
@@ -5210,7 +5211,14 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(resolved.account_id.as_deref(), Some(second.id.as_str()));
+    assert_eq!(
+        storage
+            .select_pool_supplier(&account.id, "chatgpt", &[])
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(second.id.as_str())
+    );
     assert_eq!(resolved.virtual_account_id, account.id);
     record_usage(&storage, &account, &second.id, "after", 25).await;
     assert_eq!(
@@ -5221,18 +5229,12 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
     let after = storage.account_usage_summary(&second.id).await.unwrap();
     assert_eq!(before.lifetime_tokens, Some(13));
     assert_eq!(after.lifetime_tokens, Some(26));
-    sqlx::query("DELETE FROM supplier_accounts WHERE id=?")
-        .bind(&second.id)
-        .execute(storage.pool())
-        .await
-        .unwrap();
+    assert!(storage.delete_account(&second.id).await.unwrap());
     assert!(
         storage
-            .execution_route(&account.id, "chatgpt")
+            .select_pool_supplier(&account.id, "chatgpt", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .is_none()
     );
     assert_eq!(storage.virtual_devices(&account.id).await.unwrap().len(), 1);
@@ -5693,7 +5695,11 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::TOO_MANY_REQUESTS,
+            if path.contains("realtime") {
+                StatusCode::NOT_IMPLEMENTED
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            },
             "{path}"
         );
     }
@@ -6079,7 +6085,7 @@ async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_
             .await
             .unwrap()
             .status(),
-        StatusCode::OK
+        StatusCode::NOT_IMPLEMENTED
     );
     let settings = json_body(
         app.clone()
@@ -6093,7 +6099,8 @@ async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_
             .unwrap(),
     )
     .await;
-    assert_eq!(settings["settings"]["voice_name"], "marin");
+    assert_eq!(settings["settings"]["voice_enabled"], false);
+    assert!(settings["settings"].get("voice_name").is_none());
     let config = storage
         .virtual_config(&account.id, "automations")
         .await
@@ -6158,13 +6165,12 @@ async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_
     }
     storage.close().await;
     let reopened = Storage::open(&db).await.unwrap();
-    assert_eq!(
+    assert!(
         reopened
-            .virtual_config(&account.id, "voice")
+            .virtual_client_state(&account.id, "voice")
             .await
             .unwrap()
-            .value["selected"],
-        "marin"
+            .is_none()
     );
     assert_eq!(
         reopened
@@ -7135,7 +7141,7 @@ async fn ultra_slider_default_settings_parse_and_real_client_toggle_roundtrips()
             .await
             .unwrap()
             .status(),
-        StatusCode::OK
+        StatusCode::NOT_IMPLEMENTED
     );
     let value = json_body(
         app.clone()
@@ -7149,7 +7155,8 @@ async fn ultra_slider_default_settings_parse_and_real_client_toggle_roundtrips()
             .unwrap(),
     )
     .await;
-    assert_eq!(value["settings"]["voice_name"], "marin");
+    assert_eq!(value["settings"]["voice_enabled"], false);
+    assert!(value["settings"].get("voice_name").is_none());
     assert_eq!(
         value["settings"]["model_picker_persists_ultra_effort"],
         true
@@ -7558,10 +7565,9 @@ async fn set_test_plan_config(
 
 async fn test_supplier(storage: &Storage, account: &PlatformAccount) -> Option<String> {
     storage
-        .execution_route(&account.id, "chatgpt")
+        .select_pool_supplier(&account.id, "chatgpt", &[])
         .await
         .unwrap()
-        .and_then(|r| r.supplier_account_id)
 }
 async fn bind_test_supplier(
     storage: &Storage,

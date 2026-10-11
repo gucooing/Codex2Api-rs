@@ -29,7 +29,7 @@ struct Connection {
 fn context(
     state: &ApiState,
     oauth: &VirtualAccess,
-    conn: &Connection,
+    conn: &mut Connection,
     endpoint: Endpoint,
 ) -> ExecutionContext {
     ExecutionContext::new(
@@ -40,6 +40,7 @@ fn context(
         &format!("/v1/{}", endpoint.codex_path()),
         "websocket",
     )
+    .with_supplier_permit(conn.ctx.permit.take())
 }
 
 async fn open(
@@ -48,9 +49,14 @@ async fn open(
     endpoint: Endpoint,
     headers: &HeaderMap,
     excluded: &mut Vec<String>,
+    request: &crate::pool_scheduler::ScheduleRequest,
+    mut selected: Option<SupplierContext>,
 ) -> Result<Connection> {
     loop {
-        let ctx = pool::select(state, oauth, excluded).await?;
+        let ctx = match selected.take() {
+            Some(ctx) => ctx,
+            None => pool::select_for(state, oauth, request, excluded).await?,
+        };
         let revision = state
             .storage
             .supplier_auth_revision(&ctx.account.id)
@@ -63,7 +69,7 @@ async fn open(
             }
             let upstream = state.upstream.get(&ctx.account.id).await?;
             let mut inbound = headers.clone();
-            if oauth.account_id.as_deref() != Some(ctx.account.id.as_str()) {
+            if !ctx.reused_affinity {
                 inbound.remove("x-codex-turn-state");
             }
             upstream.connect_websocket(endpoint, inbound).await
@@ -114,7 +120,24 @@ pub(super) async fn connect(
     service
         .admit_request(&oauth.virtual_account_id, false)
         .await?;
-    let connection = open(&state, &oauth, endpoint, &headers, &mut Vec::new()).await?;
+    let limit = state
+        .storage
+        .virtual_rpm_limit(&oauth.virtual_account_id)
+        .await?
+        .effective_concurrency;
+    if limit > 0 && state.storage.consumer_active(&oauth.virtual_account_id) >= limit {
+        return Err(codex2api_service::ServiceError::ConcurrencyExceeded.into());
+    }
+    let connection = open(
+        &state,
+        &oauth,
+        endpoint,
+        &headers,
+        &mut Vec::new(),
+        &crate::pool_scheduler::ScheduleRequest::default(),
+        None,
+    )
+    .await?;
     let mut response_headers = connection.headers.clone();
     super::super::identity::quota_headers(
         &state.storage,
@@ -201,7 +224,7 @@ async fn bridge(
     endpoint: Endpoint,
     headers: HeaderMap,
 ) {
-    let mut ledger = WsLedger::new(context(&state, &oauth, &conn, endpoint));
+    let mut ledger = WsLedger::new(context(&state, &oauth, &mut conn, endpoint));
     ledger.response_headers(&conn.headers);
     let ledger = tokio::sync::Mutex::new(ledger);
     let reviewer = endpoint == Endpoint::Guardian
@@ -225,127 +248,332 @@ async fn bridge(
                     return Ok(());
                 }
             }
-            if pending.is_none() && let Some(text) = queue.pop_front() {
-                let mut original: Value = serde_json::from_str(&text).map_err(|_| ApiError::bad_request("Invalid Responses frame."))?;
-                let selected = pool::select(&state,&oauth,&[]).await?;
+            if pending.is_none()
+                && let Some(text) = queue.pop_front()
+            {
+                let mut original: Value = serde_json::from_str(&text)
+                    .map_err(|_| ApiError::bad_request("Invalid Responses frame."))?;
+                let full_input = original.get("input").and_then(Value::as_array).and_then(
+                    |input| match original.get("previous_response_id").and_then(Value::as_str) {
+                        None => Some(input.clone()),
+                        Some(id) => history
+                            .as_ref()
+                            .filter(|(previous, _)| previous == id)
+                            .map(|(_, old)| old.iter().chain(input).cloned().collect()),
+                    },
+                );
+                let mut schedule = super::super::scheduling::request(&headers, &original);
+                schedule.previous_can_move = full_input.is_some();
+                let selected = pool::select_for(&state, &oauth, &schedule, &[]).await?;
                 let switched = selected.account.id != conn.ctx.account.id;
                 if switched {
                     let _ = conn.socket.close(None).await;
-                    conn = open(&state,&oauth,endpoint,&headers,&mut Vec::new()).await?;
-                    ledger.lock().await.retry_supplier(context(&state,&oauth,&conn,endpoint),&conn.ctx.account).await?;
-                    ledger.lock().await.response_headers(&conn.headers);
+                    conn = open(
+                        &state,
+                        &oauth,
+                        endpoint,
+                        &headers,
+                        &mut Vec::new(),
+                        &schedule,
+                        Some(selected),
+                    )
+                    .await?;
+                } else {
+                    conn.ctx = selected;
                 }
-                let full_input = original.get("input").and_then(Value::as_array).and_then(|input| {
-                    match original.get("previous_response_id").and_then(Value::as_str) {
-                        None => Some(input.clone()),
-                        Some(id) => history.as_ref().filter(|(previous,_)| previous==id).map(|(_,old)| old.iter().chain(input).cloned().collect()),
-                    }
-                });
-                if switched && original.get("previous_response_id").is_some_and(|v| !v.is_null()) {
-                    let input = full_input.as_ref().ok_or_else(||ApiError::openai(http::StatusCode::CONFLICT,"configuration_error","Reconnect with the full conversation input after a supplier change.",Some("supplier_context_required")))?;
-                    original.as_object_mut().unwrap().remove("previous_response_id");
+                let account = conn.ctx.account.clone();
+                ledger
+                    .lock()
+                    .await
+                    .retry_supplier(context(&state, &oauth, &mut conn, endpoint), &account)
+                    .await?;
+                ledger.lock().await.response_headers(&conn.headers);
+                if !conn.ctx.previous_response_matches
+                    && original
+                        .get("previous_response_id")
+                        .is_some_and(|v| !v.is_null())
+                {
+                    let input = full_input.as_ref().ok_or_else(|| {
+                        ApiError::openai(
+                            http::StatusCode::CONFLICT,
+                            "configuration_error",
+                            "Reconnect with the full conversation input after a supplier change.",
+                            Some("supplier_context_required"),
+                        )
+                    })?;
+                    original
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("previous_response_id");
                     original["input"] = serde_json::json!(input);
                 }
-                crate::usage::ws_start(&ledger,&text).await?;
-                send(&mut conn,&original,reviewer).await?;
-                idle.as_mut().reset(tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT);
-                pending = Some(Pending { original, full_input, prelude:Vec::new(),prelude_bytes:0,committed:false,excluded:Vec::new(),refreshed:Default::default() });
+                crate::usage::ws_start(&ledger, &text).await?;
+                send(&mut conn, &original, reviewer).await?;
+                idle.as_mut().reset(
+                    tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
+                );
+                pending = Some(Pending {
+                    original,
+                    full_input,
+                    prelude: Vec::new(),
+                    prelude_bytes: 0,
+                    committed: false,
+                    excluded: Vec::new(),
+                    refreshed: Default::default(),
+                });
             }
             tokio::select! {
                 incoming = client.next(), if connected => {
-                    let Some(Ok(message)) = incoming else { connected = false; continue; };
+                    let Some(Ok(message)) = incoming else {
+                        connected = false;
+                        continue;
+                    };
                     match message {
                         Message::Text(_) | Message::Binary(_) => {
-                            state.storage.virtual_access(&oauth.token_hash).await?.ok_or_else(ApiError::invalid_token)?;
-                            let text = match message { Message::Text(t)=>t.to_string(), Message::Binary(b)=>String::from_utf8(b.to_vec()).map_err(|_|ApiError::bad_request("Expected UTF-8 Responses frame."))?, _=>unreachable!() };
-                            let value: Value = serde_json::from_str(&text).map_err(|_|ApiError::bad_request("Invalid Responses frame."))?;
+                            state
+                                .storage
+                                .virtual_access(&oauth.token_hash)
+                                .await?
+                                .ok_or_else(ApiError::invalid_token)?;
+                            let text = match message {
+                                Message::Text(t) => t.to_string(),
+                                Message::Binary(b) => String::from_utf8(b.to_vec())
+                                    .map_err(|_| ApiError::bad_request("Expected UTF-8 Responses frame."))?,
+                                _ => unreachable!(),
+                            };
+                            let value: Value = serde_json::from_str(&text)
+                                .map_err(|_| ApiError::bad_request("Invalid Responses frame."))?;
                             if value["type"] == "response.create" {
-                                if queue.len() >= 32 || queue.iter().map(String::len).sum::<usize>() + text.len() > codex2api_upstream::MAX_REQUEST_BYTES {
+                                if queue.len() >= 32
+                                    || queue.iter().map(String::len).sum::<usize>() + text.len()
+                                        > codex2api_upstream::MAX_REQUEST_BYTES
+                                {
                                     return Err(ApiError::bad_request("Too many queued Responses requests."));
                                 }
                                 queue.push_back(text);
-                            } else { send(&mut conn,&value,reviewer).await?; }
+                            } else {
+                                send(&mut conn, &value, reviewer).await?;
+                            }
                         }
-                        Message::Close(_) => { connected = false; }
+                        Message::Close(_) => {
+                            connected = false;
+                        }
                         Message::Ping(_) | Message::Pong(_) => {}
                     }
                 }
                 incoming = conn.socket.next() => {
-                    idle.as_mut().reset(tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT);
-                    let Some(message) = incoming else { return Err(super::websocket::relay_error("Upstream WebSocket closed")); };
+                    idle.as_mut()
+                        .reset(tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT);
+                    let Some(message) = incoming else {
+                        return Err(super::websocket::relay_error("Upstream WebSocket closed"));
+                    };
                     let message = message.map_err(super::websocket::relay_error)?;
                     let text = match message {
-                        UpstreamMessage::Text(t)=>t.to_string(),
-                        UpstreamMessage::Binary(b)=>String::from_utf8(b.to_vec()).map_err(|_|ApiError::bad_request("Expected UTF-8 Responses frame."))?,
-                        UpstreamMessage::Close(_) => { if pending.is_some(){ return Err(super::websocket::relay_error("Upstream WebSocket closed")); } return Ok(()); },
-                        _=>continue,
+                        UpstreamMessage::Text(t) => t.to_string(),
+                        UpstreamMessage::Binary(b) => String::from_utf8(b.to_vec())
+                            .map_err(|_| ApiError::bad_request("Expected UTF-8 Responses frame."))?,
+                        UpstreamMessage::Close(_) => {
+                            if pending.is_some() {
+                                return Err(super::websocket::relay_error("Upstream WebSocket closed"));
+                            }
+                            return Ok(());
+                        }
+                        _ => continue,
                     };
-                    if state.storage.virtual_access(&oauth.token_hash).await?.is_none() {
+                    if state
+                        .storage
+                        .virtual_access(&oauth.token_hash)
+                        .await?
+                        .is_none()
+                    {
                         // Actual completed usage survives a concurrent device revocation.
-                        ledger.lock().await.observe_at(text.as_bytes(),false,Instant::now()).await?;
+                        ledger
+                            .lock()
+                            .await
+                            .observe_at(text.as_bytes(), false, Instant::now())
+                            .await?;
                         return Err(ApiError::invalid_token());
                     }
-                    let value: Value = serde_json::from_str(&text).map_err(|_|super::websocket::relay_error("Invalid upstream Responses event"))?;
-                    if let Some(mut failure) = codex2api_upstream::classify_supplier_failure(None,&value,&conn.headers,chrono::Utc::now().timestamp()) {
+                    let value: Value = serde_json::from_str(&text)
+                        .map_err(|_| super::websocket::relay_error("Invalid upstream Responses event"))?;
+                    if let Some(mut failure) = codex2api_upstream::classify_supplier_failure(
+                        None,
+                        &value,
+                        &conn.headers,
+                        chrono::Utc::now().timestamp(),
+                    ) {
                         let recovered = if failure == codex2api_upstream::SupplierFailure::Authentication
-                            && pending.as_ref().is_some_and(|p| !p.committed && !p.refreshed.contains(&conn.ctx.account.id)) {
-                            pending.as_mut().unwrap().refreshed.insert(conn.ctx.account.id.clone());
+                            && pending
+                                .as_ref()
+                                .is_some_and(|p| !p.committed && !p.refreshed.contains(&conn.ctx.account.id))
+                        {
+                            pending
+                                .as_mut()
+                                .unwrap()
+                                .refreshed
+                                .insert(conn.ctx.account.id.clone());
                             match pool::recover_stream_auth(&state, &conn.ctx, conn.revision).await? {
                                 None => true,
-                                Some(rejection) => { failure = rejection; false }
+                                Some(rejection) => {
+                                    failure = rejection;
+                                    false
+                                }
                             }
-                        } else { false };
-                        if !recovered { pool::observe(&state,&conn.ctx.account.id,conn.revision,&failure).await?; }
-                        if let Some(p) = &mut pending && !p.committed {
-                            if !recovered { p.excluded.push(conn.ctx.account.id.clone()); }
-                            let _=conn.socket.close(None).await;
-                            conn=open(&state,&oauth,endpoint,&headers,&mut p.excluded).await?;
-                            let mut retry=p.original.clone();
-                            if retry.get("previous_response_id").is_some_and(|v|!v.is_null()) {
-                                let input=p.full_input.as_ref().ok_or_else(||ApiError::openai(http::StatusCode::CONFLICT,"configuration_error","Reconnect with the full conversation input after a supplier change.",Some("supplier_context_required")))?;
-                                retry.as_object_mut().unwrap().remove("previous_response_id");
-                                retry["input"]=serde_json::json!(input);
+                        } else {
+                            false
+                        };
+                        if !recovered {
+                            pool::observe(&state, &conn.ctx.account.id, conn.revision, &failure).await?;
+                        }
+                        if let Some(p) = &mut pending
+                            && !p.committed
+                        {
+                            if !recovered {
+                                p.excluded.push(conn.ctx.account.id.clone());
                             }
-                            p.prelude.clear(); p.prelude_bytes=0;
-                            ledger.lock().await.retry_supplier(context(&state,&oauth,&conn,endpoint),&conn.ctx.account).await?;
+                            let _ = conn.socket.close(None).await;
+                            {
+                                let mut ledger = ledger.lock().await;
+                                ledger.supplier_attempt_failed();
+                                ledger.release_supplier_permits();
+                            }
+                            let mut schedule = super::super::scheduling::request(&headers, &p.original);
+                            schedule.previous_can_move = p.full_input.is_some();
+                            conn = open(
+                                &state,
+                                &oauth,
+                                endpoint,
+                                &headers,
+                                &mut p.excluded,
+                                &schedule,
+                                None,
+                            )
+                            .await?;
+                            let mut retry = p.original.clone();
+                            if !conn.ctx.previous_response_matches
+                                && retry
+                                    .get("previous_response_id")
+                                    .is_some_and(|v| !v.is_null())
+                            {
+                                let input = p.full_input.as_ref().ok_or_else(|| {
+                                    ApiError::openai(
+                                        http::StatusCode::CONFLICT,
+                                        "configuration_error",
+                                        "Reconnect with the full conversation input after a supplier change.",
+                                        Some("supplier_context_required"),
+                                    )
+                                })?;
+                                retry
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .remove("previous_response_id");
+                                retry["input"] = serde_json::json!(input);
+                            }
+                            p.prelude.clear();
+                            p.prelude_bytes = 0;
+                            let account = conn.ctx.account.clone();
+                            ledger
+                                .lock()
+                                .await
+                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint), &account)
+                                .await?;
                             ledger.lock().await.response_headers(&conn.headers);
-                            send(&mut conn,&retry,reviewer).await?;
+                            send(&mut conn, &retry, reviewer).await?;
                             continue;
                         }
                         if pending.is_none() {
-                            let mut excluded=vec![conn.ctx.account.id.clone()];
-                            conn=open(&state,&oauth,endpoint,&headers,&mut excluded).await?;
-                            ledger.lock().await.retry_supplier(context(&state,&oauth,&conn,endpoint),&conn.ctx.account).await?;
+                            let mut excluded = vec![conn.ctx.account.id.clone()];
+                            conn = open(
+                                &state,
+                                &oauth,
+                                endpoint,
+                                &headers,
+                                &mut excluded,
+                                &crate::pool_scheduler::ScheduleRequest::default(),
+                                None,
+                            )
+                            .await?;
+                            let account = conn.ctx.account.clone();
+                            ledger
+                                .lock()
+                                .await
+                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint), &account)
+                                .await?;
                             continue;
                         }
                     }
-                    let at=Instant::now();
-                    if let Some(p)=&mut pending {
-                        if !p.committed && pool::prelude_event(&value) && p.prelude_bytes+text.len()<=256*1024 {
-                            p.prelude_bytes+=text.len(); p.prelude.push((text,at)); continue;
+                    let at = Instant::now();
+                    if let Some(p) = &mut pending {
+                        if !p.committed && pool::prelude_event(&value) && p.prelude_bytes + text.len() <= 256 * 1024
+                        {
+                            p.prelude_bytes += text.len();
+                            p.prelude.push((text, at));
+                            continue;
                         }
-                        for (text,at) in p.prelude.drain(..) { deliver(&mut client,&mut connected,&ledger,&state,&oauth,&text,at).await?; }
-                        p.committed=true;
+                        for (text, at) in p.prelude.drain(..) {
+                            deliver(
+                                &mut client,
+                                &mut connected,
+                                &ledger,
+                                &state,
+                                &oauth,
+                                &text,
+                                at,
+                            )
+                            .await?;
+                        }
+                        p.committed = true;
                     }
-                    let outcome=deliver(&mut client,&mut connected,&ledger,&state,&oauth,&text,at).await?;
-                    if let Some(outcome)=outcome {
-                        if value["type"]=="response.completed" && let Some(p)=&pending && let Some(mut input)=p.full_input.clone() && let Some(id)=value.pointer("/response/id").and_then(Value::as_str) {
-                            input.extend(value.pointer("/response/output").and_then(Value::as_array).cloned().unwrap_or_default());
-                            history=(serde_json::to_vec(&input).is_ok_and(|v|v.len()<=codex2api_upstream::MAX_REQUEST_BYTES)).then(||(id.into(),input));
+                    let outcome = deliver(
+                        &mut client,
+                        &mut connected,
+                        &ledger,
+                        &state,
+                        &oauth,
+                        &text,
+                        at,
+                    )
+                    .await?;
+                    if let Some(outcome) = outcome {
+                        if value["type"] == "response.completed"
+                            && let Some(p) = &pending
+                            && let Some(mut input) = p.full_input.clone()
+                            && let Some(id) = value.pointer("/response/id").and_then(Value::as_str)
+                        {
+                            input.extend(
+                                value
+                                    .pointer("/response/output")
+                                    .and_then(Value::as_array)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            );
+                            history = (serde_json::to_vec(&input)
+                                .is_ok_and(|v| v.len() <= codex2api_upstream::MAX_REQUEST_BYTES))
+                            .then(|| (id.into(), input));
                         }
-                        pending=None;
+                        pending = None;
                         if let ResponseOutcome::Failed(failure) = outcome {
-                            close_code = if failure.status.is_some_and(|status|status<500) {1008} else {1011};
+                            close_code = if failure.status.is_some_and(|status| status < 500) {
+                                1008
+                            } else {
+                                1011
+                            };
                             return Ok(());
                         }
                     }
                 }
                 _ = &mut idle, if pending.is_some() => {
-                    return Err(ApiError::openai(http::StatusCode::GATEWAY_TIMEOUT,"server_error","Timed out waiting for the upstream generation.",Some("upstream_timeout")));
+                    return Err(ApiError::openai(
+                        http::StatusCode::GATEWAY_TIMEOUT,
+                        "server_error",
+                        "Timed out waiting for the upstream generation.",
+                        Some("upstream_timeout"),
+                    ));
                 }
             }
         }
-    }.await;
+    }
+    .await;
     if let Err(error) = result {
         let (status, message) = super::websocket::error_message(error).await;
         close_code = if status < 500 { 1008 } else { 1011 };
@@ -451,6 +679,10 @@ mod tests {
                         let connection = Connection {
                             socket: fixture_socket(&format!("ws://{address}/responses")).await,
                             ctx: SupplierContext {
+                                reused_affinity: false,
+                                previous_response_matches: false,
+                                permit: None,
+                                request: Default::default(),
                                 account: state.storage.require_account(&first).await.unwrap(),
                             },
                             headers: HeaderMap::new(),
@@ -651,6 +883,10 @@ mod tests {
                 async move {
                     let socket = fixture_socket(&format!("ws://{upstream_addr}/responses")).await;
                     let ctx = SupplierContext {
+                        reused_affinity: false,
+                        previous_response_matches: false,
+                        permit: None,
+                        request: Default::default(),
                         account: state.storage.require_account(&first).await.unwrap(),
                     };
                     let revision = state.storage.supplier_auth_revision(&first).await.unwrap();
@@ -722,11 +958,9 @@ mod tests {
             assert_eq!(
                 state
                     .storage
-                    .execution_route(&oauth.virtual_account_id, "chatgpt")
+                    .select_pool_supplier(&oauth.virtual_account_id, "chatgpt", &[])
                     .await
                     .unwrap()
-                    .unwrap()
-                    .supplier_account_id
                     .as_deref(),
                 Some(ids[0].as_str())
             );
@@ -766,11 +1000,7 @@ mod tests {
                 vec![("failed".into(), "supplier_pool_exhausted".into())]
             );
         }
-        let admissions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_request_admissions")
-            .fetch_one(state.storage.pool())
-            .await
-            .unwrap();
-        assert_eq!(admissions, 1);
+        assert_eq!(state.storage.consumer_active(&oauth.virtual_account_id), 0);
         upstream_task.await.unwrap();
         if let Some(task) = second_task {
             if throttle {

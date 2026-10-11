@@ -18,7 +18,8 @@ export type Supplier = {
   status: "active" | "disabled" | "error" | "payment_required" | "quota_exhausted";
   tag_ids: string[];
   tags: { id: string; name: string }[];
-  binding_count: number;
+  concurrency: number;
+  active_requests: number;
   cooldown_until: number | null;
   cooldown_code: string | null;
   authorized: boolean;
@@ -184,7 +185,6 @@ export type OAuth =
       status: "complete";
       supplier_id: string;
       reused_existing?: boolean;
-      model_sync_error?: string | null;
     };
 export type BusinessField = {
   path: string[];
@@ -289,6 +289,13 @@ export type GatewaySettings = {
   ua_mode: "blacklist" | "whitelist";
   ua_rules: string[];
   default_rpm: number;
+  default_concurrency: number;
+  scheduler_mode: "advanced" | "traditional";
+  sticky_weighted: boolean;
+  sticky_escape: boolean;
+  sticky_ttl_seconds: number;
+  pool_top_k: number;
+  pool_wait_ms: number;
 };
 export type PublicUrlSettings = {
   api_url: string;
@@ -303,7 +310,14 @@ export type SupplierTag = {
   supplier_count: number;
   binding_count: number;
 };
-export type RpmLimit = { rpm: number | null; default_rpm: number; effective_rpm: number };
+export type RpmLimit = {
+  rpm: number | null;
+  default_rpm: number;
+  effective_rpm: number;
+  concurrency: number | null;
+  default_concurrency: number;
+  effective_concurrency: number;
+};
 export type DesktopSettings = {
   proxy_id: string | null;
   resource_cache_minutes: number;

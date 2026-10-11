@@ -16,6 +16,8 @@ pub enum ServiceError {
     PricingUnavailable,
     #[error("The virtual account has reached its requests-per-minute limit")]
     RpmExceeded { retry_after: u32 },
+    #[error("The account has reached its concurrent generation limit")]
+    ConcurrencyExceeded,
 }
 
 pub type Result<T> = std::result::Result<T, ServiceError>;
@@ -53,7 +55,7 @@ impl ExecutionService {
         if !access.execution_enabled {
             return Err(PolicyError::SubscriptionRequired.into());
         }
-        if self.storage.virtual_quota(owner).await?["rate_limit"]["allowed"] == false {
+        if !self.storage.virtual_spending_status(owner).await?.0 {
             return Err(ServiceError::BudgetExceeded);
         }
         Ok(())
@@ -89,8 +91,11 @@ impl ExecutionService {
         if request.kind == ExecutionKind::InspectModel {
             return Ok(());
         }
-        self.check_budget(owner).await?;
-        if !self.storage.virtual_spending_limited(owner).await? {
+        let (allowed, limited) = self.storage.virtual_spending_status(owner).await?;
+        if !allowed {
+            return Err(ServiceError::BudgetExceeded);
+        }
+        if !limited {
             return Ok(());
         }
         let priced = match request.kind {

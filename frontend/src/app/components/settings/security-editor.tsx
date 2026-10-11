@@ -1,157 +1,129 @@
 "use client";
 import { useSecurityEditor } from "@/app/data/settings";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { CircleAlert } from "lucide-react";
 
-export function SecurityEditor({ username, disabled }: { username: string; disabled: boolean }) {
-  const { fieldId, actions, form, update, handleSubmit } = useSecurityEditor({
-    username,
-    disabled,
-  });
+const groups = [
+  {
+    title: "验证当前身份",
+    fields: [
+      {
+        key: "old_username",
+        label: "当前用户名",
+        type: "text",
+        autoComplete: "username",
+        required: true,
+        description: "填写现在登录管理后台使用的用户名，用来确认本次修改的身份。",
+      },
+      {
+        key: "old_password",
+        label: "当前密码",
+        type: "password",
+        autoComplete: "current-password",
+        required: true,
+        description: "填写现在登录管理后台使用的密码。验证通过后，才能修改登录凭据。",
+      },
+    ],
+  },
+  {
+    title: "更新登录凭据",
+    fields: [
+      {
+        key: "new_username",
+        label: "新用户名",
+        type: "text",
+        autoComplete: "username",
+        required: true,
+        description: "以后登录管理后台使用的用户名。保持原值就不修改用户名；保存后需要重新登录。",
+      },
+      {
+        key: "new_password",
+        label: "新密码",
+        type: "password",
+        autoComplete: "new-password",
+        required: false,
+        description: "以后登录管理后台使用的密码。留空会保留原密码；保存后需要重新登录。",
+      },
+    ],
+  },
+] as const;
+
+export function SecurityEditor({
+  username,
+  disabled,
+  refreshing,
+  onReload,
+}: {
+  username: string;
+  disabled: boolean;
+  refreshing: boolean;
+  onReload: () => void;
+}) {
+  const { fieldId, form, update, busy, handleSubmit } = useSecurityEditor({ username, disabled });
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle role="heading" aria-level={2}>
-          {"管理员凭据"}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <CardDescription className="text-sm text-muted-foreground">
-          保存后当前管理员会话立即失效，需要重新登录。
-        </CardDescription>
-        <form
-          noValidate
-          className="flex min-h-0 flex-col gap-4"
-          aria-busy={actions.isBusy("app\\settings\\page.tsx:form:4")}
-          onSubmit={(event) => handleSubmit(event)}
+    <form noValidate className="space-y-4" aria-busy={busy || refreshing} onSubmit={handleSubmit}>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onReload}
+          disabled={refreshing || busy}
         >
-          <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-12rem)]">
-            <FieldSet
-              disabled={disabled || actions.isBusy("app\\settings\\page.tsx:form:4")}
-              className="min-h-0 overflow-y-auto pr-1"
-            >
-              <FieldGroup className="gap-4">
-                <section className="space-y-3">
-                  <div className="space-y-1">
-                    <CardTitle role="heading" aria-level={3}>
-                      验证当前身份
-                    </CardTitle>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field>
-                      <FieldLabel
-                        htmlFor={
-                          fieldId + "-field-5" + "-" + encodeURIComponent(String("当前用户名"))
-                        }
+          {refreshing && <Spinner />}刷新
+        </Button>
+        <Button type="submit" size="sm" disabled={disabled || busy}>
+          {busy && <Spinner />}
+          {busy ? "正在保存…" : "保存"}
+        </Button>
+      </div>
+      {groups.map((group) => (
+        <FieldSet key={group.title}>
+          <FieldLegend variant="label">{group.title}</FieldLegend>
+          <FieldGroup className="grid gap-4 sm:grid-cols-2">
+            {group.fields.map((field) => (
+              <Field key={field.key}>
+                <div className="flex items-center gap-1">
+                  <FieldLabel htmlFor={`${fieldId}-${field.key}`}>{field.label}</FieldLabel>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="size-5 text-muted-foreground"
+                        aria-label={`${field.label}说明`}
                       >
-                        {"当前用户名"}
-                      </FieldLabel>
-                      <Input
-                        id={fieldId + "-field-5" + "-" + encodeURIComponent(String("当前用户名"))}
-                        aria-label={"当前用户名"}
-                        required
-                        value={form.old_username}
-                        onChange={(e) => update("old_username", e.target.value)}
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel
-                        htmlFor={
-                          fieldId + "-field-6" + "-" + encodeURIComponent(String("当前密码"))
-                        }
-                      >
-                        {"当前密码"}
-                      </FieldLabel>
-                      <Input
-                        id={fieldId + "-field-6" + "-" + encodeURIComponent(String("当前密码"))}
-                        aria-label={"当前密码"}
-                        required
-                        type="password"
-                        autoComplete="current-password"
-                        value={form.old_password}
-                        onChange={(e) => update("old_password", e.target.value)}
-                      />
-                    </Field>
-                  </div>
-                </section>
-                <section className="space-y-3">
-                  <div className="space-y-1">
-                    <CardTitle role="heading" aria-level={3}>
-                      更新登录凭据
-                    </CardTitle>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field>
-                      <FieldLabel
-                        htmlFor={
-                          fieldId + "-field-7" + "-" + encodeURIComponent(String("新用户名"))
-                        }
-                      >
-                        {"新用户名"}
-                      </FieldLabel>
-                      <Input
-                        id={fieldId + "-field-7" + "-" + encodeURIComponent(String("新用户名"))}
-                        aria-label={"新用户名"}
-                        required
-                        value={form.new_username}
-                        onChange={(e) => update("new_username", e.target.value)}
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel
-                        htmlFor={fieldId + "-field-8" + "-" + encodeURIComponent(String("新密码"))}
-                      >
-                        {"新密码"}
-                      </FieldLabel>
-                      <Input
-                        id={fieldId + "-field-8" + "-" + encodeURIComponent(String("新密码"))}
-                        aria-label={"新密码"}
-                        aria-describedby={
-                          fieldId +
-                          "-field-8" +
-                          "-" +
-                          encodeURIComponent(String("新密码")) +
-                          "-hint"
-                        }
-                        type="password"
-                        autoComplete="new-password"
-                        value={form.new_password}
-                        onChange={(e) => update("new_password", e.target.value)}
-                      />
-                      {Boolean("留空保留原密码") && (
-                        <FieldDescription
-                          id={
-                            fieldId +
-                            "-field-8" +
-                            "-" +
-                            encodeURIComponent(String("新密码")) +
-                            "-hint"
-                          }
-                        >
-                          {"留空保留原密码"}
-                        </FieldDescription>
-                      )}
-                    </Field>
-                  </div>
-                </section>
-              </FieldGroup>
-            </FieldSet>
-          </ScrollArea>
-          <FieldGroup className="flex-row justify-end gap-2 border-t pt-3">
-            <Button
-              type="submit"
-              disabled={disabled || actions.isBusy("app\\settings\\page.tsx:form:4")}
-            >
-              {actions.isBusy("app\\settings\\page.tsx:form:4") && <Spinner />}
-              {actions.isBusy("app\\settings\\page.tsx:form:4") ? "正在提交…" : "保存"}
-            </Button>
+                        <CircleAlert className="size-3" aria-hidden="true" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                      collisionPadding={16}
+                      aria-label={`${field.label}说明`}
+                    >
+                      {field.description}
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <Input
+                  id={`${fieldId}-${field.key}`}
+                  type={field.type}
+                  autoComplete={field.autoComplete}
+                  required={field.required}
+                  value={form[field.key]}
+                  onChange={(event) => update(field.key, event.target.value)}
+                  disabled={disabled || busy}
+                />
+              </Field>
+            ))}
           </FieldGroup>
-        </form>
-      </CardContent>
-    </Card>
+        </FieldSet>
+      ))}
+    </form>
   );
 }

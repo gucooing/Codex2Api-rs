@@ -204,7 +204,6 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .unwrap()
         .unwrap();
     assert_eq!(route.tag_id.as_deref(), Some("replacement"));
-    assert!(route.supplier_account_id.is_none());
     let persisted: Option<String> =
         sqlx::query_scalar("SELECT tag_id FROM execution_routes WHERE virtual_account_id=?")
             .bind(&subscription.id)
@@ -223,7 +222,6 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .as_deref(),
         Some("s2")
     );
-    assert_eq!(storage.supplier_binding_count("s1").await.unwrap(), 0);
     assert_eq!(
         storage
             .supplier_tags()
@@ -242,14 +240,18 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
                 &subscription.id,
                 "chatgpt",
                 Some("private-pool"),
-                Some("s1"),
                 Some(route.revision)
             )
             .await
             .is_err()
     );
-    assert!(sqlx::query("UPDATE execution_routes SET tag_id='private-pool',supplier_account_id='s1' WHERE virtual_account_id=?")
-        .bind(&subscription.id).execute(storage.pool()).await.is_err());
+    assert!(
+        sqlx::query("UPDATE execution_routes SET tag_id='private-pool' WHERE virtual_account_id=?")
+            .bind(&subscription.id)
+            .execute(storage.pool())
+            .await
+            .is_err()
+    );
     assert!(
         sqlx::query(
             "UPDATE execution_routes SET supplier_account_id='s1' WHERE virtual_account_id=?"
@@ -266,25 +268,21 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .unwrap();
     assert!(
         storage
-            .execution_route(&subscription.id, "chatgpt")
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .is_none()
     );
     storage
         .replace_supplier_tags(&["s2".into()], &["replacement".into()])
         .await
         .unwrap();
-    storage.refresh_supplier_bindings("s2").await.unwrap();
+    storage.invalidate_runtime_cache();
     assert_eq!(
         storage
-            .execution_route(&subscription.id, "chatgpt")
+            .select_pool_supplier(&subscription.id, "chatgpt", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .as_deref(),
         Some("s2")
     );
@@ -322,7 +320,6 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .unwrap()
             .is_none()
     );
-    assert_eq!(storage.supplier_binding_count("s2").await.unwrap(), 0);
 
     let unchanged = storage
         .user_platform_account(&user.id, "chatgpt")

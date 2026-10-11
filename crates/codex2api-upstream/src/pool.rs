@@ -23,6 +23,37 @@ pub struct UpstreamPool {
 }
 
 impl UpstreamPool {
+    pub async fn sync_supplier_models(
+        &self,
+        account: &codex2api_storage::SupplierAccount,
+    ) -> Result<()> {
+        match account.provider_id.as_str() {
+            codex2api_core::CHATGPT => {
+                let (models, revision) = self
+                    .get(&account.id)
+                    .await?
+                    .discover_supplier_models()
+                    .await?;
+                if !self
+                    .auth
+                    .storage()?
+                    .sync_supplier_models(&account.id, revision, &models)
+                    .await?
+                {
+                    return Err(crate::UpstreamError::WorkspaceChanged);
+                }
+            }
+            codex2api_core::GROK => {
+                self.grok.discover_supplier_models(&account.id).await?;
+            }
+            _ => {
+                return Err(crate::UpstreamError::InvalidRequest(
+                    "Unsupported provider".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
     pub fn new(auth: AuthService) -> Self {
         Self {
             grok: crate::grok::GrokUpstream::new(codex2api_auth::grok::GrokAuthService::new(

@@ -99,9 +99,13 @@ async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bin
         Some("2099-01-01T00:00:00Z")
     );
     assert_eq!(storage.platform_revision("paid").await.unwrap(), 1);
-    let raw: (Option<String>, Option<String>, i64) = sqlx::query_as("SELECT tag_id,supplier_account_id,revision FROM execution_routes WHERE virtual_account_id='paid'")
-        .fetch_one(storage.pool()).await.unwrap();
-    assert_eq!(raw, (None, None, 8));
+    let raw: (Option<String>, i64) = sqlx::query_as(
+        "SELECT tag_id,revision FROM execution_routes WHERE virtual_account_id='paid'",
+    )
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(raw, (None, 9));
     let inherited = storage
         .execution_route("paid", "chatgpt")
         .await
@@ -114,8 +118,7 @@ async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bin
         .unwrap()
         .unwrap();
     assert_eq!(standalone.tag_id.as_deref(), Some("old"));
-    assert_eq!(standalone.supplier_account_id.as_deref(), Some("supplier"));
-    assert_eq!(standalone.revision, 4);
+    assert_eq!(standalone.revision, 5);
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["supplier_tag_id"] = serde_json::Value::Null;
     storage
@@ -138,7 +141,7 @@ async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bin
             .unwrap()
             .unwrap()
             .revision,
-        4
+        5
     );
     let violations = sqlx::query("PRAGMA foreign_key_check")
         .fetch_all(storage.pool())
@@ -544,81 +547,90 @@ async fn gpt6_model_usage_bills_all_tiers_and_contexts_once_with_snapshot_prices
 }
 
 #[tokio::test]
-async fn startup_preserves_release_lf_checksums_and_rejects_changed_history() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("release-line-endings.sqlite");
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(&path)
-                // Match the dedicated startup migration connection for parent rebuilds.
-                .foreign_keys(false)
-                .create_if_missing(true),
-        )
+async fn startup_preserves_historical_line_endings_and_rejects_changed_history() {
+    for windows_migration_46 in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("release-line-endings.sqlite");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&path)
+                    // Match the dedicated startup migration connection for parent rebuilds.
+                    .foreign_keys(false)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        // Both release LF history and the historical Windows migration 46 must open
+        // without changing any applied checksums or accepting changed SQL.
+        Migrator {
+            migrations: Cow::Owned(
+                MIGRATIONS
+                    .iter()
+                    .map(|migration| {
+                        let sql = migration.sql.replace("\r\n", "\n");
+                        let sql = if windows_migration_46 && migration.version == 46 {
+                            sql.replace('\n', "\r\n")
+                        } else {
+                            sql
+                        };
+                        sqlx::migrate::Migration::new(
+                            migration.version,
+                            migration.description.clone(),
+                            migration.migration_type,
+                            Cow::Owned(sql),
+                            migration.no_tx,
+                        )
+                    })
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        }
+        .run(&pool)
         .await
         .unwrap();
-    // Release builds hash LF bytes. A Windows checkout containing CRLF used to
-    // pass fresh-database tests but failed to open this same migration history.
-    Migrator {
-        migrations: Cow::Owned(
-            MIGRATIONS
-                .iter()
-                .map(|migration| {
-                    sqlx::migrate::Migration::new(
-                        migration.version,
-                        migration.description.clone(),
-                        migration.migration_type,
-                        Cow::Owned(migration.sql.replace("\r\n", "\n")),
-                        migration.no_tx,
-                    )
-                })
-                .collect(),
-        ),
-        ..Migrator::DEFAULT
+        sqlx::query("INSERT INTO meta(key,value) VALUES('migration_fixture','preserved')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before: Vec<(i64, Vec<u8>)> =
+            sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        pool.close().await;
+
+        let storage = Storage::open(&path)
+            .await
+            .expect("unchanged historical migrations must be accepted");
+        let after: Vec<(i64, Vec<u8>)> =
+            sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(storage.pool())
+                .await
+                .unwrap();
+        assert_eq!(after, before, "startup must not rewrite applied checksums");
+        let marker: String =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='migration_fixture'")
+                .fetch_one(storage.pool())
+                .await
+                .unwrap();
+        assert_eq!(marker, "preserved");
+
+        // Only corrupt the disposable fixture. Real SQL edits must still be rejected.
+        sqlx::query("UPDATE _sqlx_migrations SET checksum=? WHERE version=46")
+            .bind(vec![0_u8; 48])
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        storage.close().await;
+        assert!(matches!(
+            Storage::open(&path).await,
+            Err(codex2api_storage::StorageError::Migration(
+                sqlx::migrate::MigrateError::VersionMismatch(46)
+            ))
+        ));
     }
-    .run(&pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO meta(key,value) VALUES('migration_fixture','preserved')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let before: Vec<(i64, Vec<u8>)> =
-        sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-    pool.close().await;
-
-    let storage = Storage::open(&path)
-        .await
-        .expect("Windows builds must accept unchanged LF release migrations");
-    let after: Vec<(i64, Vec<u8>)> =
-        sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
-            .fetch_all(storage.pool())
-            .await
-            .unwrap();
-    assert_eq!(after, before, "startup must not rewrite applied checksums");
-    let marker: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='migration_fixture'")
-        .fetch_one(storage.pool())
-        .await
-        .unwrap();
-    assert_eq!(marker, "preserved");
-
-    // Only corrupt the disposable fixture. Real SQL edits must still be rejected.
-    sqlx::query("UPDATE _sqlx_migrations SET checksum=? WHERE version=1")
-        .bind(vec![0_u8; 48])
-        .execute(storage.pool())
-        .await
-        .unwrap();
-    storage.close().await;
-    assert!(matches!(
-        Storage::open(&path).await,
-        Err(codex2api_storage::StorageError::Migration(
-            sqlx::migrate::MigrateError::VersionMismatch(1)
-        ))
-    ));
 }
 
 #[tokio::test]
@@ -926,7 +938,11 @@ async fn virtual_quota_removal_preserves_existing_accounts_devices_and_configura
         "Virtual"
     );
     assert_eq!(storage.virtual_devices("v").await.unwrap()[0].id, "device");
-    let voice = storage.virtual_config("v", "voice").await.unwrap();
+    let voice = storage
+        .virtual_client_state("v", "voice")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(voice.revision, 3);
     assert_eq!(voice.value["selected"], "Cove");
     assert!(storage.virtual_quota("v").await.unwrap()["rate_limit"]["primary_window"].is_null());

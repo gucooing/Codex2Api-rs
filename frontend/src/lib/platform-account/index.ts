@@ -9,7 +9,6 @@ import {
   type Json,
   type List,
   type RpmLimit,
-  type Supplier,
   type SupplierTag,
 } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
@@ -25,7 +24,6 @@ export const subscriptionLabel = (status: Consumer["subscription_status"]) =>
   ({ active: "订阅有效", expired: "订阅已到期", free: "免费层" })[status];
 
 export const recordKinds = [
-  ["realtime_call", "语音通话创建记录"],
   ["task", "任务与执行来源"],
   ["task_execution", "任务执行记录"],
   ["task_operation", "任务操作结果"],
@@ -375,7 +373,6 @@ export type RoutingResponse = {
   items: {
     virtual_account_id: string;
     provider_id: string;
-    supplier_account_id: string | null;
     tag_id: string | null;
     revision: number;
   }[];
@@ -388,6 +385,9 @@ export function useRateLimitForm({ id: accountId }: { id: string }) {
   const rpm = useResource<RpmLimit>(`${platformPrefix}/${accountId}/rate-limit`);
   const [draft, setDraft] = useState<string>();
   const value = draft ?? (rpm.data?.rpm == null ? "" : String(rpm.data.rpm));
+  const [concurrencyDraft, setConcurrencyDraft] = useState<string>();
+  const concurrency =
+    concurrencyDraft ?? (rpm.data?.concurrency == null ? "" : String(rpm.data.concurrency));
   useErrorToast(rpm.error);
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(event, "consumer-rpm", async () => {
@@ -395,14 +395,30 @@ export function useRateLimitForm({ id: accountId }: { id: string }) {
       const limit = value.trim() === "" ? null : Number(value);
       if (limit !== null && (!Number.isInteger(limit) || limit < 0 || limit > 1_000_000))
         throw new Error("RPM 须为 0 到 1000000 的整数");
+      const concurrent = concurrency.trim() === "" ? null : Number(concurrency);
+      if (
+        concurrent !== null &&
+        (!Number.isInteger(concurrent) || concurrent < 0 || concurrent > 1_000_000)
+      )
+        throw new Error("并发须为 0 到 1000000 的整数");
       await request(`${platformPrefix}/${accountId}/rate-limit`, {
         method: "PUT",
-        body: { rpm: limit },
+        body: { rpm: limit, concurrency: concurrent },
       });
       setDraft(undefined);
+      setConcurrencyDraft(undefined);
       rpm.reload();
     });
-  return { id, actions, rpm, value, setDraft, handleSubmit } as const;
+  return {
+    id,
+    actions,
+    rpm,
+    value,
+    setDraft,
+    concurrency,
+    setConcurrencyDraft,
+    handleSubmit,
+  } as const;
 }
 
 export function useRoutingForm({
@@ -420,52 +436,36 @@ export function useRoutingForm({
   const id = useId();
   const actions = useActions();
   const route = data.items.find((r) => r.provider_id === account?.provider_id);
-  const [draft, setDraft] = useState<{ tag: string; supplier: string }>();
-  const current = draft ?? { tag: route?.tag_id ?? "", supplier: route?.supplier_account_id ?? "" };
-  const [supplierSearch, setSupplierSearch] = useState("");
-  const [supplierOpen, setSupplierOpen] = useState(false);
+  const [draft, setDraft] = useState<{ tag: string }>();
+  const current = draft ?? { tag: route?.tag_id ?? "" };
   const tags = useResource<List<SupplierTag>>(
     account ? `/supplier-tags/options${query({ provider_id: account.provider_id })}` : null,
   );
-  const suppliers = useResource<List<Supplier>>(
-    supplierOpen && current.tag
-      ? `/suppliers/options${query({ provider_id: account?.provider_id, tag: current.tag, for_routing: true, search: supplierSearch, limit: 5 })}`
-      : null,
-    supplierSearch ? 250 : 0,
-  );
-  const assignedResource = useResource<Supplier>(
-    current.supplier ? `/suppliers/${encodeURIComponent(current.supplier)}` : null,
-  );
-  const assigned = assignedResource.data ?? null;
-  useErrorToast(assignedResource.error);
   useErrorToast(tags.error);
-  useErrorToast(suppliers.error);
+  const selectTag = (tag: string) => {
+    if (disabled || !tags.ready || actions.isBusy("pool-route")) return;
+    if (tag !== "none" && !tags.data?.items.some((item) => item.id === tag)) return;
+    setDraft({ tag: tag === "none" ? "" : tag });
+  };
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(event, "pool-route", async () => {
-      if (disabled || !account || !tags.ready) throw new Error("请先加载号池和供应账户");
+      if (disabled || !account || !tags.ready) throw new Error("请先加载号池配置");
       await request(`${platformPrefix}/${account.id}/routing`, {
         method: "PUT",
         body: {
           tag_id: current.tag || null,
-          supplier_id: current.supplier || null,
           revision: route?.revision ?? null,
         },
       });
       setDraft(undefined);
       onSaved();
-      suppliers.reload();
     });
   return {
     id,
     actions,
-    setDraft,
+    selectTag,
     current,
-    setSupplierSearch,
-    supplierOpen,
-    setSupplierOpen,
     tags,
-    suppliers,
-    assigned,
     handleSubmit,
   } as const;
 }

@@ -455,7 +455,7 @@ async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_route
             f.request(
                 method,
                 &format!("/admin/api/subscriptions/{}/routing", regular_platform.id),
-                json!({"tag_id":null,"supplier_id":null,"revision":null})
+                json!({"tag_id":null,"revision":null})
             )
             .await
             .status(),

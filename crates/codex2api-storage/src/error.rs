@@ -4,6 +4,8 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("Runtime cache is unavailable")]
+    Runtime,
     #[error("{message}")]
     Checkout {
         code: &'static str,

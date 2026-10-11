@@ -21,6 +21,7 @@ import {
   percentLabel,
   quotaResetLabel,
   quotaWindowLabel,
+  supplierConcurrencyLabel,
   supplierStatusLabel,
 } from "@/lib/supplier-state";
 import { ChevronRight } from "lucide-react";
@@ -157,8 +158,8 @@ export function SupplierRecordDialog({ item, now }: Props) {
             </div>
           </Field>
           <Field>
-            <FieldTitle>绑定数</FieldTitle>
-            <FieldDescription>{item.binding_count ?? 0}</FieldDescription>
+            <FieldTitle>并发</FieldTitle>
+            <FieldDescription>{supplierConcurrencyLabel(item)}</FieldDescription>
           </Field>
           <Field>
             <FieldTitle>最近使用</FieldTitle>

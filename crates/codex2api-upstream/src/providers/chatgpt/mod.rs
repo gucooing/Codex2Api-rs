@@ -8,8 +8,9 @@ pub(crate) mod endpoint;
 pub(crate) mod headers;
 pub(crate) mod proxy;
 pub(crate) mod quota;
-pub(crate) mod realtime;
 pub(crate) mod request;
 pub(crate) mod routing;
 pub(crate) mod timezone;
 pub(crate) mod websocket;
+
+mod model_discovery;

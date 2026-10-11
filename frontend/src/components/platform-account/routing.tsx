@@ -10,7 +10,7 @@ export function Routing({ account, id }: { account?: Consumer; id: string }) {
     <Card size="sm">
       <CardHeader>
         <CardTitle role="heading" aria-level={2}>
-          供应绑定
+          供应号池
         </CardTitle>
       </CardHeader>
       <CardContent>

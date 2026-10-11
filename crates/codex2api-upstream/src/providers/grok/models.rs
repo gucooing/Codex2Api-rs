@@ -95,7 +95,7 @@ pub fn descriptors(value: &Value) -> Result<Vec<Value>> {
     Ok(result.into_values().collect())
 }
 impl GrokUpstream {
-    pub async fn sync_models(&self, id: &str) -> Result<Value> {
+    pub async fn discover_supplier_models(&self, id: &str) -> Result<Value> {
         self.auth().refresh_grok(id, false, None).await?;
         let revision = self
             .auth()
@@ -108,11 +108,11 @@ impl GrokUpstream {
         if !self
             .auth()
             .storage()?
-            .save_grok_catalog(id, revision, &raw, &models)
+            .sync_supplier_models(id, revision, &models)
             .await?
         {
             return Err(UpstreamError::WorkspaceChanged);
         }
-        Ok(self.auth().storage()?.grok_catalog(id).await?)
+        Ok(serde_json::json!({"items":self.auth().storage()?.supplier_models(id).await?}))
     }
 }

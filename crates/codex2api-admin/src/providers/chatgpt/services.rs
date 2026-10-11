@@ -6,6 +6,30 @@ use codex2api_upstream::BackendEndpoint as E;
 use serde_json::Value;
 use std::collections::HashMap;
 
+pub(crate) async fn sync_models(state: &AdminState, id: &str) -> Result<(), String> {
+    let account = state
+        .storage
+        .require_account(id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let auth_revision = state
+        .storage
+        .supplier_auth_revision(id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let cooldown_revision = state
+        .storage
+        .supplier_health(id)
+        .await
+        .map_err(|e| e.to_string())?
+        .cooldown_revision;
+    if let Err(error) = state.upstream.sync_supplier_models(&account).await {
+        observe_request_failure(state, id, auth_revision, cooldown_revision, &error).await?;
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 pub(crate) async fn quota(
     state: &AdminState,
     id: &str,

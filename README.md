@@ -173,7 +173,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 不配置时使用同一默认值。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_API_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/api/oauth/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/api/oauth/chatgpt/codex/device`。授权入口跳转到 `CODEX2API_PUBLIC_USER_URL` 上的确认页；反向代理应分别路由三端，并在用户端保留 `/user` 路径。设备登录可以在用户中心或管理端撤销。
 
-管理员在 **用户管理** 创建用户，在 **订阅管理** 发放、续期、调整或终止用户的平台订阅，默认列表不显示已到期订阅。**虚拟账户** 模块继续管理原有独立账户；不会自动创建用户或转移原有数据。订阅的“配置与记录”可查看客户端配置、实际用量、设备和内部供应绑定。
+管理员在 **用户管理** 创建用户，在 **订阅管理** 发放、续期、调整或终止用户的平台订阅，默认列表不显示已到期订阅。**虚拟账户** 模块继续管理原有独立账户；不会自动创建用户或转移原有数据。订阅的“配置与记录”可查看客户端配置、实际用量、设备和号池配置与请求限制。
 
 用户中心采用侧栏、顶部导航和紧凑内容区，风格与管理端一致。首页总览显示本人钱包、各平台唯一的当前订阅、实际请求与 Token / 计费用量趋势和最近订单；侧栏可进入使用信息、订阅、套餐、订单、钱包、设备和用户信息。使用信息支持时间、平台、模型和结果筛选，展示本人请求明细；未知用量或费用不当作零。用户信息页为 `/user/profile/`，展示基本资料并提供修改密码。刷新先恢复会话，站内切换及刷新保留当前页面。新用户自动获得各已接入平台的 Free 身份；付费到期后保留身份和记录，实时按平台 Free 套餐计算权限与额度。Free 套餐不能删除，不存在单独的“到期免费访问”设置。钱包与套餐售价使用 USD，余额按整数美分保存，初始为零；管理员可在用户管理中增加或减少余额，每次调整记录为系统操作，保留操作人及变动前后余额，原因可选填。管理端“流水管理”集中查看全部用户的来源、前后余额和时间，并支持时间范围与用户名筛选；用户端没有充值或调整余额接口，支付方式仅支持钱包余额。套餐的“允许购买”决定是否展示在用户端，关闭后禁止用户购买和续订，管理员分配不受该开关限制。已发布但未定价的套餐显示“暂未定价”，不能按免费价格下单；供应号池配置不影响展示。套餐可设置售价、购买有效天数和仅管理端可见的默认供应号池。点击下单先打开不落单的预览，核对套餐、有效期、升级抵扣和优惠券后选择支付方式；点击“确认订单”才创建待支付订单，再单独确认钱包支付，成功后显示订单完成。金额和权益在 SQLite 写事务中一起提交，重复确认或支付不重复落单、扣款。供应路由只用于执行，不作为钱包支付条件。
 
@@ -185,9 +185,13 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 供应账户的身份、凭据、指纹、额度快照及执行路由只在管理端可见。用户接口不复用管理 DTO；用户 Cookie、AI access/refresh/ID token 均不能授权管理接口。改密和停用用户撤销其网页会话、平台设备及未确认授权；订阅过期后按平台 Free 套餐提供权益，仍可登录。
 
-虚拟身份、登录设备和本系统用量独立于真实账户。更换绑定保留身份、设备及历史用量，新请求使用号池内供应账户的官方凭据、代理和持久化 HTTP 指纹。供应账户可拥有多个标签，虚拟账户绑定一个标签号池，自动选择状态正常且绑定数最少的账户并保留健康绑定；也可在该池内手动换绑。删除或失效的供应账户会触发后续请求重新选号；号池无可用账户时仍能续期和读取虚拟身份，但不能执行上游请求。修改虚拟账号密码、停用或删除虚拟账号会使相关设备凭据失效。
+虚拟身份、登录设备和本系统用量独立于真实账户。虚拟账户只选择标签号池，普通订阅使用当前有效套餐的号池，不再固定绑定供应账号。每次请求从同平台号池中选择已配置该模型且状态可用的供应账号，结合会话粘连、优先级、负载、等待数、错误率和首字延迟调度；可在设置中选择传统负载模式。粘连记录是会话到账号的映射，Grok 按模型隔离。删除或失效账号会退出候选池；无可用模型或账号时拒绝执行。号池变更保留身份、设备与历史用量。
 
-设置中的默认 RPM 为 20，虚拟账户可单独覆盖，0 表示无限；留空继承默认。HTTP 与 WebSocket 生成共用一个 60 秒窗口，内部换号不重复计数。供应账户订阅使用官方名称（包括 Free、Go、Plus、Pro 100/200/500、Business、Enterprise、Edu）；套餐管理可选择对客户端展示的官方订阅档位。
+设置中的默认 RPM 为 20、默认并发为 5，账户可分别覆盖，留空继承，0 表示无限。供应账户详情的“调度”另设独立并发上限（默认 5，0 为无限）、优先级和负载容量。HTTP 与 WebSocket 共用限制，流式输出和客户端断开后的上游收尾继续占用并发槽；内部换号不重复计算消费者并发或 RPM。
+
+运行态可通过 `CODEX2API_REDIS_URL` 接入 Redis，存放会话粘连、响应归属、RPM 和并发租约。`CODEX2API_REDIS_PREFIX` 用于隔离共享 Redis 的不同部署；留空时按数据库绝对路径生成。容器内数据库路径相同的独立部署应设置不同前缀。不配置 Redis 时使用进程内有界状态，重启后清空；已配置 Redis 不可用时拒绝新的调度请求。SQLite 保留身份、配置和真实计费账本；候选与价格快照使用主动失效缓存，最近使用时间合并写入。
+
+语音通话功能已移除。原 Realtime、Live、通话创建、侧边 WebSocket、语音目录及语音选择 API 返回 `501 voice_calls_unavailable`，不会调用供应账号。客户端设置明确关闭语音入口，独立听写功能保留。
 
 虚拟账号详情顶部提供 **资料设置、服务配置、执行路由、用量统计、客户端记录、活动日志、登录设备** 页签。配置使用输入框、开关、下拉框和可增删列表，保存校验结构与版本；用量以指标、额度进度和每日图表展示，资源与日志使用表格。网页和客户端使用同一份 SQLite 数据。实现范围与验证边界见[虚拟账号数据与管理](docs/ARCHITECTURE.md#virtual-account-data-and-management)。
 
@@ -195,9 +199,9 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 **虚拟额度完全独立**：使用 7 天或 30 天外层与可选 5 小时内层两个美元费用窗口，额度由当前有效套餐决定，未付费与付费到期统一使用平台 Free 套餐。模型价格在请求开始时快照，按实际普通输入、缓存输入、缓存写入与输出结算，推理 Token 不重复收费。修改价格不重算历史；未知价格或用量明确标注。客户端响应、HTTP 头、SSE 与 WebSocket 读取同一 SQLite 账本。未完成的并发请求尚未结算，可能造成短暂超额。
 
-本系统真实用量单独记录，每条记录保留请求时的真实消费账户和来源名称，换绑定不会重写历史。真实账户详情的页签顺序为 **账户资料 → 标签 → 指纹与网络 → 官方额度 → 本地用量 → 官方用量 → 官方资料 → 重置额度**。本系统统计汇总本地请求记录中的实际 Token，不以官方账户总用量代替。
+本系统真实用量单独记录，每条记录保留请求时的实际供应账户和来源名称，号池变化不会重写历史。供应账户详情提供“可用模型”和“调度”。同步上游模型只更新当前账号，手动添加项来自同平台计费配置（可未启用或未定价）；两者都不改变计费配置，空模型列表不接受请求。Grok 独立的“官方模型”功能已移除。
 
-客户端个人资料 `GET /api/oauth/chatgpt/backend-api/wham/profiles/me` 返回虚拟账号显示名称、用户名，以及按虚拟账号累计的本系统 Token 和每日用量统计。换绑和重启不会丢失统计，不继承真实账户的头像或个人资料。未记录的轮次持续时间保持为空。
+客户端个人资料 `GET /api/oauth/chatgpt/backend-api/wham/profiles/me` 返回虚拟账号显示名称、用户名，以及按虚拟账号累计的本系统 Token 和每日用量统计。变更号池和重启不会丢失统计，不继承真实账户的头像或个人资料。未记录的轮次持续时间保持为空。
 
 客户端需支持自定义服务地址及浏览器授权码登录。统一基础地址为 `http://127.0.0.1:8080/api/oauth/chatgpt`，接口如下：
 
@@ -224,26 +228,22 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 | MCP | `GET /api/oauth/chatgpt/backend-api/ps/mcp`、`POST /api/oauth/chatgpt/backend-api/ps/mcp` |
 | MCP 资源发现（无需登录） | `GET /api/oauth/chatgpt/backend-api/ps/mcp/.well-known/oauth-protected-resource` |
 | 客户端追踪事件 | `POST /api/oauth/chatgpt/backend-api/o11y/v1/traces`（记录本地请求状态，不保存正文、不转发供应账户） |
-| 语音目录 | `GET /api/oauth/chatgpt/backend-api/settings/voices`（官方目录，选择按虚拟账号保存） |
-| 语音选择 | `PATCH /api/oauth/chatgpt/backend-api/settings/account_user_setting?feature=voice_name&value=语音ID` |
 | 浏览器设置 | `GET/PATCH /api/oauth/chatgpt/backend-api/wham/browser/settings`（按虚拟账号持久化，PATCH 校验版本） |
 | 引导状态 | `GET /api/oauth/chatgpt/backend-api/wham/onboarding/context`、`POST /api/oauth/chatgpt/backend-api/wham/onboarding/desktop/complete` |
 | 精选插件 | `GET /api/oauth/chatgpt/backend-api/plugins/featured` |
 | 插件目录 | `GET /api/oauth/chatgpt/backend-api/ps/plugins/list` |
 | 已安装插件 | `GET /api/oauth/chatgpt/backend-api/ps/plugins/installed` |
 | Codex 推荐插件 | `GET /api/oauth/chatgpt/backend-api/ps/plugins/suggested/codex` |
-| 实时会话创建 | `POST /api/oauth/chatgpt/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas` |
-| 实时会话事件通道 | `ws://服务地址/api/oauth/chatgpt/backend-api/codex/{call_id}` |
 
 现有 Codex 和 WHAM 路由均可通过此前缀访问，包括图片、搜索和账户资料。HTTP/WS 由应用提供，证书和外部 HTTPS/WSS 由反向代理处理；反向代理需保留请求路径并支持 WebSocket Upgrade。
 
-客户端配置保存在 SQLite 的 `virtual_client_state`，任务、会话归属和活动元数据保存在 `virtual_resources`，通知事件保存在 `virtual_events`，请求日志保存在 `virtual_request_logs`。数据跨重启、换绑保留。默认配置首次读取时持久化，网页可修改；集合没有本账号记录时才返回空。私人配置不继承供应账户，也不等于完成外部付款、自动化执行或站点发布。
+客户端配置保存在 SQLite 的 `virtual_client_state`，任务、会话归属和活动元数据保存在 `virtual_resources`，通知事件保存在 `virtual_events`，请求日志保存在 `virtual_request_logs`。数据跨重启、变更号池保留。默认配置首次读取时持久化，网页可修改；集合没有本账号记录时才返回空。私人配置不继承供应账户，也不等于完成外部付款、自动化执行或站点发布。
 
-云任务只列出本账号实际创建并记录的任务；详情和兄弟轮次请求校验归属。换绑后旧任务保留已记录快照，不用新供应账户凭据读取旧任务。ChatGPT 会话初始化读取本账号模型及元数据配置；prepare、发送、恢复和停止使用独立处理，conduit 凭据在服务端保存，以有期限且绑定虚拟账号及执行账户的本地凭据替换。只有上游实际返回会话 ID 后才建立会话归属。
+云任务只列出本账号实际创建并记录的任务；详情和兄弟轮次请求校验归属。任务与已创建会话保留原供应来源，只有原账号仍属于当前号池且可用时才能继续执行；不能用新账号读取旧供应资源。ChatGPT conduit 凭据在服务端保存，以有期限且绑定虚拟账号及执行来源的本地凭据替换。只有上游实际返回会话 ID 后才建立会话归属。
 
 `celsius/ws/user` 返回本地事件连接地址，通知更新从持久化事件读取。连接凭据仅用于事件通道，设备下线后失效；没有通知时保持连接，不返回假的上游 URL。反向代理部署须设置 `CODEX2API_PUBLIC_API_URL` 为外部 HTTPS origin，以生成正确的 WSS 地址。
 
-桌面用量页支持 `GET /api/oauth/chatgpt/backend-api/wham/usage/daily-token-usage-breakdown`：按虚拟账号、UTC 日期及实际模型汇总本系统已记录的输入和输出 Token（缓存输入已包含在输入中，不重复累加）。支持 `start_date`、`end_date`（包含当天）及 `group_by=day`，默认最近七天；没有上报 Token 的请求不伪造成已知用量。数据跨换绑保留。
+桌面用量页支持 `GET /api/oauth/chatgpt/backend-api/wham/usage/daily-token-usage-breakdown`：按虚拟账号、UTC 日期及实际模型汇总本系统已记录的输入和输出 Token（缓存输入已包含在输入中，不重复累加）。支持 `start_date`、`end_date`（包含当天）及 `group_by=day`，默认最近七天；没有上报 Token 的请求不伪造成已知用量。数据跨变更号池保留。
 
 轮次、插件和技能统计读取本账号实际提交的 `codex_turn_event`、`codex_plugin_used`、`skill_invocation`，按服务端接收日期汇总；轮次按 thread/turn 去重，客户端未提交的活动无法还原。这些是客户端活动统计，不替代从上游完成事件读取的 Token 账本。金额消费、积分购买和官方历史周期尚无本地业务数据源，不能用 Token 冒充；月金额上限返回客户端支持的不可用状态，轮次金额估算明确返回不可用，历史覆盖不会标为完整。
 

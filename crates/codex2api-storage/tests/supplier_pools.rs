@@ -171,7 +171,7 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), Some("s"), None)
+        .save_pool_route("v", "chatgpt", Some("pool"), None)
         .await
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -348,7 +348,7 @@ async fn obsolete_request_cooldowns_are_ignored_and_migrated_without_clearing_re
         .unwrap();
     assert!(
         storage
-            .save_pool_route("v", "chatgpt", Some("pool"), Some("limited"), None)
+            .save_pool_route("v", "chatgpt", Some("pool"), None)
             .await
             .unwrap()
     );
@@ -425,7 +425,7 @@ async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
         .unwrap();
     consumer(&storage, "v").await;
     storage
-        .save_pool_route("v", "chatgpt", Some("a"), Some("s1"), None)
+        .save_pool_route("v", "chatgpt", Some("a"), None)
         .await
         .unwrap();
     let original = storage.require_account("s1").await.unwrap();
@@ -445,11 +445,9 @@ async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
     assert_eq!(updated.updated_at, original.updated_at);
     assert_eq!(
         storage
-            .execution_route("v", "chatgpt")
+            .select_pool_supplier("v", "chatgpt", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .as_deref(),
         Some("untouched")
     );
@@ -487,7 +485,7 @@ async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
 }
 
 #[tokio::test]
-async fn concurrent_assignments_are_balanced_sticky_and_provider_isolated() {
+async fn concurrent_pool_configuration_is_provider_isolated() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("pools.sqlite"))
         .await
@@ -509,7 +507,7 @@ async fn concurrent_assignments_are_balanced_sticky_and_provider_isolated() {
         consumer(&storage, &owner).await;
         let s = storage.clone();
         handles.push(tokio::spawn(async move {
-            s.save_pool_route(&owner, "chatgpt", Some("pool"), None, None)
+            s.save_pool_route(&owner, "chatgpt", Some("pool"), None)
                 .await
                 .unwrap()
         }));
@@ -517,9 +515,7 @@ async fn concurrent_assignments_are_balanced_sticky_and_provider_isolated() {
     for handle in handles {
         assert!(handle.await.unwrap());
     }
-    assert_eq!(storage.supplier_binding_count("s1").await.unwrap(), 10);
-    assert_eq!(storage.supplier_binding_count("s2").await.unwrap(), 10);
-    let before = storage
+    let route = storage
         .execution_route("v0", "chatgpt")
         .await
         .unwrap()
@@ -529,28 +525,24 @@ async fn concurrent_assignments_are_balanced_sticky_and_provider_isolated() {
             .select_pool_supplier("v0", "chatgpt", &[])
             .await
             .unwrap(),
-        before.supplier_account_id
-    );
-    assert!(
         storage
-            .save_pool_route(
-                "v0",
-                "chatgpt",
-                Some("pool"),
-                Some("outside"),
-                Some(before.revision)
-            )
-            .await
-            .is_err()
-    );
-    assert!(storage.delete_supplier_tag("pool").await.is_err());
-    assert!(
-        !storage
-            .save_pool_route("v0", "chatgpt", None, None, Some(0))
+            .select_pool_supplier("v0", "chatgpt", &[])
             .await
             .unwrap()
     );
-    let id = before.supplier_account_id.unwrap();
+    assert_eq!(route.tag_id.as_deref(), Some("pool"));
+    assert!(storage.delete_supplier_tag("pool").await.is_err());
+    assert!(
+        !storage
+            .save_pool_route("v0", "chatgpt", None, Some(0))
+            .await
+            .unwrap()
+    );
+    let id = storage
+        .select_pool_supplier("v0", "chatgpt", &[])
+        .await
+        .unwrap()
+        .unwrap();
     let revision = storage.supplier_auth_revision(&id).await.unwrap().unwrap();
     storage.reject_supplier_auth(&id, revision).await.unwrap();
     let next = storage
@@ -603,7 +595,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), None, None)
+        .save_pool_route("v", "chatgpt", Some("pool"), None)
         .await
         .unwrap();
     let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -633,6 +625,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
         .execute(storage.pool())
         .await
         .unwrap();
+    storage.invalidate_runtime_cache();
     assert_eq!(
         storage
             .select_pool_supplier("v", "chatgpt", &[])
@@ -671,7 +664,13 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
         .unwrap()
         .unwrap();
     assert_eq!(route.tag_id.as_deref(), Some("pool"));
-    assert!(route.supplier_account_id.is_none());
+    assert!(
+        storage
+            .select_pool_supplier("v", "chatgpt", &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -692,7 +691,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), None, None)
+        .save_pool_route("v", "chatgpt", Some("pool"), None)
         .await
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -708,11 +707,9 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .cooldown_revision;
     assert!(
         storage
-            .execution_route("v", "chatgpt")
+            .select_pool_supplier("v", "chatgpt", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .is_none()
     );
     // Identical exhaustion in the same second must still supersede the check.
@@ -743,11 +740,9 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
     assert!(health.cooldown_code.is_none());
     assert_eq!(
         storage
-            .execution_route("v", "chatgpt")
+            .select_pool_supplier("v", "chatgpt", &[])
             .await
             .unwrap()
-            .unwrap()
-            .supplier_account_id
             .as_deref(),
         Some("s")
     );
@@ -914,7 +909,7 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
 }
 
 #[tokio::test]
-async fn rpm_is_atomic_sliding_persistent_and_honors_default_override_and_unlimited() {
+async fn rpm_is_atomic_sliding_and_process_local_and_honors_policy() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rpm.sqlite");
     let storage = Storage::open(&path).await.unwrap();
@@ -952,7 +947,7 @@ async fn rpm_is_atomic_sliding_persistent_and_honors_default_override_and_unlimi
             .admit_virtual_request("v", true, 159_999)
             .await
             .unwrap(),
-        Some(1)
+        None
     );
     assert!(
         storage

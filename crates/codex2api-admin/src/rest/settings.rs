@@ -52,8 +52,15 @@ pub async fn save_gateway(
     State(s): State<AdminState>,
     Json(f): Json<GatewaySettings>,
 ) -> ApiResult {
-    if f.default_rpm > 1_000_000 {
-        return Err(ApiError::bad("默认 RPM 须为 0 到 1000000 的整数"));
+    if f.default_rpm > 1_000_000 || f.default_concurrency > 1_000_000 {
+        return Err(ApiError::bad("默认 RPM 与并发限制须为 0 到 1000000 的整数"));
+    }
+    if !matches!(f.scheduler_mode.as_str(), "advanced" | "traditional")
+        || !(1..=100).contains(&f.pool_top_k)
+        || !(60..=604800).contains(&f.sticky_ttl_seconds)
+        || !(1..=60000).contains(&f.pool_wait_ms)
+    {
+        return Err(ApiError::bad("调度参数无效"));
     }
     if f.ua_rules.len() > 1000 || f.ua_rules.iter().any(|v| v.len() > 1024) {
         return Err(ApiError::bad("User-Agent 规则过长"));

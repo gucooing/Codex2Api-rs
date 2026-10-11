@@ -56,7 +56,6 @@ pub struct VirtualAccess {
     pub provider_id: String,
     pub virtual_account_id: String,
     pub device_id: String,
-    pub account_id: Option<String>,
     pub name: String,
     pub token_hash: String,
 }
@@ -186,10 +185,13 @@ impl Storage {
         Ok(changed == 1)
     }
     pub async fn virtual_access(&self, hash: &str) -> Result<Option<VirtualAccess>> {
-        Ok(sqlx::query_as("SELECT t.scopes,d.provider_id,v.id AS virtual_account_id,d.id AS device_id,r.supplier_account_id AS account_id,v.name,t.token_hash FROM virtual_access_tokens t JOIN virtual_devices d ON d.id=t.device_id JOIN platform_principals v ON v.id=d.virtual_account_id LEFT JOIN execution_routes r ON r.virtual_account_id=v.id AND r.provider_id=d.provider_id WHERE t.token_hash=? AND t.expires_at>? AND v.enabled=1")
+        Ok(sqlx::query_as("SELECT t.scopes,d.provider_id,v.id AS virtual_account_id,d.id AS device_id,v.name,t.token_hash FROM virtual_access_tokens t JOIN virtual_devices d ON d.id=t.device_id JOIN platform_principals v ON v.id=d.virtual_account_id WHERE t.token_hash=? AND t.expires_at>? AND v.enabled=1")
             .bind(hash).bind(Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
     pub async fn touch_virtual_access(&self, hash: &str) -> Result<()> {
+        if !self.runtime.claim_touch(&format!("touch-token:{hash}")) {
+            return Ok(());
+        }
         sqlx::query("UPDATE virtual_devices SET last_used_at=? WHERE id IN(SELECT device_id FROM virtual_access_tokens WHERE token_hash=? AND expires_at>?)")
             .bind(Utc::now().to_rfc3339()).bind(hash).bind(Utc::now().timestamp()).execute(self.pool()).await?;
         Ok(())

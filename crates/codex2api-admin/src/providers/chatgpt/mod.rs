@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 pub(crate) mod billing;
 mod services;
-pub(crate) use services::quota;
+pub(crate) use services::{quota, sync_models};
 pub(crate) async fn subscription_expiration(
     s: &AdminState,
     id: &str,

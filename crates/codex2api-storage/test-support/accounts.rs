@@ -34,8 +34,11 @@ impl AccountFixture for Storage {
             self.save_supplier_tag(tag, provider, tag).await?;
             self.edit_supplier_tags(&[supplier.into()], std::slice::from_ref(tag), false)
                 .await?;
+            for model in self.model_configs(provider).await? {
+                self.add_supplier_model(supplier, &model.model).await?;
+            }
         }
-        self.save_pool_route(owner, provider, tag.as_deref(), supplier, expected)
+        self.save_pool_route(owner, provider, tag.as_deref(), expected)
             .await
     }
 

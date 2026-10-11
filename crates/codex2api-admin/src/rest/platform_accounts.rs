@@ -449,7 +449,6 @@ pub async fn routes(State(s): State<AdminState>, Path(id): Path<String>) -> ApiR
             tag_id: r.tag_id,
             virtual_account_id: r.virtual_account_id,
             provider_id: r.provider_id,
-            supplier_account_id: r.supplier_account_id,
             revision: r.revision,
         })
         .collect::<Vec<_>>();
@@ -462,7 +461,6 @@ pub async fn routes(State(s): State<AdminState>, Path(id): Path<String>) -> ApiR
 #[serde(deny_unknown_fields)]
 pub struct RouteInput {
     tag_id: Option<String>,
-    supplier_id: Option<String>,
     revision: Option<i64>,
 }
 
@@ -478,7 +476,6 @@ pub async fn save_route(
             &id,
             &account.provider_id,
             f.tag_id.as_deref().filter(|s| !s.is_empty()),
-            f.supplier_id.as_deref().filter(|s| !s.is_empty()),
             f.revision,
         )
         .await?
@@ -497,6 +494,7 @@ pub async fn rate_limit(State(s): State<AdminState>, Path(id): Path<String>) -> 
 #[serde(deny_unknown_fields)]
 pub struct RpmInput {
     rpm: Option<u32>,
+    concurrency: Option<u32>,
 }
 
 pub async fn save_rate_limit(
@@ -505,7 +503,9 @@ pub async fn save_rate_limit(
     Json(input): Json<RpmInput>,
 ) -> ApiResult {
     require(&s, &id).await?;
-    s.storage.save_virtual_rpm_limit(&id, input.rpm).await?;
+    s.storage
+        .save_virtual_request_limits(&id, input.rpm, input.concurrency)
+        .await?;
     rate_limit(State(s), Path(id)).await
 }
 

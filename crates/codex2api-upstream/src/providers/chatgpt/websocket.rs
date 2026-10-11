@@ -136,8 +136,6 @@ impl UpstreamClient {
         self.connect_socket_inner(
             &endpoint.url().replacen("https://", "wss://", 1),
             endpoint.response_headers(inbound),
-            None,
-            true,
             true,
         )
         .await
@@ -149,32 +147,7 @@ impl UpstreamClient {
         url: &str,
         inbound: HeaderMap,
     ) -> Result<(UpstreamWebSocket, HeaderMap)> {
-        self.connect_socket(url, inbound, None, true).await
-    }
-
-    pub async fn connect_realtime(
-        &self,
-        kind: crate::RealtimeKind,
-        call_id: Option<&str>,
-        query: Option<&str>,
-        inbound: HeaderMap,
-    ) -> Result<(UpstreamWebSocket, HeaderMap)> {
-        let url = crate::realtime_url(kind, call_id, query)?;
-        let sideband = call_id.is_some() || url.query_pairs().any(|(key, _)| key == "call_id");
-        self.connect_socket(url.as_str(), inbound, Some(kind), sideband)
-            .await
-    }
-
-    pub(crate) async fn connect_socket(
-        &self,
-        url: &str,
-        inbound: HeaderMap,
-        realtime: Option<crate::RealtimeKind>,
-        sideband: bool,
-    ) -> Result<(UpstreamWebSocket, HeaderMap)> {
-        let (socket, headers, _) = self
-            .connect_socket_inner(url, inbound, realtime, sideband, false)
-            .await?;
+        let (socket, headers, _) = self.connect_socket_inner(url, inbound, false).await?;
         Ok((socket, headers))
     }
 
@@ -182,8 +155,6 @@ impl UpstreamClient {
         &self,
         url: &str,
         inbound: HeaderMap,
-        realtime: Option<crate::RealtimeKind>,
-        sideband: bool,
         workspace: bool,
     ) -> Result<(
         UpstreamWebSocket,
@@ -192,20 +163,8 @@ impl UpstreamClient {
     )> {
         self.synchronize_auth().await?;
         let mut metadata = serde_json::json!({});
-        let mut extra =
+        let extra =
             normalize_response_identity(&mut metadata, &self.identity().installation_id, &inbound)?;
-        if let Some(kind) = realtime {
-            crate::realtime::add_realtime_headers(&mut extra, &inbound);
-            if matches!(
-                kind,
-                crate::RealtimeKind::Live | crate::RealtimeKind::CodexSideband
-            ) {
-                extra.insert(
-                    "openai-alpha",
-                    http::HeaderValue::from_static("quicksilver=v2"),
-                );
-            }
-        }
         let tls = tokio::task::spawn_blocking(codex2api_auth::transport::websocket_tls_config)
             .await
             .map_err(|e| UpstreamError::Stream(e.to_string()))??;
@@ -232,11 +191,7 @@ impl UpstreamClient {
             } else {
                 None
             };
-            let (mut headers, token) = if realtime.is_some() {
-                self.realtime_auth_headers(sideband).await?
-            } else {
-                (auth.headers, auth.access_token)
-            };
+            let (mut headers, token) = (auth.headers, auth.access_token);
             headers.extend(extra.clone());
             let destination = if let Some(route) = &routing {
                 route.route.apply(url, &mut headers)?
@@ -253,11 +208,12 @@ impl UpstreamClient {
                 .into_client_request()
                 .map_err(|e| UpstreamError::Stream(e.to_string()))?;
             request.headers_mut().extend(headers);
-            if realtime.is_none() {
-                request.headers_mut().entry("openai-beta").or_insert(
-                    http::HeaderValue::from_static("responses_websockets=2026-02-06"),
-                );
-            }
+            request
+                .headers_mut()
+                .entry("openai-beta")
+                .or_insert(http::HeaderValue::from_static(
+                    "responses_websockets=2026-02-06",
+                ));
             if let Some(cookies) = self.cookies.cookies(&cookie_url) {
                 request.headers_mut().insert("cookie", cookies);
             }
@@ -268,11 +224,7 @@ impl UpstreamClient {
                 tokio_tungstenite::client_async_tls_with_config(
                     request,
                     transport,
-                    Some(if realtime.is_some() {
-                        WebSocketConfig::default()
-                    } else {
-                        websocket_config()
-                    }),
+                    Some(websocket_config()),
                     Some(Connector::Rustls(tls.clone())),
                 )
                 .await
@@ -315,7 +267,6 @@ impl UpstreamClient {
                     );
                     if response.status() == http::StatusCode::UNAUTHORIZED
                         && !retried
-                        && sideband
                         && self.auth_service().is_some()
                     {
                         retried = true;
@@ -472,77 +423,6 @@ mod tests {
                 Some(Ok(tungstenite::Message::Close(_)))
             ));
         }
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn realtime_sideband_uses_realtime_headers_and_preserves_binary_audio() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_hdr_async(
-                stream,
-                move |req: &tungstenite::handshake::server::Request,
-                      response: tungstenite::handshake::server::Response| {
-                    tx.send(req.headers().clone()).unwrap();
-                    Ok(response)
-                },
-            )
-            .await
-            .unwrap();
-            socket
-                .send(tungstenite::Message::Binary(vec![0xff, 0, 128, 1].into()))
-                .await
-                .unwrap();
-            socket.close(None).await.unwrap();
-        });
-        let client = UpstreamClient::new(
-            AccountIdentity::new("a", "install", HostRuntime::generate()),
-            "account-token".into(),
-            Some("account-a".into()),
-        )
-        .unwrap();
-        let mut inbound = HeaderMap::new();
-        inbound.insert(
-            "x-session-id",
-            http::HeaderValue::from_static("session-original"),
-        );
-        inbound.insert("via", http::HeaderValue::from_static("proxy"));
-        inbound.insert(
-            "x-oai-attestation",
-            http::HeaderValue::from_static("attestation-original"),
-        );
-        inbound.insert(
-            "openai-project",
-            http::HeaderValue::from_static("proj-original"),
-        );
-        let (mut socket, _) = tokio::time::timeout(
-            Duration::from_secs(5),
-            client.connect_socket(
-                &format!("ws://{addr}/live/call-1"),
-                inbound,
-                Some(crate::RealtimeKind::Live),
-                true,
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        let headers = rx.await.unwrap();
-        assert_eq!(headers["authorization"], "Bearer account-token");
-        assert_eq!(headers["openai-alpha"], "quicksilver=v2");
-        assert_eq!(headers["x-session-id"], "session-original");
-        assert_eq!(headers["x-oai-attestation"], "attestation-original");
-        assert_eq!(headers["openai-project"], "proj-original");
-        assert!(!headers.contains_key("openai-beta"));
-        assert!(!headers.contains_key("sec-websocket-extensions"));
-        assert!(!headers.contains_key("via"));
-        assert_eq!(
-            socket.next().await.unwrap().unwrap().into_data().as_ref(),
-            &[0xff, 0, 128, 1]
-        );
         server.await.unwrap();
     }
 

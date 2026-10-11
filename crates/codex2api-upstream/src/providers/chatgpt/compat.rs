@@ -17,7 +17,6 @@ pub enum ChatgptEndpoint {
     AnalyticsEvents,
     StatsigBootstrap,
     Traces,
-    Voices,
     ConnectorDirectory,
     SiteStatus,
 }
@@ -35,7 +34,6 @@ impl ChatgptEndpoint {
             Self::AnalyticsEvents => "/backend-api/codex/analytics-events/events",
             Self::StatsigBootstrap => "/backend-api/wham/statsig/bootstrap",
             Self::Traces => "/backend-api/o11y/v1/traces",
-            Self::Voices => "/backend-api/settings/voices",
             Self::ConnectorDirectory => "/backend-api/connectors/directory/list",
             Self::SiteStatus => "/backend-api/aura/site_status",
         }
@@ -144,13 +142,6 @@ impl ChatgptEndpoint {
                     .append_pair("value", "false");
             }
             Self::AccountsCheck | Self::AnalyticsEvents | Self::StatsigBootstrap | Self::Traces => {
-            }
-            Self::Voices => {
-                for (key, value) in &pairs {
-                    if matches!(key.as_ref(), "spoken_language" | "voice_mode") {
-                        url.query_pairs_mut().append_pair(key, value);
-                    }
-                }
             }
             Self::FeaturedPlugins
             | Self::Plugins
@@ -740,20 +731,6 @@ mod tests {
             Endpoint::Compact.url(),
             "https://chatgpt.com/backend-api/codex/responses/compact"
         );
-        assert_eq!(
-            crate::realtime_url(crate::RealtimeKind::CodexSideband, Some("rtc_test"), None)
-                .unwrap()
-                .as_str(),
-            "wss://chatgpt.com/backend-api/codex/rtc_test"
-        );
-        assert!(
-            crate::realtime_url(
-                crate::RealtimeKind::CodexSideband,
-                Some("../responses"),
-                None
-            )
-            .is_err()
-        );
     }
 
     #[tokio::test]
@@ -802,7 +779,6 @@ mod tests {
             ChatgptEndpoint::SuggestedPlugins,
             ChatgptEndpoint::AnalyticsEvents,
             ChatgptEndpoint::Traces,
-            ChatgptEndpoint::Voices,
         ] {
             let query = match endpoint {
                 ChatgptEndpoint::Privacy => Some("feature=training_allowed&value=false"),
@@ -814,9 +790,6 @@ mod tests {
                     Some("limit=200&includeDownloadUrls=true&pageToken=next%2Fpage")
                 }
                 ChatgptEndpoint::SuggestedPlugins => Some("scope=GLOBAL"),
-                ChatgptEndpoint::Voices => {
-                    Some("spoken_language=en-US&voice_mode=advanced&private=discard")
-                }
                 _ => None,
             };
             let official = endpoint.url("bound-account", query).unwrap();
@@ -873,12 +846,6 @@ mod tests {
                 assert_eq!(headers["origin"], "https://chatgpt.com");
             }
             assert_eq!(body.as_ref(), payload);
-            if endpoint == ChatgptEndpoint::Voices {
-                assert_eq!(
-                    uri.query(),
-                    Some("spoken_language=en-US&voice_mode=advanced")
-                );
-            }
         }
         for endpoint in [Endpoint::Compact, Endpoint::InputTokens] {
             let body = serde_json::json!({"model":"model-fixture","input":[{"role":"user","content":"keep exactly"}],"instructions":"instructions"});

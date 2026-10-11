@@ -104,7 +104,7 @@ async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
         f.request(
             "PUT",
             &format!("/admin/api/consumers/{id}/routing"),
-            json!({"tag_id":tag_id,"supplier_id":null,"revision":null})
+            json!({"tag_id":tag_id,"revision":null})
         )
         .await
         .status(),
@@ -150,6 +150,6 @@ async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
         )
         .await
         .status(),
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
 }

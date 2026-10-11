@@ -160,7 +160,6 @@ pub struct Route {
     pub tag_id: Option<String>,
     pub virtual_account_id: String,
     pub provider_id: String,
-    pub supplier_account_id: Option<String>,
     pub revision: i64,
 }
 #[derive(Serialize)]

@@ -151,7 +151,6 @@ async fn service_configuration_validates_revisions_and_preserves_client_owned_st
         "automations",
         "onboarding",
         "browser_settings",
-        "voice",
         "installed_plugins",
         "notifications",
         "notification_settings",

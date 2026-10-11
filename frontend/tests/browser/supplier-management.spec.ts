@@ -33,7 +33,8 @@ async function fixture(page: Page, includeGrok = false) {
     error_at: null,
     cooldown_until: index === 0 ? Math.floor(Date.now() / 1000) + 600 : null,
     cooldown_code: null,
-    binding_count: 0,
+    active_requests: 0,
+    concurrency: 5,
     tag_ids: [index === 1 ? "b" : "a"],
     created_at: "2026-10-01T00:00:00Z",
     last_used_at: null,
@@ -62,8 +63,8 @@ async function fixture(page: Page, includeGrok = false) {
       tag_ids: ["foreign"],
     });
   const writes: { account_ids: string[]; tag_ids: string[] }[] = [];
-  const state = { assigned: "s1" as string | null, tag: "b", revision: 1 };
-  const allocations: { supplier_id: string | null; tag_id: string | null; revision: number }[] = [];
+  const state = { tag: "b" as string | null, revision: 1 };
+  const allocations: { tag_id: string | null; revision: number }[] = [];
   await page.emulateMedia({ colorScheme: "dark" });
   await page.route("**/admin/api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -182,7 +183,6 @@ async function fixture(page: Page, includeGrok = false) {
       if (method === "PUT") {
         const input = route.request().postDataJSON();
         allocations.push(input);
-        state.assigned = input.supplier_id;
         state.tag = input.tag_id;
         state.revision += 1;
       }
@@ -191,14 +191,20 @@ async function fixture(page: Page, includeGrok = false) {
           {
             virtual_account_id: "v1",
             provider_id: "chatgpt",
-            supplier_account_id: state.assigned,
             tag_id: state.tag,
             revision: state.revision,
           },
         ],
       };
     } else if (path === "/consumers/v1/rate-limit")
-      value = { rpm: null, default_rpm: 20, effective_rpm: 20 };
+      value = {
+        rpm: null,
+        default_rpm: 20,
+        effective_rpm: 20,
+        concurrency: null,
+        default_concurrency: 5,
+        effective_concurrency: 5,
+      };
     else if (path === "/plans/options") value = contracts.plans;
     else if (path === "/plans") value = paginate(contracts.plans.items);
     await route.fulfill({ json: value });
@@ -340,7 +346,7 @@ test("supplier subscription expiry is visible in table, cards, mobile and accoun
   page,
 }, info) => {
   const { suppliers, tags } = await fixture(page);
-  suppliers[0].binding_count = 3;
+  suppliers[0].active_requests = 3;
   suppliers[0].tag_ids = ["a", "b", "extra"];
   suppliers[1].tag_ids = ["a", "b"];
   tags.push({
@@ -361,7 +367,7 @@ test("supplier subscription expiry is visible in table, cards, mobile and accoun
   await expect(
     row.locator('[data-label="套餐到期"]').getByText(expiry, { exact: true }),
   ).toBeVisible();
-  await expect(row.locator('[data-label="绑定数"]')).toHaveText("3");
+  await expect(row.locator('[data-label="并发"]')).toHaveText("3 / 5");
   await expect(row.getByRole("link", { name: "详情", exact: true })).toHaveCount(0);
   const tagCell = row.locator('[data-label="标签"]');
   await expect(tagCell.locator('[data-slot="badge"]')).toHaveCount(2);
@@ -522,35 +528,35 @@ test("left-side cross-page selection updates complete tag sets and tag managemen
   expect(errors).toEqual([]);
 });
 
-test("allocation shows the assigned account or unassigned state without operational instructions", async ({
-  page,
-}, info) => {
+test("routing configures only the pool and allows clearing it", async ({ page }, info) => {
   const { state, allocations } = await fixture(page);
   await page.goto("/admin/consumers/detail/?id=v1");
-  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveValue(
-    "supplier1@example.test",
+  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "标签号池", exact: true })).toContainText(
+    "高级池",
   );
   await expect(page.getByText("当前临时绑定 / 手动选择", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/自动选择绑定数最少|保留健康绑定|内部换号不重复计数/)).toHaveCount(0);
-  await page.screenshot({ path: info.outputPath("assigned-account.png"), fullPage: true });
+  await page.screenshot({ path: info.outputPath("configured-pool.png"), fullPage: true });
   await page.getByRole("combobox", { name: "标签号池", exact: true }).click();
   await page.getByRole("option", { name: /^标准池/ }).click();
-  await page.getByRole("combobox", { name: "分配账户", exact: true }).click();
-  await page.getByRole("option", { name: "supplier2@example.test", exact: true }).click();
-  await page.getByRole("button", { name: "保存绑定", exact: true }).click();
+  await page.getByRole("button", { name: "保存号池", exact: true }).click();
   await expect.poll(() => allocations.length).toBe(1);
-  expect(allocations[0]).toEqual({ tag_id: "a", supplier_id: "s2", revision: 1 });
-  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveValue(
-    "supplier2@example.test",
+  expect(allocations[0]).toEqual({ tag_id: "a", revision: 1 });
+  await expect(page.getByRole("combobox", { name: "标签号池", exact: true })).toContainText(
+    "标准池",
   );
 
-  state.assigned = null;
-  await page.reload();
-  await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveAttribute(
-    "placeholder",
-    "暂未分配",
+  await page.getByRole("combobox", { name: "标签号池", exact: true }).click();
+  await page.getByRole("option", { name: "未配置", exact: true }).click();
+  await page.getByRole("button", { name: "保存号池", exact: true }).click();
+  await expect.poll(() => allocations.length).toBe(2);
+  expect(allocations[1]).toEqual({ tag_id: null, revision: 2 });
+  expect(state.tag).toBeNull();
+  await expect(page.getByRole("combobox", { name: "标签号池", exact: true })).toContainText(
+    "未配置",
   );
-  await page.screenshot({ path: info.outputPath("unassigned-account.png"), fullPage: true });
+  await page.screenshot({ path: info.outputPath("unconfigured-pool.png"), fullPage: true });
 });
 
 test("supplier filters, one view toggle and contextual bulk actions stay consistent", async ({

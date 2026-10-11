@@ -3,7 +3,6 @@ import { ModelEditor } from "@/app/components/models/model-editor";
 import { ModelRecordDialog } from "@/app/components/models/model-record-dialog";
 import { emptyModel, useModelPricing } from "@/app/data/models";
 import { priceTierLabels } from "@/lib/model-pricing";
-import { GrokModelSync } from "@/components/providers/grok/models";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription } from "@/components/ui/card";
@@ -253,12 +252,6 @@ export function ModelPricing() {
             </DropdownMenu>
           </form>
           <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
-            <GrokModelSync
-              onSynced={() => {
-                resource.reload();
-                presets.reload();
-              }}
-            />
             {(resource.error || presets.error) && (
               <Button
                 type="button"

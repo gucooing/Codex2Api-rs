@@ -43,6 +43,11 @@ pub(crate) trait ProtocolObserver: Send + Sync {
     fn observe(&mut self, bytes: &[u8]) -> Vec<serde_json::Value>;
 }
 pub(crate) struct RequestLog {
+    supplier_permit: Option<codex2api_storage::RuntimePermit>,
+    consumer_permit: Option<codex2api_storage::RuntimePermit>,
+    first_token_ms: Option<f64>,
+    attempt_start: Instant,
+    attempt_reported: bool,
     observer: Option<Box<dyn ProtocolObserver>>,
     record: Option<UsageRecord>,
     storage: Storage,
@@ -53,6 +58,42 @@ pub(crate) struct RequestLog {
     supplier_failure: Option<codex2api_upstream::SupplierFailure>,
 }
 impl RequestLog {
+    pub(crate) fn set_supplier_permit(&mut self, permit: codex2api_storage::RuntimePermit) {
+        self.supplier_permit = Some(permit);
+    }
+    pub(crate) fn set_consumer_permit(&mut self, permit: codex2api_storage::RuntimePermit) {
+        self.consumer_permit = Some(permit);
+    }
+    pub(crate) fn release_supplier_permit(&mut self) {
+        self.supplier_permit = None;
+    }
+    fn report_runtime_result(&mut self, record: &UsageRecord) {
+        let client_backoff = self
+            .lifecycle
+            .outcome()
+            .and_then(ResponseOutcome::failure)
+            .is_some_and(|failure| {
+                matches!(
+                    failure.kind,
+                    codex2api_upstream::FailureKind::RateLimit
+                        | codex2api_upstream::FailureKind::LimitUnknown
+                )
+            });
+        // Ordinary throttling must not indirectly trigger a health-based pool escape.
+        if !self.attempt_reported && !client_backoff {
+            self.storage.report_supplier_result(
+                &record.account_id,
+                self.lifecycle.outcome().map_or_else(
+                    || matches!(record.status.as_str(), "completed" | "submitted"),
+                    |outcome| outcome.failure().is_none(),
+                ),
+                self.first_token_ms,
+            );
+            self.attempt_reported = true;
+        }
+        self.supplier_permit = None;
+        self.consumer_permit = None;
+    }
     pub(crate) fn set_protocol_observer(&mut self, observer: impl ProtocolObserver + 'static) {
         self.observer = Some(Box::new(observer));
     }
@@ -61,6 +102,10 @@ impl RequestLog {
         account: &codex2api_storage::SupplierAccount,
     ) -> crate::Result<()> {
         if let Some(record) = &mut self.record {
+            self.auth_revision = self.storage.supplier_auth_revision(&account.id).await?;
+            if record.account_id == account.id {
+                return Ok(());
+            }
             record.account_id = account.id.clone();
             record.account_name = account
                 .display_name
@@ -68,7 +113,6 @@ impl RequestLog {
                 .or(account.email.as_deref())
                 .unwrap_or(&account.id)
                 .into();
-            self.auth_revision = self.storage.supplier_auth_revision(&account.id).await?;
             self.storage
                 .reroute_usage(&record.id, &record.account_id, &record.account_name)
                 .await?;
@@ -76,17 +120,25 @@ impl RequestLog {
         Ok(())
     }
 
-    pub(crate) fn supplier_attempt_failed(&mut self, failure: ResponseFailure) {
-        // Keep the last rejection if all candidates fail; a successful retry clears
-        // it before observing the winning response. Pricing and request ID stay fixed.
+    pub(crate) fn supplier_attempt_failed(&mut self) {
+        if !self.attempt_reported
+            && let Some(record) = &self.record
+        {
+            self.storage
+                .report_supplier_result(&record.account_id, false, self.first_token_ms);
+            self.attempt_reported = true;
+        }
+        // A rejected attempt is not the generation's terminal result. The final
+        // response or pool error must remain authoritative for the client ledger.
         // The pool already persisted the classified observation using the exact
         // attempt revision. Do not reinterpret a refresh throttle as revoked auth.
         self.auth_revision = None;
-        self.lifecycle.fail(failure);
-        self.apply_outcome();
     }
 
     pub(crate) fn retry_generation(&mut self) {
+        self.attempt_start = Instant::now();
+        self.attempt_reported = false;
+        self.first_token_ms = None;
         self.lifecycle = ResponseLifecycle::default();
         self.authoritative_model = false;
         self.supplier_failure = None;
@@ -118,6 +170,11 @@ impl RequestLog {
         storage.insert_usage(&record).await?;
         let auth_revision = storage.supplier_auth_revision(&record.account_id).await?;
         Ok(Self {
+            supplier_permit: None,
+            consumer_permit: None,
+            attempt_reported: false,
+            first_token_ms: None,
+            attempt_start: Instant::now(),
             observer: None,
             storage,
             record: Some(record),
@@ -354,6 +411,32 @@ impl RequestLog {
         let Some(record) = &mut self.record else {
             return;
         };
+        if self.first_token_ms.is_none()
+            && (event.kind.as_deref().is_some_and(|v| v.ends_with(".delta"))
+                || value.get("output").is_some())
+        {
+            self.first_token_ms = Some(self.attempt_start.elapsed().as_secs_f64() * 1000.0);
+        }
+        if let Some(id) = event
+            .response
+            .as_ref()
+            .and_then(|r| r.id.as_deref())
+            .or_else(|| value.get("id").and_then(serde_json::Value::as_str))
+            .filter(|id| id.len() <= 512)
+        {
+            if event.kind.as_deref() == Some("response.completed")
+                || (event.kind.is_none() && value.get("output").is_some())
+            {
+                self.storage.remember_response_owner(
+                    crate::pool_scheduler::previous_key(
+                        &record.subject_id,
+                        &record.provider_id,
+                        id,
+                    ),
+                    record.account_id.clone(),
+                );
+            }
+        }
         self.supplier_failure = codex2api_upstream::classify_provider_failure(
             &record.provider_id,
             record
@@ -585,6 +668,7 @@ impl RequestLog {
         }
         complete_failure_reason(&mut record);
         record.total_ms = Some(elapsed(self.start));
+        self.report_runtime_result(&record);
         let storage = self.storage.clone();
         let rejected_revision = self.auth_revision.filter(|_| {
             self.lifecycle
@@ -955,12 +1039,25 @@ struct WsSlot {
 }
 pub(crate) struct WsLedger {
     pub context: ExecutionContext,
-    realtime_model: Option<String>,
-    pub transcription_model: Option<String>,
     slots: VecDeque<WsSlot>,
     initial_headers: Option<http::HeaderMap>,
 }
 impl WsLedger {
+    pub(crate) fn supplier_attempt_failed(&mut self) {
+        for slot in &mut self.slots {
+            if let Some(log) = &mut slot.log {
+                log.supplier_attempt_failed();
+            }
+        }
+    }
+
+    pub(crate) fn release_supplier_permits(&mut self) {
+        for slot in &mut self.slots {
+            if let Some(log) = &mut slot.log {
+                log.release_supplier_permit();
+            }
+        }
+    }
     pub(crate) async fn retry_supplier(
         &mut self,
         context: ExecutionContext,
@@ -971,6 +1068,9 @@ impl WsLedger {
         for slot in &mut self.slots {
             slot.response_id = None;
             if let Some(log) = &mut slot.log {
+                if let Some(permit) = self.context.take_supplier_permit() {
+                    log.set_supplier_permit(permit);
+                }
                 log.retry_generation();
                 log.rebind_supplier(account).await?;
             }
@@ -980,42 +1080,9 @@ impl WsLedger {
     pub fn new(context: ExecutionContext) -> Self {
         Self {
             context,
-            realtime_model: None,
-            transcription_model: None,
             slots: VecDeque::new(),
             initial_headers: None,
         }
-    }
-    pub fn realtime(context: ExecutionContext, model: String) -> Self {
-        Self {
-            context,
-            realtime_model: Some(model),
-            transcription_model: None,
-            slots: VecDeque::new(),
-            initial_headers: None,
-        }
-    }
-    pub async fn authorize_realtime(&self) -> crate::Result<()> {
-        if let Some(model) = &self.transcription_model {
-            self.context
-                .authorize(
-                    &RequestMetadata {
-                        model: Some(model.clone()),
-                        ..Default::default()
-                    },
-                    true,
-                )
-                .await?;
-        }
-        self.context
-            .authorize(
-                &RequestMetadata {
-                    model: self.realtime_model.clone(),
-                    ..Default::default()
-                },
-                false,
-            )
-            .await
     }
     pub fn response_headers(&mut self, headers: &http::HeaderMap) {
         let mut initial = headers.clone();
@@ -1029,9 +1096,11 @@ impl WsLedger {
             self.initial_headers = Some(initial);
         }
     }
+    #[cfg(test)]
     pub fn has_pending(&self) -> bool {
         !self.slots.is_empty()
     }
+    #[cfg(test)]
     pub async fn fail_inflight(&mut self, code: &str, message: &str) -> crate::Result<()> {
         self.fail_pending(ResponseFailure::new(None, Some(code), Some(message)))
             .await
@@ -1045,6 +1114,7 @@ impl WsLedger {
                     complete_failure_reason(&mut record);
                     record.total_ms = Some(elapsed(log.start));
                     log.storage.finish_usage(&record).await?;
+                    log.report_runtime_result(&record);
                 }
             }
         }
@@ -1074,7 +1144,7 @@ impl WsLedger {
     pub(crate) async fn observe_at(
         &mut self,
         bytes: &[u8],
-        allow_new: bool,
+        _allow_new: bool,
         received_at: Instant,
     ) -> crate::Result<Option<ResponseOutcome>> {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
@@ -1085,29 +1155,6 @@ impl WsLedger {
         };
         if !event.generation_message() {
             return Ok(None);
-        }
-        // VAD may create a Realtime response without a client response.create.
-        if allow_new
-            && self.context.endpoint == "/v1/realtime"
-            && event.kind.as_deref() == Some("response.created")
-            && self.slots.iter().all(|s| s.response_id.is_some())
-        {
-            let log = self
-                .context
-                .start(
-                    RequestMetadata {
-                        model: event
-                            .response
-                            .as_ref()
-                            .and_then(|r| r.model.clone())
-                            .or_else(|| self.realtime_model.clone()),
-                        ..Default::default()
-                    },
-                    Instant::now(),
-                    chrono::Utc::now().timestamp_millis(),
-                )
-                .await?;
-            self.push(Some(log));
         }
         let response_id = event
             .response
@@ -1167,122 +1214,10 @@ impl WsLedger {
             complete_failure_reason(&mut record);
             record.total_ms = Some(elapsed(log.start));
             log.storage.finish_usage(&record).await?;
+            log.report_runtime_result(&record);
         }
         Ok(outcome)
     }
-}
-
-pub(crate) async fn realtime_start(
-    ledger: &tokio::sync::Mutex<WsLedger>,
-    text: Option<&str>,
-) -> crate::Result<()> {
-    #[derive(Default, Deserialize)]
-    struct Model {
-        model: Option<String>,
-        audio: Option<Audio>,
-    }
-    #[derive(Deserialize)]
-    struct Audio {
-        input: Option<AudioInput>,
-    }
-    #[derive(Deserialize)]
-    struct AudioInput {
-        transcription: Option<Transcription>,
-    }
-    #[derive(Deserialize)]
-    struct Transcription {
-        model: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct Frame {
-        #[serde(rename = "type")]
-        kind: String,
-        model: Option<String>,
-        session: Option<Model>,
-        response: Option<Model>,
-    }
-    let frame: Option<Frame> = text
-        .map(serde_json::from_str)
-        .transpose()
-        .map_err(|_| crate::ApiError::bad_request("Invalid Realtime frame fields."))?;
-    let mut ledger = ledger.lock().await;
-    let Some(frame) = frame else {
-        return ledger.authorize_realtime().await;
-    };
-    // Only the documented session or response field selects the generation model.
-    // A stray top-level model must not change the model inherited by audio frames.
-    if frame.model.is_some()
-        || (frame.kind != "session.update" && frame.session.is_some())
-        || (frame.kind != "response.create" && frame.response.is_some())
-    {
-        return Err(crate::ApiError::bad_request(
-            "Realtime model is outside its session or response field.",
-        ));
-    }
-    let transcription = frame
-        .session
-        .as_ref()
-        .and_then(|s| s.audio.as_ref())
-        .and_then(|a| a.input.as_ref())
-        .and_then(|i| i.transcription.as_ref())
-        .map(|t| {
-            t.model.clone().ok_or_else(|| {
-                crate::ApiError::bad_request("An explicit transcription model is required.")
-            })
-        })
-        .transpose()?;
-    let clears_transcription = text
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-        .is_some_and(|value| {
-            value
-                .pointer("/session/audio/input/transcription")
-                .is_some_and(serde_json::Value::is_null)
-        });
-    let previous_transcription = if clears_transcription {
-        None
-    } else {
-        ledger.transcription_model.as_ref()
-    };
-    if let Some(model) = transcription.as_ref().or(previous_transcription) {
-        ledger
-            .context
-            .authorize(
-                &RequestMetadata {
-                    model: Some(model.clone()),
-                    ..Default::default()
-                },
-                true,
-            )
-            .await?;
-    }
-    let model = frame
-        .session
-        .and_then(|s| s.model)
-        .or_else(|| frame.response.and_then(|r| r.model))
-        .or_else(|| ledger.realtime_model.clone());
-    let metadata = RequestMetadata {
-        model,
-        ..Default::default()
-    };
-    ledger.context.authorize(&metadata, false).await?;
-    if frame.kind == "session.update" {
-        ledger.realtime_model = metadata.model.clone();
-        if transcription.is_some() || clears_transcription {
-            ledger.transcription_model = transcription;
-        }
-    }
-    if frame.kind == "response.create" {
-        let log = ledger
-            .context
-            .start(
-                metadata,
-                Instant::now(),
-                chrono::Utc::now().timestamp_millis(),
-            )
-            .await?;
-        ledger.push(Some(log));
-    }
-    Ok(())
 }
 
 pub(crate) async fn ws_start(
@@ -1312,6 +1247,7 @@ pub(crate) async fn ws_start(
     let now = chrono::Utc::now().timestamp_millis();
     let context = ledger.lock().await.context.clone();
     let log = if value.generate == Some(false) {
+        drop(context.take_supplier_permit());
         context
             .authorize(
                 &RequestMetadata {
@@ -2041,30 +1977,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn realtime_vad_generations_record_actual_usage_without_inventing_a_price() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("realtime.sqlite"))
-            .await
-            .unwrap();
-        let mut ledger =
-            WsLedger::new(execution_context(storage.clone(), "/v1/realtime", "websocket").await);
-        ledger
-            .observe(
-                br#"{"type":"response.created","response":{"id":"vad","model":"voice-model"}}"#,
-            )
-            .await
-            .unwrap();
-        ledger.observe(br#"{"type":"response.done","response":{"id":"vad","status":"completed","usage":{"input_tokens":12,"output_tokens":7,"input_tokens_details":{"cached_tokens":2}}}}"#).await.unwrap();
-        let rows = storage.query_usage(&UsageFilter::default()).await.unwrap();
-        assert_eq!(rows.total, 1);
-        let record = &rows.records[0];
-        assert_eq!(record.input_tokens, Some(12));
-        assert_eq!(record.output_tokens, Some(7));
-        assert_eq!(record.cost_nano_usd, None);
-        assert_eq!(record.billing_status, "unsupported");
-    }
-
-    #[tokio::test]
     async fn length_tracking_preserves_partial_disconnects_errors_and_chunked_completion() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path().join("usage.sqlite"))
@@ -2434,6 +2346,10 @@ mod tests {
         storage.save_account_fixture(&consumer).await.unwrap();
         for model in ["warmup", "one", "two", "interrupted", "voice-model"] {
             sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')").bind(model).execute(storage.pool()).await.unwrap();
+            storage
+                .add_supplier_model(&supplier.id, model)
+                .await
+                .unwrap();
         }
         ExecutionContext::new(
             storage,
@@ -2444,6 +2360,26 @@ mod tests {
             transport,
         )
     }
+    #[tokio::test]
+    async fn successful_task_submission_preserves_status_and_supplier_health() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path().join("submitted.sqlite"))
+            .await
+            .unwrap();
+        let context = context(storage.clone(), "/backend-api/codex/tasks", "http");
+        for _ in 0..4 {
+            let mut log = context
+                .start(RequestMetadata::default(), Instant::now(), 1)
+                .await
+                .unwrap();
+            log.http_status(202);
+            log.finish("submitted");
+        }
+        let records = finalized(&storage, 4).await;
+        assert!(records.iter().all(|record| record.status == "submitted"));
+        assert_eq!(storage.supplier_metrics("account-1").error_rate, 0.0);
+    }
+
     async fn finalized(storage: &Storage, count: usize) -> Vec<UsageRecord> {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {

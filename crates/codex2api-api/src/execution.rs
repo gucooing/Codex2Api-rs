@@ -6,6 +6,7 @@ use std::time::Instant;
 
 #[derive(Clone)]
 pub(crate) struct ExecutionContext {
+    supplier_permit: std::sync::Arc<std::sync::Mutex<Option<codex2api_storage::RuntimePermit>>>,
     storage: Storage,
     provider_id: String,
     account_id: String,
@@ -26,6 +27,7 @@ impl ExecutionContext {
         transport: &'static str,
     ) -> Self {
         Self {
+            supplier_permit: Default::default(),
             storage,
             provider_id: account.provider_id.clone(),
             account_id: account.id.clone(),
@@ -43,6 +45,16 @@ impl ExecutionContext {
         }
     }
 
+    pub fn with_supplier_permit(
+        mut self,
+        permit: Option<codex2api_storage::RuntimePermit>,
+    ) -> Self {
+        self.supplier_permit = std::sync::Arc::new(std::sync::Mutex::new(permit));
+        self
+    }
+    pub fn take_supplier_permit(&self) -> Option<codex2api_storage::RuntimePermit> {
+        self.supplier_permit.lock().unwrap().take()
+    }
     pub async fn authorize(
         &self,
         metadata: &RequestMetadata,
@@ -81,6 +93,19 @@ impl ExecutionContext {
                 },
             )
             .await?;
+        if let Some(model) = metadata.model.as_deref()
+            && !self
+                .storage
+                .supplier_supports_model(&self.account_id, model)
+                .await?
+        {
+            return Err(crate::ApiError::openai(
+                http::StatusCode::FORBIDDEN,
+                "permission_error",
+                "This supplier does not have the requested model configured.",
+                Some("supplier_model_unavailable"),
+            ));
+        }
         Ok(())
     }
 
@@ -91,6 +116,28 @@ impl ExecutionContext {
         requested_at_ms: i64,
     ) -> crate::Result<RequestLog> {
         self.authorize(&metadata, false).await?;
+        let consumer_permit = self
+            .storage
+            .acquire_consumer(&self.owner_id)
+            .await?
+            .ok_or(codex2api_service::ServiceError::ConcurrencyExceeded)?;
+        let supplier_permit = match self.take_supplier_permit() {
+            Some(permit) => permit,
+            None => {
+                let policy = self.storage.supplier_scheduling(&self.account_id).await?;
+                self.storage
+                    .acquire_supplier(&self.account_id, policy.concurrency)
+                    .await?
+                    .ok_or_else(|| {
+                        crate::ApiError::openai(
+                            http::StatusCode::TOO_MANY_REQUESTS,
+                            "rate_limit_error",
+                            "The supplier is at its concurrency limit.",
+                            Some("supplier_concurrency_exceeded"),
+                        )
+                    })?
+            }
+        };
         codex2api_service::ExecutionService::new(self.storage.clone())
             .admit_request(&self.owner_id, true)
             .await?;
@@ -123,6 +170,9 @@ impl ExecutionContext {
             status: "in_progress".into(),
             ..Default::default()
         };
-        RequestLog::begin(self.storage.clone(), record, start).await
+        let mut log = RequestLog::begin(self.storage.clone(), record, start).await?;
+        log.set_supplier_permit(supplier_permit);
+        log.set_consumer_permit(consumer_permit);
+        Ok(log)
     }
 }

@@ -268,7 +268,7 @@ pub(crate) async fn write_subscription(
             .await?;
     }
     if user.kind == crate::UserKind::Regular && (restart || plan_changed) {
-        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES(?,?) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET supplier_account_id=NULL,revision=revision+1")
+        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES(?,?) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET revision=revision+1")
             .bind(&id).bind(&plan.provider_id).execute(&mut *connection).await?;
     }
     let operation = if origin == "admin_reissue" {

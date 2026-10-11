@@ -1,6 +1,7 @@
 //! Grok Build client protocol; all identity, settings and budgets are local.
 mod jwt;
 mod oauth;
+mod scheduling;
 mod usage;
 use crate::{ApiError, ApiState, Result};
 use axum::{
@@ -261,11 +262,9 @@ pub(crate) async fn forward(
         if endpoint == "chat/completions" && body["stream"] == true {
             body["stream_options"] = json!({"include_usage":true});
         }
-        let metadata = codex2api_upstream::request_metadata(
-            &codex2api_upstream::grok::encoded(&body)?,
-            &HeaderMap::new(),
-        )?;
-        let ctx = crate::pool_execution::select(&state, &access, &[]).await?;
+        let metadata = codex2api_upstream::request_metadata_value(&body);
+        let schedule = scheduling::request(&headers, &body);
+        let mut ctx = crate::pool_execution::select_for(&state, &access, &schedule, &[]).await?;
         let mut log = Some(
             crate::execution::ExecutionContext::new(
                 state.storage.clone(),
@@ -275,6 +274,7 @@ pub(crate) async fn forward(
                 &format!("/grok/v1/{endpoint}"),
                 "http",
             )
+            .with_supplier_permit(ctx.permit.take())
             .start(
                 metadata,
                 std::time::Instant::now(),

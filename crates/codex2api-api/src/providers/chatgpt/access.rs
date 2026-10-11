@@ -10,30 +10,39 @@ use crate::pool_execution::SupplierContext;
 use account_fixture::AccountFixture;
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
+#[cfg(test)]
 use codex2api_storage::SupplierStatus;
 
 use crate::error::{ApiError, Result};
 use crate::state::ApiState;
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct AccessCheck {
     pub hash: String,
     pub account_id: String,
 }
 
+#[cfg(test)]
 impl AccessCheck {
     pub async fn validate(&self, storage: &codex2api_storage::Storage) -> Result<()> {
         let access = storage
             .virtual_access(&self.hash)
             .await?
             .ok_or_else(ApiError::invalid_token)?;
-        if access.account_id.as_deref() != Some(self.account_id.as_str()) {
-            return Err(ApiError::openai(
-                axum::http::StatusCode::CONFLICT,
-                "configuration_error",
-                "The supplier binding changed. Reconnect to continue.",
-                Some("supplier_binding_changed"),
-            ));
+        let route = storage
+            .execution_route(&access.virtual_account_id, &access.provider_id)
+            .await?;
+        let Some(tag) = route.and_then(|r| r.tag_id) else {
+            return Err(crate::pool_execution::exhausted());
+        };
+        if !storage
+            .pool_candidates(&tag, &access.provider_id, None)
+            .await?
+            .iter()
+            .any(|a| a.id == self.account_id)
+        {
+            return Err(crate::pool_execution::exhausted());
         }
         let account = storage
             .get_account(&self.account_id)
@@ -85,7 +94,53 @@ impl AccessCheck {
 pub(crate) struct ExecutionPrincipal {
     pub id: String,
     pub name: String,
-    pub access: AccessCheck,
+}
+
+/// Resource lineage pins an existing task or conversation, independently of session affinity.
+pub(crate) async fn resolve_owned_supplier(
+    state: &ApiState,
+    headers: &HeaderMap,
+    oauth: axum::Extension<codex2api_storage::VirtualAccess>,
+    source: &str,
+) -> Result<(ExecutionPrincipal, SupplierContext)> {
+    let access = state
+        .storage
+        .virtual_access(&oauth.token_hash)
+        .await?
+        .ok_or_else(ApiError::invalid_token)?;
+    if access.provider_id != codex2api_core::CHATGPT
+        || headers
+            .get_all("chatgpt-account-id")
+            .iter()
+            .any(|v| v.to_str().ok() != Some(access.virtual_account_id.as_str()))
+    {
+        return Err(ApiError::invalid_token());
+    }
+    if !state
+        .storage
+        .pool_contains_supplier(
+            &access.virtual_account_id,
+            &access.provider_id,
+            Some(source),
+        )
+        .await?
+    {
+        return Err(crate::pool_scheduler::context_required());
+    }
+    let ctx = SupplierContext {
+        account: state.storage.require_account(source).await?,
+        permit: None,
+        reused_affinity: false,
+        previous_response_matches: false,
+        request: Default::default(),
+    };
+    Ok((
+        ExecutionPrincipal {
+            id: access.virtual_account_id,
+            name: access.name,
+        },
+        ctx,
+    ))
 }
 
 pub(crate) async fn check_virtual_quota(
@@ -113,8 +168,22 @@ pub(crate) async fn resolve_supplier(
     headers: &HeaderMap,
     oauth: axum::Extension<codex2api_storage::VirtualAccess>,
 ) -> Result<(ExecutionPrincipal, SupplierContext)> {
+    resolve_supplier_for(
+        state,
+        headers,
+        oauth,
+        &crate::pool_scheduler::ScheduleRequest::default(),
+    )
+    .await
+}
+pub(crate) async fn resolve_supplier_for(
+    state: &ApiState,
+    headers: &HeaderMap,
+    oauth: axum::Extension<codex2api_storage::VirtualAccess>,
+    request: &crate::pool_scheduler::ScheduleRequest,
+) -> Result<(ExecutionPrincipal, SupplierContext)> {
     let axum::Extension(oauth) = oauth;
-    let ctx = crate::pool_execution::select(state, &oauth, &[]).await?;
+    let ctx = crate::pool_execution::select_for(state, &oauth, request, &[]).await?;
     let account_id = ctx.account.id.clone();
     if oauth.provider_id != ctx.account.provider_id || oauth.provider_id != codex2api_core::CHATGPT
     {
@@ -145,10 +214,6 @@ pub(crate) async fn resolve_supplier(
         ExecutionPrincipal {
             id: oauth.virtual_account_id,
             name: oauth.name,
-            access: AccessCheck {
-                hash: oauth.token_hash,
-                account_id: account_id.to_owned(),
-            },
         },
         ctx,
     ))

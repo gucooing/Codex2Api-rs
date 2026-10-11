@@ -1,58 +1,10 @@
 "use client";
 import { useQuotaClock } from "@/hooks/use-supplier-quotas";
-import { useActions, useErrorToast } from "@/lib/actions";
+import { useErrorToast } from "@/lib/actions";
 import type { SupplierQuota } from "@/lib/api";
-import { request, type Json, type List } from "@/lib/api";
+import { type Json } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
-import { useListResource } from "@/lib/pagination";
 import { useState } from "react";
-import { toast } from "sonner";
-
-export type GrokModel = {
-  id: string;
-  model: string;
-  name?: string;
-  context_window?: number;
-  api_backend: string;
-};
-
-export function useGrokModelCatalog({ id }: { id: string }) {
-  const resource = useListResource<GrokModel, { observed_at: string | null; stale: boolean }>(
-    `/suppliers/grok/${encodeURIComponent(id)}/models`,
-  );
-  const pagination = resource.pagination;
-  const actions = useActions();
-  useErrorToast(resource.error);
-  const handleClick = () =>
-    void actions.run("grok-catalog", async () => {
-      await request<Json>(`/suppliers/grok/${encodeURIComponent(id)}/models`, {
-        method: "POST",
-      });
-      resource.reload();
-    });
-  return { resource, pagination, actions, handleClick } as const;
-}
-
-export function useGrokModelSync({ onSynced }: { onSynced: () => void }) {
-  const actions = useActions();
-  const key = "grok-model-sync";
-  const handleClick = () =>
-    void actions.run(
-      key,
-      async () => {
-        const result = await request<List<{ success: boolean; models?: number }>>(
-          "/models/grok/sync",
-          { method: "POST" },
-        );
-        onSynced();
-        const failed = result.items.filter((i) => !i.success).length;
-        if (failed) toast.error(`${failed} 个 Grok 账户同步失败，其余目录已更新`);
-        else toast.success("Grok 真实模型目录与可用价格预设已同步");
-      },
-      { success: "" },
-    );
-  return { actions, key, handleClick } as const;
-}
 
 export function useGrokOfficialData({
   id,

@@ -93,15 +93,27 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
                 )
                 .await
                 .unwrap();
+            let voice_unavailable = suffix.starts_with("/realtime") || suffix.starts_with("/live");
             assert_eq!(
                 response.status(),
-                StatusCode::TOO_MANY_REQUESTS,
+                if voice_unavailable {
+                    StatusCode::NOT_IMPLEMENTED
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                },
                 "{method} {path}"
             );
             let body: serde_json::Value =
                 serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                     .unwrap();
-            assert_eq!(body["error"]["code"], "user_agent_blocked");
+            assert_eq!(
+                body["error"]["code"],
+                if voice_unavailable {
+                    "voice_calls_unavailable"
+                } else {
+                    "user_agent_blocked"
+                }
+            );
         }
     }
     assert!(

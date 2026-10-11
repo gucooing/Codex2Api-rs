@@ -42,29 +42,26 @@ pub(crate) async fn forward(
             )?;
         }
     }
-    let (credential, ctx) = crate::providers::chatgpt::access::resolve_supplier(
-        &state,
-        &headers,
-        Extension(access.clone()),
-    )
-    .await?;
-    if let Some(id) = value["conversation_id"].as_str() {
-        let (source, _) = state
-            .storage
-            .virtual_resource(&access.virtual_account_id, "conversation", id)
-            .await?
-            .ok_or_else(super::virtual_data::not_found)?;
-        if source.as_deref() != Some(ctx.account.id.as_str()) {
-            return Err(super::virtual_data::not_found());
-        }
-    } else if matches!(
-        path,
-        "/backend-api/f/conversation/resume" | "/backend-api/stop_conversation"
-    ) {
-        return Err(crate::ApiError::bad_request(
-            "A conversation ID is required.",
-        ));
+    let conduit=if let Some(local)=headers.get("x-conduit-token") {
+        let local=local.to_str().map_err(|_|crate::ApiError::invalid_token())?;
+        Some(state.storage.owned_virtual_conduit(&access.virtual_account_id,local).await?.ok_or_else(crate::ApiError::invalid_token)?)
+    } else {None};
+    let source=if let Some(id)=value["conversation_id"].as_str(){
+        Some(state.storage.virtual_resource(&access.virtual_account_id,"conversation",id).await?.and_then(|(source,_)|source).ok_or_else(super::virtual_data::not_found)?)
+    }else{
+        if matches!(path,"/backend-api/f/conversation/resume"|"/backend-api/stop_conversation"){return Err(crate::ApiError::bad_request("A conversation ID is required."))}
+        None
+    };
+    if let (Some(source),Some((conduit_source,_)))=(&source,&conduit) && source!=conduit_source {
+        return Err(crate::ApiError::invalid_token());
     }
+    let source=source.or_else(||conduit.as_ref().map(|(source,_)|source.clone()));
+    let (credential,mut ctx)=if let Some(source)=source.as_deref(){
+        crate::providers::chatgpt::access::resolve_owned_supplier(&state,&headers,Extension(access.clone()),source).await?
+    }else{
+        let schedule=crate::providers::chatgpt::scheduling::request(&headers,&value);
+        crate::providers::chatgpt::access::resolve_supplier_for(&state,&headers,Extension(access.clone()),&schedule).await?
+    };
     let execution = crate::execution::ExecutionContext::new(
         state.storage.clone(),
         &ctx.account,
@@ -72,7 +69,7 @@ pub(crate) async fn forward(
         &credential.name,
         path,
         "http",
-    );
+    ).with_supplier_permit(ctx.permit.take());
     if path == "/backend-api/f/conversation/prepare" || value.get("model").is_some() {
         execution
             .authorize(
@@ -81,12 +78,7 @@ pub(crate) async fn forward(
             )
             .await?;
     }
-    if let Some(local) = headers.get("x-conduit-token").and_then(|h| h.to_str().ok()) {
-        let upstream = state
-            .storage
-            .virtual_conduit(&access.virtual_account_id, &ctx.account.id, local)
-            .await?
-            .ok_or_else(crate::ApiError::invalid_token)?;
+    if let Some((_,upstream)) = conduit {
         headers.insert(
             "x-conduit-token",
             upstream

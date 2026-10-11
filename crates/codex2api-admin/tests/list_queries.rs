@@ -432,7 +432,7 @@ async fn account_record_pages_keep_owner_and_json_paths_bound() {
 }
 
 #[tokio::test]
-async fn grok_observed_catalog_pages_only_its_persisted_supplier_snapshot() {
+async fn supplier_models_read_only_their_own_snapshot() {
     let f = Fixture::new().await;
     let mut input = codex2api_storage::NewSupplierAccount::pending_identity(
         "list-grok-installation",
@@ -455,18 +455,36 @@ async fn grok_observed_catalog_pages_only_its_persisted_supplier_snapshot() {
     let models:Vec<_>=(0..27).map(|i|json!({"id":format!("list-grok-{i:02}"),"model":format!("list-grok-{i:02}"),"api_backend":"responses"})).collect();
     assert!(
         f.storage
-            .save_grok_catalog(&account.id, revision, &json!({"models":models}), &models)
+            .sync_supplier_models(&account.id, revision, &models)
             .await
             .unwrap()
     );
     let page = f
+        .get(&format!("/admin/api/suppliers/{}/models", account.id))
+        .await;
+    check_page(&page, 27, 1, 20, 20);
+    assert_eq!(page["items"][0]["model"], "list-grok-00");
+    assert!(page["items"][0]["observed_at"].is_string());
+    let last = f
         .get(&format!(
-            "/admin/api/suppliers/grok/{}/models?page=3&page_size=10",
+            "/admin/api/suppliers/{}/models?page=3&page_size=10",
             account.id
         ))
         .await;
-    check_page(&page, 27, 3, 10, 7);
-    assert_eq!(page["items"][0]["model"], "list-grok-20");
-    assert!(page["observed_at"].is_string());
-    assert_eq!(page["stale"], false);
+    check_page(&last, 27, 3, 10, 7);
+    assert_eq!(last["items"][0]["model"], "list-grok-20");
+    let filtered = f
+        .get(&format!(
+            "/admin/api/suppliers/{}/models?search=list-grok-26",
+            account.id
+        ))
+        .await;
+    check_page(&filtered, 1, 1, 20, 1);
+    assert!(
+        f.storage
+            .model_config("grok", "list-grok-00")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

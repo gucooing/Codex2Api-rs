@@ -73,13 +73,19 @@ impl Storage {
         .await?)
     }
     pub async fn model_config(&self, provider: &str, model: &str) -> Result<Option<ModelConfig>> {
-        Ok(
-            sqlx::query_as("SELECT * FROM model_catalog WHERE provider_id=? AND model=?")
-                .bind(provider)
-                .bind(model)
-                .fetch_optional(self.pool())
-                .await?,
-        )
+        let key = format!("model-config:{provider}:{model}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
+        let value = sqlx::query_as("SELECT * FROM model_catalog WHERE provider_id=? AND model=?")
+            .bind(provider)
+            .bind(model)
+            .fetch_optional(self.pool())
+            .await?;
+        self.runtime
+            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
+        Ok(value)
     }
     pub async fn unavailable_models(&self, provider: &str) -> Result<Vec<String>> {
         Ok(sqlx::query_scalar(
@@ -200,6 +206,7 @@ impl Storage {
             .await?;
         }
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(true)
     }
     pub async fn set_model_enabled(
@@ -209,7 +216,9 @@ impl Storage {
         enabled: bool,
         revision: i64,
     ) -> Result<bool> {
-        Ok(sqlx::query("UPDATE model_catalog SET enabled=?,revision=revision+1 WHERE provider_id=? AND model=? AND revision=? AND deleted=0").bind(enabled).bind(provider).bind(model).bind(revision).execute(self.pool()).await?.rows_affected()==1)
+        let changed=sqlx::query("UPDATE model_catalog SET enabled=?,revision=revision+1 WHERE provider_id=? AND model=? AND revision=? AND deleted=0").bind(enabled).bind(provider).bind(model).bind(revision).execute(self.pool()).await?.rows_affected()==1;
+        self.invalidate_runtime_cache();
+        Ok(changed)
     }
     pub async fn delete_model_config(
         &self,
@@ -234,6 +243,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(true)
     }
 }

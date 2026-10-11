@@ -46,6 +46,7 @@ import {
   percentLabel,
   quotaResetLabel,
   quotaWindowLabel,
+  supplierConcurrencyLabel,
   supplierStatusLabel,
 } from "@/lib/supplier-state";
 import {
@@ -572,12 +573,12 @@ export default function SuppliersPage() {
                           </div>
                         </TableCell>
                         <TableCell
-                          hidden={!tableColumns0.isVisible("绑定数")}
+                          hidden={!tableColumns0.isVisible("并发")}
                           className="tabular-nums"
-                          data-label="绑定数"
+                          data-label="并发"
                           role="cell"
                         >
-                          {item.binding_count ?? 0}
+                          {supplierConcurrencyLabel(item)}
                         </TableCell>
                         <TableCell
                           hidden={!tableColumns0.isVisible("最近使用")}
@@ -652,7 +653,10 @@ export default function SuppliersPage() {
                     },
                     { label: "套餐到期", value: date(item.subscription_expires_at) },
                     { label: "最近使用", value: date(item.last_used_at) },
-                    { label: "绑定数", value: item.binding_count ?? 0 },
+                    {
+                      label: "并发",
+                      value: supplierConcurrencyLabel(item),
+                    },
                   ].map(({ label, value }) => (
                     <Field
                       key={label}

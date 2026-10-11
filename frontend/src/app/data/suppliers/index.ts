@@ -22,6 +22,96 @@ import { commonSupplierTags, selectedSupplierProvider } from "@/lib/supplier-sel
 import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
+type SupplierModel = { model: string; source: "upstream" | "custom"; observed_at: string | null };
+type SupplierModelOption = { model: string; enabled: boolean };
+export function useSupplierModels(id: string) {
+  const path = `/suppliers/${encodeURIComponent(id)}/models`;
+  const resource = useListResource<SupplierModel>(path);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<SupplierModelOption | null>(null);
+  const options = useResource<List<SupplierModelOption>>(
+    `${path}/options${query({ search })}`,
+    search ? 250 : 0,
+  );
+  const actions = useActions();
+  useErrorToast(resource.error);
+  useErrorToast(options.error);
+  const sync = () =>
+    void actions.run("sync-models", async () => {
+      if (!resource.ready) throw new Error("请先加载可用模型");
+      await request(`${path}/sync`, { method: "POST" });
+      resource.reload();
+    });
+  const add = () =>
+    void actions.run("add-model", async () => {
+      if (!resource.ready || !options.ready || !selected) throw new Error("请选择计费配置中的模型");
+      await request(path, { method: "POST", body: { model: selected.model } });
+      setSelected(null);
+      resource.reload();
+    });
+  const remove = (model: string) =>
+    void actions.run(`remove-${model}`, async () => {
+      if (!resource.ready) throw new Error("请先加载可用模型");
+      await request(path, { method: "DELETE", body: { model } });
+      resource.reload();
+    });
+  return {
+    resource,
+    options,
+    search,
+    setSearch,
+    selected,
+    setSelected,
+    actions,
+    sync,
+    add,
+    remove,
+  };
+}
+type Scheduling = {
+  concurrency: number;
+  priority: number;
+  load_factor: number | null;
+  revision: number;
+  runtime: { active: number; waiting: number; error_rate: number; ttft_ms: number | null };
+};
+export function useSupplierScheduling(id: string) {
+  const resource = useResource<Scheduling>(`/suppliers/${encodeURIComponent(id)}/scheduling`);
+  const [draft, setDraft] = useState<
+    Partial<Record<"concurrency" | "priority" | "load_factor", string>>
+  >({});
+  const actions = useActions();
+  useErrorToast(resource.error);
+  const value = (key: "concurrency" | "priority" | "load_factor") =>
+    draft[key] ?? (resource.data?.[key] == null ? "" : String(resource.data[key]));
+  const update = (key: "concurrency" | "priority" | "load_factor", text: string) =>
+    setDraft((previous) => ({ ...previous, [key]: text }));
+  const submit = (event: React.SubmitEvent<HTMLFormElement>) =>
+    actions.submit(event, "supplier-scheduling", async () => {
+      if (!resource.ready || !resource.data) throw new Error("请先加载调度配置");
+      const integer = (key: "concurrency" | "priority" | "load_factor", optional = false) => {
+        const text = value(key).trim();
+        if (optional && !text) return null;
+        const number = Number(text);
+        if (!text || !Number.isInteger(number) || number < (optional ? 1 : 0) || number > 1_000_000)
+          throw new Error("请填写有效整数，负载容量须大于 0");
+        return number;
+      };
+      await request(`/suppliers/${encodeURIComponent(id)}/scheduling`, {
+        method: "PUT",
+        body: {
+          concurrency: integer("concurrency"),
+          priority: integer("priority"),
+          load_factor: integer("load_factor", true),
+          revision: resource.data.revision,
+        },
+      });
+      setDraft({});
+      resource.reload();
+    });
+  return { resource, actions, value, update, submit };
+}
+
 export function useFingerprintEditor({
   account,
   onSaved,
@@ -119,7 +209,6 @@ export function useOAuthWizard({
     const value = mergeOAuth(flow, response);
     setFlow(value);
     if (value.status === "complete") {
-      if (value.model_sync_error) toast.error(value.model_sync_error);
       onComplete();
     } else setPollAfter(Date.now() + (value.interval ?? 5) * 1000);
   };
@@ -200,11 +289,7 @@ export function useOAuthWizard({
           if (result.status !== "complete") throw new Error("授权未完成");
           updateResult(
             "complete",
-            result.model_sync_error
-              ? "授权成功，模型目录待同步"
-              : result.reused_existing
-                ? "已更新原账户，保留原指纹"
-                : "添加成功",
+            result.reused_existing ? "已更新原账户，保留原指纹" : "添加成功",
             result.supplier_id,
           );
         } catch {
@@ -372,7 +457,7 @@ export const validSupplierFilters = (value: { status: string; provider_id: strin
 export function useSuppliersPage() {
   const tableColumns0 = useColumnVisibility(
     "components/suppliers.tsx:0",
-    ["供应账户", "提供商 / 订阅", "套餐到期", "状态", "额度", "标签", "绑定数", "最近使用", "操作"],
+    ["供应账户", "提供商 / 订阅", "套餐到期", "状态", "额度", "标签", "并发", "最近使用", "操作"],
     ["供应账户", "状态", "操作"],
   );
   const mobile = useIsMobile();

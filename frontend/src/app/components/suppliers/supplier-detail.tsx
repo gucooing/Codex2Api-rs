@@ -1,4 +1,6 @@
 "use client";
+import { SupplierModels } from "@/app/components/suppliers/supplier-models";
+import { SupplierScheduling } from "@/app/components/suppliers/supplier-scheduling";
 import { FingerprintEditor } from "@/app/components/suppliers/fingerprint-editor";
 import { LocalUsage } from "@/app/components/suppliers/local-usage";
 import { OAuthWizard } from "@/app/components/suppliers/oauth-wizard";
@@ -41,7 +43,6 @@ export function SupplierDetail() {
       </Empty>
     );
   const ChannelOfficialData = supplierChannel(account?.provider_id).OfficialData;
-  const ChannelModels = supplierChannel(account?.provider_id).Models;
   return (
     <>
       <div className="flex items-center justify-end gap-2">
@@ -77,7 +78,8 @@ export function SupplierDetail() {
               ["tags", "标签"],
               ["fingerprint", "指纹与网络"],
               ["quota", "官方额度"],
-              ...(ChannelModels ? [["models", "官方模型"]] : []),
+              ["models", "可用模型"],
+              ["scheduling", "调度"],
               ["local-usage", "本地用量"],
               ["usage", supplierChannel(account?.provider_id).settingsLabel],
               ["details", "官方资料"],
@@ -173,7 +175,8 @@ export function SupplierDetail() {
             />
           )}
           {tab === "local-usage" && <LocalUsage account={account} />}
-          {tab === "models" && ChannelModels && <ChannelModels id={id} />}
+          {tab === "models" && <SupplierModels key={id} id={id} />}
+          {tab === "scheduling" && <SupplierScheduling key={id} id={id} />}
           {["quota", "usage", "details", "credits"].includes(tab) && (
             <ChannelOfficialData key={tab} id={id} section={tab} onUpdated={resource.reload} />
           )}

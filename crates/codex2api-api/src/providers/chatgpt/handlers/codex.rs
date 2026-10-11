@@ -4,9 +4,10 @@ use axum::extract::State;
 use axum::extract::{Extension, Path};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use futures::StreamExt;
 
 use crate::error::Result;
-use crate::providers::chatgpt::access::resolve_supplier;
+use crate::providers::chatgpt::access::resolve_supplier_for;
 use crate::state::ApiState;
 
 /// Rebuild official request identity while preserving the conversation and response stream.
@@ -43,9 +44,20 @@ pub async fn forward(
         let path = subpath
             .map(|s| format!("responses/{s}"))
             .unwrap_or_else(|| endpoint.codex_path().into());
-        let (key, ctx) = resolve_supplier(&state, &headers, oauth.clone()).await?;
+        let bytes = body.clone();
+        let inbound = headers.clone();
+        let (schedule, metadata) = tokio::task::spawn_blocking(move || {
+            let value = codex2api_upstream::decode_body(&bytes, &inbound)?;
+            Ok::<_, codex2api_upstream::UpstreamError>((
+                crate::providers::chatgpt::scheduling::request(&inbound, &value),
+                codex2api_upstream::request_metadata_value(&value),
+            ))
+        })
+        .await
+        .map_err(|e| crate::ApiError::internal(e.to_string()))??;
+        let (key, mut ctx) =
+            resolve_supplier_for(&state, &headers, oauth.clone(), &schedule).await?;
         if endpoint == codex2api_upstream::Endpoint::InputTokens {
-            let metadata = codex2api_upstream::request_metadata(&body, &headers)?;
             crate::execution::ExecutionContext::new(
                 state.storage.clone(),
                 &ctx.account,
@@ -58,13 +70,6 @@ pub async fn forward(
             .await?;
         }
         let mut log = if crate::usage::billable(endpoint) {
-            let bytes = body.clone();
-            let inbound = headers.clone();
-            let metadata = tokio::task::spawn_blocking(move || {
-                codex2api_upstream::request_metadata(&bytes, &inbound)
-            })
-            .await
-            .map_err(|e| crate::ApiError::internal(e.to_string()))??;
             Some(
                 crate::execution::ExecutionContext::new(
                     state.storage.clone(),
@@ -74,13 +79,14 @@ pub async fn forward(
                     &format!("/v1/{path}"),
                     "http",
                 )
+                .with_supplier_permit(ctx.permit.take())
                 .start(metadata, start, requested_at)
                 .await?,
             )
         } else {
             None
         };
-        let response = crate::providers::chatgpt::execution::forward(
+        let mut response = crate::providers::chatgpt::execution::forward(
             &state,
             &oauth,
             ctx,
@@ -114,7 +120,16 @@ pub async fn forward(
             log.http_status(status.as_u16());
             log.wrap_with(response, isolate)
         } else {
-            isolate(Body::from_stream(response.bytes_stream()))
+            let permit = response
+                .extensions_mut()
+                .remove::<codex2api_storage::RuntimePermit>();
+            let upstream = response.bytes_stream();
+            isolate(Body::from_stream(futures::stream::unfold(
+                (upstream, permit),
+                |(mut stream, permit)| async move {
+                    stream.next().await.map(|chunk| (chunk, (stream, permit)))
+                },
+            )))
         };
         Ok(forward_response(status, headers, body))
     })

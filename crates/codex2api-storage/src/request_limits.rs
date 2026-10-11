@@ -1,96 +1,86 @@
 use crate::{Result, Storage, StorageError};
-
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VirtualRpmLimit {
     pub rpm: Option<u32>,
     pub default_rpm: u32,
     pub effective_rpm: u32,
+    pub concurrency: Option<u32>,
+    pub default_concurrency: u32,
+    pub effective_concurrency: u32,
 }
-
 impl Storage {
     pub async fn virtual_rpm_limit(&self, owner: &str) -> Result<VirtualRpmLimit> {
-        let rpm: Option<i64> =
-            sqlx::query_scalar("SELECT rpm FROM virtual_rpm_limits WHERE virtual_account_id=?")
-                .bind(owner)
-                .fetch_optional(self.pool())
-                .await?;
-        let default_rpm = self.gateway_settings().await?.default_rpm;
-        let rpm = rpm.map(|n| n as u32);
-        Ok(VirtualRpmLimit {
+        let key = format!("request-limits:{owner}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
+        let (rpm,concurrency):(Option<i64>,Option<i64>)=sqlx::query_as("SELECT (SELECT rpm FROM virtual_rpm_limits WHERE virtual_account_id=?),(SELECT concurrency FROM virtual_concurrency_limits WHERE virtual_account_id=?)").bind(owner).bind(owner).fetch_one(self.pool()).await?;
+        let settings = self.gateway_settings().await?;
+        let rpm = rpm.map(|v| v as u32);
+        let concurrency = concurrency.map(|v| v as u32);
+        let value = VirtualRpmLimit {
             rpm,
-            default_rpm,
-            effective_rpm: rpm.unwrap_or(default_rpm),
-        })
+            default_rpm: settings.default_rpm,
+            effective_rpm: rpm.unwrap_or(settings.default_rpm),
+            concurrency,
+            default_concurrency: settings.default_concurrency,
+            effective_concurrency: concurrency.unwrap_or(settings.default_concurrency),
+        };
+        self.runtime
+            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
+        Ok(value)
     }
-
-    pub async fn save_virtual_rpm_limit(&self, owner: &str, rpm: Option<u32>) -> Result<()> {
-        if rpm.is_some_and(|n| n > 1_000_000) {
+    pub async fn save_virtual_request_limits(
+        &self,
+        owner: &str,
+        rpm: Option<u32>,
+        concurrency: Option<u32>,
+    ) -> Result<()> {
+        if rpm.is_some_and(|v| v > 1_000_000) || concurrency.is_some_and(|v| v > 1_000_000) {
             return Err(StorageError::Constraint(
-                "RPM 须为 0 到 1000000 的整数".into(),
+                "RPM 与并发限制须为 0 到 1000000 的整数".into(),
             ));
         }
-        if let Some(rpm) = rpm {
-            sqlx::query("INSERT INTO virtual_rpm_limits(virtual_account_id,rpm) VALUES(?,?) ON CONFLICT(virtual_account_id) DO UPDATE SET rpm=excluded.rpm")
-                .bind(owner).bind(i64::from(rpm)).execute(self.pool()).await?;
-        } else {
-            sqlx::query("DELETE FROM virtual_rpm_limits WHERE virtual_account_id=?")
-                .bind(owner)
-                .execute(self.pool())
-                .await?;
+        let mut tx = self.pool().begin().await?;
+        for (table, column, value) in [
+            ("virtual_rpm_limits", "rpm", rpm),
+            ("virtual_concurrency_limits", "concurrency", concurrency),
+        ] {
+            if let Some(value) = value {
+                sqlx::query(&format!("INSERT INTO {table}(virtual_account_id,{column}) VALUES(?,?) ON CONFLICT(virtual_account_id) DO UPDATE SET {column}=excluded.{column}")).bind(owner).bind(value).execute(&mut *tx).await?;
+            } else {
+                sqlx::query(&format!("DELETE FROM {table} WHERE virtual_account_id=?"))
+                    .bind(owner)
+                    .execute(&mut *tx)
+                    .await?;
+            }
         }
+        tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
-
-    /// Sliding sixty-second admission window, shared across devices/transports.
-    /// Returns a retry delay in seconds. Peeks never consume admission slots.
+    pub async fn save_virtual_rpm_limit(&self, owner: &str, rpm: Option<u32>) -> Result<()> {
+        self.save_virtual_request_limits(
+            owner,
+            rpm,
+            self.virtual_rpm_limit(owner).await?.concurrency,
+        )
+        .await
+    }
     pub async fn admit_virtual_request(
         &self,
         owner: &str,
         consume: bool,
         now_ms: i64,
     ) -> Result<Option<u32>> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        sqlx::query("DELETE FROM virtual_request_admissions WHERE admitted_at_ms<=?")
-            .bind(now_ms - 60_000)
-            .execute(&mut *tx)
-            .await?;
-        let settings: Option<String> =
-            sqlx::query_scalar("SELECT value FROM meta WHERE key='gateway_settings'")
-                .fetch_optional(&mut *tx)
-                .await?;
-        let default = settings
-            .map(|v| serde_json::from_str::<crate::GatewaySettings>(&v))
-            .transpose()?
-            .unwrap_or_default()
-            .default_rpm;
-        let rpm: Option<i64> =
-            sqlx::query_scalar("SELECT rpm FROM virtual_rpm_limits WHERE virtual_account_id=?")
-                .bind(owner)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let rpm = rpm.unwrap_or(i64::from(default));
-        if rpm == 0 {
-            tx.commit().await?;
-            return Ok(None);
-        }
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM virtual_request_admissions WHERE virtual_account_id=?",
-        )
-        .bind(owner)
-        .fetch_one(&mut *tx)
-        .await?;
-        if count >= rpm {
-            // Also handles administrators lowering the limit during a window.
-            let expiry: i64 = sqlx::query_scalar("SELECT admitted_at_ms+60000 FROM virtual_request_admissions WHERE virtual_account_id=? ORDER BY admitted_at_ms,id LIMIT 1 OFFSET ?")
-                .bind(owner).bind(count-rpm).fetch_one(&mut *tx).await?;
-            tx.commit().await?;
-            return Ok(Some(((expiry - now_ms + 999) / 1000).clamp(1, 60) as u32));
-        }
-        if consume {
-            sqlx::query("INSERT INTO virtual_request_admissions(virtual_account_id,admitted_at_ms) VALUES(?,?)")
-                .bind(owner).bind(now_ms).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(None)
+        self.runtime
+            .rpm(
+                owner,
+                self.virtual_rpm_limit(owner).await?.effective_rpm,
+                consume,
+                now_ms,
+            )
+            .await
     }
 }

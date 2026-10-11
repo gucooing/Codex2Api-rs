@@ -147,11 +147,25 @@ impl IntoResponse for ApiError {
                 error_type,
                 message,
                 code,
-            } => openai_response(status, error_type, message, code),
+            } => {
+                let mut response = openai_response(status, error_type, message, code);
+                if code == Some("supplier_concurrency_exceeded") {
+                    response
+                        .headers_mut()
+                        .insert("retry-after", axum::http::HeaderValue::from_static("1"));
+                }
+                response
+            }
             Self::Upstream(err) => upstream_error_response(err),
             Self::Storage(StorageError::AccountNotFound(_)) => {
                 ApiError::invalid_token().into_response()
             }
+            Self::Storage(StorageError::Runtime) => openai_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                "Request scheduling is temporarily unavailable.",
+                Some("runtime_state_unavailable"),
+            ),
             Self::Storage(err) => {
                 tracing::error!(error = %err, "storage error");
                 openai_response(
@@ -295,6 +309,18 @@ fn service_error_response(error: codex2api_service::ServiceError) -> Response {
             if let Ok(value) = retry_after.to_string().parse() {
                 response.headers_mut().insert("retry-after", value);
             }
+            return response;
+        }
+        ServiceError::ConcurrencyExceeded => {
+            let mut response = openai_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                error.to_string(),
+                Some("virtual_concurrency_exceeded"),
+            );
+            response
+                .headers_mut()
+                .insert("retry-after", http::HeaderValue::from_static("1"));
             return response;
         }
         ServiceError::Storage(_) => {

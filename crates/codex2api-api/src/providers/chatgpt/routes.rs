@@ -3,8 +3,8 @@ use super::handlers::{self, backend, chatgpt, codex, oauth, realtime, system, we
 use crate::ApiState;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Extension};
-use axum::routing::{get, patch, post};
-use codex2api_upstream::{BackendEndpoint, ChatgptEndpoint, Endpoint, RealtimeKind};
+use axum::routing::{any, get, patch, post};
+use codex2api_upstream::{BackendEndpoint, ChatgptEndpoint, Endpoint};
 
 /// Complete Codex-client API, including existing compatibility prefixes.
 pub fn routes(state: ApiState) -> Router<ApiState> {
@@ -197,16 +197,10 @@ pub fn router(state: ApiState) -> Router {
             "/backend-api/o11y/v1/traces",
             post(chatgpt::forward).layer(Extension(ChatgptEndpoint::Traces)),
         )
-        .route(
-            "/backend-api/settings/voices",
-            get(chatgpt::forward).layer(Extension(ChatgptEndpoint::Voices)),
-        )
+        .route("/backend-api/settings/voices", any(realtime::unavailable))
         .nest(
             "/backend-api/codex",
-            codex_routes().route(
-                "/{call_id}",
-                get(realtime::socket).layer(Extension(RealtimeKind::CodexSideband)),
-            ),
+            codex_routes().route("/{call_id}", any(realtime::unavailable)),
         )
         .nest("/backend-api/wham", backend_routes())
         .route(
@@ -446,34 +440,19 @@ fn codex_routes() -> Router<ApiState> {
             "/memories/trace_summarize",
             post(codex::forward).layer(Extension(Endpoint::MemorySummary)),
         )
-        // Realtime: WebSocket, call creation and existing-call sideband.
-        .route(
-            "/realtime",
-            get(realtime::socket).layer(Extension(RealtimeKind::Realtime)),
-        )
-        .route(
-            "/realtime/calls",
-            post(realtime::call).layer(Extension(RealtimeKind::Realtime)),
-        )
-        .route(
-            "/live",
-            get(realtime::socket)
-                .post(realtime::call)
-                .layer(Extension(RealtimeKind::Live)),
-        )
-        .route(
-            "/live/{call_id}",
-            get(realtime::socket).layer(Extension(RealtimeKind::Live)),
-        )
+        // Voice calls are intentionally unavailable, including old client aliases.
+        .route("/realtime", any(realtime::unavailable))
+        .route("/realtime/calls/{call_id}", any(realtime::unavailable))
+        .route("/realtime/calls", any(realtime::unavailable))
+        .route("/live", any(realtime::unavailable))
+        .route("/live/{call_id}", any(realtime::unavailable))
 }
 
 /// Relative to /backend-api/wham; the other mounts above are compatibility aliases.
 fn backend_routes() -> Router<ApiState> {
     Router::new()
-        .route(
-            "/realtime/calls",
-            post(realtime::call).layer(Extension(RealtimeKind::Wham)),
-        )
+        .route("/realtime/calls/{call_id}", any(realtime::unavailable))
+        .route("/realtime/calls", any(realtime::unavailable))
         .route(
             "/settings/configs/user-preferences",
             get(handlers::virtual_operations::cloud_preferences_schema),

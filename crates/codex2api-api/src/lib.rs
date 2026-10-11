@@ -3,6 +3,7 @@
 mod error;
 mod execution;
 mod pool_execution;
+mod pool_scheduler;
 mod providers;
 mod public_output;
 mod response;

@@ -5,7 +5,9 @@ use serde_json::json;
 #[tokio::test]
 async fn gateway_settings_require_session_and_csrf_and_persist_mode_and_rules() {
     let f = Fixture::new().await;
-    let mut value = json!({"ua_mode":"whitelist","ua_rules":["codex*","desktop"]});
+    let mut value = serde_json::to_value(codex2api_storage::GatewaySettings::default()).unwrap();
+    value["ua_mode"] = "whitelist".into();
+    value["ua_rules"] = json!(["codex*", "desktop"]);
     assert_eq!(
         f.request("PUT", "/admin/api/settings/gateway", value.clone())
             .await

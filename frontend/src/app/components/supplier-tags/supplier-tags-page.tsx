@@ -175,9 +175,7 @@ export default function SupplierTagsPage() {
                         disabled={
                           !tags.ready || tag.binding_count > 0 || actions.isBusy(`tag-${tag.id}`)
                         }
-                        title={
-                          tag.binding_count > 0 ? "请先更换使用此标签的虚拟账户绑定" : undefined
-                        }
+                        title={tag.binding_count > 0 ? "请先更换使用此标签的号池配置" : undefined}
                         onClick={() => handleClick(tag)}
                       >
                         删除

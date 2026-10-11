@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use sqlx::migrate::{Migrate, Migration};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
@@ -24,6 +25,7 @@ const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_ac
 
 #[derive(Clone, Debug)]
 pub struct Storage {
+    pub(crate) runtime: std::sync::Arc<crate::runtime::Runtime>,
     pool: SqlitePool,
     db_path: PathBuf,
     pub(crate) jwt_keys:
@@ -105,6 +107,7 @@ impl Storage {
             .await?;
 
         let storage = Self {
+            runtime: crate::runtime::Runtime::new(&db_path).await?,
             pool,
             db_path,
             jwt_keys: std::sync::Arc::new(std::array::from_fn(|_| tokio::sync::OnceCell::new())),
@@ -131,7 +134,39 @@ impl Storage {
         sqlx::query("PRAGMA foreign_keys=OFF")
             .execute(&mut *connection)
             .await?;
-        sqlx::migrate!("./migrations").run(&mut *connection).await?;
+        let mut migrator = sqlx::migrate!("./migrations");
+        connection.ensure_migrations_table().await?;
+        // Migration 46 was also applied by Windows builds with CRLF. Match
+        // those exact historical bytes without rewriting checksums or accepting
+        // any SQL changes; new databases keep the canonical LF migration.
+        if let Some(applied) = connection
+            .list_applied_migrations()
+            .await?
+            .into_iter()
+            .find(|migration| migration.version == 46)
+            && let Some(migration) = migrator
+                .migrations
+                .to_mut()
+                .iter_mut()
+                .find(|migration| migration.version == 46)
+            && migration.checksum != applied.checksum
+        {
+            let windows_migration = Migration::new(
+                migration.version,
+                migration.description.clone(),
+                migration.migration_type,
+                migration
+                    .sql
+                    .replace("\r\n", "\n")
+                    .replace('\n', "\r\n")
+                    .into(),
+                migration.no_tx,
+            );
+            if windows_migration.checksum == applied.checksum {
+                *migration = windows_migration;
+            }
+        }
+        migrator.run(&mut *connection).await?;
         Ok(())
     }
 
@@ -618,7 +653,7 @@ impl Storage {
         .await?;
         crate::supplier_health::complete_authorization(&mut tx, &account.id, revision).await?;
         tx.commit().await?;
-        self.refresh_supplier_bindings(&account.id).await?;
+        self.invalidate_runtime_cache();
         Ok(account)
     }
 
@@ -778,26 +813,19 @@ impl Storage {
         if changed.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(id.to_owned()));
         }
-        self.refresh_supplier_bindings(id).await?;
+        self.invalidate_runtime_cache();
         self.require_account(id).await
     }
 
-    pub async fn touch_account(&self, id: &str) -> Result<SupplierAccount> {
-        let now = now_rfc3339();
-        let res = sqlx::query(
-            "UPDATE supplier_accounts SET last_used_at = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(&now)
-        .bind(&now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        if res.rows_affected() == 0 {
-            return Err(StorageError::AccountNotFound(id.to_string()));
+    pub async fn touch_account(&self, id: &str) -> Result<()> {
+        if self.runtime.claim_touch(&format!("touch-supplier:{id}")) {
+            sqlx::query("UPDATE supplier_accounts SET last_used_at=? WHERE id=?")
+                .bind(now_rfc3339())
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
         }
-        self.get_account(id)
-            .await?
-            .ok_or_else(|| StorageError::AccountNotFound(id.to_string()))
+        Ok(())
     }
 
     pub async fn delete_account(&self, id: &str) -> Result<bool> {
@@ -811,6 +839,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.runtime.invalidate();
         Ok(res.rows_affected() > 0)
     }
 
@@ -845,6 +874,7 @@ impl Storage {
         if res.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account.id.clone()));
         }
+        self.runtime.invalidate();
         self.get_account(&account.id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(account.id.clone()))
@@ -919,7 +949,7 @@ impl Storage {
         crate::supplier_health::complete_authorization(&mut tx, &tokens.account_id, revision)
             .await?;
         tx.commit().await?;
-        self.refresh_supplier_bindings(&tokens.account_id).await?;
+        self.invalidate_runtime_cache();
         Ok(row)
     }
 

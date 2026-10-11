@@ -33,7 +33,6 @@ zstd.workspace = true
 tokio-tungstenite.workspace = true
 tungstenite.workspace = true
 tokio-rustls.workspace = true
-multer = "3"
 
 [dev-dependencies]
 axum.workspace = true

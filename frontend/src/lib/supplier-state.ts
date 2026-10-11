@@ -1,5 +1,13 @@
 import type { SupplierQuotaWindow, Supplier } from "./api";
 
+export function supplierConcurrencyLabel(
+  supplier: Pick<Supplier, "active_requests" | "concurrency">,
+) {
+  const active = supplier.active_requests ?? "—";
+  const limit = supplier.concurrency === 0 ? "∞" : (supplier.concurrency ?? "—");
+  return `${active} / ${limit}`;
+}
+
 export const supplierStatusLabel = (status: Supplier["status"]) =>
   ({
     active: "正常",

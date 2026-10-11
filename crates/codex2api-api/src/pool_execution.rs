@@ -14,6 +14,10 @@ use axum::body::Bytes;
 #[derive(Clone)]
 pub(crate) struct SupplierContext {
     pub account: codex2api_storage::SupplierAccount,
+    pub reused_affinity: bool,
+    pub previous_response_matches: bool,
+    pub permit: Option<codex2api_storage::RuntimePermit>,
+    pub request: crate::pool_scheduler::ScheduleRequest,
 }
 use codex2api_storage::VirtualAccess;
 use codex2api_upstream::{SupplierFailure, UpstreamError};
@@ -31,25 +35,46 @@ pub(crate) fn exhausted() -> ApiError {
     )
 }
 
+#[cfg(test)]
 pub(crate) async fn select(
     state: &ApiState,
     oauth: &VirtualAccess,
     excluded: &[String],
 ) -> Result<SupplierContext> {
-    // Refresh the consumer credential on every internal attempt as well.
+    select_for(
+        state,
+        oauth,
+        &crate::pool_scheduler::ScheduleRequest::default(),
+        excluded,
+    )
+    .await
+}
+pub(crate) async fn select_for(
+    state: &ApiState,
+    oauth: &VirtualAccess,
+    request: &crate::pool_scheduler::ScheduleRequest,
+    excluded: &[String],
+) -> Result<SupplierContext> {
     let access = state
         .storage
         .virtual_access(&oauth.token_hash)
         .await?
         .ok_or_else(ApiError::invalid_token)?;
-    let id = state
-        .storage
-        .select_pool_supplier(&access.virtual_account_id, &access.provider_id, excluded)
-        .await?
-        .ok_or_else(exhausted)?;
-    Ok(SupplierContext {
-        account: state.storage.require_account(&id).await?,
-    })
+    if request.model.is_some() {
+        codex2api_service::ExecutionService::new(state.storage.clone())
+            .authorize(
+                &access.virtual_account_id,
+                &access.provider_id,
+                codex2api_service::ExecutionRequest {
+                    kind: codex2api_core::ExecutionKind::InspectModel,
+                    model: request.model.as_deref(),
+                    service_tier: None,
+                    image_size: None,
+                },
+            )
+            .await?;
+    }
+    crate::pool_scheduler::select(state, &access, request, excluded).await
 }
 
 pub(crate) async fn observe(
@@ -267,6 +292,9 @@ where
     loop {
         if let Some(log) = log {
             log.rebind_supplier(&ctx.account).await?;
+            if let Some(permit) = ctx.permit.take() {
+                log.set_supplier_permit(permit);
+            }
         }
         let mut revision = state
             .storage
@@ -283,7 +311,12 @@ where
         }
         .await;
         match result {
-            Ok(response) => return Ok(response),
+            Ok(mut response) => {
+                if let Some(permit) = ctx.permit.take() {
+                    response.extensions_mut().insert(permit);
+                }
+                return Ok(response);
+            }
             Err(error) => {
                 revision = error.auth_revision().or(revision);
                 let Some(mut failure) = error
@@ -299,7 +332,6 @@ where
                 {
                     match recover_stream_auth(state, &ctx, revision).await? {
                         None => {
-                            ctx = select(state, oauth, &excluded).await?;
                             continue;
                         }
                         Some(rejection) => failure = rejection,
@@ -307,21 +339,14 @@ where
                 }
                 observe(state, &ctx.account.id, revision, &failure).await?;
                 if let Some(log) = log {
-                    let cause = match &failure {
-                        SupplierFailure::QuotaExhausted { code, .. } => {
-                            codex2api_upstream::ResponseFailure::new(
-                                Some(429),
-                                Some(code),
-                                Some("Supplier temporarily unavailable"),
-                            )
-                        }
-                        SupplierFailure::Authentication
-                        | SupplierFailure::PaymentRequired { .. } => error.failure(),
-                    };
-                    log.supplier_attempt_failed(cause);
+                    log.supplier_attempt_failed();
                 }
                 excluded.push(ctx.account.id.clone());
-                ctx = select(state, oauth, &excluded).await?;
+                if let Some(log) = log {
+                    log.release_supplier_permit();
+                }
+                ctx.permit = None;
+                ctx = select_for(state, oauth, &ctx.request, &excluded).await?;
                 if let Some(log) = log {
                     log.retry_generation();
                 }
@@ -481,7 +506,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(route.supplier_account_id, original.supplier_account_id);
+            assert_eq!(route.tag_id, original.tag_id);
             assert_eq!(route.revision, original.revision);
         }
         let frame = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"Please try again in 7s.\"}}}\n\n";
@@ -551,6 +576,13 @@ pub(crate) mod tests {
         let storage = Storage::open(dir.path().join("http-pool.sqlite"))
             .await
             .unwrap();
+        storage
+            .sync_supported_models(&codex2api_upstream::supported_models())
+            .await
+            .unwrap();
+        let mut settings = storage.gateway_settings().await.unwrap();
+        settings.scheduler_mode = "traditional".into();
+        storage.save_gateway_settings(&settings).await.unwrap();
         let accounts = SupplierAccountStore::open(storage.clone());
         let mut ids = Vec::new();
         for _ in 0..2 {
@@ -580,6 +612,17 @@ pub(crate) mod tests {
                 )
                 .await
                 .unwrap();
+            storage.add_supplier_model(&a.id, "gpt-5.5").await.unwrap();
+            storage
+                .save_supplier_scheduling(
+                    &a.id,
+                    &codex2api_storage::SupplierScheduling {
+                        priority: ids.len() as i32,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
             ids.push(a.id);
         }
         let owner = PlatformAccount {
@@ -605,7 +648,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         storage
-            .save_pool_route(&owner.id, "chatgpt", Some("pool"), Some(&ids[0]), None)
+            .save_pool_route(&owner.id, "chatgpt", Some("pool"), None)
             .await
             .unwrap();
         let device = storage
@@ -675,11 +718,9 @@ pub(crate) mod tests {
         }).await.unwrap();
         assert_eq!(
             storage
-                .execution_route(&owner.id, "chatgpt")
+                .select_pool_supplier(&owner.id, "chatgpt", &[])
                 .await
                 .unwrap()
-                .unwrap()
-                .supplier_account_id
                 .as_deref(),
             Some(ids[1].as_str())
         );

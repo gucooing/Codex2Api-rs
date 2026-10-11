@@ -5,7 +5,6 @@ use sqlx::FromRow;
 pub struct ExecutionRoute {
     pub virtual_account_id: String,
     pub provider_id: String,
-    pub supplier_account_id: Option<String>,
     pub tag_id: Option<String>,
     pub revision: i64,
 }

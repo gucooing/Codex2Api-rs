@@ -17,7 +17,10 @@ pub struct RequestMetadata {
 }
 
 pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetadata> {
-    let value = decode_body(body, headers)?;
+    Ok(request_metadata_value(&decode_body(body, headers)?))
+}
+
+pub fn request_metadata_value(value: &Value) -> RequestMetadata {
     let image_input_sizes = value
         .get("images")
         .and_then(Value::as_array)
@@ -34,7 +37,7 @@ pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetad
                 .map(|size| vec![size])
         })
         .filter(|items| !items.is_empty());
-    Ok(RequestMetadata {
+    RequestMetadata {
         model: value
             .get("model")
             .and_then(Value::as_str)
@@ -53,7 +56,7 @@ pub fn request_metadata(body: &[u8], headers: &HeaderMap) -> Result<RequestMetad
             .map(|s| s.chars().take(64).collect()),
         image_input_sizes,
         generate: value.get("generate").and_then(Value::as_bool),
-    })
+    }
 }
 
 fn image_input_resolution(value: &Value) -> Option<String> {

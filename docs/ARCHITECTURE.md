@@ -69,9 +69,75 @@ quota snapshots and historical attribution survive upgrades.
 
 Consumer login identities share `accounts` and `users`, with immutable `users.kind` (`regular` or `virtual`). This is storage reuse, not a shared business domain: virtual users are OAuth-only and administered exclusively in Virtual accounts. Ordinary user lists, subscription management, wallets, orders, records and user statistics exclude them. `platform_accounts` owns the stable execution/client identity, provider, entitlements and revision, uniquely keyed by `(user_id, provider_id)`. An ordinary user has an identity per configured platform; a virtual user has one administrator-managed platform identity. Supplier accounts and administrator sessions remain separate.
 
- A consumer's provider is fixed at creation; execution routes may bind
-only suppliers of that provider. ChatGPT and Grok have independent protocol adapters.
+A consumer's provider is fixed at creation; execution routes select
+only pools of that provider. ChatGPT and Grok have independent protocol adapters.
 See [Grok](GROK.md) for its authentication, model and client contracts.
+
+## Supplier pools and runtime state
+
+`execution_routes` stores only a pool tag and revision, never a fixed supplier.
+Each generation filters enabled, authorized suppliers by the requested model and
+observed availability before scheduling. Supplier model lists live in
+`supplier_models`, separately from the administrator billing catalog. A supplier
+with no configured models cannot serve generation requests. Discovery replaces
+only that supplier's upstream entries and preserves its custom entries; custom
+additions must already exist in the same provider's billing catalog, even if
+unpriced or disabled there. Neither operation changes catalog enablement or prices.
+Migration retains existing Grok discoveries in this common supplier list; ChatGPT
+suppliers need an explicit discovery or custom selection.
+
+Session affinity stores an account ID with a TTL. The Redis key includes the
+provider, pool tag, consumer identity and session hash so ownership remains
+isolated. New selections use `SET`; successful reuse conditionally renews the same
+value with `EXPIRE`. Invalid mappings are conditionally deleted. ChatGPT uses
+session headers, `prompt_cache_key`, then a model/system/tools/first-user content
+seed. Grok inserts `X-Grok-Conv-Id` before the cache key and a valid `resp_*`
+previous-response seed before content, then hashes
+`grok-affinity:v1:<model>:<seed>`. Switching Grok models produces separate affinity.
+Only hashes and account IDs are retained, never conversation contents.
+
+The default advanced scheduler scores normalized priority, load, queue, error
+EWMA and first-token-latency EWMA with weights `1, 1, 0.7, 0.8, 0.5`. Lower
+priority numbers are preferred. Load is the floored percentage of active plus
+waiting requests over positive `load_factor`, otherwise positive concurrency,
+otherwise one; this denominator never changes the actual slot limit. Equal
+priorities score one and missing/equal latency scores 0.5. EWMA uses 0.8 of the old
+value and 0.2 of each completed attempt; the first valid latency initializes it.
+Optional sticky weighting adds three for the session owner and five for a movable
+previous-response owner. The top seven candidates are considered by default;
+a qualifying previous owner, then session owner, leads the order, otherwise a
+seeded weighted permutation uses `score - minimum + 1`. Selection still requires
+an atomic slot acquisition. The traditional option orders under-capacity
+candidates by priority, load and least-recent use, breaking ties by the session
+seed; unlimited suppliers remain eligible even above the load denominator.
+
+Hard affinity is the default. A healthy owner is reused and renewed. Busy owners
+can wait for the configured timeout (default ten seconds); with escape enabled,
+busy or unhealthy owners (error EWMA at least 0.5 or latency at least fifteen
+seconds) allow a different candidate while preserving the original session
+mapping. An unmigratable `previous_response_id` requires its original supplier,
+including after reconnecting; a missing or unavailable owner returns
+`supplier_context_required`. Known full WS context permits safe supplier changes.
+
+`CODEX2API_REDIS_URL` optionally moves affinity, response ownership, rolling RPM
+and renewable concurrency leases to Redis. `CODEX2API_REDIS_PREFIX` isolates
+independent deployments sharing a Redis database; the default hashes the absolute
+SQLite path. In containers with the same internal SQLite path, explicitly use
+different prefixes for independent installations. A configured Redis outage fails
+new admissions closed. Without a URL, bounded process-local state implements the
+same policy and is cleared at restart. Concurrency leases last ninety seconds and
+renew every twenty seconds; release and expiry cover both normal completion and
+process loss. A local slot guard also prevents a Redis restart from admitting
+more than the single process's configured capacity.
+
+SQLite remains authoritative for identity, credentials, entitlements, model
+configuration and immutable accounting. Pool candidates and policy/price
+snapshots use bounded in-process caches, invalidated by administrator and supplier
+state writes; authorization and revocation remain live reads. Scheduling, RPM and
+slot acquisition take no SQLite write lock. Last-used timestamp writes coalesce
+for sixty seconds. Generation budget checks read current spending windows without
+scanning lifetime billing summaries, and price snapshots reuse an invalidated
+cache while existing request snapshots remain immutable.
 
 ## Upstream identity and transport
 
@@ -91,16 +157,13 @@ not forged TLS/JA3.
 Responses serialization places `model`, `stream` and an explicitly supplied
 `service_tier` before large input fields. WebSocket `response.create` places its
 `type` first. This ordering does not add missing fields or alter nested payloads,
-Cyber access-program selections, warmups, interrupts or Realtime messages.
+Cyber access-program selections, warmups or interrupts.
 
-Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags;
-each consumer selects one tag and keeps a temporary supplier assignment. SQLite
-serializes candidate counting and assignment in one write transaction. Confirmed supplier outages repair affected assignments. New or
-unavailable assignments select the healthy member with the fewest total current
-bindings across all tags; healthy assignments stay sticky. Manual selection is
-restricted to available members of that pool. Removing a member clears affected
-assignments; the next request selects another member. Referenced tags cannot be
-deleted. Migration preserves old isolation with one migration tag per bound supplier.
+Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags.
+Standalone virtual accounts choose one pool; ordinary subscriptions inherit the
+effective plan's pool. Selection is per generation with runtime affinity and
+concurrency, as described above; it never counts or persists fixed assignments.
+Referenced tags cannot be deleted. Existing migrated tags are retained.
 
 Supplier tag definitions are managed on their own administrator page. Account
 detail and list batch editing submit a complete checked tag set, limited to the
@@ -114,7 +177,7 @@ billing rejection and quota exhaustion. The administrator `enabled` flag control
 intent only; it can be changed in every availability state. Successful explicit
 reauthorization clears prior failure state in the same transaction as credentials,
 starts a new credential revision even for identical tokens, preserves manual
-disablement and frozen identity, and repairs eligible pool assignments. No manual
+disablement and frozen identity, and invalidates supplier eligibility caches. No manual
 authorization-recovery endpoint or button exists. Token refresh uses a revision
 check, cannot overwrite a concurrent login, and preserves billing and manual state.
 Ordinary request throttling remains a client retry concern.
@@ -123,7 +186,7 @@ The ChatGPT adapter follows
 `login/src/auth/manager.rs` in the pinned reference: `usage_limit_reached` and known
 quota/credit codes indicate exhaustion. `rate_limit_exceeded`, `slow_down` and
 unclassified HTTP 429 are forwarded with their retry information; they never
-change supplier health or binding. 403, network failures, policy errors
+change supplier health or affinity and are excluded from error EWMA samples. 403, network failures, policy errors
 and 5xx never permanently invalidate credentials. Refresh rejection follows the
 official permanent codes, including HTTP 400 `invalid_grant`; expired access tokens
 are refreshed before abandoning their supplier. Observations carry credential
@@ -143,7 +206,7 @@ it is not presented as an official quota reset. Fresh main quota responses can
 also record exhaustion; model-specific additional windows do not disable the whole
 account. A fresh ChatGPT response explicitly allowing execution or reporting usable
 credits clears quota exhaustion immediately, even before the old reset time, and
-repairs unassigned pool routes. Unknown, failed or cached reads never prove recovery.
+invalidates pool eligibility caches. Unknown, failed or cached reads never prove recovery.
 Credential and quota observation revisions protect against late checks, including
 checks started before an administrator reset.
 
@@ -167,7 +230,7 @@ remains available on the account detail page.
 
 Administrator `POST /admin/api/suppliers/{id}/reset-state` provides an offline retry
 through the list's **More / Reset state** action. It clears quota cooldowns and billing rejection,
-invalidates in-flight quota observation revisions and repairs pool routes; manual
+invalidates in-flight quota observation revisions and pool eligibility caches; manual
 disablement, authorization rejection, credentials and official snapshots remain
 intact. A subsequent explicit upstream exhaustion can mark the account again.
 
@@ -186,11 +249,15 @@ retain structured errors and close behavior; subsequent requests select a health
 member. Responses WS serializes queued generations, rechecks credentials and policy,
 and can reconnect supply between generations without replacing the virtual device.
 Its in-memory conversation input/output permits replay of known previous-response
-references on a new supplier. An opaque reference from outside that connection
-requires full client input (`supplier_context_required`); private supplier resources
-are never transferred between owners. Realtime and supplier-owned cloud resources
-retain their existing transport/resource contracts and cannot be replayed across
-accounts once established.
+references on a new supplier. A previous-response reference without reconstructible context stays on its recorded
+supplier; if that supplier is unavailable the client must resend full input
+(`supplier_context_required`). Supplier-owned cloud tasks and conversations keep
+their recorded source, subject to current pool eligibility and ownership checks.
+They are never replayed on another supplier. Voice calls are unavailable: all
+Realtime/Live creation, WebSocket and sideband aliases reject with HTTP 501
+`voice_calls_unavailable` before supplier selection. Voice catalogs and selection
+are disabled; user settings publish `voice_enabled=false`. Independent dictation
+is unchanged.
 
 ## Virtual-account data and management
 
@@ -203,11 +270,10 @@ are read-only in administration; normal client writes remain supported.
 Mixed responses separate service flags from client preferences. Protocol fields
 and identifiers are generated in code, not entered through arbitrary field editors.
 
-Private data and settings belong to the virtual account in SQLite. Binding a
-supplier authorizes execution, not inheritance of that supplier's private data,
-usage, tasks, profile or quotas. Account/resource IDs in paths, queries and bodies
-must pass ownership checks. Rebinding preserves virtual identity, configuration
-and historical records.
+Private data and settings belong to the virtual account in SQLite. Pool selection
+authorizes execution without inheriting supplier private data, usage, tasks, profile
+or quotas. Account/resource IDs in paths, queries and bodies must pass ownership
+checks. Pool changes preserve virtual identity, configuration and historical records.
 
 Standalone virtual subscriptions are issued by administrators. User subscriptions can be granted by administrators or purchased with the user wallet. Grants, renewals, plan changes and
 expiration update the same persisted entitlements used by client responses and
@@ -258,7 +324,7 @@ fields; common signing primitives do not create a shared HTTP login/data endpoin
 
 User creation atomically provisions a stable Free platform identity for each configured platform. Paid expiration is evaluated on reads; the paid expiration and purchase records remain inspectable without rewriting history.
 
-Ordinary subscriptions always use the current effective plan's supplier pool, including the platform Free pool after paid expiration. They have no separately configurable pool or supplier binding. `regular_subscription_pools` and `effective_execution_routes` resolve this policy in SQLite; regular route rows retain only temporary supplier assignments and revisions, never a copied tag. Plan pool edits clear affected assignments in the same transaction, and subsequent selections use the new pool. Clearing a plan pool leaves no supply fallback. SQL migration removes existing ordinary subscription overrides while preserving standalone virtual-account routes. SQL guards reject new overrides, and only `/consumers/{id}/routing` exposes manual routing administration. Subscription RPM remains independently editable. Pool changes preserve platform identity, expiration, spending anchors, paid orders and price snapshots.
+Ordinary subscriptions always use the current effective plan's supplier pool, including the platform Free pool after paid expiration. They have no separately configurable pool or fixed supplier. `regular_subscription_pools` and `effective_execution_routes` resolve the effective pool in SQLite; ordinary route rows hold only provider and revision. Plan pool edits take effect on the next selection; clearing a pool leaves no fallback. SQL guards reject ordinary-account pool overrides. Only `/consumers/{id}/routing` exposes standalone pool administration. Subscription RPM and concurrency remain independently editable. Pool changes preserve platform identity, expiration, spending anchors, paid orders and price snapshots.
 
 Wallet balance is `users.wallet_cents`, with a nonnegative integer constraint. It starts at zero. Identity forms and user APIs cannot set it. Administrators use `/admin/api/users/{id}/wallet-adjustments` with a signed-in administrator session, CSRF, expected user revision, idempotency key, signed integer-cent delta and optional reason. Missing, null and blank reasons normalize to null; nonempty reasons retain their length limit. A single immediate transaction applies the delta and appends a `system_adjustment` ledger entry containing the operator snapshot and before/after balances. Overdraw, unsafe amounts and stale revisions are rejected. Replays return the same entry without another balance change. Ledger updates/deletions are prohibited; historical purchase entries remain intact. The administrator-only `GET /admin/api/wallet-entries` reads all users' ledger entries with exact user ID, source, optional Unix-millisecond start/end bounds and pagination. The count and rows share a read transaction, timestamps are compared as instants, and ordering breaks time ties by insertion order. List DTOs add only the owner username/name to ledger fields, including the original order reference. This capability is not exposed through UserStore or the user listener. User wallet DTOs show the change as a system operation without administrator identity or private reason. There is no external payment integration; checkout offers the USD wallet. Plan sale price uses at most two decimal USD places, separately from model-priced inference budgets. Plans have a purchase duration and an administrator-only supplier pool. `virtual_plans.allow_purchase` is the only paid-catalog publication switch. Published plans appear even without a price or supplier pool; an unknown price stays null and cannot be ordered as zero. Supplier execution configuration does not gate wallet checkout or payment. Closing purchases blocks user purchases/renewals, not administrator assignments or existing benefits. Free is supplied automatically and is not sold.
 
@@ -305,12 +371,21 @@ User subscription administration hides expired entries by default and offers an 
 ### Request admission and subscription names
 
 RPM is a consumer-wide sliding sixty-second window across devices and HTTP/WS,
-persisted in SQLite and admitted atomically. Gateway settings default to 20;
+admitted atomically in Redis or the single-process runtime. Gateway settings default to 20;
 missing account configuration inherits it, an account override wins, and zero
 means unlimited. Each actual generation consumes one admission; internal supplier
 attempts, warmups, reads and WS handshakes do not. Handshakes check the current limit
 without consuming it. Rejections use HTTP/WS 429 `virtual_rpm_exceeded` with retry
 information and are distinct from the consumer's spending quota.
+
+Consumer concurrency is shared across that platform identity's devices and HTTP/WS
+generations. Gateway default is five, an empty account override inherits it and
+zero is unlimited. Each supplier independently defaults to five concurrent
+requests, also accepting zero. Slots span the upstream generation and its stream,
+including draining after a client disconnect; internal retries transfer only the
+supplier slot, retaining one consumer slot and one RPM admission. Rejections use
+429 `virtual_concurrency_exceeded` or `supplier_concurrency_exceeded` and retry
+information. WS handshakes and warmups do not reserve a consumer generation slot.
 
 Plan management selects the official client subscription tier independently of the
 business plan name. Updating that tier atomically updates assigned accounts while

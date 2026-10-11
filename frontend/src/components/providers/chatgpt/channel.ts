@@ -6,5 +6,4 @@ export const chatgptChannel = {
   ...chatgptConfig,
   FingerprintFields: ChatgptFingerprintFields,
   OfficialData: ChatgptOfficialData,
-  Models: undefined,
 };

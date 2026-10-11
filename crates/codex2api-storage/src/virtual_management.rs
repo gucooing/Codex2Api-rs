@@ -240,12 +240,6 @@ pub fn virtual_config_specs() -> Vec<VirtualConfigSpec> {
             json!({"plugins":[]}),
         ),
         (
-            "voice",
-            "语音选择",
-            "客户端选择的语音名称。",
-            json!({"selected":null}),
-        ),
-        (
             "onboarding",
             "引导状态",
             "客户端完成引导后保存；网页亦可维护。",
@@ -550,6 +544,15 @@ impl Storage {
         Ok(sqlx::query_scalar("SELECT upstream_token FROM virtual_conduits WHERE token_hash=? AND virtual_account_id=? AND upstream_account_id=? AND expires_at>?")
             .bind(crate::hash_token(token)).bind(owner).bind(source).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
+    /// An owned preparation credential selects its recorded supplier before a new conversation exists.
+    pub async fn owned_virtual_conduit(
+        &self,
+        owner: &str,
+        token: &str,
+    ) -> Result<Option<(String, String)>> {
+        Ok(sqlx::query_as("SELECT upstream_account_id,upstream_token FROM virtual_conduits WHERE token_hash=? AND virtual_account_id=? AND expires_at>?")
+            .bind(crate::hash_token(token)).bind(owner).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
+    }
     pub async fn record_virtual_analytics(&self, owner: &str, events: &[Value]) -> Result<()> {
         let mut tx = self.pool().begin().await?;
         let now = chrono::Utc::now().timestamp_millis();
@@ -619,6 +622,27 @@ impl Storage {
     pub async fn virtual_quota(&self, owner: &str) -> Result<Value> {
         self.virtual_quota_at(owner, chrono::Utc::now().timestamp())
             .await
+    }
+    pub async fn virtual_spending_status(&self, owner: &str) -> Result<(bool, bool)> {
+        let now = chrono::Utc::now().timestamp();
+        let account = self
+            .effective_platform_account_at(owner, now)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+        let plan = self
+            .virtual_plan(&account.plan_id)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
+        let rules = crate::plan_spending_windows(&plan.config)?;
+        let limited = rules.iter().any(|w| w.cost_limit_usd.is_some());
+        if !limited {
+            return Ok((true, false));
+        }
+        let anchor = self.subscription_anchor_at(owner, now).await?;
+        let windows = self
+            .nested_spending_windows(owner, &rules, if anchor > now { 0 } else { anchor }, now)
+            .await?;
+        Ok((windows.iter().all(|w| w["allowed"] != false), true))
     }
     pub async fn virtual_spending_limited(&self, owner: &str) -> Result<bool> {
         let account = self

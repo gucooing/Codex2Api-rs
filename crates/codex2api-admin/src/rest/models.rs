@@ -22,10 +22,6 @@ pub(super) fn router() -> Router<AdminState> {
             get(crate::providers::chatgpt::billing::search_price)
                 .put(crate::providers::chatgpt::billing::save_search_price),
         )
-        .route(
-            "/models/grok/sync",
-            post(crate::providers::grok::sync_all_models),
-        )
         .route("/models", get(models).post(save_model))
         .route("/models/options", get(model_options))
         .route("/models/presets", get(model_presets))
@@ -90,7 +86,7 @@ pub async fn models(
     ))
 }
 
-pub async fn model_presets(State(s): State<AdminState>) -> ApiResult {
+pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
     let mut models = codex2api_upstream::supported_models();
     models.extend(
         codex2api_core::providers::grok::PRICED_MODELS
@@ -98,18 +94,6 @@ pub async fn model_presets(State(s): State<AdminState>) -> ApiResult {
             .map(|model| codex2api_core::SupportedModel {
                 provider_id: codex2api_core::GROK.into(),
                 model: (*model).into(),
-                kind: "text".into(),
-            }),
-    );
-    models.extend(
-        s.storage
-            .grok_model_descriptors()
-            .await?
-            .iter()
-            .filter_map(|v| v["model"].as_str())
-            .map(|model| codex2api_core::SupportedModel {
-                provider_id: codex2api_core::GROK.into(),
-                model: model.into(),
                 kind: "text".into(),
             }),
     );

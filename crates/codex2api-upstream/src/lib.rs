@@ -8,7 +8,7 @@
 //! This crate does not spoof TLS/JA3.
 //!
 //! Public services: `UpstreamPool` selects an isolated account client;
-//! `UpstreamClient` sends requests; `Endpoint`, `BackendEndpoint`, and `RealtimeKind`
+//! `UpstreamClient` sends requests; `Endpoint` and `BackendEndpoint`
 //! describe official outbound targets. Incoming HTTP routes belong to codex2api-api.
 //! Protocol construction lives in request/headers; transport lives in client/websocket/stream.
 
@@ -38,7 +38,6 @@ pub use outcome::{FailureKind, ResponseFailure, ResponseLifecycle, ResponseOutco
 pub(crate) use providers::chatgpt::headers;
 mod pool;
 pub(crate) use providers::chatgpt::proxy;
-pub(crate) use providers::chatgpt::realtime;
 pub(crate) use providers::chatgpt::request;
 pub(crate) use providers::chatgpt::routing;
 mod stream;
@@ -50,6 +49,7 @@ pub(crate) use providers::chatgpt::websocket;
 mod proxy_fixture;
 
 pub use backend::BackendEndpoint;
+pub use body::request_metadata_value;
 pub use client::{DEFAULT_STREAM_IDLE_TIMEOUT, UpstreamClient, responses_url};
 pub use compat::{ChatgptEndpoint, responses_subpath_url};
 pub use endpoint::Endpoint;
@@ -62,7 +62,6 @@ pub use headers::{
     insert_header, strip_hop_by_hop_headers,
 };
 pub use pool::UpstreamPool;
-pub use realtime::{RealtimeKind, realtime_call_models, realtime_url};
 pub use request::{
     MAX_REQUEST_BYTES, decode_body, normalize_response_identity, serialize_responses_request,
 };

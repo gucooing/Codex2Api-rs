@@ -25,11 +25,6 @@ pub(super) fn router() -> Router<AdminState> {
             "/suppliers/grok/oauth",
             crate::providers::grok::oauth_routes(),
         )
-        .route(
-            "/suppliers/grok/{id}/models",
-            get(crate::providers::grok::model_catalog)
-                .post(crate::providers::grok::sync_model_catalog),
-        )
         .route("/suppliers", get(list))
         .route("/suppliers/options", get(options))
         .route("/suppliers/selection", get(selection))
@@ -133,7 +128,8 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
             .map(|(id, name)| json!({"id":id,"name":name}))
             .collect::<Vec<_>>()
     );
-    value["binding_count"] = json!(s.storage.supplier_binding_count(&a.id).await?);
+    value["concurrency"] = json!(s.storage.supplier_scheduling(&a.id).await?.concurrency);
+    value["active_requests"] = json!(s.storage.supplier_metrics(&a.id).active);
     value["quota"] = match s.storage.get_account_quota(&a.id).await? {
         Some(snapshot) => crate::quota::summary(&s.storage, &a.id, &snapshot).await?,
         None => Value::Null,

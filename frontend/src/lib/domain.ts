@@ -16,7 +16,6 @@ export const clientOwnedKeys = new Set([
   "verified_access",
   "automations",
   "installed_plugins",
-  "voice",
   "onboarding",
   "browser_settings",
   "config_bundle",

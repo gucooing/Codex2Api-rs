@@ -1,5 +1,5 @@
-use crate::{ExecutionRoute, Result, Storage, StorageError};
-use sqlx::{FromRow, SqliteConnection};
+use crate::{Result, Storage, StorageError};
+use sqlx::FromRow;
 
 #[derive(Clone, Debug, FromRow, serde::Serialize)]
 pub struct SupplierTag {
@@ -10,34 +10,75 @@ pub struct SupplierTag {
     pub binding_count: i64,
 }
 
-// Selection and assignment run under the same SQLite write transaction. Counting
-// every current binding (including other tags) prevents concurrent over-selection.
-async fn candidates(conn: &mut SqliteConnection, tag: &str, now: i64) -> Result<Vec<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT a.id FROM supplier_tag_members m
-         JOIN supplier_tags t ON t.id=m.tag_id
-         JOIN supplier_accounts a ON a.id=m.account_id AND a.provider_id=t.provider_id
-         JOIN supplier_tokens k ON k.account_id=a.id
-         LEFT JOIN supplier_health h ON h.account_id=a.id
-         WHERE m.tag_id=? AND a.status='active' AND COALESCE(k.access_token,'')!=''
-           AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
-           AND h.payment_required_at IS NULL
-           AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted' OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision OR h.cooldown_until<=?)
-         ORDER BY (SELECT COUNT(*) FROM execution_routes r WHERE r.supplier_account_id=a.id),a.created_at,a.id",
-    ).bind(tag).bind(now).fetch_all(conn).await?)
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, FromRow)]
+pub struct PoolCandidate {
+    pub id: String,
+    pub concurrency: u32,
+    pub priority: i32,
+    pub load_factor: Option<u32>,
 }
-
 impl Storage {
-    /// A confirmed supplier outage repairs every affected temporary assignment.
-    /// Recheck under each assignment transaction so stale health observations or
-    /// concurrent administrator changes never force a healthy route elsewhere.
-    pub async fn refresh_supplier_bindings(&self, supplier: &str) -> Result<()> {
-        let owners: Vec<(String,String)> = sqlx::query_as("SELECT virtual_account_id,provider_id FROM effective_execution_routes WHERE supplier_account_id=? OR (supplier_account_id IS NULL AND tag_id IN (SELECT tag_id FROM supplier_tag_members WHERE account_id=?)) ORDER BY virtual_account_id")
-            .bind(supplier).bind(supplier).fetch_all(self.pool()).await?;
-        for (owner, provider) in owners {
-            self.select_pool_supplier(&owner, &provider, &[]).await?;
+    pub async fn pool_contains_supplier(
+        &self,
+        owner: &str,
+        provider: &str,
+        supplier: Option<&str>,
+    ) -> Result<bool> {
+        let Some(supplier) = supplier else {
+            return Ok(false);
+        };
+        let Some(tag) = self
+            .execution_route(owner, provider)
+            .await?
+            .and_then(|r| r.tag_id)
+        else {
+            return Ok(false);
+        };
+        Ok(self
+            .pool_candidates(&tag, provider, None)
+            .await?
+            .iter()
+            .any(|a| a.id == supplier))
+    }
+    pub async fn pool_candidates(
+        &self,
+        tag: &str,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Result<Vec<PoolCandidate>> {
+        let key = format!("pool:{}", serde_json::to_string(&(tag, provider, model))?);
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
         }
-        Ok(())
+        let epoch = self.runtime.epoch();
+        let rows = sqlx::query_as(
+            "SELECT a.id,COALESCE(s.concurrency,5) AS concurrency,
+                    COALESCE(s.priority,0) AS priority,s.load_factor
+             FROM supplier_tag_members m
+             JOIN supplier_accounts a ON a.id=m.account_id
+             JOIN supplier_tokens k ON k.account_id=a.id
+             LEFT JOIN supplier_health h ON h.account_id=a.id
+             LEFT JOIN supplier_scheduling s ON s.account_id=a.id
+             WHERE m.tag_id=? AND a.provider_id=? AND a.status='active'
+               AND COALESCE(k.access_token,'')!=''
+               AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
+               AND h.payment_required_at IS NULL
+               AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted'
+                    OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision
+                    OR h.cooldown_until<=?)
+               AND (?='' OR EXISTS(SELECT 1 FROM supplier_models sm WHERE sm.account_id=a.id AND sm.model=?))
+             ORDER BY a.id",
+        )
+        .bind(tag)
+        .bind(provider)
+        .bind(chrono::Utc::now().timestamp())
+        .bind(model.unwrap_or(""))
+        .bind(model.unwrap_or(""))
+        .fetch_all(self.pool())
+        .await?;
+        self.runtime
+            .cache(key, &rows, epoch, std::time::Duration::from_secs(2));
+        Ok(rows)
     }
     pub async fn supplier_tags(&self) -> Result<Vec<SupplierTag>> {
         Ok(sqlx::query_as(
@@ -89,6 +130,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
 
@@ -136,16 +178,12 @@ impl Storage {
                 ));
             }
         }
-        let routes:Vec<(String,String)>=sqlx::query_as("SELECT virtual_account_id,provider_id FROM execution_routes WHERE supplier_account_id IN(SELECT value FROM json_each(?))")
-            .bind(&account_json).fetch_all(&mut *tx).await?;
         sqlx::query("DELETE FROM supplier_tag_members WHERE account_id IN(SELECT value FROM json_each(?)) AND tag_id NOT IN(SELECT value FROM json_each(?))")
             .bind(&account_json).bind(&tag_json).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO supplier_tag_members(tag_id,account_id) SELECT t.value,a.value FROM json_each(?) t CROSS JOIN json_each(?) a WHERE 1 ON CONFLICT(tag_id,account_id) DO NOTHING")
             .bind(&tag_json).bind(&account_json).execute(&mut *tx).await?;
         tx.commit().await?;
-        for (owner, provider) in routes {
-            self.select_pool_supplier(&owner, &provider, &[]).await?;
-        }
+        self.invalidate_runtime_cache();
         Ok(())
     }
 
@@ -184,16 +222,8 @@ impl Storage {
             }
         }
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(())
-    }
-
-    pub async fn supplier_binding_count(&self, account: &str) -> Result<i64> {
-        Ok(
-            sqlx::query_scalar("SELECT COUNT(*) FROM execution_routes WHERE supplier_account_id=?")
-                .bind(account)
-                .fetch_one(self.pool())
-                .await?,
-        )
     }
 
     pub async fn save_pool_route(
@@ -201,84 +231,46 @@ impl Storage {
         owner: &str,
         provider: &str,
         tag: Option<&str>,
-        supplier: Option<&str>,
         expected: Option<i64>,
     ) -> Result<bool> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::VirtualAccount)
             .await?;
-        let current: Option<ExecutionRoute> = sqlx::query_as(
-            "SELECT * FROM execution_routes WHERE virtual_account_id=? AND provider_id=?",
+        let current: Option<i64> = sqlx::query_scalar(
+            "SELECT revision FROM execution_routes WHERE virtual_account_id=? AND provider_id=?",
         )
         .bind(owner)
         .bind(provider)
         .fetch_optional(&mut *tx)
         .await?;
-        if current.as_ref().map(|r| r.revision) != expected {
+        if current != expected {
             return Ok(false);
         }
-        let selected = if let Some(tag) = tag {
-            let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM supplier_tags t JOIN platform_accounts v ON v.provider_id=t.provider_id WHERE t.id=? AND v.id=? AND t.provider_id=?)")
-                .bind(tag).bind(owner).bind(provider).fetch_one(&mut *tx).await?;
-            if !valid {
-                return Err(StorageError::Constraint("请选择同提供商的标签号池".into()));
-            }
-            let available = candidates(&mut tx, tag, chrono::Utc::now().timestamp()).await?;
-            if let Some(supplier) = supplier {
-                if !available.iter().any(|id| id == supplier) {
-                    return Err(StorageError::Constraint(
-                        "只能绑定所选标签号池内状态正常的供应账户".into(),
-                    ));
-                }
-                Some(supplier.to_owned())
-            } else {
-                available.into_iter().next()
-            }
-        } else {
-            if supplier.is_some() {
-                return Err(StorageError::Constraint("请先选择标签号池".into()));
-            }
-            None
-        };
-        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,supplier_account_id,revision) VALUES(?,?,?,?,?)
-            ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id,supplier_account_id=excluded.supplier_account_id,revision=excluded.revision")
-            .bind(owner).bind(provider).bind(tag).bind(selected).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,revision) VALUES(?,?,?,?) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id,revision=excluded.revision")
+            .bind(owner).bind(provider).bind(tag).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(true)
     }
-
-    /// Healthy assignments are sticky. An unavailable/missing assignment is
-    /// replaced using the least-bound member. Exclusions bound a request's retries.
+    /// Non-generation operations need a healthy pool member, without an assignment.
     pub async fn select_pool_supplier(
         &self,
         owner: &str,
         provider: &str,
         excluded: &[String],
     ) -> Result<Option<String>> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        // The view resolves regular subscriptions through the current effective
-        // plan, including Free on expiration. No subscription pool is persisted.
-        let route: Option<ExecutionRoute> = sqlx::query_as("SELECT r.* FROM effective_execution_routes r JOIN platform_principals v ON v.id=r.virtual_account_id WHERE r.virtual_account_id=? AND r.provider_id=? AND v.enabled=1")
-            .bind(owner).bind(provider).fetch_optional(&mut *tx).await?;
-        let Some(route) = route else {
+        let Some(route) = self.execution_route(owner, provider).await? else {
             return Ok(None);
         };
-        let available = match &route.tag_id {
-            Some(tag) => candidates(&mut tx, tag, chrono::Utc::now().timestamp()).await?,
-            None => Vec::new(),
+        let Some(tag) = route.tag_id else {
+            return Ok(None);
         };
-        let eligible = |id: &String| !excluded.contains(id);
-        let selected = route
-            .supplier_account_id
-            .as_ref()
-            .filter(|id| available.contains(id) && eligible(id))
-            .cloned()
-            .or_else(|| available.into_iter().find(eligible));
-        if selected != route.supplier_account_id {
-            sqlx::query("UPDATE execution_routes SET supplier_account_id=?,revision=revision+1 WHERE virtual_account_id=? AND provider_id=?")
-                .bind(&selected).bind(owner).bind(provider).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(selected)
+        let mut candidates = self.pool_candidates(&tag, provider, None).await?;
+        candidates.retain(|a| !excluded.contains(&a.id));
+        candidates.sort_by_key(|a| {
+            let metrics = self.supplier_metrics(&a.id);
+            (a.priority, metrics.active, metrics.last_used)
+        });
+        Ok(candidates.into_iter().next().map(|a| a.id))
     }
 }

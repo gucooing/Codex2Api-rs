@@ -34,7 +34,7 @@ impl Storage {
             .bind(tokens.last_refresh).bind(tokens.raw_auth_json).bind(Utc::now().to_rfc3339()).bind(id).bind(id).bind(revision)
             .execute(self.pool()).await?.rows_affected()==1;
         if updated {
-            self.refresh_supplier_bindings(id).await?;
+            self.invalidate_runtime_cache();
         }
         Ok(updated)
     }

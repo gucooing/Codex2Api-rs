@@ -303,6 +303,11 @@ fn image_tier_rank(tier: &str) -> Option<usize> {
 
 impl Storage {
     pub(crate) async fn billing_snapshot(&self, provider: &str) -> Result<String> {
+        let key = format!("billing-snapshot:{provider}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
         let mut tx = self.pool().begin().await?;
         let tokens = sqlx::query_as(
             "SELECT * FROM model_prices WHERE provider_id=? ORDER BY model,tier,min_input_tokens",
@@ -322,11 +327,14 @@ impl Storage {
                 .fetch_all(&mut *tx)
                 .await?;
         tx.commit().await?;
-        Ok(serde_json::to_string(&BillingSnapshot::Current {
+        let value = serde_json::to_string(&BillingSnapshot::Current {
             tokens,
             images,
             operations,
-        })?)
+        })?;
+        self.runtime
+            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
+        Ok(value)
     }
     pub async fn model_prices(&self, provider: &str) -> Result<Vec<ModelPrice>> {
         Ok(sqlx::query_as(
@@ -373,6 +381,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(true)
     }
     pub async fn billing_summary(&self, owner: &str) -> Result<serde_json::Value> {

@@ -11,7 +11,6 @@ pub fn client_writable(key: &str) -> bool {
             | "pins"
             | "notification_settings"
             | "notifications"
-            | "voice"
             | "browser_settings"
             | "onboarding"
     )
@@ -70,7 +69,6 @@ pub fn client_state_only(key: &str) -> bool {
             | "verified_access"
             | "automations"
             | "installed_plugins"
-            | "voice"
             | "onboarding"
             | "browser_settings"
             | "config_bundle"

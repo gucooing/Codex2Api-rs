@@ -87,7 +87,7 @@ impl Storage {
             payment_required_code=excluded.payment_required_code,cooldown_revision=supplier_health.cooldown_revision+1")
             .bind(code).bind(id).bind(auth_revision).bind(expected_observation).bind(expected_observation)
             .execute(self.pool()).await?;
-        self.refresh_supplier_bindings(id).await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
 
@@ -138,7 +138,7 @@ impl Storage {
             cooldown_until=CASE WHEN supplier_health.cooldown_kind='quota_exhausted' AND supplier_health.cooldown_auth_revision=excluded.cooldown_auth_revision THEN MAX(COALESCE(supplier_health.cooldown_until,0),excluded.cooldown_until) ELSE excluded.cooldown_until END,
             cooldown_auth_revision=excluded.cooldown_auth_revision,cooldown_code=excluded.cooldown_code,cooldown_observed_at=excluded.cooldown_observed_at,cooldown_revision=supplier_health.cooldown_revision+1")
             .bind(until).bind(code).bind(id).bind(auth_revision).bind(expected).bind(expected).execute(self.pool()).await?;
-        self.refresh_supplier_bindings(id).await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
 
@@ -157,7 +157,7 @@ impl Storage {
         .bind(id)
         .execute(self.pool())
         .await?;
-        self.refresh_supplier_bindings(id).await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
 
@@ -187,7 +187,7 @@ impl Storage {
         .rows_affected()
             == 1;
         if changed {
-            self.refresh_supplier_bindings(id).await?;
+            self.invalidate_runtime_cache();
         }
         Ok(changed)
     }
@@ -221,7 +221,7 @@ impl Storage {
              ON CONFLICT(account_id) DO UPDATE SET error_message=excluded.error_message,
              error_at=excluded.error_at,revision=supplier_health.revision+1,rejected_auth_revision=excluded.rejected_auth_revision",
         ).bind(id).bind(auth_revision).execute(self.pool()).await?;
-        self.refresh_supplier_bindings(id).await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
 }

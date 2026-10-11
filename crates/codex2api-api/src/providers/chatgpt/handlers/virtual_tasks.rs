@@ -30,13 +30,10 @@ async fn owned(
         .await?
         .ok_or_else(super::virtual_data::not_found)?;
     if execution
-        && (source.is_none()
-            || source
-                != state
-                    .storage
-                    .execution_route(&account.id, "chatgpt")
-                    .await?
-                    .and_then(|r| r.supplier_account_id))
+        && !state
+            .storage
+            .pool_contains_supplier(&account.id, "chatgpt", source.as_deref())
+            .await?
     {
         return Err(super::virtual_data::not_found());
     }
@@ -153,13 +150,10 @@ pub(crate) async fn forward(
             .virtual_resource(&account.id, "task", id)
             .await?
             .unwrap();
-        if source.is_none()
-            || source
-                != state
-                    .storage
-                    .execution_route(&account.id, "chatgpt")
-                    .await?
-                    .and_then(|r| r.supplier_account_id)
+        if !state
+            .storage
+            .pool_contains_supplier(&account.id, "chatgpt", source.as_deref())
+            .await?
         {
             if endpoint == E::Task {
                 return Ok(crate::providers::chatgpt::identity::json_response(saved));
@@ -224,18 +218,18 @@ pub(crate) async fn forward(
                 .virtual_resource(&account.id, "task", &id)
                 .await?
                 .unwrap();
-            if source.is_some()
-                && source
-                    == state
-                        .storage
-                        .execution_route(&account.id, "chatgpt")
-                        .await?
-                        .and_then(|r| r.supplier_account_id)
+            if state
+                .storage
+                .pool_contains_supplier(&account.id, "chatgpt", source.as_deref())
+                .await?
             {
-                let (_, ctx) = crate::providers::chatgpt::access::resolve_supplier(
+                let (_, ctx) = crate::providers::chatgpt::access::resolve_owned_supplier(
                     state,
                     &headers,
                     Extension(access.clone()),
+                    source
+                        .as_deref()
+                        .ok_or_else(super::virtual_data::not_found)?,
                 )
                 .await?;
                 let client = state.upstream.get(&ctx.account.id).await?;
@@ -302,9 +296,45 @@ pub(crate) async fn forward(
             json!({"items":items,"cursor":(offset.saturating_add(limit)<total).then(||(offset+limit).to_string())}),
         ));
     }
-    let (credential, ctx) =
-        crate::providers::chatgpt::access::resolve_supplier(state, &headers, Extension(access))
-            .await?;
+    let source_task = params.get("task_id").map(String::as_str).or_else(|| {
+        value
+            .pointer("/follow_up/task_id")
+            .or(value.get("task_id"))
+            .and_then(Value::as_str)
+    });
+    let source = if let Some(id) = source_task {
+        state
+            .storage
+            .virtual_resource(&account.id, "task", id)
+            .await?
+            .and_then(|(source, _)| source)
+    } else {
+        None
+    };
+    let (credential, mut ctx) = if let Some(source) = source.as_deref() {
+        crate::providers::chatgpt::access::resolve_owned_supplier(
+            state,
+            &headers,
+            Extension(access.clone()),
+            source,
+        )
+        .await?
+    } else {
+        let request = crate::pool_scheduler::ScheduleRequest {
+            model: value
+                .pointer("/metadata/model_slug")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            ..Default::default()
+        };
+        crate::providers::chatgpt::access::resolve_supplier_for(
+            state,
+            &headers,
+            Extension(access.clone()),
+            &request,
+        )
+        .await?
+    };
     let task_model = if endpoint == E::CreateTask {
         match execution_model(&state.storage, &account.id, &ctx.account.id, &value).await {
             Ok(model) => Some(model),
@@ -337,6 +367,7 @@ pub(crate) async fn forward(
                 "/backend-api/wham/tasks",
                 "http",
             )
+            .with_supplier_permit(ctx.permit.take())
             .start(
                 codex2api_upstream::RequestMetadata {
                     model: task_model.clone(),

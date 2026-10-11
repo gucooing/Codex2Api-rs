@@ -95,6 +95,18 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
     pool.close().await;
     let storage = Storage::open(&path).await.unwrap();
     for (table, (original_columns, expected)) in tables.iter().zip(&before) {
+        if *table == "execution_routes" {
+            // The current routing migration intentionally removes supplier binding.
+            let route = storage
+                .execution_route("consumer", "chatgpt")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(route.tag_id.as_deref(), Some("legacy-supplier"));
+            assert_eq!(route.provider_id, "chatgpt");
+            assert!(route.revision > 7);
+            continue;
+        }
         // Later migrations may append fields; every pre-existing column and value must survive.
         let current_columns = columns(storage.pool(), table).await;
         assert!(
@@ -143,6 +155,12 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
     );
     storage.close().await;
     let reopened = Storage::open(&path).await.unwrap();
+    let route_revision = reopened
+        .execution_route("consumer", "chatgpt")
+        .await
+        .unwrap()
+        .unwrap()
+        .revision;
     assert_eq!(
         reopened
             .require_account("supplier")
@@ -164,8 +182,8 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
         .await
         .unwrap()
         .unwrap();
-    assert!(route.supplier_account_id.is_none());
-    assert_eq!(route.revision, 8);
+    assert_eq!(route.tag_id.as_deref(), Some("legacy-supplier"));
+    assert_eq!(route.revision, route_revision);
     assert_eq!(
         reopened
             .query_usage(&Default::default())

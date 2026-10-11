@@ -615,7 +615,6 @@
         "tag_id": null,
         "virtual_account_id": "contract-consumer",
         "provider_id": "chatgpt",
-        "supplier_account_id": null,
         "revision": 1
       }
     ]

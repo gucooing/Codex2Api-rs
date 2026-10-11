@@ -17,10 +17,12 @@ pub(crate) async fn forward(
     headers: HeaderMap,
     log: &mut Option<crate::usage::RequestLog>,
 ) -> Result<reqwest::Response> {
+    let original = ctx.account.id.clone();
+    let reused_affinity = ctx.reused_affinity;
     execute(state, oauth, ctx, log, |id: String| {
         let body = body.clone();
         let mut headers = headers.clone();
-        if oauth.account_id.as_deref() != Some(id.as_str()) {
+        if !reused_affinity || id != original {
             headers.remove("x-codex-turn-state");
         }
         async move {

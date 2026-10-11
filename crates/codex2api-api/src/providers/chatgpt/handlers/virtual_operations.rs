@@ -185,7 +185,15 @@ pub(crate) async fn conversation(
             }
         }
     }
-    if source.is_none() || source != access.account_id {
+    if !state
+        .storage
+        .pool_contains_supplier(
+            &access.virtual_account_id,
+            &access.provider_id,
+            source.as_deref(),
+        )
+        .await?
+    {
         if method == Method::GET
             && let Some((_, detail)) = state
                 .storage
@@ -201,10 +209,13 @@ pub(crate) async fn conversation(
             Some("conversation_source_unavailable"),
         ));
     }
-    let (_, ctx) = crate::providers::chatgpt::access::resolve_supplier(
+    let (_, ctx) = crate::providers::chatgpt::access::resolve_owned_supplier(
         &state,
         &headers,
         Extension(access.clone()),
+        source
+            .as_deref()
+            .ok_or_else(super::virtual_data::not_found)?,
     )
     .await?;
     let upstream = state.upstream.get(&ctx.account.id).await?;

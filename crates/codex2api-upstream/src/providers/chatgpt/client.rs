@@ -327,11 +327,6 @@ impl UpstreamClient {
         .await
     }
 
-    pub(crate) fn authenticated_headers(&self) -> Result<(HeaderMap, String)> {
-        let auth = self.request_auth()?;
-        Ok((auth.headers, auth.access_token))
-    }
-
     pub(crate) fn request_auth(&self) -> Result<RequestAuth> {
         let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
         Ok(RequestAuth {
