@@ -12,9 +12,9 @@
 
 官方协议目标：
 
-- 发布版: `0.162.0`（tag `rust-v0.162.0`，commit `c1382380de69521303b416720a52f42d51af6248`）
-- 源码快照: `c1382380de69521303b416720a52f42d51af6248`（2026-10-08T16:56:07Z）
-- User-Agent 版本写死为 `0.162.0`，不用源码树的 `0.0.0`
+- 发布版: `0.162.1`（tag `rust-v0.162.1`，commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`）
+- 源码快照: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`（2026-10-09T17:39:05Z）
+- User-Agent 版本写死为 `0.162.1`，不用源码树的 `0.0.0`
 - 常量 crate: `crates/codex2api-version`
 - 架构说明: `docs/ARCHITECTURE.md`
 

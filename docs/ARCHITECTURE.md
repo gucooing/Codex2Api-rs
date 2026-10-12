@@ -3,18 +3,23 @@
 ## Official protocol baseline
 
 - Official repository: https://github.com/openai/codex
-- Release: `0.162.0` / `rust-v0.162.0`
-- Commit: `c1382380de69521303b416720a52f42d51af6248`
-- Commit time: `2026-10-08T16:56:07Z`
+- Release: `0.162.1` / `rust-v0.162.1`
+- Commit: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`
+- Commit time: `2026-10-09T17:39:05Z`
 - Reference-only checkout: `reference/codex`; constants: `crates/codex2api-version`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
-- Fork integration commit: `ba3e0a1b0ce46bfba9ea50d38de67fc0bc8034a5`
+- Fork integration commit: `c63e0d6140676390d687bd1389a1d36b34046821`
 
 The maintained client inherits the exact official release. Its customizations are
 `BASE_OAUTH_URL`, the `ccodex` executable, `.ccodex` default home and its release
 channel. Supplier protocol constants always come from official Codex. Official
 Rust crates are never dependencies of this proxy. Follow [CODEX_UPDATES.md](CODEX_UPDATES.md)
 for baseline changes. Build and test both frontend exports and the Rust workspace; release packaging uses the release workflow.
+
+Client Rust compilation, tests, schema generation and native runtime validation
+remain unverified under the no-local-ccodex-compilation policy. Full `just fmt`
+and Bazel lock validation are also unverified because those tools are unavailable;
+the completed local client checks cover source, direct Rust formatting and static packaging.
 
 ## Process and crates
 
@@ -192,10 +197,16 @@ credentials and account-local HTTP clients remain provider-owned.
 ## Upstream identity and transport
 
 The supplier UA formula is
-`codex_cli_rs/0.162.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
+`codex_cli_rs/0.162.1 ({os_type} {os_version}; {arch}) {terminal_token}`.
 Official headers include `originator`, `User-Agent`, bearer authorization,
 `ChatGPT-Account-ID` and `x-codex-installation-id`; request-specific session,
 thread, turn and request IDs retain their actual lifecycle.
+
+User-Agent, the provider `version` header and catalog `client_version` share the
+pinned release version. Startup aligns only the ChatGPT supplier UA strings in
+`supplier_accounts.user_agent` and `http_fingerprint_json` before creating account
+transports. It preserves installation IDs, OS, architecture, terminal, proxy,
+timezone and unknown fingerprint fields, and leaves other providers unchanged.
 
 OAuth uses `https://auth.openai.com`, client ID
 `app_EMoamEEZ73f0CkXaXp7hrann`, and the pinned official scopes.

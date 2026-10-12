@@ -8,7 +8,7 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `c1382380de69521303b416720a52f42d51af6248` (2026-10-08T16:56:07Z)
+- commit: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d` (2026-10-09T17:39:05Z)
 - constants: `crates/codex2api-version`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
@@ -23,7 +23,7 @@ release commit and the fork integration commit; fork-only service routing,
 official supplier-side protocol constants. The client otherwise retains official
 Codex behavior and isolates its default home from official Codex, not per service.
 
-Current official release integration in the fork: `ba3e0a1b0ce46bfba9ea50d38de67fc0bc8034a5`.
+Current official release integration in the fork: `c63e0d6140676390d687bd1389a1d36b34046821`.
 
 Validate proxy changes locally with the relevant compilation checks and regression
 tests before reporting completion. Do not compile ccodex locally; use source review,
@@ -117,7 +117,7 @@ validation are complete.
 ## Official constants (do not invent)
 
 - originator: `codex_cli_rs`
-- package version in UA: `0.162.0`
+- package version in UA: `0.162.1`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`
