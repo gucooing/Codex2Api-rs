@@ -7,10 +7,27 @@ use serde_json::{Value, json};
 #[derive(Clone)]
 pub struct GrokUpstream {
     auth: codex2api_auth::grok::GrokAuthService,
+    transport: std::sync::Arc<dyn crate::HttpTransport>,
 }
 
 pub mod errors;
 pub mod models;
+
+#[derive(Clone)]
+pub struct PreparedBody {
+    bytes: Bytes,
+    model: Option<String>,
+    stream: bool,
+}
+impl PreparedBody {
+    pub fn new(value: Value) -> Result<Self> {
+        Ok(Self {
+            bytes: encoded(&value)?,
+            model: value["model"].as_str().map(str::to_owned),
+            stream: value["stream"] == true,
+        })
+    }
+}
 
 /// Normalize a real Grok billing period for the shared administrator quota view.
 /// Keep the original response, and leave absent measurements unknown.
@@ -46,7 +63,14 @@ pub fn quota_snapshot(mut value: Value) -> Result<Value> {
 
 impl GrokUpstream {
     pub fn new(auth: codex2api_auth::grok::GrokAuthService) -> Self {
-        Self { auth }
+        Self {
+            auth,
+            transport: std::sync::Arc::new(crate::ReqwestTransport),
+        }
+    }
+    pub fn with_transport(mut self, transport: std::sync::Arc<dyn crate::HttpTransport>) -> Self {
+        self.transport = transport;
+        self
     }
     pub fn auth(&self) -> &codex2api_auth::grok::GrokAuthService {
         &self.auth
@@ -57,6 +81,23 @@ impl GrokUpstream {
         method: Method,
         path: &str,
         body: Option<Value>,
+        inbound: &HeaderMap,
+    ) -> Result<reqwest::Response> {
+        self.grok_request_prepared(
+            id,
+            method,
+            path,
+            body.map(PreparedBody::new).transpose()?,
+            inbound,
+        )
+        .await
+    }
+    pub async fn grok_request_prepared(
+        &self,
+        id: &str,
+        method: Method,
+        path: &str,
+        body: Option<PreparedBody>,
         inbound: &HeaderMap,
     ) -> Result<reqwest::Response> {
         if !matches!(
@@ -73,7 +114,7 @@ impl GrokUpstream {
                 "Unsupported Grok upstream operation".into(),
             ));
         }
-        let account = self.auth().storage()?.require_account(id).await?;
+        let account = self.auth().storage()?.supplier_account_snapshot(id).await?;
         if account.provider_id != codex2api_core::GROK {
             return Err(UpstreamError::InvalidRequest(
                 "Supplier provider mismatch".into(),
@@ -118,14 +159,14 @@ impl GrokUpstream {
             headers.entry("x-grok-req-id").or_insert_with(|| {
                 HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).expect("UUID")
             });
-            if let Some(model) = body.as_ref().and_then(|v| v["model"].as_str()) {
+            if let Some(model) = body.as_ref().and_then(|v| v.model.as_deref()) {
                 headers.insert(
                     "x-grok-model-override",
                     HeaderValue::from_str(model)
                         .map_err(|_| UpstreamError::InvalidRequest("Invalid model".into()))?,
                 );
             }
-            if body.as_ref().is_some_and(|v| v["stream"] == true) {
+            if body.as_ref().is_some_and(|v| v.stream) {
                 headers.insert("accept", HeaderValue::from_static("text/event-stream"));
             }
         }
@@ -136,13 +177,17 @@ impl GrokUpstream {
         );
         let mut request = http.routed_api.request(method, url).headers(headers);
         if let Some(body) = body {
-            request = request.json(&body);
+            request = request
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(body.bytes);
         }
         // Bound the wait for response headers while leaving long generations to the stream watchdog.
-        let mut response =
-            tokio::time::timeout(std::time::Duration::from_secs(120), request.send())
-                .await
-                .map_err(|_| UpstreamError::StreamIdleTimeout)??;
+        let mut response = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            self.transport.send(request),
+        )
+        .await
+        .map_err(|_| UpstreamError::StreamIdleTimeout)??;
         response
             .extensions_mut()
             .insert(SupplierAuthRevision(snapshot.auth_revision));

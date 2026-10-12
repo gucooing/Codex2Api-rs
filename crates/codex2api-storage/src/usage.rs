@@ -260,8 +260,12 @@ fn account_usage_summary(
 
 impl Storage {
     pub async fn reroute_usage(&self, id: &str, account: &str, name: &str) -> Result<()> {
-        sqlx::query("UPDATE usage_records SET account_id=?,account_name=? WHERE id=? AND status='in_progress'")
-            .bind(account).bind(name).bind(id).execute(self.pool()).await?;
+        self.write_request(crate::request_writer::Write::Reroute {
+            id: id.into(),
+            supplier: account.into(),
+            name: name.into(),
+        })
+        .await?;
         Ok(())
     }
     pub async fn supplier_cycle_usage(
@@ -350,36 +354,22 @@ impl Storage {
         Ok(())
     }
     pub async fn insert_usage(&self, record: &UsageRecord) -> Result<()> {
-        let snapshot = self.billing_snapshot(&record.provider_id).await?;
-        sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,image_input_usage_json,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?))")
-            .bind(&record.provider_id).bind(&record.subject_kind).bind(&record.id).bind(&record.account_id).bind(&record.account_name).bind(&record.subject_id).bind(&record.subject_name)
-            .bind(&record.endpoint).bind(&record.transport).bind(&record.model).bind(&record.reasoning_effort).bind(&record.service_tier).bind(&record.image_size).bind(&record.image_input_usage_json).bind(record.requested_at_ms).bind(&record.status)
-            .bind(&record.actual_model).bind(snapshot).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.subject_id)
-            .execute(self.pool()).await?;
-        Ok(())
+        let prices = self.billing_snapshot(&record.provider_id).await?;
+        self.write_request(crate::request_writer::Write::Start {
+            record: Box::new(record.clone()),
+            prices,
+        })
+        .await
+        .map(|_| ())
     }
 
     pub async fn finish_usage(&self, record: &UsageRecord) -> Result<()> {
-        let snapshot: Option<Option<String>> =
-            sqlx::query_scalar("SELECT pricing_snapshot_json FROM usage_records WHERE id=?")
-                .bind(&record.id)
-                .fetch_optional(self.pool())
-                .await?;
-        let prices = snapshot
-            .flatten()
-            .map(|s| serde_json::from_str::<crate::billing::BillingSnapshot>(&s))
-            .transpose()?;
-        let (cost, billing_status, billing_model, billing_tier) = match prices {
-            Some(prices) => prices.charge(record),
-            None => (None, "legacy", None, None),
-        };
-        sqlx::query("UPDATE usage_records SET cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?, input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,failure_kind=?,failure_status=?,error_code=?,error_message=?,upstream_request_id=? WHERE id=? AND status='in_progress'")
-            .bind(cost).bind(billing_status).bind(billing_model).bind(billing_tier).bind(&record.service_tier).bind(&record.actual_model).bind(record.input_tokens).bind(record.output_tokens).bind(record.cached_tokens).bind(record.cache_write_tokens)
-            .bind(record.reasoning_tokens).bind(&record.image_size).bind(record.image_count).bind(&record.image_usage_json).bind(&record.image_input_usage_json).bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.failure_kind).bind(record.failure_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.id)
-            .execute(self.pool()).await?;
-        Ok(())
+        self.write_request(crate::request_writer::Write::Finish(Box::new(
+            record.clone(),
+        )))
+        .await
+        .map(|_| ())
     }
-
     pub async fn query_usage(&self, filter: &UsageFilter) -> Result<UsagePage> {
         let page_size = table_page_size(filter.page_size)?;
         let mut tx = self.pool().begin().await?;

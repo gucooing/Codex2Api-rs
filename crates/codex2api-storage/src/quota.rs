@@ -59,6 +59,10 @@ impl Storage {
         }
         sqlx::query("INSERT INTO supplier_info_cache(account_id, section, response_json, observed_at) VALUES(?, ?, ?, ?) ON CONFLICT(account_id, section) DO UPDATE SET response_json=excluded.response_json, observed_at=excluded.observed_at, auth_revision=NULL")
             .bind(account_id).bind(section.as_str()).bind(serde_json::to_string(&snapshot.value)?).bind(snapshot.observed_at).execute(self.pool()).await?;
+        if section == SupplierInfoSection::Details {
+            self.runtime
+                .invalidate_key(&format!("supplier-routing:{account_id}"));
+        }
         Ok(())
     }
 
@@ -75,6 +79,10 @@ impl Storage {
             .bind(section.as_str())
             .execute(self.pool())
             .await?;
+        if section == SupplierInfoSection::Details {
+            self.runtime
+                .invalidate_key(&format!("supplier-routing:{account_id}"));
+        }
         Ok(())
     }
     pub async fn get_account_quota(&self, account_id: &str) -> Result<Option<QuotaSnapshot>> {
@@ -129,46 +137,16 @@ impl Storage {
         update: F,
     ) -> Result<bool>
     where
-        F: FnOnce(Option<QuotaSnapshot>) -> Value + Send,
+        F: FnOnce(Option<QuotaSnapshot>) -> Value + Send + 'static,
     {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let current: Option<i64> =
-            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
-                .bind(account_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        if current != Some(auth_revision) {
-            return Ok(false);
-        }
-        let row: Option<(String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT response_json, observed_at FROM account_quota_cache WHERE account_id=?",
-        )
-        .bind(account_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if row.as_ref().is_some_and(|(_, at)| *at > observed_at) {
-            return Ok(false);
-        }
-        let previous = row
-            .map(|(raw, at)| {
-                Ok::<_, crate::StorageError>(QuotaSnapshot {
-                    value: serde_json::from_str(&raw)?,
-                    observed_at: at,
-                })
+        Ok(self
+            .write_request(crate::request_writer::Write::Quota {
+                id: account_id.into(),
+                revision: auth_revision,
+                at: observed_at,
+                update: Some(Box::new(update)),
             })
-            .transpose()?;
-        let value = update(previous);
-        sqlx::query(
-            "INSERT INTO account_quota_cache(account_id,response_json,observed_at) VALUES(?,?,?)
-             ON CONFLICT(account_id) DO UPDATE SET response_json=excluded.response_json,
-                 observed_at=excluded.observed_at",
-        )
-        .bind(account_id)
-        .bind(serde_json::to_string(&value)?)
-        .bind(observed_at)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(true)
+            .await?
+            > 0)
     }
 }

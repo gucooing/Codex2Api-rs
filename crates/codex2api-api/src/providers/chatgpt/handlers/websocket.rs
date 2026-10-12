@@ -16,14 +16,24 @@ pub async fn responses_websocket(
     super::pooled_websocket::connect(state, endpoint, oauth.0, headers, upgrade).await
 }
 
+#[cfg(test)]
 pub(super) fn prepare_message(
     text: &str,
     installation_id: &str,
     timezone: Option<&str>,
     guardian_reviewer: bool,
 ) -> codex2api_upstream::Result<String> {
-    let mut value: serde_json::Value = serde_json::from_str(text)
+    let value: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| codex2api_upstream::UpstreamError::InvalidRequest(e.to_string()))?;
+    prepare_value(value, installation_id, timezone, guardian_reviewer)
+}
+
+pub(super) fn prepare_value(
+    mut value: serde_json::Value,
+    installation_id: &str,
+    timezone: Option<&str>,
+    guardian_reviewer: bool,
+) -> codex2api_upstream::Result<String> {
     if value.get("type").and_then(serde_json::Value::as_str) == Some("response.create") {
         codex2api_upstream::apply_response_timezone(&mut value, timezone)?;
         let mut headers = HeaderMap::new();

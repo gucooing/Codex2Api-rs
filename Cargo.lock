@@ -400,6 +400,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "bytes",
  "chrono",
  "codex2api-accounts",
  "codex2api-admin",

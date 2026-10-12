@@ -19,11 +19,13 @@ use codex2api_auth::transport::{AccountCookieStore, AccountHttpClients};
 /// Default idle timeout while waiting for the next SSE event (official-style).
 pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct TokenState {
     access_token: String,
     chatgpt_account_id: Option<String>,
     revision: i64,
+    credentials: Option<Arc<codex2api_auth::tokens::ChatgptCredentials>>,
+    headers: Option<HeaderMap>,
 }
 
 pub(crate) struct RequestAuth {
@@ -48,6 +50,13 @@ pub struct UpstreamClient {
     stream_idle_timeout: Duration,
     pub(crate) cookies: Arc<AccountCookieStore>,
     pub(crate) account_http: Arc<AccountHttpClients>,
+    pub(crate) transport: Arc<dyn crate::HttpTransport>,
+    pub(crate) workspace: RwLock<
+        Option<(
+            Arc<(codex2api_storage::QuotaSnapshot, Option<i64>)>,
+            crate::WorkspaceRoute,
+        )>,
+    >,
 }
 
 impl UpstreamClient {
@@ -60,6 +69,7 @@ impl UpstreamClient {
     }
 
     pub fn from_context(ctx: SupplierContext, auth: Option<AuthService>) -> Result<Self> {
+        let clients = Arc::new(AccountHttpClients::new(&ctx.identity)?);
         let account_id = ctx.account.id.clone();
         let tokens = ctx
             .auth
@@ -74,12 +84,13 @@ impl UpstreamClient {
             .clone()
             .filter(|s| !s.is_empty())
             .or(ctx.account.chatgpt_account_id.clone());
-        Self::build(
-            ctx.identity,
+        Ok(Self::build_with_http(
+            clients.identity.clone(),
             tokens.access_token.clone(),
             chatgpt_account_id,
             auth,
-        )
+            clients,
+        ))
     }
 
     pub fn with_auth_service(mut self, auth: AuthService) -> Self {
@@ -99,8 +110,24 @@ impl UpstreamClient {
         auth: Option<AuthService>,
     ) -> Result<Self> {
         let clients = Arc::new(AccountHttpClients::new(&identity)?);
+        Ok(Self::build_with_http(
+            identity,
+            access_token,
+            chatgpt_account_id,
+            auth,
+            clients,
+        ))
+    }
+
+    pub(crate) fn build_with_http(
+        identity: AccountIdentity,
+        access_token: String,
+        chatgpt_account_id: Option<String>,
+        auth: Option<AuthService>,
+        clients: Arc<AccountHttpClients>,
+    ) -> Self {
         let http = clients.api.clone();
-        Ok(Self {
+        Self {
             #[cfg(test)]
             discovery_url: None,
             http,
@@ -109,12 +136,16 @@ impl UpstreamClient {
                 access_token,
                 chatgpt_account_id,
                 revision: 0,
+                credentials: None,
+                headers: None,
             }),
             auth,
             stream_idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
             cookies: clients.cookies.clone(),
             account_http: clients,
-        })
+            transport: Arc::new(crate::ReqwestTransport),
+            workspace: RwLock::new(None),
+        }
     }
 
     pub fn identity(&self) -> &AccountIdentity {
@@ -137,6 +168,7 @@ impl UpstreamClient {
         self.auth.as_ref()
     }
 
+    #[cfg(test)]
     pub(crate) fn use_account_http(&mut self, clients: Arc<AccountHttpClients>) {
         self.http = clients.api.clone();
         self.cookies = clients.cookies.clone();
@@ -239,7 +271,7 @@ impl UpstreamClient {
             if method != http::Method::GET || !prepared.body.is_empty() {
                 request = request.body(prepared.body.clone());
             }
-            let mut response = request.send().await?;
+            let mut response = self.transport.send(request).await?;
             if response.status() == StatusCode::UNAUTHORIZED && !retried && self.auth.is_some() {
                 retried = true;
                 self.refresh_access_token(&auth.access_token).await?;
@@ -330,11 +362,14 @@ impl UpstreamClient {
     pub(crate) fn request_auth(&self) -> Result<RequestAuth> {
         let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
         Ok(RequestAuth {
-            headers: default_headers(
-                &self.identity,
-                &tokens.access_token,
-                tokens.chatgpt_account_id.as_deref(),
-            )?,
+            headers: match &tokens.headers {
+                Some(headers) => headers.clone(),
+                None => default_headers(
+                    &self.identity,
+                    &tokens.access_token,
+                    tokens.chatgpt_account_id.as_deref(),
+                )?,
+            },
             access_token: tokens.access_token.clone(),
             account_id: tokens.chatgpt_account_id.clone(),
             revision: tokens.revision,
@@ -345,26 +380,30 @@ impl UpstreamClient {
         let Some(auth) = &self.auth else {
             return Ok(());
         };
-        if let Err(error) = auth.refresh(&self.identity.account_id, false).await {
-            if error.permanent_refresh_failure()
-                && !matches!(error, codex2api_auth::AuthError::MissingRefreshToken)
-            {
-                self.reject_auth(self.request_auth()?.revision).await;
-                return Err(UpstreamError::Refresh(error));
+        let credentials = match auth.refresh(&self.identity.account_id, false).await {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                if error.permanent_refresh_failure()
+                    && !matches!(error, codex2api_auth::AuthError::MissingRefreshToken)
+                {
+                    self.reject_auth(self.request_auth()?.revision).await;
+                    return Err(UpstreamError::Refresh(error));
+                }
+                // Official proactive refresh keeps persisted auth on transient failure.
+                tracing::warn!(%error, "proactive token refresh failed");
+                auth.credentials(&self.identity.account_id).await?
             }
-            // Official proactive refresh keeps persisted auth on transient failure.
-            tracing::warn!(%error, "proactive token refresh failed");
-        }
-        self.load_current_auth().await
+        };
+        self.apply_auth(credentials)
     }
 
     pub(crate) async fn refresh_access_token(&self, rejected_token: &str) -> Result<()> {
         let auth = self.auth.as_ref().ok_or(UpstreamError::Unauthorized)?;
-        match auth
+        let credentials = match auth
             .refresh_rejected_token(&self.identity.account_id, rejected_token)
             .await
         {
-            Ok(_) => (),
+            Ok(credentials) => credentials,
             Err(error) => {
                 // A refresh outage cannot establish invalid credentials.
                 let revision = self.request_auth()?.revision;
@@ -374,7 +413,7 @@ impl UpstreamClient {
                 return Err(UpstreamError::Refresh(error));
             }
         };
-        self.load_current_auth().await
+        self.apply_auth(credentials)
     }
 
     pub(crate) async fn reject_auth(&self, revision: i64) {
@@ -388,14 +427,20 @@ impl UpstreamClient {
         }
     }
 
-    async fn load_current_auth(&self) -> Result<()> {
-        let auth = self.auth.as_ref().ok_or(UpstreamError::Unauthorized)?;
-        let snapshot = auth
-            .storage()?
-            .supplier_auth_snapshot(&self.identity.account_id)
-            .await?
-            .ok_or_else(|| UpstreamError::MissingAccessToken(self.identity.account_id.clone()))?;
-        let refreshed = codex2api_auth::AuthDotJson::from_supplier_tokens(&snapshot.tokens)?;
+    pub(crate) fn apply_auth(
+        &self,
+        credentials: Arc<codex2api_auth::tokens::ChatgptCredentials>,
+    ) -> Result<()> {
+        {
+            let state = self.tokens.read().unwrap_or_else(|e| e.into_inner());
+            if state.credentials.as_ref().is_some_and(|old| {
+                Arc::ptr_eq(old, &credentials)
+                    || old.cache_generation > credentials.cache_generation
+            }) {
+                return Ok(());
+            }
+        }
+        let refreshed = &credentials.auth;
         let tokens = refreshed
             .tokens
             .as_ref()
@@ -411,9 +456,22 @@ impl UpstreamClient {
             .filter(|s| !s.is_empty())
             .or_else(|| refreshed.chatgpt_account_id().map(str::to_string));
         let mut state = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+        if state
+            .credentials
+            .as_ref()
+            .is_some_and(|old| old.cache_generation > credentials.cache_generation)
+        {
+            return Ok(());
+        }
         state.access_token = tokens.access_token.clone();
-        state.chatgpt_account_id = chatgpt_account_id.or(snapshot.chatgpt_account_id);
-        state.revision = snapshot.auth_revision;
+        state.chatgpt_account_id = chatgpt_account_id;
+        state.headers = Some(default_headers(
+            &self.identity,
+            &tokens.access_token,
+            state.chatgpt_account_id.as_deref(),
+        )?);
+        state.revision = credentials.revision;
+        state.credentials = Some(credentials);
         Ok(())
     }
 }

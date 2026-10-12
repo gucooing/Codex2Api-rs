@@ -4,6 +4,65 @@ use codex2api_storage::{Storage, SupplierAccount, UsageRecord};
 use codex2api_upstream::RequestMetadata;
 use std::time::Instant;
 
+pub(crate) struct Admission {
+    metadata: RequestMetadata,
+    pub(crate) version: (u64, u64, i64),
+}
+impl Admission {
+    pub async fn new(
+        storage: &Storage,
+        provider: &str,
+        owner: &str,
+        endpoint: &str,
+        metadata: RequestMetadata,
+    ) -> crate::Result<Self> {
+        let version = storage.admission_version(owner);
+        let service = codex2api_service::ExecutionService::new(storage.clone());
+        service
+            .authorize(
+                owner,
+                provider,
+                request(provider, endpoint, &metadata, false),
+            )
+            .await?;
+        service.admit_request(owner, false).await?;
+        Ok(Self { metadata, version })
+    }
+}
+fn request<'a>(
+    provider: &str,
+    endpoint: &str,
+    metadata: &'a RequestMetadata,
+    inspect: bool,
+) -> codex2api_service::ExecutionRequest<'a> {
+    use codex2api_core::ExecutionKind;
+    let kind = if inspect {
+        ExecutionKind::InspectModel
+    } else if let Some(operation) = codex2api_core::billing_operation(provider, endpoint) {
+        ExecutionKind::Operation(operation)
+    } else if endpoint.ends_with("/responses/compact") {
+        ExecutionKind::Compact
+    } else if ["/responses", "/chat/completions", "/messages"]
+        .iter()
+        .any(|suffix| endpoint.ends_with(suffix))
+    {
+        ExecutionKind::Responses
+    } else if ["/images/generations", "/images/edits"]
+        .iter()
+        .any(|suffix| endpoint.ends_with(suffix))
+    {
+        ExecutionKind::Image
+    } else {
+        ExecutionKind::Unpriced
+    };
+    codex2api_service::ExecutionRequest {
+        kind,
+        model: metadata.model.as_deref(),
+        service_tier: metadata.service_tier.as_deref(),
+        image_size: metadata.image_size.as_deref(),
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ExecutionContext {
     supplier_permit: std::sync::Arc<std::sync::Mutex<Option<codex2api_storage::RuntimePermit>>>,
@@ -60,37 +119,11 @@ impl ExecutionContext {
         metadata: &RequestMetadata,
         inspect_only: bool,
     ) -> crate::Result<()> {
-        use codex2api_core::ExecutionKind;
-        let kind = if inspect_only {
-            ExecutionKind::InspectModel
-        } else if let Some(operation) =
-            codex2api_core::billing_operation(&self.provider_id, &self.endpoint)
-        {
-            ExecutionKind::Operation(operation)
-        } else if self.endpoint.ends_with("/responses/compact") {
-            ExecutionKind::Compact
-        } else if self.endpoint.ends_with("/responses")
-            || self.endpoint.ends_with("/chat/completions")
-            || self.endpoint.ends_with("/messages")
-        {
-            ExecutionKind::Responses
-        } else if self.endpoint.ends_with("/images/generations")
-            || self.endpoint.ends_with("/images/edits")
-        {
-            ExecutionKind::Image
-        } else {
-            ExecutionKind::Unpriced
-        };
         codex2api_service::ExecutionService::new(self.storage.clone())
             .authorize(
                 &self.owner_id,
                 &self.provider_id,
-                codex2api_service::ExecutionRequest {
-                    kind,
-                    model: metadata.model.as_deref(),
-                    service_tier: metadata.service_tier.as_deref(),
-                    image_size: metadata.image_size.as_deref(),
-                },
+                request(&self.provider_id, &self.endpoint, metadata, inspect_only),
             )
             .await?;
         if let Some(model) = metadata.model.as_deref()
@@ -115,7 +148,39 @@ impl ExecutionContext {
         start: Instant,
         requested_at_ms: i64,
     ) -> crate::Result<RequestLog> {
-        self.authorize(&metadata, false).await?;
+        let admission = Admission::new(
+            &self.storage,
+            &self.provider_id,
+            &self.owner_id,
+            &self.endpoint,
+            metadata,
+        )
+        .await?;
+        self.start_admitted(admission, start, requested_at_ms).await
+    }
+
+    pub async fn start_admitted(
+        &self,
+        admission: Admission,
+        start: Instant,
+        requested_at_ms: i64,
+    ) -> crate::Result<RequestLog> {
+        if admission.version != self.storage.admission_version(&self.owner_id) {
+            self.authorize(&admission.metadata, false).await?;
+        } else if let Some(model) = admission.metadata.model.as_deref()
+            && !self
+                .storage
+                .supplier_supports_model(&self.account_id, model)
+                .await?
+        {
+            return Err(crate::ApiError::openai(
+                http::StatusCode::FORBIDDEN,
+                "permission_error",
+                "This supplier does not have the requested model configured.",
+                Some("supplier_model_unavailable"),
+            ));
+        }
+        let metadata = admission.metadata;
         let consumer_permit = self
             .storage
             .acquire_consumer(&self.owner_id)

@@ -112,25 +112,41 @@ fn retry_headers(value: &Value) -> Option<Value> {
         .collect();
     (!mapped.is_empty()).then_some(Value::Object(mapped))
 }
-pub(crate) fn metadata(value: &mut Value) {
+/// Returns whether sanitization changed the event, avoiding a full comparison copy.
+pub(crate) fn metadata(value: &mut Value) -> bool {
+    let mut changed = false;
     match value {
         Value::Array(items) => {
             for item in items {
-                metadata(item)
+                changed |= metadata(item);
             }
         }
         Value::Object(object) => {
             if matches!(
                 object.get("type").and_then(Value::as_str),
                 Some("error" | "response.failed")
-            ) && let Some(headers) = object.remove("headers")
-                && let Some(headers) = retry_headers(&headers)
+            ) && let Some(headers) = object.get("headers")
             {
-                object.insert("headers".into(), headers);
+                let safe = retry_headers(headers);
+                if safe.as_ref() != Some(headers) {
+                    changed = true;
+                    object.remove("headers");
+                    if let Some(safe) = safe {
+                        object.insert("headers".into(), safe);
+                    }
+                }
             }
+            let original_len = object.len();
             object.retain(|key, _| {
+                let lowercase;
+                let name = if key.bytes().any(|b| b.is_ascii_uppercase()) {
+                    lowercase = key.to_ascii_lowercase();
+                    lowercase.as_str()
+                } else {
+                    key.as_str()
+                };
                 !matches!(
-                    key.to_ascii_lowercase().as_str(),
+                    name,
                     "supplier_account_id"
                         | "supplier_id"
                         | "supplier_account"
@@ -195,22 +211,29 @@ pub(crate) fn metadata(value: &mut Value) {
                         | "cost_in_usd_ticks"
                 )
             });
+            changed |= original_len != object.len();
             for (key, item) in object.iter_mut() {
                 if key == "error" && !item.is_null() {
-                    *item = error(item);
+                    let safe = error(item);
+                    if *item != safe {
+                        *item = safe;
+                        changed = true;
+                    }
                 } else {
-                    metadata(item);
+                    changed |= metadata(item);
                 }
             }
             if object.get("type").and_then(Value::as_str) == Some("error") {
-                object.insert(
-                    "message".into(),
-                    json!("The service could not complete this request."),
-                );
+                let message = "The service could not complete this request.";
+                if object.get("message").and_then(Value::as_str) != Some(message) {
+                    object.insert("message".into(), json!(message));
+                    changed = true;
+                }
             }
         }
         _ => {}
     }
+    changed
 }
 
 #[cfg(test)]

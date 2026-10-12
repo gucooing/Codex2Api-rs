@@ -65,15 +65,43 @@ pub fn image_resolution_tier(value: &str) -> Option<String> {
 
 impl Storage {
     pub async fn model_configs(&self, provider: &str) -> Result<Vec<ModelConfig>> {
-        Ok(sqlx::query_as(
-            "SELECT * FROM model_catalog WHERE provider_id=? AND deleted=0 ORDER BY model",
-        )
-        .bind(provider)
-        .fetch_all(self.pool())
-        .await?)
+        Ok(self
+            .model_catalog_snapshot(provider)
+            .await?
+            .as_ref()
+            .clone())
+    }
+    pub async fn model_catalog_snapshot(
+        &self,
+        provider: &str,
+    ) -> Result<std::sync::Arc<Vec<ModelConfig>>> {
+        let key = format!("model-catalog:{provider}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
+        let value = std::sync::Arc::new(
+            sqlx::query_as(
+                "SELECT * FROM model_catalog WHERE provider_id=? AND deleted=0 ORDER BY model",
+            )
+            .bind(provider)
+            .fetch_all(self.pool())
+            .await?,
+        );
+        self.runtime
+            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
+        Ok(value)
     }
     pub async fn model_config(&self, provider: &str, model: &str) -> Result<Option<ModelConfig>> {
         let key = format!("model-config:{provider}:{model}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
         if let Some(value) = self.runtime.cached(&key) {
             return Ok(value);
         }

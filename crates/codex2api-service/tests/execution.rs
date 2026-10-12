@@ -44,6 +44,106 @@ fn chrono_timestamp() -> String {
 }
 
 #[tokio::test]
+async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().join("image-prices.sqlite"))
+        .await
+        .unwrap();
+    let account = consumer(&storage, "consumer").await;
+    let mut plan = storage
+        .virtual_plan(&account.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.config["model_access"] = json!("all");
+    plan.config["spending_windows"] = json!([{"duration_seconds":604800,"cost_limit_usd":"1"}]);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    let model = codex2api_storage::ModelConfig {
+        provider_id: "chatgpt".into(),
+        model: "fixture-image".into(),
+        kind: "image".into(),
+        enabled: true,
+        deleted: false,
+        revision: 0,
+    };
+    let mut price = codex2api_storage::ImagePrice {
+        provider_id: "chatgpt".into(),
+        model: model.model.clone(),
+        resolution: "4K".into(),
+        price_nano_usd: 1,
+    };
+    storage
+        .save_model_config(&model, &[], std::slice::from_ref(&price), None)
+        .await
+        .unwrap();
+    let service = ExecutionService::new(storage.clone());
+    let image = |size| ExecutionRequest {
+        kind: ExecutionKind::Image,
+        image_size: size,
+        ..request("fixture-image")
+    };
+    assert!(matches!(
+        service
+            .authorize(&account.id, "chatgpt", image(Some("1024x1024")))
+            .await,
+        Err(ServiceError::PricingUnavailable)
+    ));
+    let model = storage
+        .model_config("chatgpt", &model.model)
+        .await
+        .unwrap()
+        .unwrap();
+    price.resolution = "1K".into();
+    storage
+        .save_model_config(
+            &model,
+            &[],
+            std::slice::from_ref(&price),
+            Some(model.revision),
+        )
+        .await
+        .unwrap();
+    for size in [None, Some("auto"), Some("1K"), Some("1024x1024")] {
+        service
+            .authorize(&account.id, "chatgpt", image(size))
+            .await
+            .unwrap();
+    }
+    for size in ["4K", "4096x4096", "unknown"] {
+        assert!(matches!(
+            service
+                .authorize(&account.id, "chatgpt", image(Some(size)))
+                .await,
+            Err(ServiceError::PricingUnavailable)
+        ));
+    }
+    let model = storage
+        .model_config("chatgpt", &model.model)
+        .await
+        .unwrap()
+        .unwrap();
+    price.resolution = "4K".into();
+    storage
+        .save_model_config(
+            &model,
+            &[],
+            std::slice::from_ref(&price),
+            Some(model.revision),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .authorize(&account.id, "chatgpt", image(Some("1024x1024")))
+            .await,
+        Err(ServiceError::PricingUnavailable)
+    ));
+}
+
+#[tokio::test]
 async fn configured_search_price_allows_limited_accounts_without_bypassing_model_or_budget_checks()
 {
     let temp = tempfile::tempdir().unwrap();

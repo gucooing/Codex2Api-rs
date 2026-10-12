@@ -68,4 +68,17 @@ impl GrokIdentity {
     pub fn fingerprint_json(&self) -> serde_json::Result<String> {
         serde_json::to_string(self)
     }
+    pub fn from_transport(account: &codex2api_storage::SupplierTransportSnapshot) -> Self {
+        let timezone = serde_json::from_str::<serde_json::Value>(&account.http_fingerprint_json)
+            .ok()
+            .and_then(|v| v["timezone"].as_str().map(str::to_owned));
+        Self::new(
+            account.id.clone(),
+            account.installation_id.clone(),
+            account.os_type.clone(),
+            account.os_version.clone(),
+            account.arch.clone(),
+            timezone,
+        )
+    }
 }

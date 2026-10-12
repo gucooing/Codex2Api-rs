@@ -33,5 +33,6 @@ pub(crate) fn request(headers: &http::HeaderMap, body: &serde_json::Value) -> Sc
         session_hash,
         previous_response: None,
         previous_can_move: false,
+        admission: None,
     }
 }

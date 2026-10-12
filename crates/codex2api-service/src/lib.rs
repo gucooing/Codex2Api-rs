@@ -2,7 +2,7 @@
 //! This crate makes business decisions; it does not know HTTP headers or frame formats.
 
 use codex2api_core::{ExecutionKind, PolicyError};
-use codex2api_storage::Storage;
+use codex2api_storage::{PriceRequirement, Storage};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
@@ -98,45 +98,20 @@ impl ExecutionService {
         if !limited {
             return Ok(());
         }
-        let priced = match request.kind {
+        let requirement = match request.kind {
             ExecutionKind::Responses | ExecutionKind::Compact => {
-                let tier = codex2api_storage::price_tier(request.service_tier);
-                self.storage
-                    .model_prices(provider)
-                    .await?
-                    .iter()
-                    .any(|price| {
-                        price.model == model
-                            && Some(price.tier.as_str()) == tier
-                            && price.min_input_tokens == 0
-                    })
+                PriceRequirement::Tokens(codex2api_storage::price_tier(request.service_tier))
             }
-            ExecutionKind::Image => {
-                self.storage
-                    .image_prices(provider)
-                    .await?
-                    .iter()
-                    .any(|price| {
-                        price.model == model
-                            && request
-                                .image_size
-                                .filter(|size| *size != "auto")
-                                .is_none_or(|size| {
-                                    size == price.resolution
-                                        || codex2api_storage::image_resolution_tier(size).as_deref()
-                                            == Some(&price.resolution)
-                                })
-                    })
-            }
-            ExecutionKind::InspectModel => true,
-            ExecutionKind::Operation(operation) => self
-                .storage
-                .operation_price(provider, operation)
-                .await?
-                .is_some_and(|price| price.price_nano_usd.is_some()),
-            ExecutionKind::Unpriced => false,
+            ExecutionKind::Image => PriceRequirement::Image(request.image_size),
+            ExecutionKind::Operation(operation) => PriceRequirement::Operation(operation),
+            ExecutionKind::InspectModel => return Ok(()),
+            ExecutionKind::Unpriced => return Err(ServiceError::PricingUnavailable),
         };
-        if !priced {
+        if !self
+            .storage
+            .price_available(provider, model, requirement)
+            .await?
+        {
             return Err(ServiceError::PricingUnavailable);
         }
         Ok(())

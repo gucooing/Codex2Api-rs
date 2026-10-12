@@ -3,7 +3,7 @@ use http::{HeaderMap, HeaderValue, Method};
 
 use crate::request::{
     PreparedRequest, decode_body, normalize_protocol_headers, normalize_response_identity,
-    prepare_responses,
+    prepare_responses_value,
 };
 use crate::{Result, UpstreamClient};
 use codex2api_version::{CHATGPT_CODEX_BASE_URL, CODEX_PACKAGE_VERSION};
@@ -76,17 +76,34 @@ impl Endpoint {
         installation_id: &str,
         timezone: Option<&str>,
     ) -> Result<PreparedRequest> {
-        if self.is_response() {
-            let inbound = self.response_headers(inbound.clone());
-            return prepare_responses(body, &inbound, installation_id, timezone);
-        }
         if self.method() == Method::GET {
             return Ok(PreparedRequest {
                 body: Bytes::new(),
                 headers: normalize_protocol_headers(inbound, installation_id)?,
             });
         }
-        let mut value = decode_body(body, inbound)?;
+        self.prepare_value(
+            decode_body(body, inbound)?,
+            inbound,
+            installation_id,
+            timezone,
+        )
+    }
+
+    pub(crate) fn prepare_value(
+        self,
+        mut value: serde_json::Value,
+        inbound: &HeaderMap,
+        installation_id: &str,
+        timezone: Option<&str>,
+    ) -> Result<PreparedRequest> {
+        if self.is_response() {
+            let inbound = self.response_headers(inbound.clone());
+            return prepare_responses_value(value, &inbound, installation_id, timezone);
+        }
+        if self.method() == Method::GET {
+            return self.prepare(&[], inbound, installation_id, timezone);
+        }
         if self == Self::InputTokens {
             let mut headers = normalize_protocol_headers(inbound, installation_id)?;
             headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -135,6 +152,38 @@ impl Endpoint {
 }
 
 impl UpstreamClient {
+    /// Consume the value already decoded for scheduling and billing.
+    pub async fn forward_decoded_endpoint(
+        &self,
+        endpoint: Endpoint,
+        subpath: Option<&str>,
+        body: serde_json::Value,
+        inbound: HeaderMap,
+    ) -> Result<reqwest::Response> {
+        let (endpoint, url, provider_version) = if let Some(path) = subpath {
+            (
+                Endpoint::Compact,
+                crate::responses_subpath_url(path)?.to_string(),
+                true,
+            )
+        } else {
+            (
+                endpoint,
+                endpoint.url(),
+                !matches!(endpoint, Endpoint::Usage | Endpoint::InputTokens),
+            )
+        };
+        let installation = self.identity().installation_id.clone();
+        let timezone = self.identity().http_fingerprint.timezone.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            endpoint.prepare_value(body, &inbound, &installation, timezone.as_deref())
+        })
+        .await
+        .map_err(|e| crate::UpstreamError::InvalidRequest(e.to_string()))??;
+        self.send_prepared(endpoint.method(), &url, prepared, provider_version)
+            .await
+    }
+
     pub async fn forward_endpoint(
         &self,
         endpoint: Endpoint,

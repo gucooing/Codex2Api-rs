@@ -10,6 +10,13 @@ use crate::{Result, Storage, StorageError, UsageRecord};
 use account_fixture::AccountFixture;
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize)]
+pub enum PriceRequirement<'a> {
+    Tokens(Option<&'a str>),
+    Image(Option<&'a str>),
+    Operation(&'a str),
+}
+
 /// Integer micro-USD per million tokens; snapshot with each request.
 #[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ModelPrice {
@@ -302,8 +309,50 @@ fn image_tier_rank(tier: &str) -> Option<usize> {
 }
 
 impl Storage {
-    pub(crate) async fn billing_snapshot(&self, provider: &str) -> Result<String> {
+    pub async fn price_available(
+        &self,
+        provider: &str,
+        model: &str,
+        requirement: PriceRequirement<'_>,
+    ) -> Result<bool> {
+        if matches!(requirement, PriceRequirement::Tokens(None)) {
+            return Ok(false);
+        }
+        let key = format!(
+            "price-available:{}",
+            serde_json::to_string(&(provider, model, &requirement))?
+        );
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
+        let value: bool = match requirement {
+            PriceRequirement::Tokens(tier) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_prices WHERE provider_id=? AND model=? AND tier=? AND min_input_tokens=0)")
+                .bind(provider).bind(model).bind(tier).fetch_one(self.pool()).await?,
+            PriceRequirement::Image(size) => {
+                let size = size.filter(|size| *size != "auto");
+                let tier = size.and_then(crate::image_resolution_tier);
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_image_prices WHERE provider_id=? AND model=? AND (? IS NULL OR resolution=? OR resolution=?))")
+                    .bind(provider).bind(model).bind(size).bind(size).bind(tier).fetch_one(self.pool()).await?
+            }
+            PriceRequirement::Operation(operation) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operation_prices WHERE provider_id=? AND operation=? AND price_nano_usd IS NOT NULL)")
+                .bind(provider).bind(operation).fetch_one(self.pool()).await?,
+        };
+        self.runtime
+            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
+        Ok(value)
+    }
+
+    pub(crate) async fn billing_snapshot(&self, provider: &str) -> Result<std::sync::Arc<String>> {
         let key = format!("billing-snapshot:{provider}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
         if let Some(value) = self.runtime.cached(&key) {
             return Ok(value);
         }
@@ -327,11 +376,11 @@ impl Storage {
                 .fetch_all(&mut *tx)
                 .await?;
         tx.commit().await?;
-        let value = serde_json::to_string(&BillingSnapshot::Current {
+        let value = std::sync::Arc::new(serde_json::to_string(&BillingSnapshot::Current {
             tokens,
             images,
             operations,
-        })?;
+        })?);
         self.runtime
             .cache(key, &value, epoch, std::time::Duration::from_secs(30));
         Ok(value)

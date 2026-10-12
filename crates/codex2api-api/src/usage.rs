@@ -201,29 +201,31 @@ struct Tokens {
     output_tokens_details: Option<TokenDetails>,
 }
 #[derive(Default, Deserialize)]
-struct ResponseMetadata {
+struct ResponseMetadata<'a> {
     id: Option<String>,
     model: Option<String>,
     headers: Option<serde_json::Value>,
     size: Option<String>,
     usage: Option<Tokens>,
     status: Option<String>,
-    data: Option<Vec<ImageOutput>>,
+    #[serde(borrow)]
+    data: Option<Vec<ImageOutput<'a>>>,
 }
 #[derive(Default, Deserialize)]
-struct ImageOutput {
-    b64_json: Option<String>,
-    url: Option<String>,
+struct ImageOutput<'a> {
+    b64_json: Option<&'a str>,
+    url: Option<&'a str>,
     size: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     error: Option<serde::de::IgnoredAny>,
 }
 #[derive(Default, Deserialize)]
-struct Event {
+struct Event<'a> {
     #[serde(rename = "type")]
     kind: Option<String>,
-    response: Option<ResponseMetadata>,
+    #[serde(borrow)]
+    response: Option<ResponseMetadata<'a>>,
     response_id: Option<String>,
     model: Option<String>,
     headers: Option<serde_json::Value>,
@@ -232,10 +234,11 @@ struct Event {
     // Error envelopes use a numeric HTTP status; response events use a string.
     status: Option<serde_json::Value>,
     error: Option<serde_json::Value>,
-    data: Option<Vec<ImageOutput>>,
+    #[serde(borrow)]
+    data: Option<Vec<ImageOutput<'a>>>,
 }
 
-impl Event {
+impl Event<'_> {
     fn generation_message(&self) -> bool {
         self.kind
             .as_deref()
@@ -404,7 +407,7 @@ impl RequestLog {
             record.http_status = Some(i64::from(status));
         }
     }
-    fn observe(&mut self, event: &Event, value: &serde_json::Value) {
+    fn observe(&mut self, event: &Event<'_>, value: &serde_json::Value) {
         if self.lifecycle.outcome().is_some() {
             return;
         }
@@ -626,7 +629,7 @@ impl RequestLog {
         if let Some(observer) = &mut self.observer {
             let events = observer.observe(bytes);
             for value in events {
-                if let Ok(event) = serde_json::from_value::<Event>(value.clone()) {
+                if let Ok(event) = Event::deserialize(&value) {
                     if event.generation_message() {
                         self.first_message_at(received_at);
                     }
@@ -651,7 +654,7 @@ impl RequestLog {
             return;
         }
         if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes)
-            && let Ok(event) = serde_json::from_value::<Event>(value.clone())
+            && let Ok(event) = Event::deserialize(&value)
         {
             if event.generation_message() {
                 self.first_message_at(received_at);
@@ -1150,7 +1153,14 @@ impl WsLedger {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
             return Ok(None);
         };
-        let Ok(event) = serde_json::from_value::<Event>(value.clone()) else {
+        self.observe_value_at(&value, received_at).await
+    }
+    pub(crate) async fn observe_value_at(
+        &mut self,
+        value: &serde_json::Value,
+        received_at: Instant,
+    ) -> crate::Result<Option<ResponseOutcome>> {
+        let Ok(event) = Event::deserialize(value) else {
             return Ok(None);
         };
         if !event.generation_message() {
@@ -1222,7 +1232,8 @@ impl WsLedger {
 
 pub(crate) async fn ws_start(
     ledger: &tokio::sync::Mutex<WsLedger>,
-    text: &str,
+    value: &serde_json::Value,
+    admission: Option<crate::execution::Admission>,
 ) -> crate::Result<()> {
     #[derive(Deserialize)]
     struct Reasoning {
@@ -1238,7 +1249,7 @@ pub(crate) async fn ws_start(
         reasoning: Option<Reasoning>,
         service_tier: Option<String>,
     }
-    let value: Create = serde_json::from_str(text)
+    let value = Create::deserialize(value)
         .map_err(|_| crate::ApiError::bad_request("Invalid Responses frame fields."))?;
     if value.kind.as_deref() != Some("response.create") {
         return Ok(());
@@ -1259,25 +1270,21 @@ pub(crate) async fn ws_start(
             .await?;
         None
     } else {
-        Some(
-            context
-                .start(
-                    RequestMetadata {
-                        model: value.model,
-                        reasoning_effort: value
-                            .reasoning
-                            .and_then(|r| r.effort)
-                            .map(|s| s.chars().take(64).collect()),
-                        service_tier: value.service_tier.map(|s| s.chars().take(64).collect()),
-                        image_size: value.size.map(|s| s.chars().take(64).collect()),
-                        generate: value.generate,
-                        ..Default::default()
-                    },
-                    start,
-                    now,
-                )
-                .await?,
-        )
+        let metadata = RequestMetadata {
+            model: value.model,
+            reasoning_effort: value
+                .reasoning
+                .and_then(|r| r.effort)
+                .map(|s| s.chars().take(64).collect()),
+            service_tier: value.service_tier.map(|s| s.chars().take(64).collect()),
+            image_size: value.size.map(|s| s.chars().take(64).collect()),
+            generate: value.generate,
+            ..Default::default()
+        };
+        Some(match admission {
+            Some(admission) => context.start_admitted(admission, start, now).await?,
+            None => context.start(metadata, start, now).await?,
+        })
     };
     ledger.lock().await.push(log);
     Ok(())
@@ -1961,7 +1968,9 @@ mod tests {
         assert!(
             ws_start(
                 &ledger,
-                r#"{"type":"response.create","model":"image-test"}"#
+                &serde_json::from_str(r#"{"type":"response.create","model":"image-test"}"#)
+                    .unwrap(),
+                None,
             )
             .await
             .is_err()
@@ -2499,7 +2508,11 @@ mod tests {
         ));
         ws_start(
             &ledger,
-            r#"{"type":"response.create","generate":false,"model":"warmup"}"#,
+            &serde_json::from_str(
+                r#"{"type":"response.create","generate":false,"model":"warmup"}"#,
+            )
+            .unwrap(),
+            None,
         )
         .await
         .unwrap();
@@ -2525,7 +2538,7 @@ mod tests {
         );
         ws_start(
             &ledger,
-            r#"{"type":"response.create","model":"one","reasoning":{"effort":"high"},"service_tier":"priority"}"#,
+            &serde_json::from_str(r#"{"type":"response.create","model":"one","reasoning":{"effort":"high"},"service_tier":"priority"}"#).unwrap(), None,
         )
         .await
         .unwrap();
@@ -2537,14 +2550,18 @@ mod tests {
             .unwrap();
         ws_start(
             &ledger,
-            r#"{"type":"response.create","model":"two","reasoning":{"effort":"low"}}"#,
+            &serde_json::from_str(
+                r#"{"type":"response.create","model":"two","reasoning":{"effort":"low"}}"#,
+            )
+            .unwrap(),
+            None,
         )
         .await
         .unwrap();
         // Official 0.160.0 steering interrupts a response without creating a new generation.
         ws_start(
             &ledger,
-            r#"{"type":"response.interrupt","response_id":"r1","mode":"discard_partial_items"}"#,
+            &serde_json::from_str(r#"{"type":"response.interrupt","response_id":"r1","mode":"discard_partial_items"}"#).unwrap(), None,
         )
         .await
         .unwrap();
@@ -2565,7 +2582,8 @@ mod tests {
             .unwrap();
         ws_start(
             &ledger,
-            r#"{"type":"response.create","model":"interrupted"}"#,
+            &serde_json::from_str(r#"{"type":"response.create","model":"interrupted"}"#).unwrap(),
+            None,
         )
         .await
         .unwrap();

@@ -346,6 +346,7 @@ impl Storage {
             json!({"ok":true,"matched":matched,"affected":affected,"skipped":matched-affected});
         remember(&mut tx, "batch", request_id, &signature, &result, now).await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(result)
     }
 }

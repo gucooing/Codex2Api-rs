@@ -188,12 +188,20 @@ impl Storage {
         Ok(sqlx::query_as("SELECT t.scopes,d.provider_id,v.id AS virtual_account_id,d.id AS device_id,v.name,t.token_hash FROM virtual_access_tokens t JOIN virtual_devices d ON d.id=t.device_id JOIN platform_principals v ON v.id=d.virtual_account_id WHERE t.token_hash=? AND t.expires_at>? AND v.enabled=1")
             .bind(hash).bind(Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
+    /// Live revocation/ownership check for an already authenticated stream.
+    pub async fn virtual_access_valid(&self, hash: &str) -> Result<bool> {
+        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_access_tokens t JOIN virtual_devices d ON d.id=t.device_id JOIN platform_principals v ON v.id=d.virtual_account_id WHERE t.token_hash=? AND t.expires_at>? AND v.enabled=1)")
+            .bind(hash).bind(Utc::now().timestamp()).fetch_one(self.pool()).await?)
+    }
     pub async fn touch_virtual_access(&self, hash: &str) -> Result<()> {
         if !self.runtime.claim_touch(&format!("touch-token:{hash}")) {
             return Ok(());
         }
-        sqlx::query("UPDATE virtual_devices SET last_used_at=? WHERE id IN(SELECT device_id FROM virtual_access_tokens WHERE token_hash=? AND expires_at>?)")
-            .bind(Utc::now().to_rfc3339()).bind(hash).bind(Utc::now().timestamp()).execute(self.pool()).await?;
+        self.write_request(crate::request_writer::Write::TouchAccess {
+            hash: hash.into(),
+            at: Utc::now(),
+        })
+        .await?;
         Ok(())
     }
     pub async fn revoke_virtual_token(&self, token: &str, provider: &str) -> Result<()> {

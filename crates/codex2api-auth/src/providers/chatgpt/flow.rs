@@ -21,8 +21,14 @@ use codex2api_storage::Storage;
 pub struct AuthService {
     accounts: SupplierAccountStore,
     cfg: OAuthConfig,
-    clients: Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::transport::AccountHttpClients>>>>,
+    clients: Arc<crate::account_cache::AccountCache<CachedAccountHttp>>,
     pub(crate) drafts: Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::draft::DraftLogin>>>>,
+}
+
+#[derive(Clone)]
+struct CachedAccountHttp {
+    snapshot: Arc<codex2api_storage::SupplierTransportSnapshot>,
+    clients: Arc<crate::transport::AccountHttpClients>,
 }
 
 impl AuthService {
@@ -39,7 +45,7 @@ impl AuthService {
         Ok(Self {
             accounts,
             cfg,
-            clients: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            clients: Arc::default(),
             drafts: Arc::default(),
         })
     }
@@ -60,25 +66,37 @@ impl AuthService {
         &self,
         account_id: &str,
     ) -> Result<Arc<crate::transport::AccountHttpClients>> {
-        let mut clients = self.clients.lock().await;
-        let account = self.storage()?.require_account(account_id).await?;
-        let identity = AccountIdentity::from_account(&account);
-        let proxy = match account.proxy_id.as_deref() {
-            Some(id) => Some(self.storage()?.require_outbound_proxy(id).await?),
-            None => None,
-        };
-        let proxy_url = proxy.as_ref().map(|proxy| proxy.url.as_str());
-        let client = if let Some(existing) = clients.get(account_id) {
-            if existing.matches(&identity, proxy_url) {
-                return Ok(existing.clone());
-            }
-            existing.reconfigure(&identity, proxy_url)?
-        } else {
-            crate::transport::AccountHttpClients::with_proxy(&identity, proxy_url)?
-        };
-        let client = Arc::new(client);
-        clients.insert(account_id.to_string(), client.clone());
-        Ok(client)
+        let snapshot = self
+            .storage()?
+            .supplier_transport_snapshot(account_id)
+            .await?;
+        if snapshot.provider_id != codex2api_core::CHATGPT {
+            return Err(AuthError::AccountNotFound(account_id.into()));
+        }
+        let current = snapshot.clone();
+        Ok(self
+            .clients
+            .get_or_update(
+                account_id,
+                |old| {
+                    Arc::ptr_eq(&old.snapshot, &current)
+                        || old.snapshot.cache_generation > current.cache_generation
+                },
+                |old| async move {
+                    let identity = AccountIdentity::from_transport(&snapshot);
+                    let proxy = snapshot.proxy_url.as_deref();
+                    let clients = match old {
+                        Some(old) if old.clients.matches(&identity, proxy) => old.clients,
+                        Some(old) => Arc::new(old.clients.reconfigure(&identity, proxy)?),
+                        None => Arc::new(crate::transport::AccountHttpClients::with_proxy(
+                            &identity, proxy,
+                        )?),
+                    };
+                    Ok::<_, AuthError>(CachedAccountHttp { snapshot, clients })
+                },
+            )
+            .await?
+            .clients)
     }
 
     /// Reload the stored HTTP identity without discarding account cookies or refresh coordination.
@@ -88,7 +106,7 @@ impl AuthService {
     }
 
     pub async fn evict_account_http(&self, account_id: &str) {
-        self.clients.lock().await.remove(account_id);
+        self.clients.remove(account_id);
     }
 
     /// Exchange an already-validated callback submitted through the administrator UI.
@@ -129,11 +147,40 @@ impl AuthService {
         Ok(completed)
     }
 
-    pub async fn refresh(&self, account_id: &str, force: bool) -> Result<AuthDotJson> {
+    pub async fn credentials(
+        &self,
+        account_id: &str,
+    ) -> Result<Arc<crate::tokens::ChatgptCredentials>> {
+        let snapshot = self
+            .storage()?
+            .supplier_auth_snapshot(account_id)
+            .await?
+            .ok_or_else(|| AuthError::TokensNotFound(account_id.into()))?;
+        if snapshot.provider_id != codex2api_core::CHATGPT {
+            return Err(AuthError::AccountMismatch);
+        }
+        snapshot.decode(|| crate::tokens::ChatgptCredentials::from_snapshot(&snapshot))
+    }
+
+    pub async fn refresh(
+        &self,
+        account_id: &str,
+        force: bool,
+    ) -> Result<Arc<crate::tokens::ChatgptCredentials>> {
+        let current = self.credentials(account_id).await?;
+        if !force && !current.needs_refresh() {
+            return Ok(current);
+        }
         let http = self.account_http(account_id).await?;
         let _guard = http.refresh_lock.lock().await;
-        let account = self.storage()?.require_account(account_id).await?;
-        let revision = self.storage()?.supplier_auth_revision(account_id).await?;
+        let current = self.credentials(account_id).await?;
+        if !force && !current.needs_refresh() {
+            return Ok(current);
+        }
+        let account = self
+            .storage()?
+            .supplier_account_snapshot(account_id)
+            .await?;
         let result = refresh_account(
             &self.accounts,
             &http.authenticated,
@@ -145,34 +192,35 @@ impl AuthService {
         if let Err(error) = &result
             && error.permanent_refresh_failure()
             && (force || !matches!(error, AuthError::MissingRefreshToken))
-            && let Some(revision) = revision
         {
             self.storage()?
-                .reject_supplier_auth(account_id, revision)
+                .reject_supplier_auth(account_id, current.revision)
                 .await?;
         }
-        result
+        result?;
+        self.credentials(account_id).await
     }
 
     pub async fn refresh_rejected_token(
         &self,
         account_id: &str,
         rejected: &str,
-    ) -> Result<AuthDotJson> {
+    ) -> Result<Arc<crate::tokens::ChatgptCredentials>> {
         let http = self.account_http(account_id).await?;
         let _guard = http.refresh_lock.lock().await;
-        let account = self.storage()?.require_account(account_id).await?;
-        let current = load_auth(&self.accounts, &account)
-            .await?
-            .ok_or_else(|| AuthError::TokensNotFound(account_id.to_string()))?;
+        let current = self.credentials(account_id).await?;
         if current
+            .auth
             .tokens
             .as_ref()
             .is_some_and(|tokens| tokens.access_token != rejected)
         {
             return Ok(current);
         }
-        let revision = self.storage()?.supplier_auth_revision(account_id).await?;
+        let account = self
+            .storage()?
+            .supplier_account_snapshot(account_id)
+            .await?;
         let result = refresh_account(
             &self.accounts,
             &http.authenticated,
@@ -183,13 +231,13 @@ impl AuthService {
         .await;
         if let Err(error) = &result
             && error.permanent_refresh_failure()
-            && let Some(revision) = revision
         {
             self.storage()?
-                .reject_supplier_auth(account_id, revision)
+                .reject_supplier_auth(account_id, current.revision)
                 .await?;
         }
-        result
+        result?;
+        self.credentials(account_id).await
     }
 
     pub async fn revoke(&self, account_id: &str) -> Result<()> {

@@ -107,6 +107,7 @@ pub struct WorkspaceConnection {
     revision: i64,
     route: WorkspaceRoute,
     http: Arc<AccountHttpClients>,
+    snapshot: Arc<(QuotaSnapshot, Option<i64>)>,
 }
 
 impl WorkspaceConnection {
@@ -121,15 +122,16 @@ impl WorkspaceConnection {
         if storage.supplier_auth_revision(&self.supplier_id).await? != Some(self.revision) {
             return Err(UpstreamError::WorkspaceChanged);
         }
-        let (snapshot, revision) = storage
+        let snapshot = storage
             .supplier_routing_snapshot(&self.supplier_id)
             .await?
             .ok_or(UpstreamError::WorkspaceChanged)?;
-        if revision != Some(self.revision)
-            || WorkspaceRoute::from_accounts(&snapshot.value, &self.route.account_id)
-                .ok()
-                .as_ref()
-                != Some(&self.route)
+        if snapshot.1 != Some(self.revision)
+            || (!Arc::ptr_eq(&snapshot, &self.snapshot)
+                && WorkspaceRoute::from_accounts(&snapshot.0.value, &self.route.account_id)
+                    .ok()
+                    .as_ref()
+                    != Some(&self.route))
             || !Arc::ptr_eq(
                 &self.auth.account_http(&self.supplier_id).await?,
                 &self.http,
@@ -160,13 +162,28 @@ impl UpstreamClient {
             .ok_or_else(|| {
                 UpstreamError::WorkspaceRouting("supplier has no ChatGPT account ID".into())
             })?;
-        let route = WorkspaceRoute::from_accounts(&snapshot.value, id)?;
+        let route = {
+            let cached = self.workspace.read().unwrap();
+            cached
+                .as_ref()
+                .filter(|(old, route)| Arc::ptr_eq(old, &snapshot) && route.account_id == id)
+                .map(|(_, route)| route.clone())
+        };
+        let route = match route {
+            Some(route) => route,
+            None => {
+                let route = WorkspaceRoute::from_accounts(&snapshot.0.value, id)?;
+                *self.workspace.write().unwrap() = Some((snapshot.clone(), route.clone()));
+                route
+            }
+        };
         let connection = self.auth_service().map(|auth| WorkspaceConnection {
             auth: auth.clone(),
             supplier_id: self.identity().account_id.clone(),
             revision: request.revision,
             route: route.clone(),
             http: self.account_http.clone(),
+            snapshot: snapshot.clone(),
         });
         Ok(RoutedWorkspace { route, connection })
     }
@@ -184,7 +201,7 @@ impl UpstreamClient {
                     retried = true;
                     self.refresh_access_token(&request.access_token).await?;
                 }
-                result => return result,
+                result => return result.map(|snapshot| snapshot.0.clone()),
             }
         }
     }
@@ -193,9 +210,7 @@ impl UpstreamClient {
         &self,
         request: &RequestAuth,
         refresh: bool,
-    ) -> Result<QuotaSnapshot> {
-        // Account reconfiguration preserves this lock; only snapshots live in SQLite.
-        let _guard = self.account_http.routing_lock.lock().await;
+    ) -> Result<Arc<(QuotaSnapshot, Option<i64>)>> {
         let storage = self.auth_service().map(AuthService::storage).transpose()?;
         let id = &self.identity().account_id;
         if let Some(storage) = storage {
@@ -203,11 +218,19 @@ impl UpstreamClient {
                 return Err(UpstreamError::WorkspaceChanged);
             }
             if !refresh
-                && let Some((snapshot, revision)) = storage.supplier_routing_snapshot(id).await?
-                && revision == Some(request.revision)
+                && let Some(snapshot) = storage.supplier_routing_snapshot(id).await?
+                && snapshot.1 == Some(request.revision)
             {
                 return Ok(snapshot);
             }
+        }
+        let _guard = self.account_http.routing_lock.lock().await;
+        if !refresh
+            && let Some(storage) = storage
+            && let Some(snapshot) = storage.supplier_routing_snapshot(id).await?
+            && snapshot.1 == Some(request.revision)
+        {
+            return Ok(snapshot);
         }
         let mut headers = request.headers.clone();
         headers.remove("version");
@@ -217,12 +240,14 @@ impl UpstreamClient {
         let discovery_url = self.discovery_url.as_deref().unwrap_or(discovery_url);
         let result = async {
             let response = self
-                .account_http
-                .api
-                .get(discovery_url)
-                .headers(headers)
-                .timeout(Duration::from_secs(30))
-                .send()
+                .transport
+                .send(
+                    self.account_http
+                        .api
+                        .get(discovery_url)
+                        .headers(headers)
+                        .timeout(Duration::from_secs(30)),
+                )
                 .await?;
             let status = response.status();
             let headers = response.headers().clone();
@@ -249,7 +274,14 @@ impl UpstreamClient {
         {
             return Err(UpstreamError::WorkspaceChanged);
         }
-        Ok(snapshot)
+        if let Some(storage) = storage {
+            return storage
+                .supplier_routing_snapshot(id)
+                .await?
+                .filter(|snapshot| snapshot.1 == Some(request.revision))
+                .ok_or(UpstreamError::WorkspaceChanged);
+        }
+        Ok(Arc::new((snapshot, Some(request.revision))))
     }
 }
 

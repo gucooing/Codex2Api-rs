@@ -1,5 +1,6 @@
 use crate::{Result, Storage, StorageError};
 use sqlx::FromRow;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Clone, Debug, FromRow, serde::Serialize)]
 pub struct SupplierTag {
@@ -16,15 +17,147 @@ pub struct PoolCandidate {
     pub concurrency: u32,
     pub priority: i32,
     pub load_factor: Option<u32>,
+    #[serde(skip)]
+    #[sqlx(skip)]
+    pub(crate) runtime_key: String,
+    #[serde(skip)]
+    #[sqlx(skip)]
+    pub(crate) runtime_shard: usize,
 }
+#[derive(FromRow)]
+struct CandidateRow {
+    #[sqlx(flatten)]
+    candidate: PoolCandidate,
+    ready_at: Option<i64>,
+    model: Option<String>,
+}
+
+#[derive(Default)]
+struct PoolIndex {
+    all: Arc<Vec<Arc<PoolCandidate>>>,
+    by_id: std::collections::HashMap<String, Arc<PoolCandidate>>,
+    by_model: std::collections::HashMap<String, Arc<Vec<Arc<PoolCandidate>>>>,
+    models: std::collections::HashMap<String, Arc<std::collections::HashSet<String>>>,
+    empty: Arc<Vec<Arc<PoolCandidate>>>,
+}
+
 impl Storage {
+    async fn pool_index(&self, tag: &str, provider: &str) -> Result<Arc<PoolIndex>> {
+        let key = format!("pool-index:{}", serde_json::to_string(&(provider, tag))?);
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let epoch = self.runtime.epoch();
+        let rows = sqlx::query_as::<_, CandidateRow>(
+            "SELECT a.id,COALESCE(s.concurrency,5) AS concurrency,
+             COALESCE(s.priority,0) AS priority,s.load_factor,sm.model,
+             CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
+                  THEN h.cooldown_until END AS ready_at
+             FROM supplier_tag_members m
+             JOIN supplier_accounts a ON a.id=m.account_id
+             JOIN supplier_tokens k ON k.account_id=a.id
+             LEFT JOIN supplier_health h ON h.account_id=a.id
+             LEFT JOIN supplier_scheduling s ON s.account_id=a.id
+             LEFT JOIN supplier_models sm ON sm.account_id=a.id
+             WHERE m.tag_id=? AND a.provider_id=? AND a.status='active'
+             AND COALESCE(k.access_token,'')!=''
+             AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
+             AND h.payment_required_at IS NULL
+             AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted'
+                  OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision
+                  OR h.cooldown_until IS NOT NULL)
+             ORDER BY a.id,sm.model"
+        ).bind(tag).bind(provider).fetch_all(self.pool()).await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut ttl_ms = 30_000;
+        let mut index = PoolIndex::default();
+        let mut all = Vec::new();
+        let mut models = std::collections::HashMap::<String, Vec<Arc<PoolCandidate>>>::new();
+        for row in rows {
+            if let Some(at) = row.ready_at.filter(|at| at.saturating_mul(1000) > now) {
+                ttl_ms = ttl_ms.min(at.saturating_mul(1000).saturating_sub(now));
+                continue;
+            }
+            let id = row.candidate.id.clone();
+            let candidate = index.by_id.entry(id.clone()).or_insert_with(|| {
+                let mut candidate = row.candidate;
+                candidate.runtime_key = format!("supplier:{}", candidate.id);
+                candidate.runtime_shard = self.runtime.shard_index(&candidate.runtime_key);
+                let candidate = Arc::new(candidate);
+                all.push(candidate.clone());
+                candidate
+            });
+            if let Some(model) = row.model {
+                models
+                    .entry(model.clone())
+                    .or_default()
+                    .push(candidate.clone());
+                Arc::make_mut(index.models.entry(id).or_default()).insert(model);
+            }
+        }
+        index.all = Arc::new(all);
+        index.by_model = models
+            .into_iter()
+            .map(|(model, values)| (model, Arc::new(values)))
+            .collect();
+        for (id, models) in &index.models {
+            self.runtime.cache(
+                format!("supplier-models:{id}"),
+                models,
+                epoch,
+                Duration::from_millis(ttl_ms as u64),
+            );
+        }
+        let index = Arc::new(index);
+        self.runtime
+            .cache(key, &index, epoch, Duration::from_millis(ttl_ms as u64));
+        Ok(index)
+    }
+
+    /// Direct model-to-account expansion; no per-request account/model filtering.
+    pub async fn pool_candidates(
+        &self,
+        tag: &str,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Result<Arc<Vec<Arc<PoolCandidate>>>> {
+        let index = self.pool_index(tag, provider).await?;
+        Ok(match model.filter(|model| !model.is_empty()) {
+            Some(model) => index.by_model.get(model).unwrap_or(&index.empty).clone(),
+            None => index.all.clone(),
+        })
+    }
+
+    pub async fn pool_candidate(
+        &self,
+        tag: &str,
+        provider: &str,
+        model: Option<&str>,
+        id: &str,
+    ) -> Result<Option<Arc<PoolCandidate>>> {
+        let index = self.pool_index(tag, provider).await?;
+        if let Some(model) = model.filter(|model| !model.is_empty())
+            && !index
+                .models
+                .get(id)
+                .is_some_and(|models| models.contains(model))
+        {
+            return Ok(None);
+        }
+        Ok(index.by_id.get(id).cloned())
+    }
+
     pub async fn pool_contains_supplier(
         &self,
         owner: &str,
         provider: &str,
         supplier: Option<&str>,
     ) -> Result<bool> {
-        let Some(supplier) = supplier else {
+        let Some(id) = supplier else {
             return Ok(false);
         };
         let Some(tag) = self
@@ -35,50 +168,9 @@ impl Storage {
             return Ok(false);
         };
         Ok(self
-            .pool_candidates(&tag, provider, None)
+            .pool_candidate(&tag, provider, None, id)
             .await?
-            .iter()
-            .any(|a| a.id == supplier))
-    }
-    pub async fn pool_candidates(
-        &self,
-        tag: &str,
-        provider: &str,
-        model: Option<&str>,
-    ) -> Result<Vec<PoolCandidate>> {
-        let key = format!("pool:{}", serde_json::to_string(&(tag, provider, model))?);
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let rows = sqlx::query_as(
-            "SELECT a.id,COALESCE(s.concurrency,5) AS concurrency,
-                    COALESCE(s.priority,0) AS priority,s.load_factor
-             FROM supplier_tag_members m
-             JOIN supplier_accounts a ON a.id=m.account_id
-             JOIN supplier_tokens k ON k.account_id=a.id
-             LEFT JOIN supplier_health h ON h.account_id=a.id
-             LEFT JOIN supplier_scheduling s ON s.account_id=a.id
-             WHERE m.tag_id=? AND a.provider_id=? AND a.status='active'
-               AND COALESCE(k.access_token,'')!=''
-               AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
-               AND h.payment_required_at IS NULL
-               AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted'
-                    OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision
-                    OR h.cooldown_until<=?)
-               AND (?='' OR EXISTS(SELECT 1 FROM supplier_models sm WHERE sm.account_id=a.id AND sm.model=?))
-             ORDER BY a.id",
-        )
-        .bind(tag)
-        .bind(provider)
-        .bind(chrono::Utc::now().timestamp())
-        .bind(model.unwrap_or(""))
-        .bind(model.unwrap_or(""))
-        .fetch_all(self.pool())
-        .await?;
-        self.runtime
-            .cache(key, &rows, epoch, std::time::Duration::from_secs(2));
-        Ok(rows)
+            .is_some())
     }
     pub async fn supplier_tags(&self) -> Result<Vec<SupplierTag>> {
         Ok(sqlx::query_as(
@@ -265,12 +357,14 @@ impl Storage {
         let Some(tag) = route.tag_id else {
             return Ok(None);
         };
-        let mut candidates = self.pool_candidates(&tag, provider, None).await?;
-        candidates.retain(|a| !excluded.contains(&a.id));
-        candidates.sort_by_key(|a| {
-            let metrics = self.supplier_metrics(&a.id);
-            (a.priority, metrics.active, metrics.last_used)
-        });
-        Ok(candidates.into_iter().next().map(|a| a.id))
+        let candidates = self.pool_candidates(&tag, provider, None).await?;
+        let selected = candidates
+            .iter()
+            .filter(|a| !excluded.contains(&a.id))
+            .min_by_key(|a| {
+                let metrics = self.supplier_metrics(&a.id);
+                (a.priority, metrics.active, metrics.last_used)
+            });
+        Ok(selected.map(|a| a.id.clone()))
     }
 }

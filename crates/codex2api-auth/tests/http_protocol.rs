@@ -140,7 +140,10 @@ async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
     )
     .unwrap();
     let updated = auth.refresh(&id, false).await.unwrap();
-    assert_eq!(updated.tokens.unwrap().access_token, "access-1");
+    assert_eq!(
+        updated.auth.tokens.as_ref().unwrap().access_token,
+        "access-1"
+    );
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     auth.refresh(&id, false).await.unwrap();
     assert_eq!(requests.load(Ordering::SeqCst), 1);
@@ -148,8 +151,14 @@ async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
         auth.refresh_rejected_token(&id, "access-1"),
         auth.refresh_rejected_token(&id, "access-1")
     );
-    assert_eq!(a.unwrap().tokens.unwrap().access_token, "access-2");
-    assert_eq!(b.unwrap().tokens.unwrap().access_token, "access-2");
+    assert_eq!(
+        a.unwrap().auth.tokens.as_ref().unwrap().access_token,
+        "access-2"
+    );
+    assert_eq!(
+        b.unwrap().auth.tokens.as_ref().unwrap().access_token,
+        "access-2"
+    );
     assert_eq!(requests.load(Ordering::SeqCst), 2);
     let clients = auth.account_http(&id).await.unwrap();
     assert!(Arc::ptr_eq(

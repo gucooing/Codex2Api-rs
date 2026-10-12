@@ -199,6 +199,9 @@ impl Storage {
             .await?;
         }
         tx.commit().await?;
+        if changed == 1 {
+            self.invalidate_runtime_cache();
+        }
         Ok(changed == 1)
     }
 

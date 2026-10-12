@@ -13,7 +13,7 @@ use account_fixture::AccountFixture;
 use axum::body::Bytes;
 #[derive(Clone)]
 pub(crate) struct SupplierContext {
-    pub account: codex2api_storage::SupplierAccount,
+    pub account: std::sync::Arc<codex2api_storage::SupplierAccount>,
     pub reused_affinity: bool,
     pub previous_response_matches: bool,
     pub permit: Option<codex2api_storage::RuntimePermit>,
@@ -55,16 +55,21 @@ pub(crate) async fn select_for(
     request: &crate::pool_scheduler::ScheduleRequest,
     excluded: &[String],
 ) -> Result<SupplierContext> {
-    let access = state
-        .storage
-        .virtual_access(&oauth.token_hash)
-        .await?
-        .ok_or_else(ApiError::invalid_token)?;
-    if request.model.is_some() {
+    let admitted = excluded.is_empty()
+        && request.admission == Some(state.storage.admission_version(&oauth.virtual_account_id));
+    if !admitted
+        && !state
+            .storage
+            .virtual_access_valid(&oauth.token_hash)
+            .await?
+    {
+        return Err(ApiError::invalid_token());
+    }
+    if !admitted && request.model.is_some() {
         codex2api_service::ExecutionService::new(state.storage.clone())
             .authorize(
-                &access.virtual_account_id,
-                &access.provider_id,
+                &oauth.virtual_account_id,
+                &oauth.provider_id,
                 codex2api_service::ExecutionRequest {
                     kind: codex2api_core::ExecutionKind::InspectModel,
                     model: request.model.as_deref(),
@@ -74,7 +79,7 @@ pub(crate) async fn select_for(
             )
             .await?;
     }
-    crate::pool_scheduler::select(state, &access, request, excluded).await
+    crate::pool_scheduler::select(state, oauth, request, excluded).await
 }
 
 pub(crate) async fn observe(
@@ -177,6 +182,7 @@ async fn inspect_for(
         .copied();
     let mut prefix = Vec::new();
     let mut parsed = 0;
+    let mut scanned = 0;
     let mut first_event = None;
     'read: while prefix.len() < 256 * 1024 {
         let chunk = tokio::time::timeout(
@@ -191,25 +197,25 @@ async fn inspect_for(
         prefix.extend_from_slice(&chunk);
         loop {
             let remaining = &prefix[parsed..];
-            let boundary = remaining
-                .windows(2)
-                .position(|s| s == b"\n\n")
-                .map(|p| (p, 2))
-                .or_else(|| {
-                    remaining
-                        .windows(4)
-                        .position(|s| s == b"\r\n\r\n")
-                        .map(|p| (p, 4))
-                });
+            let mut boundary = None;
+            while scanned < prefix.len() {
+                scanned += 1;
+                let separator = if scanned >= parsed + 2 && &prefix[scanned - 2..scanned] == b"\n\n"
+                {
+                    2
+                } else if scanned >= parsed + 4 && &prefix[scanned - 4..scanned] == b"\r\n\r\n" {
+                    4
+                } else {
+                    continue;
+                };
+                boundary = Some((scanned - parsed - separator, separator));
+                break;
+            }
             let Some((end, separator)) = boundary else {
                 break;
             };
             let frame = String::from_utf8_lossy(&remaining[..end]);
-            let data = frame
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let data = codex2api_upstream::sse_data(&frame);
             parsed += end + separator;
             if data.is_empty() {
                 continue;
@@ -426,7 +432,7 @@ pub(crate) mod tests {
             async move {
                 if id == first {
                     let snapshot = storage.supplier_auth_snapshot(&id).await.unwrap().unwrap();
-                    let mut tokens = snapshot.tokens;
+                    let mut tokens = snapshot.tokens.clone();
                     tokens.access_token = Some("refreshed-before-discovery".into());
                     storage
                         .replace_supplier_tokens(&id, snapshot.auth_revision, tokens)

@@ -752,6 +752,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(response)
     }
 
@@ -760,6 +761,7 @@ impl Storage {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let result = admin_reset_on(&mut tx, owner, actor, Utc::now().timestamp_millis()).await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(result)
     }
 }

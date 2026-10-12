@@ -69,6 +69,7 @@ impl Storage {
         )
         .await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(())
     }
 

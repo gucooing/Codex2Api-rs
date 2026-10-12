@@ -8,5 +8,6 @@ pub(crate) fn request(headers: &http::HeaderMap, body: &serde_json::Value) -> Sc
         session_hash: seed.map(|v| hash(&v)),
         previous_response: text(body, "previous_response_id"),
         previous_can_move: false,
+        admission: None,
     }
 }

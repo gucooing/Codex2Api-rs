@@ -304,11 +304,19 @@ pub async fn require_oauth(
 ) -> crate::Result<Response> {
     let bearer = crate::providers::chatgpt::access::extract_bearer(request.headers())
         .map_err(|_| invalid_access())?;
-    let credential = state
-        .storage
-        .virtual_access(&hash_token(bearer))
-        .await?
-        .ok_or_else(invalid_access)?;
+    let hash = hash_token(bearer);
+    let credential = match request
+        .extensions()
+        .get::<codex2api_storage::VirtualAccess>()
+        .filter(|access| access.token_hash == hash)
+    {
+        Some(access) => access.clone(),
+        None => state
+            .storage
+            .virtual_access(&hash)
+            .await?
+            .ok_or_else(invalid_access)?,
+    };
     if credential.provider_id != codex2api_core::CHATGPT {
         return Err(codex2api_service::ServiceError::Policy(
             codex2api_core::PolicyError::ProviderMismatch,

@@ -1,6 +1,6 @@
 //! Provider-neutral pool scheduling. Providers construct their own affinity seeds.
 use crate::{ApiError, ApiState, Result, pool_execution::SupplierContext};
-use codex2api_storage::{PoolCandidate, RuntimeMetrics, VirtualAccess};
+use codex2api_storage::VirtualAccess;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -14,6 +14,7 @@ pub(crate) struct ScheduleRequest {
     pub session_hash: Option<String>,
     pub previous_response: Option<String>,
     pub previous_can_move: bool,
+    pub admission: Option<(u64, u64, i64)>,
 }
 pub(crate) fn hash(seed: &str) -> String {
     format!("{:x}", Sha256::digest(seed.as_bytes()))
@@ -52,16 +53,14 @@ pub(crate) fn body_seed(body: &Value) -> Option<String> {
         .flatten()
         .filter(|item| matches!(item["role"].as_str(), Some("system" | "developer")))
         .collect();
-    Some(
-        serde_json::json!([
-            body.get("model"),
-            body.get("instructions").or_else(|| body.get("system")),
-            system_messages,
-            body.get("tools"),
-            first
-        ])
-        .to_string(),
-    )
+    serde_json::to_string(&(
+        body.get("model"),
+        body.get("instructions").or_else(|| body.get("system")),
+        system_messages,
+        body.get("tools"),
+        first,
+    ))
+    .ok()
 }
 pub(crate) fn text(body: &Value, key: &str) -> Option<String> {
     body.get(key)
@@ -92,13 +91,6 @@ pub(crate) fn context_required() -> ApiError {
         Some("supplier_context_required"),
     )
 }
-#[derive(Clone)]
-struct Ranked {
-    account: PoolCandidate,
-    metrics: RuntimeMetrics,
-    load: u64,
-    score: f64,
-}
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -127,30 +119,6 @@ pub(crate) async fn select(
         .ok_or_else(crate::pool_execution::exhausted)?;
     let tag = route.tag_id.ok_or_else(crate::pool_execution::exhausted)?;
     let settings = state.storage.gateway_settings().await?;
-    let pool = state
-        .storage
-        .pool_candidates(&tag, &oauth.provider_id, request.model.as_deref())
-        .await?;
-    let model_candidates_exist = !pool.is_empty();
-    let mut candidates: Vec<_> = pool
-        .into_iter()
-        .filter(|a| !excluded.contains(&a.id))
-        .map(|account| {
-            let metrics = state.storage.supplier_metrics(&account.id);
-            let capacity = account
-                .load_factor
-                .filter(|v| *v > 0)
-                .unwrap_or(account.concurrency.max(1));
-            let load = 100 * (u64::from(metrics.active) + u64::from(metrics.waiting))
-                / u64::from(capacity);
-            Ranked {
-                account,
-                metrics,
-                load,
-                score: 0.0,
-            }
-        })
-        .collect();
     let sticky_key = request.session_hash.as_ref().map(|hash| {
         format!(
             "sticky_session:{}:{tag}:{}:{hash}",
@@ -174,38 +142,44 @@ pub(crate) async fn select(
         }
         None => None,
     };
+    let previous_candidate = match previous
+        .as_deref()
+        .filter(|id| !excluded.iter().any(|v| v == id))
+    {
+        Some(id) => {
+            state
+                .storage
+                .pool_candidate(&tag, &oauth.provider_id, request.model.as_deref(), id)
+                .await?
+        }
+        None => None,
+    };
+    let sticky_candidate = if sticky == previous {
+        previous_candidate.clone()
+    } else {
+        match sticky
+            .as_deref()
+            .filter(|id| !excluded.iter().any(|v| v == id))
+        {
+            Some(id) => {
+                state
+                    .storage
+                    .pool_candidate(&tag, &oauth.provider_id, request.model.as_deref(), id)
+                    .await?
+            }
+            None => None,
+        }
+    };
     if let (Some(key), Some(id)) = (&sticky_key, &sticky)
-        && !candidates.iter().any(|v| &v.account.id == id)
+        && sticky_candidate.is_none()
     {
         state.storage.forget_routing_affinity(key, id).await?;
     }
     if request.previous_response.is_some()
         && !request.previous_can_move
-        && (previous.is_none()
-            || !candidates
-                .iter()
-                .any(|c| Some(&c.account.id) == previous.as_ref()))
+        && previous_candidate.is_none()
     {
         return Err(context_required());
-    }
-    if candidates.is_empty() {
-        let model_unavailable = request.model.is_some()
-            && !model_candidates_exist
-            && !state
-                .storage
-                .pool_candidates(&tag, &oauth.provider_id, None)
-                .await?
-                .is_empty();
-        return Err(if model_unavailable {
-            ApiError::openai(
-                http::StatusCode::SERVICE_UNAVAILABLE,
-                "server_error",
-                "No eligible supplier in this pool has the requested model configured.",
-                Some("supplier_model_unavailable"),
-            )
-        } else {
-            crate::pool_execution::exhausted()
-        });
     }
     let weighted = settings.scheduler_mode == "advanced" && settings.sticky_weighted;
     let mut preserve = false;
@@ -214,15 +188,18 @@ pub(crate) async fn select(
         .filter(|_| !weighted || !request.previous_can_move)
         .or_else(|| sticky.as_ref().filter(|_| !weighted));
     if let Some(id) = hard
-        && let Some(candidate) = candidates.iter().find(|v| &v.account.id == id)
+        && let Some(candidate) = previous_candidate
+            .as_ref()
+            .filter(|c| &c.id == id)
+            .or_else(|| sticky_candidate.as_ref().filter(|c| &c.id == id))
     {
         let cannot_move = request.previous_response.is_some() && !request.previous_can_move;
-        let unhealthy = candidate.metrics.error_rate >= 0.5
-            || candidate.metrics.ttft_ms.is_some_and(|v| v >= 15000.0);
+        let metrics = state.storage.supplier_metrics(id);
+        let unhealthy = metrics.error_rate >= 0.5 || metrics.ttft_ms.is_some_and(|v| v >= 15000.0);
         if !settings.sticky_escape || cannot_move || !unhealthy {
             if let Some(permit) = state
                 .storage
-                .acquire_supplier(id, candidate.account.concurrency)
+                .acquire_supplier(id, candidate.concurrency)
                 .await?
             {
                 if let Some(key) = &sticky_key {
@@ -239,7 +216,7 @@ pub(crate) async fn select(
                     }
                 }
                 return Ok(SupplierContext {
-                    account: state.storage.require_account(id).await?,
+                    account: state.storage.supplier_account_snapshot(id).await?,
                     permit: Some(permit),
                     reused_affinity: true,
                     previous_response_matches: previous.as_ref() == Some(id),
@@ -252,7 +229,7 @@ pub(crate) async fn select(
                 .storage
                 .wait_supplier(
                     id,
-                    candidate.account.concurrency,
+                    candidate.concurrency,
                     std::time::Duration::from_millis(settings.pool_wait_ms),
                 )
                 .await?
@@ -272,11 +249,11 @@ pub(crate) async fn select(
             }) {
                 return Err(crate::pool_execution::exhausted());
             }
-            let eligible = state
+            let current = state
                 .storage
-                .pool_candidates(&tag, &oauth.provider_id, request.model.as_deref())
+                .pool_candidate(&tag, &oauth.provider_id, request.model.as_deref(), id)
                 .await?;
-            let Some(current) = eligible.iter().find(|candidate| &candidate.id == id) else {
+            let Some(current) = current else {
                 drop(permit);
                 return Err(if cannot_move {
                     context_required()
@@ -304,7 +281,7 @@ pub(crate) async fn select(
                 }
             }
             return Ok(SupplierContext {
-                account: state.storage.require_account(id).await?,
+                account: state.storage.supplier_account_snapshot(id).await?,
                 permit: Some(permit),
                 reused_affinity: true,
                 previous_response_matches: previous.as_ref() == Some(id),
@@ -315,128 +292,82 @@ pub(crate) async fn select(
         // Escaping relaxes affinity; health metrics are not an availability ban.
         // Keeping the owner eligible also lets a single-supplier pool recover.
     }
-    if candidates.is_empty() {
-        return Err(busy());
+    let pool = state
+        .storage
+        .pool_candidates(&tag, &oauth.provider_id, request.model.as_deref())
+        .await?;
+    if pool.is_empty() {
+        let model_unavailable = request.model.is_some()
+            && !state
+                .storage
+                .pool_candidates(&tag, &oauth.provider_id, None)
+                .await?
+                .is_empty();
+        return Err(if model_unavailable {
+            ApiError::openai(
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                "No eligible supplier in this pool has the requested model configured.",
+                Some("supplier_model_unavailable"),
+            )
+        } else {
+            crate::pool_execution::exhausted()
+        });
     }
-    let seed = serde_json::json!([
-        request.session_hash,
-        request.previous_response,
-        request.model,
-        tag,
-        oauth.virtual_account_id
-    ]);
-    let digest = Sha256::digest(seed.to_string().as_bytes());
+    let seed = serde_json::to_vec(&(
+        &request.session_hash,
+        &request.previous_response,
+        &request.model,
+        &tag,
+        &oauth.virtual_account_id,
+    ))
+    .expect("schedule seed");
+    let digest = Sha256::digest(&seed);
     let mut rng = Rng(u64::from_le_bytes(digest[..8].try_into().unwrap()).max(1));
     if request.session_hash.is_none() && request.previous_response.is_none() {
-        rng.0 ^= rand::random::<u64>();
-        rng.0 = rng.0.max(1);
+        rng.0 = (rng.0 ^ rand::random::<u64>()).max(1);
     }
-    if settings.scheduler_mode == "traditional" {
-        // Randomize ties before a stable priority/load/LRU sort.
-        // Load ranks suppliers; atomic permit acquisition enforces concurrency.
-        for i in (1..candidates.len()).rev() {
-            let j = (rng.next() as usize) % (i + 1);
-            candidates.swap(i, j);
-        }
-        candidates.sort_by_key(|v| (v.account.priority, v.load, v.metrics.last_used));
-    } else {
-        let min_p = candidates.iter().map(|v| v.account.priority).min().unwrap();
-        let max_p = candidates.iter().map(|v| v.account.priority).max().unwrap();
-        let max_q = candidates
-            .iter()
-            .map(|v| v.metrics.waiting)
-            .max()
-            .unwrap()
-            .max(1) as f64;
-        let min_t = candidates
-            .iter()
-            .filter_map(|v| v.metrics.ttft_ms)
-            .fold(f64::INFINITY, f64::min);
-        let max_t = candidates
-            .iter()
-            .filter_map(|v| v.metrics.ttft_ms)
-            .fold(0.0, f64::max);
-        for c in &mut candidates {
-            let p = if min_p == max_p {
-                1.0
-            } else {
-                1.0 - f64::from(c.account.priority - min_p) / f64::from(max_p - min_p)
-            };
-            let l = 1.0 - (c.load as f64 / 100.0).clamp(0.0, 1.0);
-            let q = 1.0 - f64::from(c.metrics.waiting) / max_q;
-            let e = 1.0 - c.metrics.error_rate.clamp(0.0, 1.0);
-            let t = c
-                .metrics
-                .ttft_ms
-                .filter(|_| max_t > min_t)
-                .map_or(0.5, |t| {
-                    1.0 - ((t - min_t) / (max_t - min_t)).clamp(0.0, 1.0)
-                });
-            c.score = p + l + 0.7 * q + 0.8 * e + 0.5 * t;
-            if weighted {
-                if Some(&c.account.id) == sticky.as_ref() {
-                    c.score += 3.0
-                }
-                if request.previous_can_move && Some(&c.account.id) == previous.as_ref() {
-                    c.score += 5.0
-                }
-            }
-        }
-        candidates.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then(a.account.priority.cmp(&b.account.priority))
-                .then(a.load.cmp(&b.load))
-                .then(a.metrics.waiting.cmp(&b.metrics.waiting))
-                .then(a.account.id.cmp(&b.account.id))
-        });
-        candidates.truncate(settings.pool_top_k.max(1));
-        let sticky_index = weighted
-            .then(|| {
-                previous
-                    .as_ref()
-                    .and_then(|id| candidates.iter().position(|c| &c.account.id == id))
-                    .or_else(|| {
-                        sticky
-                            .as_ref()
-                            .and_then(|id| candidates.iter().position(|c| &c.account.id == id))
-                    })
-            })
-            .flatten();
-        if let Some(i) = sticky_index {
-            let first = candidates.remove(i);
-            candidates.insert(0, first);
-        } else {
-            let minimum = candidates.last().unwrap().score;
-            let mut ordered = Vec::with_capacity(candidates.len());
-            while !candidates.is_empty() {
-                let sum: f64 = candidates.iter().map(|v| v.score - minimum + 1.0).sum();
-                let mut target = rng.unit() * sum;
-                let mut index = candidates.len() - 1;
-                for (i, c) in candidates.iter().enumerate() {
-                    target -= c.score - minimum + 1.0;
-                    if target < 0.0 {
-                        index = i;
-                        break;
-                    }
-                }
-                ordered.push(candidates.remove(index));
-            }
-            candidates = ordered;
-        }
+    let mut attempted: std::collections::HashSet<String> = excluded.iter().cloned().collect();
+    if !excluded.is_empty() && pool.iter().all(|account| attempted.contains(&account.id)) {
+        return Err(crate::pool_execution::exhausted());
     }
-    for candidate in &candidates {
-        let id = &candidate.account.id;
-        let permit = if request.model.is_some() {
-            state
-                .storage
-                .acquire_supplier(id, candidate.account.concurrency)
-                .await?
-        } else {
-            None
-        };
+    while let Some((candidate, mut permit)) = state
+        .storage
+        .acquire_ready_supplier(
+            pool.clone(),
+            settings.scheduler_mode == "traditional",
+            settings.pool_top_k.max(1),
+            previous
+                .as_deref()
+                .filter(|_| weighted && request.previous_can_move),
+            sticky.as_deref().filter(|_| weighted),
+            &attempted,
+            rng.unit(),
+            request.model.is_some(),
+        )
+        .await?
+    {
+        let id = &candidate.id;
+        attempted.insert(id.clone());
         if request.model.is_some() && permit.is_none() {
             continue;
+        }
+        let Some(current) = state
+            .storage
+            .pool_candidate(&tag, &oauth.provider_id, request.model.as_deref(), id)
+            .await?
+        else {
+            continue;
+        };
+        if request.model.is_some() && current.concurrency != candidate.concurrency {
+            drop(permit.take());
+            permit = state
+                .storage
+                .acquire_supplier(id, current.concurrency)
+                .await?;
+            if permit.is_none() {
+                continue;
+            }
         }
         if (!preserve || sticky.as_ref() == Some(id))
             && let Some(key) = &sticky_key
@@ -453,11 +384,14 @@ pub(crate) async fn select(
                     .await?;
             }
         }
+        let reused_affinity = Some(id) == sticky.as_ref() || Some(id) == previous.as_ref();
+        let previous_response_matches = previous.as_ref() == Some(id);
+        let id = id.clone();
         return Ok(SupplierContext {
-            account: state.storage.require_account(id).await?,
+            account: state.storage.supplier_account_snapshot(&id).await?,
             permit,
-            reused_affinity: Some(id) == sticky.as_ref() || Some(id) == previous.as_ref(),
-            previous_response_matches: previous.as_ref() == Some(id),
+            reused_affinity,
+            previous_response_matches,
             request: request.clone(),
         });
     }

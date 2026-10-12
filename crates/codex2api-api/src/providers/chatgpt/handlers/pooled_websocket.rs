@@ -100,7 +100,7 @@ async fn open(
                     &failure,
                 )
                 .await?;
-                excluded.push(ctx.account.id);
+                excluded.push(ctx.account.id.clone());
             }
         }
     }
@@ -113,8 +113,6 @@ pub(super) async fn connect(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    super::super::access::resolve_supplier(&state, &headers, axum::Extension(oauth.clone()))
-        .await?;
     let service = codex2api_service::ExecutionService::new(state.storage.clone());
     service.check_budget(&oauth.virtual_account_id).await?;
     service
@@ -165,7 +163,7 @@ pub(super) async fn connect(
 struct Pending {
     original: Value,
     full_input: Option<Vec<Value>>,
-    prelude: Vec<(String, Instant)>,
+    prelude: Vec<(String, Value, Instant)>,
     prelude_bytes: usize,
     committed: bool,
     excluded: Vec<String>,
@@ -176,8 +174,8 @@ async fn send(conn: &mut Connection, value: &Value, reviewer: bool) -> Result<()
     if let Some(workspace) = &conn.workspace {
         workspace.check_current().await?;
     }
-    let text = super::websocket::prepare_message(
-        &value.to_string(),
+    let text = super::websocket::prepare_value(
+        value.clone(),
         &conn.ctx.account.installation_id,
         codex2api_accounts::AccountIdentity::from_account(&conn.ctx.account)
             .http_fingerprint
@@ -198,18 +196,16 @@ async fn deliver(
     state: &ApiState,
     oauth: &VirtualAccess,
     text: &str,
+    value: &mut Value,
     at: Instant,
 ) -> Result<Option<ResponseOutcome>> {
-    let outcome = ledger
-        .lock()
-        .await
-        .observe_at(text.as_bytes(), *connected, at)
-        .await?;
+    let outcome = ledger.lock().await.observe_value_at(value, at).await?;
     if !*connected {
         return Ok(outcome);
     }
     let text =
-        super::super::identity::websocket_message(&state.storage, &oauth.token_hash, text).await?;
+        super::super::identity::websocket_event(&state.storage, &oauth.token_hash, text, value)
+            .await?;
     if client.send(Message::Text(text.into())).await.is_err() {
         *connected = false;
     }
@@ -231,7 +227,8 @@ async fn bridge(
         || headers
             .get("x-codex-guardian")
             .is_some_and(|h| h == "reviewer");
-    let mut queue: VecDeque<String> = VecDeque::new();
+    let mut queue: VecDeque<(Value, usize)> = VecDeque::new();
+    let mut queued_bytes = 0usize;
     let mut pending: Option<Pending> = None;
     // In-memory connection context only; never written to logs or shared accounts.
     let mut history: Option<(String, Vec<Value>)> = None;
@@ -244,15 +241,15 @@ async fn bridge(
         loop {
             if !connected {
                 queue.clear();
+                queued_bytes = 0;
                 if pending.is_none() {
                     return Ok(());
                 }
             }
             if pending.is_none()
-                && let Some(text) = queue.pop_front()
+                && let Some((mut original, bytes)) = queue.pop_front()
             {
-                let mut original: Value = serde_json::from_str(&text)
-                    .map_err(|_| ApiError::bad_request("Invalid Responses frame."))?;
+                queued_bytes -= bytes;
                 let full_input = original.get("input").and_then(Value::as_array).and_then(
                     |input| match original.get("previous_response_id").and_then(Value::as_str) {
                         None => Some(input.clone()),
@@ -264,6 +261,13 @@ async fn bridge(
                 );
                 let mut schedule = super::super::scheduling::request(&headers, &original);
                 schedule.previous_can_move = full_input.is_some();
+                let admission = if original["generate"] == false { None } else {
+                    Some(crate::execution::Admission::new(&state.storage, &oauth.provider_id,
+                        &oauth.virtual_account_id, &format!("/v1/{}", endpoint.codex_path()),
+                        codex2api_upstream::request_metadata_value(&original)).await?)
+                };
+                schedule.admission = admission.as_ref().map(|value| value.version);
+                if !state.storage.virtual_access_valid(&oauth.token_hash).await? { return Err(ApiError::invalid_token()); }
                 let selected = pool::select_for(&state, &oauth, &schedule, &[]).await?;
                 let switched = selected.account.id != conn.ctx.account.id;
                 if switched {
@@ -307,7 +311,7 @@ async fn bridge(
                         .remove("previous_response_id");
                     original["input"] = serde_json::json!(input);
                 }
-                crate::usage::ws_start(&ledger, &text).await?;
+                crate::usage::ws_start(&ledger, &original, admission).await?;
                 send(&mut conn, &original, reviewer).await?;
                 idle.as_mut().reset(
                     tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
@@ -345,12 +349,13 @@ async fn bridge(
                                 .map_err(|_| ApiError::bad_request("Invalid Responses frame."))?;
                             if value["type"] == "response.create" {
                                 if queue.len() >= 32
-                                    || queue.iter().map(String::len).sum::<usize>() + text.len()
+                                    || queued_bytes + text.len()
                                         > codex2api_upstream::MAX_REQUEST_BYTES
                                 {
                                     return Err(ApiError::bad_request("Too many queued Responses requests."));
                                 }
-                                queue.push_back(text);
+                                queued_bytes += text.len();
+                                queue.push_back((value, text.len()));
                             } else {
                                 send(&mut conn, &value, reviewer).await?;
                             }
@@ -380,11 +385,10 @@ async fn bridge(
                         }
                         _ => continue,
                     };
-                    if state
+                    if !state
                         .storage
-                        .virtual_access(&oauth.token_hash)
+                        .virtual_access_valid(&oauth.token_hash)
                         .await?
-                        .is_none()
                     {
                         // Actual completed usage survives a concurrent device revocation.
                         ledger
@@ -394,7 +398,7 @@ async fn bridge(
                             .await?;
                         return Err(ApiError::invalid_token());
                     }
-                    let value: Value = serde_json::from_str(&text)
+                    let mut value: Value = serde_json::from_str(&text)
                         .map_err(|_| super::websocket::relay_error("Invalid upstream Responses event"))?;
                     if let Some(mut failure) = codex2api_upstream::classify_supplier_failure(
                         None,
@@ -507,10 +511,10 @@ async fn bridge(
                         if !p.committed && pool::prelude_event(&value) && p.prelude_bytes + text.len() <= 256 * 1024
                         {
                             p.prelude_bytes += text.len();
-                            p.prelude.push((text, at));
+                            p.prelude.push((text, value, at));
                             continue;
                         }
-                        for (text, at) in p.prelude.drain(..) {
+                        for (text, mut value, at) in p.prelude.drain(..) {
                             deliver(
                                 &mut client,
                                 &mut connected,
@@ -518,26 +522,16 @@ async fn bridge(
                                 &state,
                                 &oauth,
                                 &text,
+                                &mut value,
                                 at,
                             )
                             .await?;
                         }
                         p.committed = true;
                     }
-                    let outcome = deliver(
-                        &mut client,
-                        &mut connected,
-                        &ledger,
-                        &state,
-                        &oauth,
-                        &text,
-                        at,
-                    )
-                    .await?;
-                    if let Some(outcome) = outcome {
                         if value["type"] == "response.completed"
-                            && let Some(p) = &pending
-                            && let Some(mut input) = p.full_input.clone()
+                            && let Some(p) = &mut pending
+                            && let Some(mut input) = p.full_input.take()
                             && let Some(id) = value.pointer("/response/id").and_then(Value::as_str)
                         {
                             input.extend(
@@ -551,6 +545,10 @@ async fn bridge(
                                 .is_ok_and(|v| v.len() <= codex2api_upstream::MAX_REQUEST_BYTES))
                             .then(|| (id.into(), input));
                         }
+                    let outcome = deliver(
+                        &mut client, &mut connected, &ledger, &state, &oauth, &text, &mut value, at,
+                    ).await?;
+                    if let Some(outcome) = outcome {
                         pending = None;
                         if let ResponseOutcome::Failed(failure) = outcome {
                             close_code = if failure.status.is_some_and(|status| status < 500) {
@@ -683,7 +681,11 @@ mod tests {
                                 previous_response_matches: false,
                                 permit: None,
                                 request: Default::default(),
-                                account: state.storage.require_account(&first).await.unwrap(),
+                                account: state
+                                    .storage
+                                    .supplier_account_snapshot(&first)
+                                    .await
+                                    .unwrap(),
                             },
                             headers: HeaderMap::new(),
                             revision: state.storage.supplier_auth_revision(&first).await.unwrap(),
@@ -887,7 +889,11 @@ mod tests {
                         previous_response_matches: false,
                         permit: None,
                         request: Default::default(),
-                        account: state.storage.require_account(&first).await.unwrap(),
+                        account: state
+                            .storage
+                            .supplier_account_snapshot(&first)
+                            .await
+                            .unwrap(),
                     };
                     let revision = state.storage.supplier_auth_revision(&first).await.unwrap();
                     let connection = Connection {

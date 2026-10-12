@@ -271,6 +271,30 @@ impl AccountIdentity {
         }
     }
 
+    pub fn from_transport(account: &codex2api_storage::SupplierTransportSnapshot) -> Self {
+        let http_fingerprint = HttpFingerprint::from_json(&account.http_fingerprint_json)
+            .unwrap_or_else(|_| HttpFingerprint {
+                timezone: None,
+                originator: account.originator.clone(),
+                user_agent: account.user_agent.clone(),
+                os_type: account.os_type.clone(),
+                os_version: account.os_version.clone(),
+                arch: account.arch.clone(),
+                installation_id: account.installation_id.clone(),
+                cookies: Vec::new(),
+            });
+        Self {
+            account_id: account.id.clone(),
+            installation_id: account.installation_id.clone(),
+            originator: http_fingerprint.originator.clone(),
+            user_agent: http_fingerprint.user_agent.clone(),
+            os_type: http_fingerprint.os_type.clone(),
+            os_version: http_fingerprint.os_version.clone(),
+            arch: http_fingerprint.arch.clone(),
+            http_fingerprint,
+        }
+    }
+
     pub fn fingerprint_json(&self) -> Result<String> {
         self.http_fingerprint.to_json()
     }

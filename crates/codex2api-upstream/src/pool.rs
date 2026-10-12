@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,8 +17,9 @@ use crate::stream::SseForwardStream;
 pub struct UpstreamPool {
     auth: AuthService,
     grok: crate::grok::GrokUpstream,
-    clients: Arc<tokio::sync::Mutex<HashMap<String, Arc<UpstreamClient>>>>,
+    clients: Arc<codex2api_auth::account_cache::AccountCache<Arc<UpstreamClient>>>,
     stream_idle_timeout: Option<Duration>,
+    transport: Arc<dyn crate::HttpTransport>,
 }
 
 impl UpstreamPool {
@@ -60,8 +60,9 @@ impl UpstreamPool {
                 auth.storage().ok().cloned(),
             )),
             auth,
-            clients: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            clients: Arc::default(),
             stream_idle_timeout: None,
+            transport: Arc::new(crate::ReqwestTransport),
         }
     }
 
@@ -77,7 +78,14 @@ impl UpstreamPool {
         &self.grok
     }
     pub fn with_grok(mut self, grok: crate::grok::GrokUpstream) -> Self {
-        self.grok = grok;
+        self.grok = grok.with_transport(self.transport.clone());
+        self
+    }
+    /// Composition-time injection for an alternate transport, including in-memory load fixtures.
+    pub fn with_transport(mut self, transport: Arc<dyn crate::HttpTransport>) -> Self {
+        self.grok = self.grok.with_transport(transport.clone());
+        self.transport = transport;
+        self.clients = Arc::default();
         self
     }
     pub async fn refresh_supplier_auth(
@@ -108,43 +116,43 @@ impl UpstreamPool {
 
     /// Return the isolated client for `account_id`, creating it on first use.
     pub async fn get(&self, account_id: &str) -> Result<Arc<UpstreamClient>> {
-        if self
-            .auth
-            .storage()?
-            .require_account(account_id)
-            .await?
-            .provider_id
-            != codex2api_core::CHATGPT
-        {
-            return Err(crate::UpstreamError::InvalidRequest(
-                "Supplier provider mismatch".into(),
-            ));
-        }
-        let mut map = self.clients.lock().await;
         let clients = self.auth.account_http(account_id).await?;
-        if let Some(existing) = map.get(account_id)
-            && Arc::ptr_eq(&existing.account_http, &clients)
-        {
-            return Ok(existing.clone());
-        }
-        let ctx = self.auth.accounts().load_context(account_id).await?;
-        if ctx.account.provider_id != codex2api_core::CHATGPT {
-            return Err(crate::UpstreamError::InvalidRequest(
-                "Supplier provider mismatch".into(),
-            ));
-        }
-        let mut client = UpstreamClient::from_context(ctx, Some(self.auth.clone()))?;
-        client.use_account_http(clients);
-        if let Some(timeout) = self.stream_idle_timeout {
-            client = client.with_stream_idle_timeout(timeout);
-        }
-        let client = Arc::new(client);
-        map.insert(account_id.to_string(), client.clone());
-        Ok(client)
+        let current = clients.clone();
+        self.clients
+            .get_or_update(
+                account_id,
+                |old| Arc::ptr_eq(&old.account_http, &current),
+                |_| async {
+                    let credentials = self.auth.credentials(account_id).await?;
+                    let tokens = credentials
+                        .auth
+                        .tokens
+                        .as_ref()
+                        .filter(|t| !t.access_token.is_empty())
+                        .ok_or_else(|| {
+                            crate::UpstreamError::MissingAccessToken(account_id.into())
+                        })?;
+                    let mut client = UpstreamClient::build_with_http(
+                        clients.identity.clone(),
+                        tokens.access_token.clone(),
+                        tokens.account_id.clone(),
+                        Some(self.auth.clone()),
+                        clients,
+                    );
+                    client.apply_auth(credentials)?;
+                    client.transport = self.transport.clone();
+                    if let Some(timeout) = self.stream_idle_timeout {
+                        client = client.with_stream_idle_timeout(timeout);
+                    }
+                    Ok(Arc::new(client))
+                },
+            )
+            .await
     }
 
     pub async fn evict(&self, account_id: &str) {
-        self.clients.lock().await.remove(account_id);
+        self.clients.remove(account_id);
+        self.auth.evict_account_http(account_id).await;
         self.grok.auth().evict_account_http(account_id).await;
     }
 

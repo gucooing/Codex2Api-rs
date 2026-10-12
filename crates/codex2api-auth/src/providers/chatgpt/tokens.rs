@@ -13,6 +13,44 @@ pub const AUTH_MODE_CHATGPT: &str = "chatgpt";
 const TOKEN_REFRESH_INTERVAL_DAYS: i64 = 8;
 const ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
 
+pub struct ChatgptCredentials {
+    pub auth: AuthDotJson,
+    pub revision: i64,
+    pub cache_generation: u64,
+    expires_at: Option<DateTime<Utc>>,
+}
+impl ChatgptCredentials {
+    pub(crate) fn from_snapshot(
+        snapshot: &codex2api_storage::SupplierAuthSnapshot,
+    ) -> Result<Self> {
+        let mut auth = AuthDotJson::from_supplier_tokens(&snapshot.tokens)?;
+        if let Some(tokens) = auth.tokens.as_mut()
+            && tokens.account_id.is_none()
+        {
+            tokens.account_id = snapshot.chatgpt_account_id.clone();
+        }
+        let expires_at = auth
+            .tokens
+            .as_ref()
+            .and_then(|tokens| parse_jwt_expiration(&tokens.access_token).ok().flatten());
+        Ok(Self {
+            auth,
+            revision: snapshot.auth_revision,
+            cache_generation: snapshot.cache_generation,
+            expires_at,
+        })
+    }
+    pub(crate) fn needs_refresh(&self) -> bool {
+        if let Some(expires) = self.expires_at {
+            expires <= Utc::now() + chrono::Duration::minutes(ACCESS_TOKEN_REFRESH_WINDOW_MINUTES)
+        } else {
+            self.auth.last_refresh.is_some_and(|last| {
+                last < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL_DAYS)
+            })
+        }
+    }
+}
+
 /// Subset of official `$CODEX_HOME/auth.json` token payload used by callers.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenSet {

@@ -77,11 +77,19 @@ pub async fn require_oauth(
         })
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(ApiError::invalid_token)?;
-    let access = state
-        .storage
-        .virtual_access(&hash_token(token))
-        .await?
-        .ok_or_else(ApiError::invalid_token)?;
+    let hash = hash_token(token);
+    let access = match request
+        .extensions()
+        .get::<VirtualAccess>()
+        .filter(|access| access.token_hash == hash)
+    {
+        Some(access) => access.clone(),
+        None => state
+            .storage
+            .virtual_access(&hash)
+            .await?
+            .ok_or_else(ApiError::invalid_token)?,
+    };
     if access.provider_id != codex2api_core::GROK {
         return Err(codex2api_service::ServiceError::Policy(
             codex2api_core::PolicyError::ProviderMismatch,
@@ -253,17 +261,38 @@ pub(crate) async fn forward(
     endpoint: &'static str,
 ) -> Result<Response> {
     crate::response::complete_on_disconnect(async move {
-        let mut body = codex2api_upstream::grok::prepare(&body, &headers)?;
-        if endpoint == "messages" {
-            body.as_object_mut()
-                .expect("validated object")
-                .remove("store");
-        }
-        if endpoint == "chat/completions" && body["stream"] == true {
-            body["stream_options"] = json!({"include_usage":true});
-        }
-        let metadata = codex2api_upstream::request_metadata_value(&body);
-        let schedule = scheduling::request(&headers, &body);
+        let inbound = headers.clone();
+        let (metadata, mut schedule, body) = tokio::task::spawn_blocking(move || {
+            let mut body = codex2api_upstream::grok::prepare(&body, &inbound)?;
+            if endpoint == "messages" {
+                body.as_object_mut()
+                    .expect("validated object")
+                    .remove("store");
+            }
+            if endpoint == "chat/completions" && body["stream"] == true {
+                body["stream_options"] = json!({"include_usage":true});
+            }
+            let metadata = codex2api_upstream::request_metadata_value(&body);
+            let schedule = scheduling::request(&inbound, &body);
+            Ok::<_, codex2api_upstream::UpstreamError>((
+                metadata,
+                schedule,
+                codex2api_upstream::grok::PreparedBody::new(body)?,
+            ))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
+        let start = std::time::Instant::now();
+        let requested_at = chrono::Utc::now().timestamp_millis();
+        let admission = crate::execution::Admission::new(
+            &state.storage,
+            &access.provider_id,
+            &access.virtual_account_id,
+            &format!("/grok/v1/{endpoint}"),
+            metadata,
+        )
+        .await?;
+        schedule.admission = Some(admission.version);
         let mut ctx = crate::pool_execution::select_for(&state, &access, &schedule, &[]).await?;
         let mut log = Some(
             crate::execution::ExecutionContext::new(
@@ -275,11 +304,7 @@ pub(crate) async fn forward(
                 "http",
             )
             .with_supplier_permit(ctx.permit.take())
-            .start(
-                metadata,
-                std::time::Instant::now(),
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .start_admitted(admission, start, requested_at)
             .await?,
         );
         let response = crate::pool_execution::execute_with_prelude(
@@ -295,7 +320,7 @@ pub(crate) async fn forward(
                 async move {
                     upstream
                         .grok()
-                        .grok_request(&id, Method::POST, endpoint, Some(body), &headers)
+                        .grok_request_prepared(&id, Method::POST, endpoint, Some(body), &headers)
                         .await
                 }
             },
@@ -326,7 +351,7 @@ fn isolate(body: Body) -> Body {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
     Body::from_stream(
-        body.into_data_stream()
+        codex2api_upstream::buffered_sse_lines(body.into_data_stream())
             .eventsource()
             .filter_map(|event| async move {
                 let event = match event {
@@ -346,16 +371,23 @@ fn isolate(body: Body) -> Body {
                 {
                     return None;
                 }
+                let mut changed = false;
                 if value.get("error").is_some_and(|v| !v.is_null()) {
+                    changed = true;
                     value["error"] = codex2api_upstream::grok::errors::normalize(&value);
                     if value["type"].is_null() {
                         value["type"] = "error".into();
                     }
                 }
-                crate::public_output::metadata(&mut value);
+                changed |= crate::public_output::metadata(&mut value);
+                let data = if changed {
+                    value.to_string()
+                } else {
+                    event.data
+                };
                 Some(Ok(Bytes::from(format!(
                     "event: {}\ndata: {}\n\n",
-                    event.event, value
+                    event.event, data
                 ))))
             }),
     )

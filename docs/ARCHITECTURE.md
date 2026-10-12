@@ -106,12 +106,19 @@ value and 0.2 of each completed attempt; the first valid latency initializes it.
 Optional sticky weighting adds three for the session owner and five for a movable
 previous-response owner. The top seven candidates are considered by default;
 a qualifying previous owner, then session owner, leads the order, otherwise a
-seeded weighted permutation uses `score - minimum + 1`. Selection still requires
-an atomic slot acquisition. The traditional option orders under-capacity
+seeded weighted selection uses `score - minimum + 1`. Model-pool indexes retain
+ordered ready accounts and consume a bounded log of changed supplier metrics.
+Acquisition updates the local count before releasing the index lock. Normal
+requests update changed accounts and take Top-K from the index rather than
+scoring the whole pool. A change to normalization extrema rebuilds scores;
+retry exclusions use the remaining population. The traditional option groups under-capacity
 candidates by priority, load and least-recent use, breaking ties by the session
 seed; unlimited suppliers remain eligible even above the load denominator.
 
-Hard affinity is the default. A healthy owner is reused and renewed. Busy owners
+Hard affinity is the default. A provider-and-pool snapshot expands each model to
+its eligible account references and indexes account membership separately. Both
+channels share this index. Affinity looks up the bound account without scanning
+the candidate list or reading every supplier's load. A healthy owner is reused and renewed. Busy owners
 can wait for the configured timeout (default ten seconds); with escape enabled,
 busy or unhealthy owners (error EWMA at least 0.5 or latency at least fifteen
 seconds) allow a different candidate while preserving the original session
@@ -131,13 +138,56 @@ process loss. A local slot guard also prevents a Redis restart from admitting
 more than the single process's configured capacity.
 
 SQLite remains authoritative for identity, credentials, entitlements, model
-configuration and immutable accounting. Pool candidates and policy/price
-snapshots use bounded in-process caches, invalidated by administrator and supplier
-state writes; authorization and revocation remain live reads. Scheduling, RPM and
+configuration and immutable accounting. Shared scheduling, model catalogs,
+supplier model membership, frozen transport fields and price snapshots use
+bounded native in-process caches. Immutable lists are shared through `Arc`;
+cache reads do not encode/decode JSON. Concurrent misses for one key share a
+loader, cancellation releases that loader, and generation fencing prevents a
+pre-edit read from repopulating an invalidated cache. Administrator and supplier
+state writes invalidate snapshots, including fingerprint edits, proxy URL changes
+and unbinding. Pool snapshots expire within thirty seconds or at the earliest
+pending quota reset, including empty pools. Model and account changes invalidate
+the expansion before the next selection. Entitlement, route and spending
+admission snapshots share the same invalidation boundary; subscription expiry
+and quota reset timestamps bound their lifetime. Consumer authorization and revocation
+remain live reads; the HTTP dispatcher passes the validated principal to its provider.
+Admission runs before selection and carries its policy/spending/time generation
+to request start; changes require revalidation. Supplier credentials and account
+records are immutable snapshots invalidated by login, refresh, deletion and account edits.
+Providers decode their own credentials once per snapshot. Healthy credentials
+avoid the refresh lock; refresh and rejected-token recovery recheck after locking.
+Workspace routes reuse the persisted snapshot and parsed route; discovery locks
+only cache misses and explicit refresh. Account client caches have independent
+construction locks, preserving isolated clients, cookies and refresh locks.
+Targeted routing/profile updates invalidate only their own key and fence stale fills.
+Local capacity
+waiters wake on permit release; Redis-backed waits also poll for remote releases.
+Scheduling, RPM and
 slot acquisition take no SQLite write lock. Last-used timestamp writes coalesce
-for sixty seconds. Generation budget checks read current spending windows without
-scanning lifetime billing summaries, and price snapshots reuse an invalidated
-cache while existing request snapshots remain immutable.
+for sixty seconds. Generation admission reads cached eligibility and pricing
+availability for tokens, images and per-operation charges, not usage details.
+Settlement invalidates the owner's spending
+decision; first use also updates the optional inner-window anchor. Cache misses
+aggregate indexed amounts in SQLite instead of fetching every ledger row into
+Rust. Protocol quota fields reuse that snapshot; lifetime totals belong to
+administration and statistics. Request start, completion, retry attribution, activity,
+device/supplier touches, routing and passive supplier quota observations use one bounded writer, batching immediately
+available work into durable transactions. Acknowledgements and cache updates
+follow commit. Request prices remain immutable and duplicate completions do not
+charge twice.
+
+Request metadata and forwarding reuse the decoded HTTP body. Grok serializes
+its normalized body once and shares the encoded bytes across supplier attempts;
+ChatGPT normalizes the parsed body for the chosen account and preserves official
+compression. WebSocket accounting, error classification and output sanitization
+share parsed events. Queued WebSocket requests retain the parsed value and byte count;
+dequeue and ledger validation do not decode the frame again. SSE framing scans newly received bytes and splits buffers
+without moving the remaining stream. Complete lines feed the shared SSE parser,
+avoiding repeated scans of partial lines. ChatGPT preserves unchanged frames;
+Grok preserves unchanged JSON while retaining its event framing.
+Sanitization reports changes directly instead of cloning whole events to compare.
+Both providers use the shared scheduler and snapshot store; their wire adapters,
+credentials and account-local HTTP clients remain provider-owned.
 
 ## Upstream identity and transport
 

@@ -253,9 +253,7 @@ pub async fn quota_headers(
     id: &str,
     headers: &mut HeaderMap,
 ) -> crate::Result<()> {
-    let Some(account) = storage.effective_platform_account(id).await? else {
-        return Ok(());
-    };
+    let quota = storage.execution_quota(id).await?;
     let names: Vec<_> = headers
         .keys()
         .filter(|k| {
@@ -277,11 +275,11 @@ pub async fn quota_headers(
     ] {
         headers.insert(name, value.parse().unwrap());
     }
-    let quota = storage.virtual_quota(&account.id).await?;
     headers.insert(
         "x-codex-plan-type",
-        account
-            .effective_plan()
+        quota["plan_type"]
+            .as_str()
+            .unwrap_or("free")
             .parse()
             .map_err(|_| crate::ApiError::internal("Invalid subscription plan."))?,
     );
@@ -324,69 +322,63 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
     let stream = futures::stream::try_unfold(
         (
             body.into_data_stream(),
-            Vec::<u8>::new(),
+            bytes::BytesMut::new(),
+            0usize,
             false,
             storage,
             id,
         ),
-        |(mut source, mut buffer, mut ended, storage, id)| async move {
+        |(mut source, mut buffer, mut scanned, mut ended, storage, id)| async move {
             loop {
-                let boundary = buffer
-                    .windows(2)
-                    .position(|w| w == b"\n\n")
-                    .map(|i| i + 2)
-                    .or_else(|| {
-                        buffer
-                            .windows(4)
-                            .position(|w| w == b"\r\n\r\n")
-                            .map(|i| i + 4)
-                    });
+                let mut boundary = None;
+                while scanned < buffer.len() {
+                    scanned += 1;
+                    if (scanned >= 2 && &buffer[scanned - 2..scanned] == b"\n\n")
+                        || (scanned >= 4 && &buffer[scanned - 4..scanned] == b"\r\n\r\n")
+                    {
+                        boundary = Some(scanned);
+                        break;
+                    }
+                }
                 if let Some(end) =
                     boundary.or_else(|| (ended && !buffer.is_empty()).then_some(buffer.len()))
                 {
-                    let frame: Vec<_> = buffer.drain(..end).collect();
+                    let frame = buffer.split_to(end).freeze();
+                    scanned = 0;
                     let mut output = frame.clone();
                     if let Ok(text) = std::str::from_utf8(&frame) {
-                        let data = text
-                            .lines()
-                            .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if let Ok(event) = serde_json::from_str::<Value>(&data)
-                            && event["type"] == "codex.rate_limits"
-                        {
-                            let usage = storage
-                                .virtual_quota(&id)
-                                .await
-                                .map_err(std::io::Error::other)?;
-                            let window = |key: &str| {
-                                let v = &usage["rate_limit"][key];
-                                if v.is_null() {
-                                    Value::Null
-                                } else {
-                                    json!({"used_percent":v["used_percent"],"window_minutes":v["limit_window_seconds"].as_i64().unwrap()/60,"reset_at":v["reset_at"]})
-                                }
-                            };
-                            let value = json!({"type":"codex.rate_limits","plan_type":usage["plan_type"],"credits":usage["credits"],"rate_limits":{"primary":window("primary_window"),"secondary":window("secondary_window")}});
-                            let mut lines = text
-                                .lines()
-                                .filter(|line| !line.starts_with("data:") && !line.is_empty())
-                                .map(str::to_owned)
-                                .collect::<Vec<_>>();
-                            lines.push(format!("data: {value}"));
-                            output = format!("{}\n\n", lines.join("\n")).into_bytes();
-                        } else if let Ok(mut value) = serde_json::from_str::<Value>(&data) {
-                            let original = value.clone();
-                            crate::public_output::metadata(&mut value);
-                            if value != original {
+                        let data = codex2api_upstream::sse_data(text);
+                        let event = serde_json::from_str::<Value>(&data);
+                        if let Ok(mut value) = event {
+                            if value["type"] == "codex.rate_limits" {
+                                let usage = storage
+                                    .execution_quota(&id)
+                                    .await
+                                    .map_err(std::io::Error::other)?;
+                                let window = |key: &str| {
+                                    let v = &usage["rate_limit"][key];
+                                    if v.is_null() {
+                                        Value::Null
+                                    } else {
+                                        json!({"used_percent":v["used_percent"],"window_minutes":v["limit_window_seconds"].as_i64().unwrap()/60,"reset_at":v["reset_at"]})
+                                    }
+                                };
+                                let value = json!({"type":"codex.rate_limits","plan_type":usage["plan_type"],"credits":usage["credits"],"rate_limits":{"primary":window("primary_window"),"secondary":window("secondary_window")}});
+                                let mut lines = text
+                                    .lines()
+                                    .filter(|line| !line.starts_with("data:") && !line.is_empty())
+                                    .map(str::to_owned)
+                                    .collect::<Vec<_>>();
+                                lines.push(format!("data: {value}"));
+                                output = Bytes::from(format!("{}\n\n", lines.join("\n")));
+                            } else if crate::public_output::metadata(&mut value) {
                                 let event_name = text.lines().find(|l| l.starts_with("event:"));
-                                output = format!(
+                                output = Bytes::from(format!(
                                     "{}data: {value}\n\n",
                                     event_name
                                         .map(|name| format!("{name}\n"))
                                         .unwrap_or_default()
-                                )
-                                .into_bytes();
+                                ));
                             }
                         } else if !data.is_empty() && data != "[DONE]" {
                             return Err(std::io::Error::other("Invalid service event"));
@@ -395,8 +387,8 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
                         return Err(std::io::Error::other("Invalid service event encoding"));
                     }
                     return Ok::<_, std::io::Error>(Some((
-                        Bytes::from(output),
-                        (source, buffer, ended, storage, id),
+                        output,
+                        (source, buffer, scanned, ended, storage, id),
                     )));
                 }
                 if ended {
@@ -416,28 +408,119 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
     axum::body::Body::from_stream(stream)
 }
 
+#[cfg(test)]
+#[tokio::test]
+#[ignore = "manual fragmented stream performance comparison"]
+async fn benchmark_fragmented_sse() {
+    use axum::body::{Body, Bytes};
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("stream.sqlite"))
+        .await
+        .unwrap();
+    let frame = Bytes::from(format!(
+        "data: {}\n\n",
+        json!({"type":"response.output_text.delta","delta":"x".repeat(128 * 1024)})
+    ));
+    let start = std::time::Instant::now();
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..3 {
+        let (frame, storage) = (frame.clone(), storage.clone());
+        tasks.spawn(async move {
+            for _ in 0..10 {
+                let chunks: Vec<_> = (0..frame.len())
+                    .step_by(1024)
+                    .map(|at| {
+                        Ok::<_, std::io::Error>(frame.slice(at..(at + 1024).min(frame.len())))
+                    })
+                    .collect();
+                let body = isolate_sse(
+                    Body::from_stream(futures::stream::iter(chunks)),
+                    storage.clone(),
+                    "owner".into(),
+                );
+                assert_eq!(axum::body::to_bytes(body, usize::MAX).await.unwrap(), frame);
+            }
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap();
+    }
+    eprintln!(
+        "fragmented SSE: 3 streams x 10 events x 128KiB = {:?}",
+        start.elapsed()
+    );
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn fragmented_events_preserve_bytes_and_sanitize_metadata_across_mixed_boundaries() {
+    use axum::body::{Body, Bytes};
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("frames.sqlite"))
+        .await
+        .unwrap();
+    let prefix = ": keepalive\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"分片🙂\"}\r\n\r\n";
+    let text = format!(
+        "{prefix}event: response.failed\ndata: {{\"type\":\"response.failed\",\"response\":{{\"error\":{{\"code\":\"slow_down\",\"message\":\"supplier-secret\",\"headers\":{{\"Retry-After\":7}}}},\"metadata\":{{\"ACCOUNT_ID\":\"private\"}}}}}}\n\ndata: [DONE]\n\n"
+    );
+    for size in [1, 2, 3, 17, text.len()] {
+        let chunks = text
+            .as_bytes()
+            .chunks(size)
+            .map(|chunk| Ok::<_, std::io::Error>(Bytes::copy_from_slice(chunk)))
+            .collect::<Vec<_>>();
+        let body = isolate_sse(
+            Body::from_stream(futures::stream::iter(chunks)),
+            storage.clone(),
+            "owner".into(),
+        );
+        let output = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        let output = std::str::from_utf8(&output).unwrap();
+        assert!(output.starts_with(prefix));
+        assert!(output.ends_with("data: [DONE]\n\n"));
+        assert!(!output.contains("supplier-secret") && !output.contains("private"));
+        let error: Value = serde_json::from_str(
+            codex2api_upstream::sse_data(
+                output
+                    .strip_prefix(prefix)
+                    .unwrap()
+                    .split("\n\n")
+                    .next()
+                    .unwrap(),
+            )
+            .as_ref(),
+        )
+        .unwrap();
+        assert_eq!(error["response"]["error"]["headers"]["retry-after"], "7");
+    }
+}
+
 /// The pinned client reads quota both from handshake headers and codex.rate_limits events.
+#[cfg(test)]
 pub async fn websocket_message(storage: &Storage, hash: &str, text: &str) -> crate::Result<String> {
     let mut event = serde_json::from_str::<Value>(text)
         .map_err(|_| crate::ApiError::internal("Invalid service event"))?;
+    websocket_event(storage, hash, text, &mut event).await
+}
+
+pub(crate) async fn websocket_event(
+    storage: &Storage,
+    hash: &str,
+    text: &str,
+    event: &mut Value,
+) -> crate::Result<String> {
     if event["type"] != "codex.rate_limits" {
-        let original = event.clone();
-        crate::public_output::metadata(&mut event);
-        return Ok(if event == original {
-            text.to_owned()
-        } else {
+        return Ok(if crate::public_output::metadata(event) {
             event.to_string()
+        } else {
+            text.to_owned()
         });
     }
     let access = storage
         .virtual_access(hash)
         .await?
         .ok_or_else(crate::ApiError::invalid_token)?;
-    let account = storage
-        .effective_platform_account(&access.virtual_account_id)
-        .await?
-        .ok_or_else(crate::ApiError::invalid_token)?;
-    let usage = storage.virtual_quota(&account.id).await?;
+    let usage = storage.execution_quota(&access.virtual_account_id).await?;
     let window = |name: &str| {
         let v = &usage["rate_limit"][name];
         if v.is_null() {
@@ -445,8 +528,8 @@ pub async fn websocket_message(storage: &Storage, hash: &str, text: &str) -> cra
         }
         json!({"used_percent":v["used_percent"],"window_minutes":v["limit_window_seconds"].as_i64().unwrap()/60,"reset_at":v["reset_at"]})
     };
-    event = json!({"type":"codex.rate_limits","rate_limits":{"primary":window("primary_window"),"secondary":window("secondary_window")},"credits":usage["credits"]});
-    event["plan_type"] = account.effective_plan().into();
+    *event = json!({"type":"codex.rate_limits","rate_limits":{"primary":window("primary_window"),"secondary":window("secondary_window")},"credits":usage["credits"]});
+    event["plan_type"] = usage["plan_type"].clone();
     Ok(event.to_string())
 }
 

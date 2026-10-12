@@ -9,8 +9,20 @@ pub struct VirtualRpmLimit {
     pub effective_concurrency: u32,
 }
 impl Storage {
+    /// Request-local proof; policy edits, settlements and time boundaries require re-admission.
+    pub fn admission_version(&self, owner: &str) -> (u64, u64, i64) {
+        (
+            self.runtime.epoch(),
+            self.runtime.version(&format!("spending-decision:{owner}")),
+            chrono::Utc::now().timestamp(),
+        )
+    }
     pub async fn virtual_rpm_limit(&self, owner: &str) -> Result<VirtualRpmLimit> {
         let key = format!("request-limits:{owner}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
         if let Some(value) = self.runtime.cached(&key) {
             return Ok(value);
         }

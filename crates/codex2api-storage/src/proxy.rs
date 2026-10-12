@@ -151,7 +151,7 @@ impl Storage {
             return Err(StorageError::InvalidProxy);
         }
         let url = parse_proxy_url(url.trim())?;
-        sqlx::query_as(
+        let updated = sqlx::query_as(
             "UPDATE outbound_proxies SET name=?1, url=?2,
             exit_ip=CASE WHEN url=?2 THEN exit_ip END,
             country_code=CASE WHEN url=?2 THEN country_code END,
@@ -175,7 +175,9 @@ impl Storage {
         .bind(id)
         .fetch_optional(self.pool())
         .await?
-        .ok_or(StorageError::ProxyNotFound)
+        .ok_or(StorageError::ProxyNotFound)?;
+        self.invalidate_runtime_cache();
+        Ok(updated)
     }
 
     pub async fn require_outbound_proxy(&self, id: &str) -> Result<OutboundProxy> {
@@ -193,6 +195,7 @@ impl Storage {
                 .bind(id).bind(id).execute(&mut *tx).await?;
             if result.rows_affected() > 0 {
                 tx.commit().await?;
+                self.invalidate_runtime_cache();
                 return Ok(true);
             }
             let count: i64 =
@@ -216,6 +219,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(result.rows_affected() > 0)
     }
 
@@ -237,6 +241,7 @@ impl Storage {
         if result.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account_id.to_owned()));
         }
+        self.invalidate_runtime_cache();
         self.require_account(account_id).await
     }
 }

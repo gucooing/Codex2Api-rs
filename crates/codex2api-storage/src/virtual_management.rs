@@ -623,42 +623,6 @@ impl Storage {
         self.virtual_quota_at(owner, chrono::Utc::now().timestamp())
             .await
     }
-    pub async fn virtual_spending_status(&self, owner: &str) -> Result<(bool, bool)> {
-        let now = chrono::Utc::now().timestamp();
-        let account = self
-            .effective_platform_account_at(owner, now)
-            .await?
-            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
-        let plan = self
-            .virtual_plan(&account.plan_id)
-            .await?
-            .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
-        let rules = crate::plan_spending_windows(&plan.config)?;
-        let limited = rules.iter().any(|w| w.cost_limit_usd.is_some());
-        if !limited {
-            return Ok((true, false));
-        }
-        let anchor = self.subscription_anchor_at(owner, now).await?;
-        let windows = self
-            .nested_spending_windows(owner, &rules, if anchor > now { 0 } else { anchor }, now)
-            .await?;
-        Ok((windows.iter().all(|w| w["allowed"] != false), true))
-    }
-    pub async fn virtual_spending_limited(&self, owner: &str) -> Result<bool> {
-        let account = self
-            .effective_platform_account(owner)
-            .await?
-            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
-        let plan = self
-            .virtual_plan(&account.plan_id)
-            .await?
-            .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
-        // The first request must respect an inner limit before that window starts
-        // and becomes visible in the client's quota presentation.
-        Ok(crate::plan_spending_windows(&plan.config)?
-            .iter()
-            .any(|window| window.cost_limit_usd.is_some()))
-    }
     pub(crate) async fn virtual_quota_at(&self, owner: &str, now: i64) -> Result<Value> {
         let account = self
             .effective_platform_account_at(owner, now)
@@ -684,25 +648,17 @@ impl Storage {
             .nested_spending_windows(owner, &rules, anchor, now)
             .await?;
         allowed &= windows.iter().all(|window| window["allowed"] != false);
-        // Official Codex names the short window primary. A single outer window
-        // remains primary, matching free accounts that only report 30 days.
-        let active_inner = windows
-            .get(1)
-            .filter(|window| !window["started_at"].is_null() && !window["used_percent"].is_null());
-        let outer_public = windows
-            .first()
-            .filter(|window| !window["used_percent"].is_null());
-        let primary = active_inner
-            .cloned()
-            .or_else(|| outer_public.cloned())
-            .unwrap_or(Value::Null);
-        let secondary = active_inner
-            .and_then(|_| outer_public.cloned())
-            .unwrap_or(Value::Null);
         let reset_count = self.virtual_reset_credit_count(owner).await?;
-        Ok(
-            json!({"account_id":account.id,"user_id":format!("user-{}",account.id),"plan_type":account.effective_plan_at(now),"rate_limit":{"allowed":allowed,"limit_reached":!allowed,"primary_window":primary,"secondary_window":secondary,"windows":windows},"credits":{"has_credits":false,"unlimited":false,"balance":null},"rate_limit_reset_credits":{"available_count":reset_count},"billing":billing}),
-        )
+        let mut value = crate::spending_windows::quota_view(
+            owner,
+            account.effective_plan_at(now),
+            allowed,
+            &windows,
+            now,
+        );
+        value["rate_limit_reset_credits"] = json!({"available_count":reset_count});
+        value["billing"] = billing;
+        Ok(value)
     }
     pub async fn virtual_config(&self, owner: &str, key: &str) -> Result<VirtualClientState> {
         if crate::plan_owned_config(key) {
@@ -1004,9 +960,17 @@ impl Storage {
         status: u16,
         duration: i64,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO virtual_request_logs(virtual_account_id,device_id,method,path,status,duration_ms,created_at_ms) SELECT id,?,?,?,?,?,? FROM platform_accounts WHERE id=?")
-            .bind(device).bind(method).bind(path).bind(i64::from(status)).bind(duration).bind(chrono::Utc::now().timestamp_millis()).bind(owner).execute(self.pool()).await?;
-        Ok(())
+        self.write_request(crate::request_writer::Write::Activity {
+            owner: owner.into(),
+            device: device.into(),
+            method: method.into(),
+            path: path.into(),
+            status,
+            duration,
+            at: chrono::Utc::now().timestamp_millis(),
+        })
+        .await
+        .map(|_| ())
     }
 
     pub async fn virtual_request_logs(&self, owner: &str, before: i64) -> Result<Vec<Value>> {

@@ -679,11 +679,12 @@ async fn supplier_routing_migration_preserves_credentials_and_marks_legacy_snaps
         .unwrap();
     assert_eq!(snapshot.auth_revision, 0);
     assert_eq!(snapshot.tokens.access_token.as_deref(), Some("old-access"));
-    let (details, revision) = storage
+    let shared = storage
         .supplier_routing_snapshot("legacy")
         .await
         .unwrap()
         .unwrap();
+    let (details, revision) = shared.as_ref();
     assert!(revision.is_none());
     assert!(
         storage
@@ -691,7 +692,7 @@ async fn supplier_routing_migration_preserves_credentials_and_marks_legacy_snaps
             .await
             .unwrap()
     );
-    let mut tokens = snapshot.tokens;
+    let mut tokens = snapshot.tokens.clone();
     tokens.access_token = Some("renewed-access".into());
     storage.upsert_supplier_tokens(tokens).await.unwrap();
     assert_eq!(

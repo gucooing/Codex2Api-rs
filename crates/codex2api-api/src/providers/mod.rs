@@ -32,11 +32,18 @@ pub(crate) fn router(state: crate::ApiState) -> axum::Router {
                                 .virtual_access(&codex2api_storage::hash_token(token.trim()))
                                 .await
                             {
-                                Ok(Some(access)) if access.provider_id == codex2api_core::GROK => {
-                                    let uri = format!("/grok{}", request.uri());
-                                    *request.uri_mut() =
-                                        uri.parse().expect("known provider prefix");
-                                    return grok.oneshot(request).await.expect("infallible router");
+                                Ok(Some(access)) => {
+                                    let is_grok = access.provider_id == codex2api_core::GROK;
+                                    request.extensions_mut().insert(access);
+                                    if is_grok {
+                                        let uri = format!("/grok{}", request.uri());
+                                        *request.uri_mut() =
+                                            uri.parse().expect("known provider prefix");
+                                        return grok
+                                            .oneshot(request)
+                                            .await
+                                            .expect("infallible router");
+                                    }
                                 }
                                 Err(error) => {
                                     return axum::response::IntoResponse::into_response(

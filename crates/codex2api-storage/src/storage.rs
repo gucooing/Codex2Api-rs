@@ -26,6 +26,8 @@ const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_ac
 #[derive(Clone, Debug)]
 pub struct Storage {
     pub(crate) runtime: std::sync::Arc<crate::runtime::Runtime>,
+    pub(crate) request_writer:
+        std::sync::Arc<tokio::sync::OnceCell<crate::request_writer::RequestWriter>>,
     pool: SqlitePool,
     db_path: PathBuf,
     pub(crate) jwt_keys:
@@ -108,6 +110,7 @@ impl Storage {
 
         let storage = Self {
             runtime: crate::runtime::Runtime::new(&db_path).await?,
+            request_writer: std::sync::Arc::default(),
             pool,
             db_path,
             jwt_keys: std::sync::Arc::new(std::array::from_fn(|_| tokio::sync::OnceCell::new())),
@@ -819,11 +822,11 @@ impl Storage {
 
     pub async fn touch_account(&self, id: &str) -> Result<()> {
         if self.runtime.claim_touch(&format!("touch-supplier:{id}")) {
-            sqlx::query("UPDATE supplier_accounts SET last_used_at=? WHERE id=?")
-                .bind(now_rfc3339())
-                .bind(id)
-                .execute(&self.pool)
-                .await?;
+            self.write_request(crate::request_writer::Write::Touch {
+                id: id.into(),
+                at: now_rfc3339(),
+            })
+            .await?;
         }
         Ok(())
     }
@@ -903,6 +906,7 @@ impl Storage {
         if result.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account.id.clone()));
         }
+        self.invalidate_runtime_cache();
         self.require_account(&account.id).await
     }
 

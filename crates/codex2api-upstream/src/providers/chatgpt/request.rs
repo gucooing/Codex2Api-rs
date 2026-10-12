@@ -171,7 +171,20 @@ pub(crate) fn prepare_responses(
     installation_id: &str,
     timezone: Option<&str>,
 ) -> Result<PreparedRequest> {
-    let mut body = decode_body(body, inbound)?;
+    prepare_responses_value(
+        decode_body(body, inbound)?,
+        inbound,
+        installation_id,
+        timezone,
+    )
+}
+
+pub(crate) fn prepare_responses_value(
+    mut body: Value,
+    inbound: &HeaderMap,
+    installation_id: &str,
+    timezone: Option<&str>,
+) -> Result<PreparedRequest> {
     crate::apply_response_timezone(&mut body, timezone)?;
     let mut headers = normalize_response_identity(&mut body, installation_id, inbound)?;
     let json = serialize_responses_request(&body)?;

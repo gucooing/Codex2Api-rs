@@ -14,6 +14,267 @@ use codex2api_storage::{
 async fn supplier(storage: &Storage, id: &str) {
     supplier_for(storage, id, "chatgpt").await;
 }
+
+#[tokio::test]
+async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("journal.sqlite"))
+        .await
+        .unwrap();
+    supplier(&storage, "supplier").await;
+    consumer(&storage, "owner").await;
+    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+    plan.config["spending_windows"] = serde_json::json!([
+        {"duration_seconds":2592000,"cost_limit_usd":"1000"},
+        {"duration_seconds":18000,"cost_limit_usd":"0.000000001"}
+    ]);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.virtual_spending_status("owner").await.unwrap(),
+        (true, true)
+    );
+    assert_eq!(
+        storage.execution_quota("owner").await.unwrap()["rate_limit"]["primary_window"]["limit_window_seconds"],
+        2592000
+    );
+    storage
+        .sync_supported_models(&[codex2api_core::SupportedModel {
+            provider_id: "chatgpt".into(),
+            model: "gpt-5.5".into(),
+            kind: "text".into(),
+        }])
+        .await
+        .unwrap();
+    let record = codex2api_storage::UsageRecord {
+        id: "request".into(),
+        account_id: "supplier".into(),
+        subject_id: "owner".into(),
+        subject_kind: "virtual_account".into(),
+        provider_id: "chatgpt".into(),
+        status: "in_progress".into(),
+        endpoint: "/v1/responses".into(),
+        transport: "http".into(),
+        model: Some("gpt-5.5".into()),
+        requested_at_ms: chrono::Utc::now().timestamp_millis(),
+        ..Default::default()
+    };
+    let (first, duplicate) =
+        tokio::join!(storage.insert_usage(&record), storage.insert_usage(&record));
+    assert_ne!(
+        first.is_ok(),
+        duplicate.is_ok(),
+        "first={first:?}, duplicate={duplicate:?}"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_records WHERE id='request'")
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(
+        storage.execution_quota("owner").await.unwrap()["rate_limit"]["primary_window"]["started_at"],
+        record.requested_at_ms / 1000
+    );
+    let mut completed = record;
+    completed.status = "completed".into();
+    completed.input_tokens = Some(10);
+    completed.output_tokens = Some(3);
+    storage.finish_usage(&completed).await.unwrap();
+    assert_eq!(
+        storage.virtual_spending_status("owner").await.unwrap(),
+        (false, true)
+    );
+    completed.input_tokens = Some(999);
+    storage.finish_usage(&completed).await.unwrap();
+    let row: (String, Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT status,input_tokens,cost_nano_usd FROM usage_records WHERE id='request'",
+    )
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(row.0, "completed");
+    assert_eq!(row.1, Some(10));
+    assert!(row.2.is_some_and(|cost| cost > 0));
+    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+    plan.config["spending_windows"][1]["cost_limit_usd"] = "10".into();
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.virtual_spending_status("owner").await.unwrap(),
+        (true, true)
+    );
+}
+
+#[tokio::test]
+async fn shared_snapshots_refresh_models_transport_and_availability_for_each_provider() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("snapshots.sqlite"))
+        .await
+        .unwrap();
+    for provider in ["chatgpt", "grok"] {
+        supplier_for(&storage, provider, provider).await;
+        storage
+            .save_supplier_tag(provider, provider, provider)
+            .await
+            .unwrap();
+        storage
+            .edit_supplier_tags(&[provider.into()], &[provider.into()], false)
+            .await
+            .unwrap();
+        storage
+            .sync_supported_models(&[codex2api_core::SupportedModel {
+                provider_id: provider.into(),
+                model: "shared-model".into(),
+                kind: "text".into(),
+            }])
+            .await
+            .unwrap();
+        let empty = storage
+            .pool_candidates(provider, provider, Some("shared-model"))
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        storage
+            .add_supplier_model(provider, "shared-model")
+            .await
+            .unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..3 {
+            let storage = storage.clone();
+            tasks.spawn(async move {
+                storage
+                    .pool_candidates(provider, provider, Some("shared-model"))
+                    .await
+                    .unwrap()
+            });
+        }
+        let first = tasks.join_next().await.unwrap().unwrap();
+        assert_eq!(first.len(), 1);
+        while let Some(result) = tasks.join_next().await {
+            assert!(Arc::ptr_eq(&first, &result.unwrap()));
+        }
+        assert!(empty.is_empty());
+        let models = storage.supplier_model_snapshot(provider).await.unwrap();
+        assert!(models.contains("shared-model"));
+        let catalog = storage.model_catalog_snapshot(provider).await.unwrap();
+        assert!(catalog.iter().all(|m| m.provider_id == provider));
+        storage
+            .remove_supplier_model(provider, "shared-model")
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .supplier_supports_model(provider, "shared-model")
+                .await
+                .unwrap()
+        );
+        assert!(models.contains("shared-model"));
+        assert!(
+            storage
+                .pool_candidates(provider, provider, Some("shared-model"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let initial = storage.supplier_transport_snapshot(provider).await.unwrap();
+        assert!(Arc::ptr_eq(
+            &initial,
+            &storage.supplier_transport_snapshot(provider).await.unwrap()
+        ));
+        let proxy = storage
+            .create_outbound_proxy("proxy", "http://127.0.0.1:12345")
+            .await
+            .unwrap();
+        storage
+            .set_account_proxy(provider, Some(&proxy.id))
+            .await
+            .unwrap();
+        let bound = storage.supplier_transport_snapshot(provider).await.unwrap();
+        assert_eq!(bound.proxy_url.as_deref(), Some("http://127.0.0.1:12345/"));
+        storage
+            .update_outbound_proxy(&proxy.id, "changed", "http://127.0.0.1:12346")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .supplier_transport_snapshot(provider)
+                .await
+                .unwrap()
+                .proxy_url
+                .as_deref(),
+            Some("http://127.0.0.1:12346/")
+        );
+        let mut account = storage.require_account(provider).await.unwrap();
+        account.user_agent = "updated-fingerprint".into();
+        storage.save_account_fingerprint(&account).await.unwrap();
+        assert_eq!(
+            storage
+                .supplier_transport_snapshot(provider)
+                .await
+                .unwrap()
+                .user_agent,
+            "updated-fingerprint"
+        );
+        assert_ne!(initial.user_agent, "updated-fingerprint");
+        storage
+            .delete_outbound_proxy(&proxy.id, true)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .supplier_transport_snapshot(provider)
+                .await
+                .unwrap()
+                .proxy_url
+                .is_none()
+        );
+
+        let revision = storage
+            .supplier_auth_revision(provider)
+            .await
+            .unwrap()
+            .unwrap();
+        let reset = chrono::Utc::now().timestamp() + 1;
+        storage
+            .exhaust_supplier_quota(provider, revision, reset, "fixture")
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .pool_candidates(provider, provider, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let millis = (reset * 1000 - chrono::Utc::now().timestamp_millis()).max(0) as u64 + 25;
+        tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+        assert_eq!(
+            storage
+                .pool_candidates(provider, provider, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        storage
+            .set_account_status(provider, SupplierStatus::Disabled)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .pool_candidates(provider, provider, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
 async fn supplier_for(storage: &Storage, id: &str, provider: &str) {
     let mut new = NewSupplierAccount::pending_identity(
         id,

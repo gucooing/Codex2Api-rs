@@ -280,10 +280,7 @@ impl SupplierAccountStore {
     pub async fn load_context(&self, account_id: &str) -> Result<SupplierContext> {
         validate_account_id(account_id)?;
         let storage = self.storage()?;
-        let account = storage
-            .get_account(account_id)
-            .await?
-            .ok_or_else(|| AccountError::NotFound(account_id.to_string()))?;
+        let account = storage.supplier_account_snapshot(account_id).await?;
         if account.provider_id != codex2api_core::CHATGPT {
             return Err(AccountError::Storage(
                 codex2api_storage::StorageError::Constraint(
@@ -294,7 +291,7 @@ impl SupplierAccountStore {
         let identity = AccountIdentity::from_account(&account);
         let auth = self.load_auth_for_account(&account).await?;
         Ok(SupplierContext {
-            account,
+            account: account.as_ref().clone(),
             identity,
             auth,
         })

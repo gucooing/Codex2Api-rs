@@ -203,18 +203,28 @@ impl Storage {
         Ok(true)
     }
     pub async fn supplier_supports_model(&self, id: &str, model: &str) -> Result<bool> {
-        let key = format!("supplier-model:{id}:{model}");
+        Ok(self.supplier_model_snapshot(id).await?.contains(model))
+    }
+    pub async fn supplier_model_snapshot(
+        &self,
+        id: &str,
+    ) -> Result<std::sync::Arc<std::collections::HashSet<String>>> {
+        let key = format!("supplier-models:{id}");
+        if let Some(value) = self.runtime.cached(&key) {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
         if let Some(value) = self.runtime.cached(&key) {
             return Ok(value);
         }
         let epoch = self.runtime.epoch();
-        let value: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM supplier_models WHERE account_id=? AND model=?)",
-        )
-        .bind(id)
-        .bind(model)
-        .fetch_one(self.pool())
-        .await?;
+        let models: Vec<String> =
+            sqlx::query_scalar("SELECT model FROM supplier_models WHERE account_id=?")
+                .bind(id)
+                .fetch_all(self.pool())
+                .await?;
+        let value =
+            std::sync::Arc::new(models.into_iter().collect::<std::collections::HashSet<_>>());
         self.runtime
             .cache(key, &value, epoch, std::time::Duration::from_secs(30));
         Ok(value)

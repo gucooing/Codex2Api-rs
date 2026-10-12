@@ -12,6 +12,12 @@ mod account_fixture {
 use account_fixture::AccountFixture;
 
 async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleRequest) {
+    fixture_for("chatgpt").await
+}
+
+async fn fixture_for(
+    provider: &str,
+) -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleRequest) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(directory.path().join("scheduler.sqlite"))
         .await
@@ -27,6 +33,7 @@ async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleReque
         "{}",
     );
     supplier.id = Some("supplier".into());
+    supplier.provider_id = provider.into();
     supplier.chatgpt_account_id = Some("workspace".into());
     supplier.chatgpt_user_id = Some("user".into());
     storage
@@ -40,15 +47,20 @@ async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleReque
         )
         .await
         .unwrap();
+    let plan = if provider == "grok" {
+        storage.platform_free_plan(provider).await.unwrap()
+    } else {
+        storage.virtual_plan("plus").await.unwrap().unwrap()
+    };
     let consumer = PlatformAccount {
         id: "owner".into(),
-        provider_id: "chatgpt".into(),
+        provider_id: provider.into(),
         username: "owner".into(),
         password_hash: "fixture".into(),
         name: "Owner".into(),
         email: "owner@example.test".into(),
-        plan_type: "plus".into(),
-        plan_id: "plus".into(),
+        plan_type: plan.plan_type,
+        plan_id: plan.id,
         subscription_expires_at: None,
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -75,7 +87,7 @@ async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleReque
         .unwrap();
     storage
         .sync_supported_models(&[codex2api_core::SupportedModel {
-            provider_id: "chatgpt".into(),
+            provider_id: provider.into(),
             model: "fixture-model".into(),
             kind: "text".into(),
         }])
@@ -86,7 +98,7 @@ async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleReque
         .await
         .unwrap();
     storage
-        .save_supplier_tag("pool", "chatgpt", "Pool")
+        .save_supplier_tag("pool", provider, "Pool")
         .await
         .unwrap();
     storage
@@ -94,7 +106,7 @@ async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleReque
         .await
         .unwrap();
     storage
-        .save_pool_route("owner", "chatgpt", Some("pool"), None)
+        .save_pool_route("owner", provider, Some("pool"), None)
         .await
         .unwrap();
     let mut settings = storage.gateway_settings().await.unwrap();
@@ -115,6 +127,50 @@ async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleReque
         ..Default::default()
     };
     (directory, state, access, request)
+}
+
+#[tokio::test]
+async fn both_providers_share_concurrent_scheduling_and_recheck_stale_model_snapshots() {
+    for provider in ["chatgpt", "grok"] {
+        for mode in ["traditional", "advanced"] {
+            let (_directory, state, access, request) = fixture_for(provider).await;
+            let mut settings = state.storage.gateway_settings().await.unwrap();
+            settings.scheduler_mode = mode.into();
+            state
+                .storage
+                .save_gateway_settings(&settings)
+                .await
+                .unwrap();
+            let mut jobs = tokio::task::JoinSet::new();
+            for _ in 0..3 {
+                let (state, access, request) = (state.clone(), access.clone(), request.clone());
+                jobs.spawn(async move { select(&state, &access, &request, &[]).await.unwrap() });
+            }
+            let mut selected = Vec::new();
+            while let Some(result) = jobs.join_next().await {
+                selected.push(result.unwrap());
+            }
+            assert_eq!(selected.len(), 3);
+            assert!(selected.iter().all(|s| s.account.provider_id == provider));
+            assert_eq!(state.storage.supplier_metrics("supplier").active, 3);
+            drop(selected);
+            assert_eq!(state.storage.supplier_metrics("supplier").active, 0);
+            let cached = state
+                .storage
+                .pool_candidates("pool", provider, request.model.as_deref())
+                .await
+                .unwrap();
+            assert_eq!(cached.len(), 1);
+            // Existing readers retain their snapshot; new selections see the model edit.
+            state
+                .storage
+                .remove_supplier_model("supplier", "fixture-model")
+                .await
+                .unwrap();
+            assert!(select(&state, &access, &request, &[]).await.is_err());
+            assert_eq!(state.storage.supplier_metrics("supplier").active, 0);
+        }
+    }
 }
 
 #[tokio::test]

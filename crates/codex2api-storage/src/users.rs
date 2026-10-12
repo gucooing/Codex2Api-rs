@@ -154,6 +154,9 @@ impl Storage {
             }
         }
         tx.commit().await?;
+        if changed {
+            self.invalidate_runtime_cache();
+        }
         Ok(changed)
     }
     pub async fn create_user_session(&self, user: &User, csrf: &str) -> Result<Option<String>> {

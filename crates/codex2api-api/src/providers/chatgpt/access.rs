@@ -128,7 +128,7 @@ pub(crate) async fn resolve_owned_supplier(
         return Err(crate::pool_scheduler::context_required());
     }
     let ctx = SupplierContext {
-        account: state.storage.require_account(source).await?,
+        account: state.storage.supplier_account_snapshot(source).await?,
         permit: None,
         reused_affinity: false,
         previous_response_matches: false,
@@ -205,10 +205,6 @@ pub(crate) async fn resolve_supplier_for(
             Some("account_mismatch"),
         ));
     }
-    state
-        .storage
-        .touch_virtual_access(&oauth.token_hash)
-        .await?;
     state.storage.touch_account(&account_id).await?;
     Ok((
         ExecutionPrincipal {

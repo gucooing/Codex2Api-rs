@@ -1,6 +1,7 @@
 use crate::{Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sqlx::Connection;
 
 /// 单链额度的一层；按顶层到最内层排列，金额留空表示这一层不限额。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +50,96 @@ pub fn plan_spending_windows(config: &Value) -> Result<Vec<SpendingWindow>> {
 }
 
 impl Storage {
+    async fn spending_decision(&self, owner: &str) -> Result<std::sync::Arc<SpendingDecision>> {
+        let key = format!("spending-decision:{owner}");
+        let current = || {
+            self.runtime
+                .cached::<std::sync::Arc<SpendingDecision>>(&key)
+                .filter(|value| value.version == self.runtime.version(&key))
+        };
+        if let Some(value) = current() {
+            return Ok(value);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
+        if let Some(value) = current() {
+            return Ok(value);
+        }
+        let version = self.runtime.version(&key);
+        let epoch = self.runtime.epoch();
+        let now = chrono::Utc::now().timestamp();
+        let entitlements = self.effective_entitlements(owner).await?;
+        let limited = entitlements
+            .spending_windows
+            .iter()
+            .any(|w| w.cost_limit_usd.is_some());
+        let windows = if limited {
+            let anchor = self.subscription_anchor_at(owner, now).await?;
+            self.nested_spending_windows(
+                owner,
+                &entitlements.spending_windows,
+                if anchor > now { 0 } else { anchor },
+                now,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+        let allowed = windows.iter().all(|w| w["allowed"] != false);
+        let deadline = windows
+            .iter()
+            .filter_map(|w| w["reset_at"].as_i64())
+            .chain(entitlements.expires_at)
+            .filter(|at| *at > now)
+            .min();
+        let ttl_ms = deadline.map_or(30_000, |at| {
+            at.saturating_mul(1000)
+                .saturating_sub(chrono::Utc::now().timestamp_millis())
+                .clamp(0, 30_000)
+        });
+        let value = std::sync::Arc::new(SpendingDecision {
+            version,
+            allowed,
+            limited,
+            windows,
+            plan_type: entitlements.plan_type.clone(),
+            enabled: entitlements.execution_enabled,
+        });
+        self.runtime.cache(
+            key,
+            &value,
+            epoch,
+            std::time::Duration::from_millis(ttl_ms as u64),
+        );
+        Ok(value)
+    }
+
+    /// Admission reads one cached predicate, never a collection of usage records.
+    pub async fn virtual_spending_status(&self, owner: &str) -> Result<(bool, bool)> {
+        let value = self.spending_decision(owner).await?;
+        Ok((value.allowed, value.limited))
+    }
+
+    pub async fn virtual_spending_limited(&self, owner: &str) -> Result<bool> {
+        Ok(self
+            .effective_entitlements(owner)
+            .await?
+            .spending_windows
+            .iter()
+            .any(|w| w.cost_limit_usd.is_some()))
+    }
+
+    /// Protocol quota fields share the admission snapshot; administration owns lifetime totals.
+    pub async fn execution_quota(&self, owner: &str) -> Result<Value> {
+        let value = self.spending_decision(owner).await?;
+        Ok(quota_view(
+            owner,
+            &value.plan_type,
+            value.enabled && value.allowed,
+            &value.windows,
+            chrono::Utc::now().timestamp(),
+        ))
+    }
+
     /// 只读账本推导内层起点，不因打开额度页而启动周期或取得写锁。
     pub(crate) async fn nested_spending_windows(
         &self,
@@ -62,6 +153,62 @@ impl Storage {
     }
 }
 
+impl crate::runtime::Runtime {
+    pub(crate) fn record_spending_use(&self, record: &crate::UsageRecord) {
+        let key = format!("spending-decision:{}", record.subject_id);
+        let Some(value) = self
+            .cached::<std::sync::Arc<SpendingDecision>>(&key)
+            .filter(|value| value.version == self.version(&key))
+        else {
+            // Fence a concurrent cache fill that may have read before this insert.
+            self.advance_version(&key);
+            return;
+        };
+        if let Some(inner) = value.windows.get(1) {
+            let at = record.requested_at_ms.div_euclid(1000);
+            // A new first use or an earlier concurrently inserted timestamp can
+            // change the five-hour anchor. Later uses do not change admission.
+            if inner["started_at"].as_i64().is_none_or(|start| at < start) {
+                self.advance_version(&key);
+            }
+        }
+    }
+}
+
+struct SpendingDecision {
+    version: u64,
+    allowed: bool,
+    limited: bool,
+    enabled: bool,
+    plan_type: String,
+    windows: Vec<Value>,
+}
+
+pub(crate) fn quota_view(
+    owner: &str,
+    plan: &str,
+    allowed: bool,
+    windows: &[Value],
+    now: i64,
+) -> Value {
+    let mut windows = windows.to_vec();
+    for window in &mut windows {
+        window["reset_after_seconds"] = window["reset_at"]
+            .as_i64()
+            .map(|at| at.saturating_sub(now))
+            .into();
+    }
+    let inner = windows
+        .get(1)
+        .filter(|w| !w["started_at"].is_null() && !w["used_percent"].is_null());
+    let outer = windows.first().filter(|w| !w["used_percent"].is_null());
+    let primary = inner.or(outer).cloned().unwrap_or(Value::Null);
+    let secondary = inner.and(outer).cloned().unwrap_or(Value::Null);
+    json!({"account_id":owner,"user_id":format!("user-{owner}"),"plan_type":plan,
+        "rate_limit":{"allowed":allowed,"limit_reached":!allowed,"primary_window":primary,"secondary_window":secondary,"windows":windows},
+        "credits":{"has_credits":false,"unlimited":false,"balance":null}})
+}
+
 pub(crate) async fn windows_on(
     connection: &mut sqlx::SqliteConnection,
     owner: &str,
@@ -72,6 +219,9 @@ pub(crate) async fn windows_on(
     let Some(root) = rules.first() else {
         return Ok(Vec::new());
     };
+    // All windows describe one read snapshot, including when called inside a
+    // reset-card transaction (sqlx uses a nested savepoint in that case).
+    let mut tx = connection.begin().await?;
     // A card restarts the quota clock, independently of subscription expiration.
     // Old in-flight requests retain their original timestamp and stay out of the
     // new windows even if their historical bill settles after redemption.
@@ -80,7 +230,7 @@ pub(crate) async fn windows_on(
         )
         .bind(owner)
         .bind(now.saturating_add(1).saturating_mul(1000))
-        .fetch_optional(&mut *connection)
+        .fetch_optional(&mut *tx)
         .await?;
     let reset_at = reset.as_ref().map(|(_, at)| *at);
     let anchor = reset_at.map_or(anchor, |reset| anchor.max(reset.div_euclid(1000)));
@@ -97,19 +247,7 @@ pub(crate) async fn windows_on(
         .checked_add(1)
         .and_then(|v| v.checked_mul(1000))
         .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))?;
-    let usage: Vec<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT requested_at_ms, cost_nano_usd FROM usage_records
-             WHERE subject_id=? AND requested_at_ms>=? AND requested_at_ms<?
-             AND (? IS NULL OR quota_reset_credit_id=?)
-             ORDER BY requested_at_ms,id",
-    )
-    .bind(owner)
-    .bind(from_ms)
-    .bind(until_ms)
-    .bind(reset.as_ref().map(|(id, _)| id))
-    .bind(reset.as_ref().map(|(id, _)| id))
-    .fetch_all(&mut *connection)
-    .await?;
+    let reset_id = reset.as_ref().map(|(id, _)| id.as_str());
     let mut parent_start = Some(root_start);
     let mut parent_end = None;
     let mut parent_remaining: Option<i64> = None;
@@ -118,18 +256,20 @@ pub(crate) async fn windows_on(
         let start = if depth == 0 {
             Some(root_start)
         } else if let Some(parent_start) = parent_start {
-            let mut start = None;
-            for (at_ms, _) in &usage {
-                let at = at_ms.div_euclid(1000);
-                if at < parent_start {
-                    continue;
-                }
-                if start.is_none_or(|previous: i64| {
-                    at.saturating_sub(previous) >= rule.duration_seconds
-                }) {
-                    start = Some(at);
-                }
-            }
+            // Jump between actual first uses after each expiry. A 30-day outer
+            // period contains at most 144 five-hour starts, regardless of row count.
+            let first_ms = from_ms.max(parent_start.saturating_mul(1000));
+            let mut query = sqlx::QueryBuilder::new(
+                "WITH RECURSIVE periods(at) AS (SELECT MIN(requested_at_ms)/1000 FROM usage_records",
+            );
+            usage_scope(&mut query, owner, first_ms, until_ms, reset_id);
+            query.push(" UNION ALL SELECT (SELECT MIN(requested_at_ms)/1000 FROM usage_records");
+            usage_scope(&mut query, owner, first_ms, until_ms, reset_id);
+            query
+                .push(" AND requested_at_ms >= (periods.at + ")
+                .push_bind(rule.duration_seconds)
+                .push(") * 1000) FROM periods WHERE at IS NOT NULL) SELECT MAX(at) FROM periods");
+            let start: Option<i64> = query.build_query_scalar().fetch_one(&mut *tx).await?;
             start.filter(|start| now.saturating_sub(*start) < rule.duration_seconds)
         } else {
             None
@@ -142,11 +282,20 @@ pub(crate) async fn windows_on(
                     .ok_or_else(|| StorageError::Constraint("额度周期超出时间范围".into()))
             })
             .transpose()?;
-        let used = usage
-            .iter()
-            .filter(|(at, _)| start.is_some_and(|start| at.div_euclid(1000) >= start))
-            .try_fold(0_i64, |sum, (_, cost)| sum.checked_add(cost.unwrap_or(0)))
-            .ok_or_else(|| StorageError::Constraint("额度用量超出金额范围".into()))?;
+        let used: i64 = if let Some(start) = start {
+            let mut query =
+                sqlx::QueryBuilder::new("SELECT COALESCE(SUM(cost_nano_usd),0) FROM usage_records");
+            usage_scope(
+                &mut query,
+                owner,
+                from_ms.max(start.saturating_mul(1000)),
+                until_ms,
+                reset_id,
+            );
+            query.build_query_scalar().fetch_one(&mut *tx).await?
+        } else {
+            0
+        };
         let limit = rule
             .cost_limit_usd
             .as_deref()
@@ -169,7 +318,27 @@ pub(crate) async fn windows_on(
         parent_end = end;
         parent_remaining = effective_remaining;
     }
+    tx.commit().await?;
     Ok(result)
+}
+
+fn usage_scope<'a>(
+    query: &mut sqlx::QueryBuilder<'a, sqlx::Sqlite>,
+    owner: &'a str,
+    from_ms: i64,
+    until_ms: i64,
+    reset: Option<&'a str>,
+) {
+    query
+        .push(" WHERE subject_id=")
+        .push_bind(owner)
+        .push(" AND requested_at_ms>=")
+        .push_bind(from_ms)
+        .push(" AND requested_at_ms<")
+        .push_bind(until_ms);
+    if let Some(reset) = reset {
+        query.push(" AND quota_reset_credit_id=").push_bind(reset);
+    }
 }
 
 #[cfg(test)]

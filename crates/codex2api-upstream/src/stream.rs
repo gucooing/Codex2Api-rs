@@ -86,6 +86,71 @@ pub struct SseForwardStream {
     rx: mpsc::Receiver<Result<SseEvent>>,
 }
 
+/// A single data line borrows the frame; only multiline SSE requires a join.
+pub fn sse_data(frame: &str) -> std::borrow::Cow<'_, str> {
+    let mut lines = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim_start));
+    let Some(first) = lines.next() else {
+        return std::borrow::Cow::Borrowed("");
+    };
+    let Some(second) = lines.next() else {
+        return std::borrow::Cow::Borrowed(first);
+    };
+    let mut data = String::with_capacity(first.len() + second.len() + 1);
+    data.push_str(first);
+    data.push('\n');
+    data.push_str(second);
+    for line in lines {
+        data.push('\n');
+        data.push_str(line);
+    }
+    std::borrow::Cow::Owned(data)
+}
+
+/// Feed complete lines to eventsource-stream. Its streaming parser otherwise
+/// rescans an incomplete long data line on every network chunk.
+pub fn buffered_sse_lines<S, E>(
+    source: S,
+) -> impl Stream<Item = std::io::Result<bytes::Bytes>> + Send
+where
+    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    async_stream::try_stream! {
+        let mut source = Box::pin(source);
+        let mut buffer = bytes::BytesMut::new();
+        let mut scanned = 0;
+        let mut first = true;
+        while let Some(chunk) = source.next().await {
+            buffer.extend_from_slice(&chunk.map_err(std::io::Error::other)?);
+            if first {
+                // SSE ignores one initial UTF-8 BOM. Remove all three bytes before
+                // eventsource-stream's single-byte BOM removal can split a character.
+                if buffer.len() < 3 && b"\xEF\xBB\xBF".starts_with(&buffer) { continue; }
+                if buffer.starts_with(b"\xEF\xBB\xBF") { let _ = buffer.split_to(3); }
+                first = false;
+            }
+            while scanned < buffer.len() {
+                let byte = buffer[scanned];
+                if byte == b'\r' && scanned + 1 == buffer.len() { break; }
+                scanned += 1;
+                if byte != b'\r' && byte != b'\n' { continue; }
+                if byte == b'\r' && buffer[scanned] == b'\n' { scanned += 1; }
+                if scanned > crate::MAX_REQUEST_BYTES {
+                    Err(std::io::Error::other("Oversized upstream SSE line"))?;
+                }
+                yield buffer.split_to(scanned).freeze();
+                scanned = 0;
+            }
+            if buffer.len() > crate::MAX_REQUEST_BYTES {
+                Err(std::io::Error::other("Oversized upstream SSE line"))?;
+            }
+        }
+        if !buffer.is_empty() { yield buffer.freeze(); }
+    }
+}
+
 impl SseForwardStream {
     pub fn turn_state(&self) -> Option<&str> {
         self.response_headers
@@ -119,7 +184,7 @@ pub fn spawn_sse_forward(response: Response, idle_timeout: Duration) -> SseForwa
     let byte_stream = response.bytes_stream();
 
     tokio::spawn(async move {
-        let mut stream = byte_stream.eventsource();
+        let mut stream = Box::pin(buffered_sse_lines(byte_stream).eventsource());
         loop {
             match timeout(idle_timeout, stream.next()).await {
                 Ok(Some(Ok(event))) => {
@@ -151,6 +216,37 @@ pub fn spawn_sse_forward(response: Response, idle_timeout: Duration) -> SseForwa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn buffered_lines_preserve_eventsource_semantics_at_every_chunk_size() {
+        use bytes::Bytes;
+        use futures::TryStreamExt;
+        let input = "\u{feff}: heartbeat\r\nevent: named\rdata: first\rdata: 第二🙂\r\rid: 9\ndata: last\nretry: 300\n\n";
+        let source = futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from(
+            input.trim_start_matches('\u{feff}'),
+        ))]);
+        let expected: Vec<_> = source
+            .eventsource()
+            .map_ok(|e| (e.event, e.data, e.id, e.retry))
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(expected.len(), 2);
+        for size in [1, 2, 3, 9, input.len()] {
+            let chunks = input
+                .as_bytes()
+                .chunks(size)
+                .map(|c| Ok::<_, std::io::Error>(Bytes::copy_from_slice(c)))
+                .collect::<Vec<_>>();
+            let actual: Vec<_> = buffered_sse_lines(futures::stream::iter(chunks))
+                .eventsource()
+                .map_ok(|e| (e.event, e.data, e.id, e.retry))
+                .try_collect()
+                .await
+                .unwrap();
+            assert_eq!(actual, expected, "chunk size {size}");
+        }
+    }
 
     #[test]
     fn formats_named_event_with_multiline_data() {

@@ -31,7 +31,13 @@ pub struct GrokAuthService {
     storage: Option<codex2api_storage::Storage>,
     grok_config: GrokConfig,
     grok_drafts: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Draft>>>>>,
-    clients: Arc<tokio::sync::Mutex<HashMap<String, Arc<GrokHttpClients>>>>,
+    clients: Arc<crate::account_cache::AccountCache<CachedAccountHttp>>,
+}
+
+#[derive(Clone)]
+struct CachedAccountHttp {
+    snapshot: Arc<codex2api_storage::SupplierTransportSnapshot>,
+    clients: Arc<GrokHttpClients>,
 }
 
 #[derive(Clone)]
@@ -159,32 +165,46 @@ impl GrokAuthService {
             .ok_or_else(|| problem("Grok storage unavailable"))
     }
     pub async fn account_http(&self, id: &str) -> Result<Arc<GrokHttpClients>> {
-        let account = self.storage()?.require_account(id).await?;
-        if account.provider_id != codex2api_core::GROK {
+        let snapshot = self.storage()?.supplier_transport_snapshot(id).await?;
+        if snapshot.provider_id != codex2api_core::GROK {
             return Err(AuthError::AccountMismatch);
         }
-        let identity = AccountIdentity::from_account(&account);
-        let proxy = match account.proxy_id {
-            Some(id) => Some(self.storage()?.require_outbound_proxy(&id).await?.url),
-            None => None,
-        };
-        let mut clients = self.clients.lock().await;
-        if let Some(client) = clients.get(id)
-            && client.identity == identity
-            && client.proxy == proxy
-        {
-            return Ok(client.clone());
-        }
-        let mut client = GrokHttpClients::with_proxy(&identity, proxy.as_deref())?;
-        if let Some(old) = clients.get(id) {
-            client.refresh_lock = old.refresh_lock.clone();
-        }
-        let client = Arc::new(client);
-        clients.insert(id.into(), client.clone());
-        Ok(client)
+        let current = snapshot.clone();
+        Ok(self
+            .clients
+            .get_or_update(
+                id,
+                |old| {
+                    Arc::ptr_eq(&old.snapshot, &current)
+                        || old.snapshot.cache_generation > current.cache_generation
+                },
+                |old| async move {
+                    let identity = AccountIdentity::from_transport(&snapshot);
+                    let proxy = snapshot.proxy_url.as_deref();
+                    if let Some(old) = &old
+                        && old.clients.identity == identity
+                        && old.clients.proxy.as_deref() == proxy
+                    {
+                        return Ok(CachedAccountHttp {
+                            snapshot,
+                            clients: old.clients.clone(),
+                        });
+                    }
+                    let mut client = GrokHttpClients::with_proxy(&identity, proxy)?;
+                    if let Some(old) = old {
+                        client.refresh_lock = old.clients.refresh_lock.clone();
+                    }
+                    Ok::<_, AuthError>(CachedAccountHttp {
+                        snapshot,
+                        clients: Arc::new(client),
+                    })
+                },
+            )
+            .await?
+            .clients)
     }
     pub async fn evict_account_http(&self, id: &str) {
-        self.clients.lock().await.remove(id);
+        self.clients.remove(id);
     }
 
     /// Explicit composition/test override; never resolved from an inbound request.
@@ -759,19 +779,17 @@ impl GrokAuthService {
         id: &str,
         force: bool,
         rejected: Option<&str>,
-    ) -> Result<GrokCredentials> {
-        let http = self.account_http(id).await?;
-        let _guard = http.refresh_lock.lock().await;
-        let account = self.storage()?.require_account(id).await?;
-        if account.provider_id != codex2api_core::GROK {
-            return Err(AuthError::AccountMismatch);
-        }
+    ) -> Result<Arc<GrokCredentials>> {
         let snapshot = self
             .storage()?
             .supplier_auth_snapshot(id)
             .await?
             .ok_or_else(|| AuthError::TokensNotFound(id.into()))?;
-        let current = GrokCredentials::from_supplier_tokens(&snapshot.tokens)?;
+        if snapshot.provider_id != codex2api_core::GROK {
+            return Err(AuthError::AccountMismatch);
+        }
+        let current =
+            snapshot.decode(|| GrokCredentials::from_supplier_tokens(&snapshot.tokens))?;
         let access = snapshot
             .tokens
             .access_token
@@ -782,6 +800,27 @@ impl GrokAuthService {
         }
         let expires = current.expires_at;
         if !force && expires.is_none_or(|n| n > Utc::now().timestamp() + 300) {
+            return Ok(current);
+        }
+        let http = self.account_http(id).await?;
+        let _guard = http.refresh_lock.lock().await;
+        let account = self.storage()?.supplier_account_snapshot(id).await?;
+        if account.provider_id != codex2api_core::GROK {
+            return Err(AuthError::AccountMismatch);
+        }
+        let snapshot = self
+            .storage()?
+            .supplier_auth_snapshot(id)
+            .await?
+            .ok_or_else(|| AuthError::TokensNotFound(id.into()))?;
+        let current =
+            snapshot.decode(|| GrokCredentials::from_supplier_tokens(&snapshot.tokens))?;
+        if rejected.is_some_and(|v| Some(v) != snapshot.tokens.access_token.as_deref())
+            || (!force
+                && current
+                    .expires_at
+                    .is_none_or(|n| n > Utc::now().timestamp() + 300))
+        {
             return Ok(current);
         }
         let rt = snapshot
@@ -839,9 +878,10 @@ impl GrokAuthService {
                     .await?
                     .ok_or_else(|| AuthError::TokensNotFound(id.into()))?,
             )
+            .map(Arc::new)
             .map_err(Into::into);
         }
-        Ok(auth)
+        Ok(Arc::new(auth))
     }
 
     pub async fn revoke_grok(&self, id: &str) -> Result<()> {

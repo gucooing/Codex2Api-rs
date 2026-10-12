@@ -698,6 +698,7 @@ impl Storage {
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(id.into()))?;
         tx.commit().await?;
+        self.invalidate_runtime_cache();
         Ok(paid)
     }
     pub async fn cancel_subscription_order(

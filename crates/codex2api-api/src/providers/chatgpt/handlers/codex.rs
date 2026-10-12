@@ -31,10 +31,6 @@ pub async fn forward(
                 .await?,
             ));
         }
-        if crate::usage::billable(endpoint) {
-            crate::providers::chatgpt::access::check_virtual_quota(&state.storage, &virtual_id)
-                .await?;
-        }
         let start = std::time::Instant::now();
         let requested_at = chrono::Utc::now().timestamp_millis();
         let subpath = parameters.get("subpath");
@@ -46,30 +42,48 @@ pub async fn forward(
             .unwrap_or_else(|| endpoint.codex_path().into());
         let bytes = body.clone();
         let inbound = headers.clone();
-        let (schedule, metadata) = tokio::task::spawn_blocking(move || {
+        let (mut schedule, metadata, decoded) = tokio::task::spawn_blocking(move || {
             let value = codex2api_upstream::decode_body(&bytes, &inbound)?;
             Ok::<_, codex2api_upstream::UpstreamError>((
                 crate::providers::chatgpt::scheduling::request(&inbound, &value),
                 codex2api_upstream::request_metadata_value(&value),
+                value,
             ))
         })
         .await
         .map_err(|e| crate::ApiError::internal(e.to_string()))??;
+        let admission = if crate::usage::billable(endpoint) {
+            Some(
+                crate::execution::Admission::new(
+                    &state.storage,
+                    &oauth.provider_id,
+                    &virtual_id,
+                    &format!("/v1/{path}"),
+                    metadata,
+                )
+                .await?,
+            )
+        } else {
+            if endpoint == codex2api_upstream::Endpoint::InputTokens {
+                codex2api_service::ExecutionService::new(state.storage.clone())
+                    .authorize(
+                        &virtual_id,
+                        &oauth.provider_id,
+                        codex2api_service::ExecutionRequest {
+                            kind: codex2api_core::ExecutionKind::InspectModel,
+                            model: metadata.model.as_deref(),
+                            service_tier: None,
+                            image_size: None,
+                        },
+                    )
+                    .await?;
+            }
+            None
+        };
+        schedule.admission = admission.as_ref().map(|value| value.version);
         let (key, mut ctx) =
             resolve_supplier_for(&state, &headers, oauth.clone(), &schedule).await?;
-        if endpoint == codex2api_upstream::Endpoint::InputTokens {
-            crate::execution::ExecutionContext::new(
-                state.storage.clone(),
-                &ctx.account,
-                &key.id,
-                &key.name,
-                "/v1/responses/input_tokens",
-                "http",
-            )
-            .authorize(&metadata, true)
-            .await?;
-        }
-        let mut log = if crate::usage::billable(endpoint) {
+        let mut log = if let Some(admission) = admission {
             Some(
                 crate::execution::ExecutionContext::new(
                     state.storage.clone(),
@@ -80,7 +94,7 @@ pub async fn forward(
                     "http",
                 )
                 .with_supplier_permit(ctx.permit.take())
-                .start(metadata, start, requested_at)
+                .start_admitted(admission, start, requested_at)
                 .await?,
             )
         } else {
@@ -93,6 +107,7 @@ pub async fn forward(
             endpoint,
             subpath.map(String::as_str),
             body,
+            decoded,
             headers,
             &mut log,
         )

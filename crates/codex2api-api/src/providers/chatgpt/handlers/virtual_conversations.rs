@@ -186,7 +186,7 @@ pub(crate) async fn forward(
                 body,
                 state.storage.clone(),
                 access.virtual_account_id.clone(),
-                ctx.account.id,
+                ctx.account.id.clone(),
             )
         } else {
             body

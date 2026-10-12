@@ -6,6 +6,8 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 pub enum StorageError {
     #[error("Runtime cache is unavailable")]
     Runtime,
+    #[error("Request journal is unavailable")]
+    LedgerUnavailable,
     #[error("{message}")]
     Checkout {
         code: &'static str,

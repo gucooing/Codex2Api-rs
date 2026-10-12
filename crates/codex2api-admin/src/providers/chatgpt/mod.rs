@@ -177,7 +177,8 @@ pub async fn official(
         let mut routing =
             json!({"status":"not_observed","backend_origin":null,"constraint":null,"message":null});
         let (mut value, observed_at) = match snapshot {
-            Some((snapshot, revision)) => {
+            Some(shared) => {
+                let (snapshot, revision) = shared.as_ref();
                 match codex2api_upstream::WorkspaceRoute::from_accounts(
                     &snapshot.value,
                     account.chatgpt_account_id.as_deref().unwrap_or(""),
@@ -185,19 +186,20 @@ pub async fn official(
                     Ok(route) => {
                         routing["backend_origin"] = route.backend_origin.into();
                         routing["constraint"] = route.account_routing_override.into();
-                        routing["status"] = if revision.is_some() && revision == current_revision {
-                            "ready"
-                        } else {
-                            "stale"
-                        }
-                        .into();
+                        routing["status"] =
+                            if revision.is_some() && *revision == current_revision {
+                                "ready"
+                            } else {
+                                "stale"
+                            }
+                            .into();
                     }
                     Err(error) => {
                         routing["status"] = "invalid".into();
                         routing["message"] = error.to_string().into();
                     }
                 }
-                (snapshot.value, Some(snapshot.observed_at))
+                (snapshot.value.clone(), Some(snapshot.observed_at))
             }
             None => (Value::Null, None),
         };

@@ -89,6 +89,10 @@ impl Storage {
         if let Some(value) = self.runtime.cached("gateway-settings") {
             return Ok(value);
         }
+        let _fill = self.runtime.cache_fill("gateway-settings").await;
+        if let Some(value) = self.runtime.cached("gateway-settings") {
+            return Ok(value);
+        }
         let epoch = self.runtime.epoch();
         let value: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key = 'gateway_settings'")
