@@ -22,7 +22,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     env = os.environ.copy()
     env["CODEX2API_IMAGE"] = sys.argv[1]
-    for surface, port in (("API", 8080), ("ADMIN", 8081), ("USER", 8082)):
+    for surface, port in (("API", 8080), ("ADMIN", 8081), ("USER", 8082), ("METERED_API", 8083)):
         env[f"CODEX2API_{surface}_HOST"] = "127.0.0.1"
         env[f"CODEX2API_{surface}_PORT"] = "0"
         env[f"CODEX2API_PUBLIC_{surface}_URL"] = f"http://127.0.0.1:{port}"
@@ -78,8 +78,10 @@ def main():
                 return response.read()
 
         def check_surfaces():
-            api, admin, user = (origin(port) for port in (8080, 8081, 8082))
+            api, admin, user, metered = (origin(port) for port in (8080, 8081, 8082, 8083))
             assert json.loads(request(api + "/healthz"))["ok"] is True
+            assert json.loads(request(metered + "/healthz"))["ok"] is True
+            request(metered + "/v1/models", statuses=(401,))
             for base, path in ((admin, "/admin/"), (user, "/user/")):
                 page = request(base + path).decode()
                 assert "<html" in page.lower(), f"Missing embedded page at {base}{path}"
@@ -90,6 +92,7 @@ def main():
                 (api, ("/admin/", "/admin/api/session", "/user/")),
                 (user, ("/admin/", "/admin/api/session")),
                 (admin, ("/user/", "/user/api/session")),
+                (metered, ("/admin/", "/admin/api/session", "/user/", "/api/oauth/chatgpt/oauth/token")),
             ):
                 for path in paths:
                     request(base + path, statuses=(401, 404))
@@ -113,7 +116,7 @@ def main():
             admin = check_surfaces()
             request(admin + "/admin/api/session")
             assert (data_dir / "codex2api.sqlite").stat().st_size > 0
-            print("Container smoke test passed: three listeners, embedded assets, non-root execution and bind-mounted SQLite persistence.")
+            print("Container smoke test passed: four listeners, embedded assets, non-root execution and bind-mounted SQLite persistence.")
         except Exception:
             run("logs", "--no-color", check=False)
             raise

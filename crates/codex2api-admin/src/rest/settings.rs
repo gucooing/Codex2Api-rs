@@ -77,12 +77,15 @@ pub async fn missing(
 }
 
 pub async fn public_urls(State(s): State<AdminState>) -> ApiResult {
-    Ok(Json(json!(
-        s.storage
-            .public_url_settings()
-            .await?
-            .unwrap_or(s.public_url_defaults)
-    )))
+    let mut settings = s
+        .storage
+        .public_url_settings()
+        .await?
+        .unwrap_or_else(|| s.public_url_defaults.clone());
+    if settings.metered_api_url.is_empty() {
+        settings.metered_api_url = s.public_url_defaults.metered_api_url;
+    }
+    Ok(Json(json!(settings)))
 }
 
 pub async fn save_public_urls(

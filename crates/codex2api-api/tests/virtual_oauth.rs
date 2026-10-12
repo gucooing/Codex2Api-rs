@@ -4429,6 +4429,8 @@ fn router(storage: &Storage) -> Router {
     .merge(codex2api_user::router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://127.0.0.1:8082".into(),
+        metered_api_base_url: "http://127.0.0.1:8083".into(),
+        api_concurrency: std::sync::Arc::new(|_| 0),
     }))
 }
 
@@ -5248,12 +5250,21 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
         .oneshot(
             Request::post(format!("{ROOT}/backend-api/codex/responses"))
                 .header("authorization", format!("Bearer {access}"))
-                .body(Body::from("{}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"model":"gpt-6-astra","input":[]}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let denied_status = denied.status();
+    let denied_body = json_body(denied).await;
+    assert_eq!(
+        denied_status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{denied_body}"
+    );
     drop(app);
     storage.close().await;
     let storage = Storage::open(&path).await.unwrap();
@@ -5680,27 +5691,32 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
         "/backend-api/codex/realtime/calls",
         "/backend-api/codex/responses",
     ] {
+        let response = app
+            .clone()
+            .oneshot(client_json(
+                "POST",
+                path,
+                token,
+                if path.contains("realtime") {
+                    json!({"sdp":"v=0","session":{"model":"gpt-6-astra"}})
+                } else if path.ends_with("/responses") {
+                    json!({"model":"gpt-6-astra","input":[]})
+                } else {
+                    request.clone()
+                },
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
         assert_eq!(
-            app.clone()
-                .oneshot(client_json(
-                    "POST",
-                    path,
-                    token,
-                    if path.contains("realtime") {
-                        json!({"sdp":"v=0","session":{"model":"gpt-6-astra"}})
-                    } else {
-                        request.clone()
-                    }
-                ))
-                .await
-                .unwrap()
-                .status(),
+            status,
             if path.contains("realtime") {
                 StatusCode::NOT_IMPLEMENTED
             } else {
                 StatusCode::TOO_MANY_REQUESTS
             },
-            "{path}"
+            "{path}: {body}"
         );
     }
     let policy = storage

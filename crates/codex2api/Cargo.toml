@@ -18,6 +18,7 @@ axum.workspace = true
 codex2api-accounts.workspace = true
 codex2api-admin.workspace = true
 codex2api-api.workspace = true
+codex2api-gateway.workspace = true
 codex2api-auth.workspace = true
 codex2api-storage.workspace = true
 codex2api-upstream.workspace = true

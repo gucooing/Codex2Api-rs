@@ -10,21 +10,11 @@ mod account_fixture {
 use crate::{ApiError, ApiState, Result};
 #[cfg(test)]
 use account_fixture::AccountFixture;
-use axum::body::Bytes;
-#[derive(Clone)]
-pub(crate) struct SupplierContext {
-    pub account: std::sync::Arc<codex2api_storage::SupplierAccount>,
-    pub reused_affinity: bool,
-    pub previous_response_matches: bool,
-    pub permit: Option<codex2api_storage::RuntimePermit>,
-    pub request: crate::pool_scheduler::ScheduleRequest,
-}
+pub(crate) use codex2api_scheduler::SupplierContext;
 use codex2api_storage::VirtualAccess;
 use codex2api_upstream::{SupplierFailure, UpstreamError};
-use futures::StreamExt;
 
-#[derive(Clone, Copy)]
-pub(crate) struct FirstEventAt(pub std::time::Instant);
+pub(crate) use codex2api_scheduler::FirstEventAt;
 
 pub(crate) fn exhausted() -> ApiError {
     ApiError::openai(
@@ -88,184 +78,20 @@ pub(crate) async fn observe(
     revision: Option<i64>,
     failure: &SupplierFailure,
 ) -> Result<()> {
-    if let Some(revision) = revision {
-        match failure {
-            SupplierFailure::Authentication => {
-                state.storage.reject_supplier_auth(id, revision).await?
-            }
-            SupplierFailure::PaymentRequired { code } => {
-                state
-                    .storage
-                    .mark_supplier_payment_required(id, revision, code.as_deref(), None)
-                    .await?
-            }
-            SupplierFailure::QuotaExhausted { until, code } => {
-                state
-                    .storage
-                    .exhaust_supplier_quota(id, revision, *until, code)
-                    .await?
-            }
-        }
-    }
+    codex2api_scheduler::observe_failure(&state.storage, id, revision, failure).await?;
     Ok(())
 }
 
 pub(crate) async fn recover_stream_auth(
     state: &ApiState,
     ctx: &SupplierContext,
-    observed_revision: Option<i64>,
+    revision: Option<i64>,
 ) -> Result<Option<SupplierFailure>> {
-    let snapshot = state
-        .storage
-        .supplier_auth_snapshot(&ctx.account.id)
-        .await?
-        .ok_or_else(|| UpstreamError::MissingAccessToken(ctx.account.id.clone()))?;
-    if observed_revision.is_some_and(|revision| revision != snapshot.auth_revision) {
-        return Ok(None);
-    }
-    if state
-        .storage
-        .supplier_health(&ctx.account.id)
-        .await?
-        .authentication_invalid
-    {
-        return Ok(Some(SupplierFailure::Authentication));
-    }
-    let token = snapshot.tokens.access_token.as_deref().unwrap_or("");
-    match state
-        .upstream
-        .refresh_supplier_auth(&ctx.account, token)
-        .await
-    {
-        Ok(_) => Ok(None),
-        Err(error) => {
-            match error
-                .supplier_failure_for(&ctx.account.provider_id, chrono::Utc::now().timestamp())
-            {
-                Some(failure) => Ok(Some(failure)),
-                None => Err(error.into()),
-            }
-        }
-    }
+    Ok(codex2api_scheduler::recover_auth(&state.storage, &state.upstream, ctx, revision).await?)
 }
 
-/// Buffer only the non-output prelude. Once output/tool execution is visible,
-/// replay would duplicate side effects and is not a recoverable rejection.
-pub(crate) fn prelude_event(value: &serde_json::Value) -> bool {
-    matches!(
-        value.get("type").and_then(serde_json::Value::as_str),
-        Some("response.created" | "response.in_progress" | "response.queued" | "codex.rate_limits")
-    )
-}
-
-async fn inspect_for(
-    provider: &str,
-    is_prelude: fn(&serde_json::Value) -> bool,
-    mut response: reqwest::Response,
-) -> std::result::Result<reqwest::Response, UpstreamError> {
-    let status = response.status();
-    let headers = response.headers().clone();
-    if !status.is_success() {
-        let body = response.text().await?;
-        return Err(UpstreamError::status_with_headers(status, body, headers));
-    }
-    if !headers
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|v| v.starts_with("text/event-stream"))
-    {
-        return Ok(response);
-    }
-    let revision = response
-        .extensions()
-        .get::<codex2api_upstream::SupplierAuthRevision>()
-        .copied();
-    let mut prefix = Vec::new();
-    let mut parsed = 0;
-    let mut scanned = 0;
-    let mut first_event = None;
-    'read: while prefix.len() < 256 * 1024 {
-        let chunk = tokio::time::timeout(
-            codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
-            response.chunk(),
-        )
-        .await
-        .map_err(|_| UpstreamError::StreamIdleTimeout)??;
-        let Some(chunk) = chunk else {
-            break;
-        };
-        prefix.extend_from_slice(&chunk);
-        loop {
-            let remaining = &prefix[parsed..];
-            let mut boundary = None;
-            while scanned < prefix.len() {
-                scanned += 1;
-                let separator = if scanned >= parsed + 2 && &prefix[scanned - 2..scanned] == b"\n\n"
-                {
-                    2
-                } else if scanned >= parsed + 4 && &prefix[scanned - 4..scanned] == b"\r\n\r\n" {
-                    4
-                } else {
-                    continue;
-                };
-                boundary = Some((scanned - parsed - separator, separator));
-                break;
-            }
-            let Some((end, separator)) = boundary else {
-                break;
-            };
-            let frame = String::from_utf8_lossy(&remaining[..end]);
-            let data = codex2api_upstream::sse_data(&frame);
-            parsed += end + separator;
-            if data.is_empty() {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
-                break 'read;
-            };
-            if value
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind.starts_with("response.") || kind == "error")
-            {
-                first_event.get_or_insert_with(std::time::Instant::now);
-            }
-            if codex2api_upstream::classify_provider_failure(
-                provider,
-                None,
-                &value,
-                &headers,
-                chrono::Utc::now().timestamp(),
-            )
-            .is_some()
-            {
-                let body = value.get("response").unwrap_or(&value).to_string();
-                let failure = codex2api_upstream::ResponseFailure::from_error(None, &value);
-                return Err(UpstreamError::Status {
-                    status: failure.status.unwrap_or(429),
-                    body,
-                    headers,
-                    auth_revision: revision.map(|revision| revision.0),
-                });
-            }
-            if !is_prelude(&value) {
-                break 'read;
-            }
-        }
-    }
-    let stream = futures::stream::once(async move { Ok::<_, reqwest::Error>(Bytes::from(prefix)) })
-        .chain(response.bytes_stream());
-    let mut rebuilt = http::Response::new(reqwest::Body::wrap_stream(stream));
-    *rebuilt.status_mut() = status;
-    *rebuilt.headers_mut() = headers;
-    if let Some(at) = first_event {
-        rebuilt.extensions_mut().insert(FirstEventAt(at));
-    }
-    if let Some(revision) = revision {
-        rebuilt.extensions_mut().insert(revision);
-    }
-    Ok(reqwest::Response::from(rebuilt))
-}
+use codex2api_scheduler::inspect_response as inspect_for;
+pub(crate) use codex2api_scheduler::prelude_event;
 
 pub(crate) async fn execute<F, Fut>(
     state: &ApiState,
@@ -575,6 +401,25 @@ pub(crate) mod tests {
                 .unwrap(),
             policy
         );
+    }
+
+    #[tokio::test]
+    async fn measured_terminal_failure_is_never_replayed_on_another_supplier() {
+        let (_dir, state, oauth, ids) = setup_pool().await;
+        let ctx = select(&state, &oauth, &[]).await.unwrap();
+        let value = json!({"type":"response.failed","response":{"id":"measured","status":"failed","error":{"code":"usage_limit_reached","resets_at":2000000000},"usage":{"input_tokens":100,"output_tokens":10}}});
+        let body = format!("data: {value}\n\n");
+        let mut calls = 0;
+        let result = execute(&state, &oauth, ctx, &mut None, |id| {
+            calls += 1;
+            assert_eq!(id, ids[0]);
+            std::future::ready(Ok(response(200, true, &body)))
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(result.status(), 200);
+        assert_eq!(result.text().await.unwrap(), body);
     }
 
     pub(crate) async fn setup_pool() -> (tempfile::TempDir, ApiState, VirtualAccess, Vec<String>) {

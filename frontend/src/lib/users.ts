@@ -25,7 +25,7 @@ export type UserSubscription = {
 };
 export type WalletEntry = {
   id: string;
-  kind: "order_payment" | "system_adjustment";
+  kind: "order_payment" | "system_adjustment" | "api_usage";
   balance_before_cents: number;
   operator_name: string | null;
   reason: string | null;

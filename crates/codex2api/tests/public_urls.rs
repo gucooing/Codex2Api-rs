@@ -109,7 +109,7 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
     .await;
     assert_eq!(
         initial,
-        json!({"api_url":"http://127.0.0.1:8080", "user_url":"http://127.0.0.1:8082", "admin_url":"http://127.0.0.1:8081", "revision":0})
+        json!({"api_url":"http://127.0.0.1:8080", "user_url":"http://127.0.0.1:8082", "admin_url":"http://127.0.0.1:8081", "metered_api_url":"http://127.0.0.1:8083", "revision":0})
     );
 
     let grok_query = query(
@@ -134,7 +134,7 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
             "http://admin.example.test:9081",
         ),
     ] {
-        let settings = json!({"api_url":api_url,"user_url":user_url,"admin_url":admin_url,"revision":revision});
+        let settings = json!({"api_url":api_url,"user_url":user_url,"admin_url":admin_url,"metered_api_url":"https://metered.example.test","revision":revision});
         let saved = send(
             &routers.admin,
             "PUT",
@@ -367,7 +367,7 @@ async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
         .await
         .unwrap();
     let routers = apps(storage.clone());
-    let settings = json!({"api_url":"https://api.example.test/","user_url":"http://user.example.test:8082/","admin_url":"https://admin.example.test/","revision":0});
+    let settings = json!({"api_url":"https://api.example.test/","user_url":"http://user.example.test:8082/","admin_url":"https://admin.example.test/","metered_api_url":"https://metered.example.test/","revision":0});
     assert_eq!(
         send(
             &routers.admin,
@@ -412,7 +412,7 @@ async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
         .status(),
         StatusCode::FORBIDDEN
     );
-    for field in ["api_url", "user_url", "admin_url"] {
+    for field in ["api_url", "user_url", "admin_url", "metered_api_url"] {
         for invalid in [
             "",
             "api.example.test",
@@ -463,4 +463,5 @@ async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
     assert_eq!(saved["api_url"], "https://api.example.test");
     assert_eq!(saved["user_url"], "http://user.example.test:8082");
     assert_eq!(saved["admin_url"], "https://admin.example.test");
+    assert_eq!(saved["metered_api_url"], "https://metered.example.test");
 }

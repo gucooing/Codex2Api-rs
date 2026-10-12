@@ -331,6 +331,7 @@ dependencies = [
  "codex2api-admin",
  "codex2api-api",
  "codex2api-auth",
+ "codex2api-gateway",
  "codex2api-storage",
  "codex2api-upstream",
  "codex2api-user",
@@ -406,6 +407,7 @@ dependencies = [
  "codex2api-admin",
  "codex2api-auth",
  "codex2api-core",
+ "codex2api-scheduler",
  "codex2api-service",
  "codex2api-storage",
  "codex2api-upstream",
@@ -471,6 +473,55 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "codex2api-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "bytes",
+ "chrono",
+ "codex2api-accounts",
+ "codex2api-auth",
+ "codex2api-core",
+ "codex2api-scheduler",
+ "codex2api-storage",
+ "codex2api-upstream",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "codex2api-scheduler"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "codex2api-storage",
+ "codex2api-upstream",
+ "futures",
+ "http",
+ "rand 0.9.5",
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

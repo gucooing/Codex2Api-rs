@@ -2,11 +2,11 @@
 
 ## 项目定位
 
-单个 Rust 进程提供用户端、管理端和 AI API 三个独立监听入口；两个前端分别构建并嵌入同一个可执行文件。
+单个 Rust 进程提供 OAuth 客户端、管理端、用户端和按量 API 四个独立监听入口；两个前端分别构建并嵌入同一个可执行文件。
 
 目标是把 Codex 订阅转换成标准、可供 Codex 客户端使用的 API。Proxy 对外提供该 API；对内管理多个上游 OpenAI/ChatGPT 账户，并把请求发到官方 Codex 服务。
 
-供应账户仅负责上游执行。虚拟账户是仅限 OAuth 登录的特殊用户，与普通用户共用身份存储，但管理入口、展示、订阅、钱包、订单与用户统计彼此隔离。虚拟账户仍由管理员在“虚拟账户”管理，不能登录用户中心。每位普通用户可以订阅多个平台，每个平台只有一个订阅及其独立执行身份，身份、设备和历史均归属该用户。创建消费账户时固定提供商，之后不可切换。当前只实现 ChatGPT，Grok 等未来提供商需要独立适配，不能复用 ChatGPT 协议冒充支持。
+供应账户仅负责上游执行。虚拟账户是仅限 OAuth 登录的特殊用户，与普通用户共用身份存储，但管理入口、展示、订阅、钱包、订单与用户统计彼此隔离。虚拟账户仍由管理员在“虚拟账户”管理，不能登录用户中心。每位普通用户可以订阅多个平台，每个平台只有一个订阅及其独立执行身份，身份、设备和历史均归属该用户。创建消费账户时固定提供商，之后不可切换。当前支持 ChatGPT 和 Grok，各自使用独立协议、凭据与上游 transport。普通用户还可创建 API Key，通过独立的按量 API 端口调用文本和图像模型，费用按 API 组倍率从现有 USD 钱包结算，详见[按量 API](docs/API.md)。
 
 客户端单独维护在 [gucooing/codex 的 ccodex 分支](https://github.com/gucooing/codex/tree/ccodex)，本地可与本仓库并列放在 `../codex`。更新顺序为官方稳定版 → ccodex → 本仓库。官方源码只作为协议和行为参考，不引入官方 Rust crates；纯净参考快照位置为 `reference/codex`，精确来源记录在版本常量中。
 
@@ -45,15 +45,16 @@ docker compose logs -f --tail=100
 
 PowerShell 中复制配置使用 `Copy-Item .env.example .env`，创建目录使用 `New-Item -ItemType Directory -Force data`；Docker Desktop 不需要执行 Linux 的 `chown`。如修改 `CODEX2API_DATA_DIR`，创建目录和设置权限时使用该实际路径。默认镜像标签为 `latest`，指向最近成功发布的正式版本；首个正式版本镜像发布前，可将 `.env` 中的 `CODEX2API_IMAGE` 改为 `ghcr.io/gucooing/codex2api-rs:edge`，使用通过 CI 的 `main` 构建。生产部署也可以指定已发布的完整版本标签或 `@sha256:…` 摘要固定镜像。
 
-默认只在宿主机回环地址开放三个端口：
+默认只在宿主机回环地址开放四个端口：
 
 | 入口 | 地址 | Compose 配置 |
 | --- | --- | --- |
 | AI API | `http://127.0.0.1:8080` | `CODEX2API_API_HOST` / `CODEX2API_API_PORT` |
 | 管理端 | `http://127.0.0.1:8081/admin/` | `CODEX2API_ADMIN_HOST` / `CODEX2API_ADMIN_PORT` |
 | 用户端 | `http://127.0.0.1:8082/user/` | `CODEX2API_USER_HOST` / `CODEX2API_USER_PORT` |
+| 按量 API | `http://127.0.0.1:8083/v1` | `CODEX2API_METERED_API_HOST` / `CODEX2API_METERED_API_PORT` |
 
-直接从其他机器访问时，将所需入口的 `*_HOST` 改为 `0.0.0.0`，并将对应的 `CODEX2API_PUBLIC_*_URL` 改为客户端实际访问的 origin。首次管理登录为 `admin` / `admin`，登录后修改密码。使用宿主机上的反向代理时，可保留回环绑定，并将三个公开地址设置为实际 HTTPS origin；这些变量不启用容器内 TLS。反向代理应把 `/admin` 及其子路径转发到 8081，把 `/user` 及其子路径转发到 8082，其余客户端协议路径转发到 8080，并支持 WebSocket 和不缓冲的 SSE。容器内监听端口固定为 8080、8081、8082，只通过端口映射更改宿主机端口。
+直接从其他机器访问时，将所需入口的 `*_HOST` 改为 `0.0.0.0`，并将对应的 `CODEX2API_PUBLIC_*_URL` 改为客户端实际访问的 origin。首次管理登录为 `admin` / `admin`，登录后修改密码。使用宿主机上的反向代理时，可保留回环绑定，并将四个公开地址设置为实际 HTTPS origin；这些变量不启用容器内 TLS。反向代理应把 `/admin` 及其子路径转发到 8081，把 `/user` 及其子路径转发到 8082，其余客户端协议路径转发到 8080，并支持 WebSocket 和不缓冲的 SSE。按量 API 使用独立公开 origin 转发到 8083。容器内监听端口固定为 8080、8081、8082、8083，只通过端口映射更改宿主机端口。
 
 管理端 **设置 → 访问地址** 中保存的地址优先于 `.env` 中的启动默认值；已有部署改域名时同步更新该设置，并重新发起客户端登录。
 
@@ -81,7 +82,7 @@ docker build --build-arg CODEX2API_BUILD_TAG=local -t codex2api:local .
 docker compose up -d --wait --pull never
 ```
 
-构建会分别检查、导出两个前端，再使用仓库锁定的 Rust 工具链及 `Cargo.lock` 编译。运行容器为非 root 用户，根文件系统只读，写入使用挂载的数据目录和临时目录；健康检查覆盖三个监听入口，停止时向 Rust 进程直接发送 SIGTERM，并预留 60 秒关闭时间。自定义 CA 证书可通过 Compose override 只读挂载到容器，再设置 `CODEX_CA_CERTIFICATE` 为容器内路径。
+构建会分别检查、导出两个前端，再使用仓库锁定的 Rust 工具链及 `Cargo.lock` 编译。运行容器为非 root 用户，根文件系统只读，写入使用挂载的数据目录和临时目录；健康检查覆盖四个监听入口，停止时向 Rust 进程直接发送 SIGTERM，并预留 60 秒关闭时间。自定义 CA 证书可通过 Compose override 只读挂载到容器，再设置 `CODEX_CA_CERTIFICATE` 为容器内路径。
 
 ### CI 镜像发布
 
@@ -92,7 +93,7 @@ docker compose up -d --wait --pull never
 - Git 标签推送在现有多平台二进制构建通过后发布同名镜像标签及提交哈希标签；正式 `vX.Y.Z` / `X.Y.Z` 标签同时更新 `latest`，预发布标签不更新 `latest`。GitHub Release 在镜像成功发布后创建。
 - `Container` 支持手动运行：`main` 和已合入 `main` 的标签允许发布，其他分支仅验证。标签必须满足 Docker 标签格式。
 
-每个平台发布前映射全新的临时目录启动 Compose，检查三个入口隔离、两个嵌入页面及静态资源、非 root 运行、管理员登录，并重建容器验证宿主机目录中的 SQLite、签名密钥及会话仍然有效；两个平台均通过后才发布多架构标签。镜像名从当前 GitHub 仓库名自动转为小写，Fork 仓库部署时同步修改 `.env` 中的镜像地址。
+每个平台发布前映射全新的临时目录启动 Compose，检查四个入口隔离、两个嵌入页面及静态资源、非 root 运行、管理员登录，并重建容器验证宿主机目录中的 SQLite、签名密钥及会话仍然有效；两个平台均通过后才发布多架构标签。镜像名从当前 GitHub 仓库名自动转为小写，Fork 仓库部署时同步修改 `.env` 中的镜像地址。
 
 CI 使用自动提供的 `GITHUB_TOKEN` 及 `packages: write` 权限推送，无需另设 GHCR 密码。首次发布后，如需匿名拉取，在 GitHub Packages 中将该包的可见性设为 Public；私有包须先使用有 `read:packages` 权限的凭据执行 `docker login ghcr.io`。详见 [GitHub Container Registry 文档](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 
@@ -112,9 +113,9 @@ bash scripts/build.sh --release
 
 脚本依次执行 `npm ci`、ESLint、Prettier 格式检查、TypeScript 检查、前端契约测试、Next.js 导出及 Rust 编译。`codex2api-web` 在构建时校验前端源文件 SHA-256 清单，把 `frontend/out` 和 `frontend-user/out` 编译进二进制；产物缺失或过期会明确拒绝编译。Cargo 不会隐式联网安装 Node 依赖。发布仍为单个可执行文件，运行不依赖 Node.js 或外部网页目录。
 
-管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。AI API 在 `127.0.0.1:8080`，仅注册客户端协议接口。三端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
+管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。AI API 在 `127.0.0.1:8080`，仅注册客户端协议接口。按量 API 在 `127.0.0.1:8083`，只接受 API Key。四端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
 
-反向代理部署后，在管理端 **设置 → 访问地址** 填写 API、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/api/oauth/grok`、`/user`、`/admin` 等路径。三端可以使用同一域名，由反向代理按路径转发到各自监听端口。保存到 SQLite 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
+反向代理部署后，在管理端 **设置 → 访问地址** 填写 OAuth API、按量 API、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/api/oauth/grok`、`/user`、`/admin` 等路径。浏览器与 OAuth 入口可由反向代理按路径区分；按量 API 建议使用独立域名，以免与 OAuth 的 `/v1` 兼容路径冲突。保存到 SQLite 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
 
 开发时可使用 `cargo run -p codex2api --features dev-frontend`，再分别运行两个前端的 `pnpm dev`，无需预先导出静态页面。该特性仅用于本地开发，release 构建不允许启用；完整配置见 [本地验证](docs/LOCAL_TEST.md#前后端开发启动)。
 
@@ -129,9 +130,11 @@ bash scripts/build.sh --release
 | `CODEX2API_API_BIND` | `127.0.0.1:8080` | AI API 监听地址。 |
 | `CODEX2API_ADMIN_BIND` | `127.0.0.1:8081` | 管理端监听地址。 |
 | `CODEX2API_USER_BIND` | `127.0.0.1:8082` | 用户端监听地址。 |
+| `CODEX2API_METERED_API_BIND` | `127.0.0.1:8083` | 按量 API 监听地址。 |
 | `CODEX2API_PUBLIC_API_URL` | `http://127.0.0.1:8080` | 对外 AI API origin，用于 OAuth 资源发现和客户端事件地址。 |
 | `CODEX2API_PUBLIC_USER_URL` | `http://127.0.0.1:8082` | 对外用户端 origin，用于浏览器授权跳转、同源校验和安全 Cookie。 |
 | `CODEX2API_PUBLIC_ADMIN_URL` | `http://127.0.0.1:8081` | 对外管理端 origin；HTTPS 时登录、退出和改密 Cookie 都带 `Secure`，不采信请求中的转发协议头。 |
+| `CODEX2API_PUBLIC_METERED_API_URL` | `http://127.0.0.1:8083` | 按量 API 公开 origin；用户 API Key 页显示此地址加 `/v1`。 |
 | `CODEX2API_DB` | `data/codex2api.sqlite` | SQLite 数据库文件路径；相对路径以程序启动目录为基准。 |
 | `CODEX_CA_CERTIFICATE` | 未设置 | 可选的 PEM 格式自定义 CA 证书文件路径。 |
 | `SSL_CERT_FILE` | 未设置 | 未配置 `CODEX_CA_CERTIFICATE` 时使用的自定义 CA 证书文件路径。 |

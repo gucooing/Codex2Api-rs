@@ -1,3 +1,4 @@
+mod api_access;
 mod devices;
 mod orders;
 mod profile;
@@ -12,6 +13,15 @@ use axum::{
 };
 pub(crate) fn router(state: UserState) -> Router {
     let protected = Router::new()
+        .route("/api-groups", get(api_access::groups))
+        .route("/model-market", get(api_access::market))
+        .route(
+            "/api-keys",
+            get(api_access::keys).post(api_access::create_key),
+        )
+        .route("/api-keys/{id}", post(api_access::update_key))
+        .route("/api-keys/{id}/revoke", post(api_access::revoke_key))
+        .route("/api-usage", get(api_access::usage))
         .route("/session", get(profile::session))
         .route("/logout", post(auth::logout))
         .route("/password", post(profile::password))

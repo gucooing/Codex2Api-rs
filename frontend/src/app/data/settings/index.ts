@@ -182,7 +182,11 @@ export type GatewayForm = ReturnType<typeof useGateway>["form"];
 export const fields = [
   {
     key: "api_url",
-    label: "API 基础地址",
+    label: "OAuth 客户端基础地址",
+  },
+  {
+    key: "metered_api_url",
+    label: "按量 API 基础地址",
   },
   {
     key: "user_url",

@@ -299,6 +299,7 @@ export type GatewaySettings = {
 };
 export type PublicUrlSettings = {
   api_url: string;
+  metered_api_url: string;
   user_url: string;
   admin_url: string;
   revision: number;

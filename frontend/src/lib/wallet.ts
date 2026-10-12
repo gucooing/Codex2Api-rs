@@ -1,4 +1,8 @@
-export const walletSources = { order_payment: "订单支付", system_adjustment: "系统操作" } as const;
+export const walletSources = {
+  order_payment: "订单支付",
+  system_adjustment: "系统操作",
+  api_usage: "API 调用",
+} as const;
 
 /** Parse USD with integer arithmetic; never round an administrator's input. */
 export function usdCents(value: string): number | null {

@@ -356,6 +356,8 @@ async fn setup() -> (tempfile::TempDir, Storage, Router, User) {
     let app = codex2api_user::router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://127.0.0.1:8082".into(),
+        metered_api_base_url: "http://127.0.0.1:8083".into(),
+        api_concurrency: std::sync::Arc::new(|_| 0),
     });
     (dir, storage, app, user)
 }

@@ -29,6 +29,7 @@ impl From<codex2api_storage::StorageError> for UserError {
     fn from(error: codex2api_storage::StorageError) -> Self {
         use codex2api_storage::StorageError as E;
         match error {
+            E::Api { code, message } => Self(StatusCode::UNPROCESSABLE_ENTITY, code, message),
             E::Checkout { code, message } => Self(StatusCode::UNPROCESSABLE_ENTITY, code, message),
             E::InvalidCredentials | E::SessionNotFound => Self::unauthorized(),
             E::AccountNotFound(_) => Self::missing(),

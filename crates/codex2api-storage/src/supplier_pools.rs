@@ -41,7 +41,84 @@ struct PoolIndex {
     empty: Arc<Vec<Arc<PoolCandidate>>>,
 }
 
+#[derive(Clone)]
+struct PoolUnion {
+    candidates: Arc<Vec<Arc<PoolCandidate>>>,
+    // Retain source allocations while their pointer identities form a cache key.
+    _sources: Vec<Arc<Vec<Arc<PoolCandidate>>>>,
+}
+
 impl Storage {
+    /// API group tags expand into the same scheduler candidates as subscription pools.
+    /// The source Arc identities change when membership/health snapshots change.
+    pub async fn pool_candidates_for_tags(
+        &self,
+        tags: &[String],
+        provider: &str,
+        model: Option<&str>,
+    ) -> Result<Arc<Vec<Arc<PoolCandidate>>>> {
+        let tags = tags.iter().collect::<std::collections::BTreeSet<_>>();
+        if tags.len() == 1 {
+            return self
+                .pool_candidates(tags.first().expect("one tag"), provider, model)
+                .await;
+        }
+        let epoch = self.runtime.epoch();
+        let mut sources = Vec::with_capacity(tags.len());
+        for tag in &tags {
+            sources.push(self.pool_candidates(tag, provider, model).await?);
+        }
+        let identities = sources
+            .iter()
+            .map(|source| Arc::as_ptr(source) as usize)
+            .collect::<Vec<_>>();
+        let key = format!(
+            "pool-union:{}",
+            serde_json::to_string(&(provider, tags, model, identities))?
+        );
+        if let Some(value) = self.runtime.cached::<PoolUnion>(&key) {
+            return Ok(value.candidates);
+        }
+        let _fill = self.runtime.cache_fill(&key).await;
+        if let Some(value) = self.runtime.cached::<PoolUnion>(&key) {
+            return Ok(value.candidates);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let candidates = Arc::new(
+            sources
+                .iter()
+                .flat_map(|source| source.iter())
+                .filter(|candidate| seen.insert(candidate.id.clone()))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        self.runtime.cache(
+            key,
+            &PoolUnion {
+                candidates: candidates.clone(),
+                _sources: sources,
+            },
+            epoch,
+            Duration::from_secs(30),
+        );
+        Ok(candidates)
+    }
+
+    pub async fn pool_candidate_for_tags(
+        &self,
+        tags: &[String],
+        provider: &str,
+        model: Option<&str>,
+        id: &str,
+    ) -> Result<Option<Arc<PoolCandidate>>> {
+        for tag in tags {
+            if let Some(candidate) = self.pool_candidate(tag, provider, model, id).await? {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
+    }
+
     async fn pool_index(&self, tag: &str, provider: &str) -> Result<Arc<PoolIndex>> {
         let key = format!("pool-index:{}", serde_json::to_string(&(provider, tag))?);
         if let Some(value) = self.runtime.cached(&key) {
@@ -176,7 +253,7 @@ impl Storage {
         Ok(sqlx::query_as(
             "SELECT t.*,
             (SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,
-            (SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id) AS binding_count
+            ((SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id)+(SELECT COUNT(*) FROM api_group_tags g WHERE g.tag_id=t.id)) AS binding_count
             FROM supplier_tags t ORDER BY t.provider_id,t.name,t.id",
         )
         .fetch_all(self.pool())
@@ -207,14 +284,15 @@ impl Storage {
     pub async fn delete_supplier_tag(&self, id: &str) -> Result<()> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let bound: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_routes WHERE tag_id=?) OR EXISTS(SELECT 1 FROM virtual_plans WHERE json_extract(config,'$.supplier_tag_id')=?)")
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_routes WHERE tag_id=?) OR EXISTS(SELECT 1 FROM virtual_plans WHERE json_extract(config,'$.supplier_tag_id')=?) OR EXISTS(SELECT 1 FROM api_group_tags WHERE tag_id=?)")
+                .bind(id)
                 .bind(id)
                 .bind(id)
                 .fetch_one(&mut *tx)
                 .await?;
         if bound {
             return Err(StorageError::Constraint(
-                "此标签仍用于套餐或虚拟账户，请先更换其号池".into(),
+                "此标签仍用于套餐、虚拟账户或 API 组，请先更换关联标签".into(),
             ));
         }
         sqlx::query("DELETE FROM supplier_tags WHERE id=?")

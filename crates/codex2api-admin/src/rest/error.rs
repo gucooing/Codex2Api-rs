@@ -60,6 +60,11 @@ impl From<codex2api_storage::StorageError> for ApiError {
     fn from(e: codex2api_storage::StorageError) -> Self {
         use codex2api_storage::StorageError as E;
         match e {
+            E::Api { code, message } => Self(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                code.into(),
+                message.into(),
+            ),
             E::Checkout { code, message } => Self(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 code.into(),

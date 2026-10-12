@@ -8,8 +8,11 @@
 $env:CODEX2API_API_BIND = '127.0.0.1:8080'
 $env:CODEX2API_ADMIN_BIND = '127.0.0.1:8081'
 $env:CODEX2API_USER_BIND = '127.0.0.1:8082'
+$env:CODEX2API_METERED_API_BIND = '127.0.0.1:8083'
 $env:CODEX2API_PUBLIC_API_URL = 'http://127.0.0.1:8080'
+$env:CODEX2API_PUBLIC_ADMIN_URL = 'http://127.0.0.1:8081'
 $env:CODEX2API_PUBLIC_USER_URL = 'http://127.0.0.1:8082'
+$env:CODEX2API_PUBLIC_METERED_API_URL = 'http://127.0.0.1:8083'
 $env:CODEX2API_DB = 'data/codex2api-test.sqlite'
 .\codex2api.exe
 ```
@@ -34,20 +37,18 @@ ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录�
 
 本地执行两个前端的 lint、typecheck、test 和 build，再执行 `cargo test --workspace --locked`。Windows 可使用已安装的 MSVC 工具链，或同版本 Rust GNU 工具链加 MinGW。浏览器回归必须分别访问管理端与用户端，并验证另一端接口返回不可访问、用户令牌不能进入管理端、确认前不发放授权码、跨账户读写被拒绝及购买重放不重复扣款。
 
-当前 `codex2api-api/tests/virtual_oauth.rs` 有 5 项既有断言待对齐：三项订阅到期时间期望 `Z` 而实际为等价的 `+00:00`，授权失败状态期望 `400` 而实际为 `401`，工作区配置更新期望 `200` 而实际为 `409`。运行完整回归时须保留这些失败结果，不能将其计为通过；它们不由 CLI 版本常量或 Responses 字段顺序控制。`codex2api-storage` 的 `expiration_cannot_be_overridden_by_a_reset_card` 也存在等价 UTC 字符串（`+00:00` 与 `.000Z`）的断言差异。
-
 用户前端浏览器测试使用 `CODEX2API_TEST_USER_URL`、`CODEX2API_TEST_ADMIN_URL` 和 `CODEX2API_TEST_API_URL` 指定三个本地入口。钱包测试通过管理端余额调整接口在独立测试库准备，不能对正式库制造测试流水。
 迁移 SQL 使用 LF，不能修改已应用的迁移或手工改写校验记录。
 
 ## 前后端开发启动
 
 前端热更新使用两个 `pnpm dev` 进程；Rust 用 `cargo run -p codex2api --features dev-frontend`。
-此显式开发特性只运行三个后端接口入口，跳过静态前端导出及其源码清单校验，页面由 Next 开发服务器提供。
+此显式开发特性只运行四个后端接口入口，跳过静态前端导出及其源码清单校验，页面由 Next 开发服务器提供。
 它不能用于 release 构建；默认构建仍严格嵌入并校验两个静态前端。
 
 Rust 设置 `CODEX2API_PUBLIC_USER_URL=http://127.0.0.1:3001`；管理前端在 `frontend/` 运行
 `pnpm dev --hostname 127.0.0.1 --port 3000`，用户前端在 `frontend-user/` 运行
-`pnpm dev --hostname 127.0.0.1 --port 3001`。对应后端默认端口为 8081 和 8082，AI API 为 8080。
+`pnpm dev --hostname 127.0.0.1 --port 3001`。对应后端默认端口为 8081 和 8082，OAuth 客户端入口为 8080，按量 API 为 8083。
 Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p codex2api --features dev-frontend`，并将 MinGW 的 bin 目录加入 PATH。
 
 已应用迁移的 SQL 文件必须保持字节不变。结构调整只能新增迁移；不得手工修改 `_sqlx_migrations` 的校验值，也不得为消除错误删除已有数据库。
@@ -57,6 +58,10 @@ Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p
 鉴权回归覆盖两端真实 JWT 互换、同密钥不同用途、错误账户类型、未知 kid、过期/撤销、篡改签名，以及 none、空算法、HS256、非 RS256 算法的拒绝。带错误 Bearer 和有效 Cookie 的请求仍须失败。`accounts` 的账户类型与资料表归属不可更改；用户侧数据仓库不得暴露供应账户查询。账户/JWT 结构迁移会使旧网页会话失效；Codex OAuth 的客户端协议、签名密钥、设备授权和令牌不因网页登录 JWT 改造而更换。
 
 用户端页面为 `/user/`（总览）、`/user/usage/`（使用信息）、`/user/subscriptions/`、`/user/plans/`、`/user/orders/`、`/user/wallet/`、`/user/devices/`、`/user/profile/`（用户信息）。检查桌面侧栏折叠和手机抽屉、面包屑及头像入口；直接进入或刷新子页先恢复会话，确认未登录后才显示登录表单。总览数值应与本人对应明细一致，资料页只展示本人的信息，修改密码仍要求当前密码。
+
+按量 API 页面为管理端 `/admin/api-groups/`、`/admin/api-keys/`、`/admin/api-usage/`，用户端 `/user/model-market/`、`/user/api-keys/`、`/user/api-usage/`。配置同平台标签与模型后，核对空模型列表按标签解析、模型倍率覆盖组倍率、组与模型的每用户并发和 RPM 同时生效，多把 Key 不能增加同一用户的限额。模型广场默认展示基础目录，横向切换组后展示精确计费价格和两层限制。密钥只在创建时返回一次，撤销后调用立即失效；钱包 API 扣款不能改变 OAuth 订阅额度。
+
+管理前端的 `tests/browser/api-service.spec.ts` 在含 `review_fixture` 的独立测试库上验收组编辑、模型价格、手机布局、密钥和读取失败后的状态保留。设置 `CODEX2API_TEST_BASE_URL` 为本地管理入口、`CODEX2API_TEST_USER_BASE_URL` 为本地用户入口、`CODEX2API_TEST_OUTPUT_DIR` 为测试输出目录，然后在 `frontend/` 执行 `npx playwright test api-service.spec.ts public-urls.spec.ts`。测试只准备本地假供应账户，不调用真实上游；真实平台授权、订阅权限及生成行为仍需使用获准的供应账户单独验证。
 
 购买与订单检查：关闭套餐的“允许购买”后，用户目录移除该套餐，管理员仍能在订阅及虚拟账户管理中直接分配。开启后即展示，未定价保持未知且不能下单。点击下单只打开预览，关闭或反复计算后订单数、钱包、订阅和优惠券预留数均不变。“使用优惠码”在空输入或全空格时禁用，填写后才可提交；移除优惠码恢复原价。支付方式直接显示钱包可用余额。预览过期时使用独立的“刷新预览”，不能自动下单；确认前展示最终费用、支付方式、套餐和有效期。点击“确认订单”才产生一条待支付订单，重试确认复用原单，然后单独执行钱包支付，最后显示完成状态。支付成功后订单、余额、订阅和钱包记录一致。按原价 $30/30 天、剩余 15 天升级至 $60/30 天的报价应为新剩余费用 $30、抵扣 $15、应付 $15，原到期时间不变。核对不同时期续费价格、管理员发放快照、改价后抵扣不重算、降级在到期前被拒绝，以及重复支付、跨用户订单、过期报价和取消订单不扣款。管理端 `/admin/orders/` 查看相同的费用快照与支付状态。
 

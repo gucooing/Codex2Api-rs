@@ -1,0 +1,71 @@
+"use client";
+import { useErrorToast } from "@/lib/actions";
+import type { ApiCatalogModel, ApiGroups, ApiModelMarket } from "@/lib/metered-api";
+import { usePageControls } from "@/lib/pagination";
+import { useResource } from "@/lib/resource";
+import { useId, useState, type FormEvent } from "react";
+
+export function useModelMarketPage() {
+  const id = useId();
+  const [groupId, setGroupId] = useState("");
+  const [filters, setFilters] = useState({ search: "", provider_id: "" });
+  const [applied, setApplied] = useState(filters);
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(20);
+  const [selected, setSelected] = useState<ApiCatalogModel>();
+  const groups = useResource<ApiGroups>("/api-groups", 0);
+  const params = new URLSearchParams({
+    ...applied,
+    group_id: groupId,
+    page: String(page),
+    page_size: String(size),
+  });
+  const resource = useResource<ApiModelMarket>(`/model-market?${params}`, 0);
+  const pagination = usePageControls(
+    resource.data?.page ?? page,
+    resource.data?.total,
+    setPage,
+    size,
+    !resource.ready,
+    setSize,
+  );
+  useErrorToast(groups.error);
+  useErrorToast(resource.error);
+  const selectGroup = (value: string) => {
+    setGroupId(value === "base" ? "" : value);
+    setPage(1);
+    setSelected(undefined);
+  };
+  const search = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setApplied({ ...filters });
+    setPage(1);
+    resource.reload();
+  };
+  const reset = () => {
+    const empty = { search: "", provider_id: "" };
+    setFilters(empty);
+    setApplied(empty);
+    setPage(1);
+    resource.reload();
+  };
+  const reload = () => {
+    groups.reload();
+    resource.reload();
+  };
+  return {
+    id,
+    groups,
+    groupId,
+    selectGroup,
+    filters,
+    setFilters,
+    resource,
+    pagination,
+    selected,
+    setSelected,
+    search,
+    reset,
+    reload,
+  };
+}

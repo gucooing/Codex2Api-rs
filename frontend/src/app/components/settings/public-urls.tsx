@@ -10,7 +10,9 @@ import { CircleAlert } from "lucide-react";
 
 const descriptions = {
   api_url:
-    "客户端连接 AI 服务时使用的对外地址，例如 https://api.example.com。填写实际可访问的协议、域名和可选端口，不需要填写 /v1 等路径。",
+    "OAuth 客户端连接时使用的对外地址，例如 https://codex.example.com。填写协议、域名和可选端口，不需要填写路径。",
+  metered_api_url:
+    "API 密钥调用时使用的对外地址，例如 https://api.example.com。填写协议、域名和可选端口，不需要填写 /v1 路径。",
   user_url:
     "普通用户访问用户网站时使用的对外地址，例如 https://user.example.com。填写协议、域名和可选端口，不需要填写 /user 等路径。",
   admin_url:

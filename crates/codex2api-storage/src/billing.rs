@@ -48,6 +48,29 @@ pub(crate) enum BillingSnapshot {
 }
 
 impl BillingSnapshot {
+    pub(crate) fn charge_scaled(
+        &self,
+        record: &UsageRecord,
+        multiplier_micros: i64,
+    ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
+        if !record.endpoint.contains("/images/")
+            && codex2api_core::billing_operation(&record.provider_id, &record.endpoint).is_none()
+        {
+            let tokens = match self {
+                Self::Legacy(tokens) | Self::Current { tokens, .. } => tokens,
+            };
+            return charge_scaled(record, tokens, multiplier_micros);
+        }
+        let (cost, status, model, tier) = self.charge(record);
+        match cost.map(|cost| {
+            i64::try_from((i128::from(cost) * i128::from(multiplier_micros) + 500_000) / 1_000_000)
+        }) {
+            Some(Ok(cost)) => (Some(cost), status, model, tier),
+            Some(Err(_)) => (None, "overflow", model, tier),
+            None => (None, status, model, tier),
+        }
+    }
+
     pub(crate) fn charge(
         &self,
         record: &UsageRecord,
@@ -255,6 +278,14 @@ pub(crate) fn charge(
     record: &UsageRecord,
     prices: &[ModelPrice],
 ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
+    charge_scaled(record, prices, 1_000_000)
+}
+
+fn charge_scaled(
+    record: &UsageRecord,
+    prices: &[ModelPrice],
+    multiplier_micros: i64,
+) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
     let model = record
         .actual_model
         .as_ref()
@@ -296,9 +327,13 @@ pub(crate) fn charge(
         + i128::from(writes) * i128::from(price.cache_write_rate)
         + i128::from(output) * i128::from(price.output_rate);
     // Round once to nano-USD; reasoning tokens are already included in output.
-    match i64::try_from((units + 500) / 1000) {
-        Ok(value) => (Some(value), "priced", model, Some(price.tier.clone())),
-        Err(_) => (None, "overflow", model, Some(price.tier.clone())),
+    match units
+        .checked_mul(i128::from(multiplier_micros))
+        .and_then(|v| v.checked_add(500_000_000))
+        .and_then(|v| i64::try_from(v / 1_000_000_000).ok())
+    {
+        Some(value) => (Some(value), "priced", model, Some(price.tier.clone())),
+        None => (None, "overflow", model, Some(price.tier.clone())),
     }
 }
 

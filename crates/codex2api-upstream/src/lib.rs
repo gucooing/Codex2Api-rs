@@ -28,6 +28,7 @@ pub(crate) use providers::chatgpt::endpoint;
 mod body;
 mod error;
 mod outcome;
+pub mod public_output;
 pub use availability::{
     SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_available,
     quota_unavailable_until,
@@ -52,7 +53,7 @@ pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
 mod proxy_fixture;
 
 pub use backend::BackendEndpoint;
-pub use body::request_metadata_value;
+pub use body::{data_url_resolution, request_metadata_value};
 pub use client::{DEFAULT_STREAM_IDLE_TIMEOUT, UpstreamClient, responses_url};
 pub use compat::{ChatgptEndpoint, responses_subpath_url};
 pub use endpoint::Endpoint;

@@ -46,7 +46,7 @@ export type Plan = {
 };
 export type Entry = {
   id: string;
-  kind: "order_payment" | "system_adjustment";
+  kind: "order_payment" | "system_adjustment" | "api_usage";
   balance_before_cents: number;
   plan_name: string | null;
   amount_cents: number;

@@ -282,8 +282,17 @@ impl Storage {
                  THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) END AS tokens,
              COALESCE(SUM(cost_nano_usd IS NULL),0) AS unpriced_requests,
              COALESCE(SUM(input_tokens IS NULL OR output_tokens IS NULL),0) AS missing_token_requests
-             FROM usage_records WHERE account_id=? AND requested_at_ms>=? AND requested_at_ms<?",
+             FROM (
+                 SELECT input_tokens,output_tokens,cost_nano_usd
+                 FROM usage_records WHERE account_id=? AND requested_at_ms>=? AND requested_at_ms<?
+                 UNION ALL
+                 SELECT input_tokens,output_tokens,base_cost_nano_usd AS cost_nano_usd
+                 FROM api_usage_records WHERE supplier_account_id=? AND requested_at_ms>=? AND requested_at_ms<?
+             )",
         )
+        .bind(from_ms)
+        .bind(until_ms)
+        .bind(account_id)
         .bind(from_ms)
         .bind(until_ms)
         .bind(account_id)

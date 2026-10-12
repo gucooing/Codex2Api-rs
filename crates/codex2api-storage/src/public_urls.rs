@@ -8,6 +8,9 @@ pub struct PublicUrlSettings {
     pub api_url: String,
     pub user_url: String,
     pub admin_url: String,
+    /// Older saved settings use the process default until this origin is configured.
+    #[serde(default)]
+    pub metered_api_url: String,
     pub revision: i64,
 }
 
@@ -50,7 +53,7 @@ impl Storage {
             .transpose()
     }
 
-    /// Atomically replace all three origins, rejecting stale administrator forms.
+    /// Atomically replace the public origins, rejecting stale administrator forms.
     pub async fn save_public_url_settings(
         &self,
         settings: &PublicUrlSettings,
@@ -62,6 +65,7 @@ impl Storage {
             api_url: normalize_public_origin(&settings.api_url)?,
             user_url: normalize_public_origin(&settings.user_url)?,
             admin_url: normalize_public_origin(&settings.admin_url)?,
+            metered_api_url: normalize_public_origin(&settings.metered_api_url)?,
             revision: settings.revision + 1,
         };
         let value = serde_json::to_string(&saved)?;

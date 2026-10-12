@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 #[derive(Clone)]
 pub struct UserStore {
-    storage: Storage,
+    pub(crate) storage: Storage,
 }
 impl Storage {
     pub fn user_store(&self) -> UserStore {
@@ -18,6 +18,16 @@ impl Storage {
     }
 }
 impl UserStore {
+    pub async fn public_metered_api_url(&self, fallback: &str) -> Result<String> {
+        Ok(self
+            .storage
+            .public_url_settings()
+            .await?
+            .map(|settings| settings.metered_api_url)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback.to_owned()))
+    }
+
     pub async fn public_user_url(&self, fallback: &str) -> Result<String> {
         Ok(self
             .storage

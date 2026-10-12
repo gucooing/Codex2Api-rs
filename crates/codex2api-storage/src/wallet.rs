@@ -48,7 +48,8 @@ impl Storage {
         filter: &WalletEntryFilter,
     ) -> Result<serde_json::Value> {
         if filter.user_id.len() > 128
-            || !["", "order_payment", "system_adjustment"].contains(&filter.kind.as_str())
+            || !["", "order_payment", "system_adjustment", "api_usage"]
+                .contains(&filter.kind.as_str())
             || filter.page < 1
             || ![10, 20, 30, 50].contains(&filter.limit)
             || matches!((filter.from_ms,filter.until_ms),(Some(from),Some(until)) if from>=until)
@@ -144,6 +145,18 @@ impl Storage {
             .ok_or(StorageError::InvalidAdminUpdate(
                 "减少金额不能超过当前余额，增加后余额不能超出金额范围",
             ))?;
+        let api_pending: i64 = sqlx::query_scalar(
+            "SELECT COALESCE((SELECT pending_nano_usd FROM api_wallet_state WHERE user_id=?),0)",
+        )
+        .bind(owner)
+        .fetch_one(&mut *tx)
+        .await?;
+        let reserved_cents = api_pending / 10_000_000 + i64::from(api_pending % 10_000_000 != 0);
+        if input.amount_cents < 0 && after < reserved_cents {
+            return Err(StorageError::InvalidAdminUpdate(
+                "调整后余额不能低于已发生的 API 待扣费用",
+            ));
+        }
         sqlx::query(
             "UPDATE users SET wallet_cents=?,revision=revision+1 WHERE id=? AND revision=?",
         )
@@ -159,6 +172,7 @@ impl Storage {
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
+        crate::api_billing::settle_api_debt_on(&mut tx, owner).await?;
         tx.commit().await?;
         Ok(entry)
     }

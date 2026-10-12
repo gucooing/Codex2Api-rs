@@ -48,11 +48,13 @@ COPY --from=builder /src/target/release/codex2api /usr/local/bin/codex2api
 ENV CODEX2API_API_BIND=0.0.0.0:8080 \
     CODEX2API_ADMIN_BIND=0.0.0.0:8081 \
     CODEX2API_USER_BIND=0.0.0.0:8082 \
+    CODEX2API_METERED_API_BIND=0.0.0.0:8083 \
     CODEX2API_DB=/app/data/codex2api.sqlite
 USER 10001:10001
-EXPOSE 8080 8081 8082
+EXPOSE 8080 8081 8082 8083
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/healthz > /dev/null \
         && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8081/admin/ > /dev/null \
-        && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8082/user/ > /dev/null
+        && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8082/user/ > /dev/null \
+        && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8083/healthz > /dev/null
 ENTRYPOINT ["/usr/local/bin/codex2api"]

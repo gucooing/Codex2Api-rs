@@ -147,6 +147,8 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     .merge(codex2api_user::router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://service.example.test".into(),
+        metered_api_base_url: "http://127.0.0.1:8083".into(),
+        api_concurrency: std::sync::Arc::new(|_| 0),
     }));
     let tokens = authorize(&app).await;
     let access = tokens["access_token"].as_str().unwrap();
@@ -179,6 +181,7 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
             api_url: "https://public.example.test:9443".into(),
             user_url: "http://users.example.test:8082".into(),
             admin_url: "https://admin.example.test".into(),
+            metered_api_url: "https://metered.example.test".into(),
             revision: 0,
         })
         .await
@@ -368,6 +371,8 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     .merge(codex2api_user::router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://service.example.test".into(),
+        metered_api_base_url: "http://127.0.0.1:8083".into(),
+        api_concurrency: std::sync::Arc::new(|_| 0),
     }));
     let tokens = authorize(&app).await;
     let access = tokens["access_token"].as_str().unwrap();

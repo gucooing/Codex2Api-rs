@@ -1,4 +1,6 @@
 mod account_scope;
+mod api_groups;
+mod api_keys;
 mod auth;
 mod consumers;
 mod coupons;
@@ -25,6 +27,8 @@ use axum::{
 };
 pub(crate) fn router(state: AdminState) -> Router {
     let protected = Router::new()
+        .merge(api_groups::router())
+        .merge(api_keys::router())
         .merge(users::router())
         .merge(consumers::router())
         .merge(subscriptions::router())

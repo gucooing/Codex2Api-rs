@@ -52,6 +52,7 @@ export const tokens = (value: number | null | undefined) =>
 export const usageCost = (nano: number | null | undefined) =>
   nano == null ? "—" : `$${(nano / 1e9).toFixed(6)}`;
 const statusLabels: Record<string, string> = {
+  started: "进行中",
   completed: "已完成",
   client_stopped: "用户停止",
   failed: "失败",
@@ -60,6 +61,7 @@ const statusLabels: Record<string, string> = {
   in_progress: "进行中",
 };
 const billingLabels: Record<string, string> = {
+  settled: "已结算",
   priced: "已计费",
   unpriced: "未定价",
   pending: "待结算",

@@ -52,6 +52,7 @@ pub fn request_metadata_value(value: &Value) -> RequestMetadata {
             .map(|s| s.chars().take(64).collect()),
         image_size: value
             .get("size")
+            .or_else(|| value.get("resolution"))
             .and_then(Value::as_str)
             .map(|s| s.chars().take(64).collect()),
         image_input_sizes,
@@ -92,7 +93,8 @@ fn image_input_resolution(value: &Value) -> Option<String> {
     data_url_resolution(encoded?)
 }
 
-fn data_url_resolution(encoded: &str) -> Option<String> {
+/// Read reported image dimensions without fetching remote image URLs.
+pub fn data_url_resolution(encoded: &str) -> Option<String> {
     let encoded = encoded
         .strip_prefix("data:")
         .and_then(|value| value.split_once(",").map(|(_, data)| data))

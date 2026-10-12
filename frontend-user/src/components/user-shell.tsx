@@ -41,7 +41,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
-import { isUserPage, userNavigation } from "@/lib/navigation";
+import { isUserPage, userNavigation, userNavigationGroups } from "@/lib/navigation";
 import { LogOut, Monitor, Moon, Sun, UserRound } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode } from "react";
@@ -165,7 +165,7 @@ function UserNavigation({ children }: { children: ReactNode }) {
         </SidebarHeader>
         <SidebarContent>
           <nav aria-label="用户导航">
-            {["工作台", "订阅服务", "账户"].map((group) => (
+            {userNavigationGroups.map((group) => (
               <SidebarGroup key={group}>
                 <SidebarGroupLabel>{group}</SidebarGroupLabel>
                 <SidebarGroupContent>

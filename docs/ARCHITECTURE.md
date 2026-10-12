@@ -23,7 +23,7 @@ the completed local client checks cover source, direct Rust formatting and stati
 
 ## Process and crates
 
-One Rust process runs three listeners: AI API (8080), administration (8081), and the user website/API (8082). Each router registers only its own surface. The administrator and user Next.js projects produce separate static exports embedded in the same executable. Production does not run a Node.js server.
+One Rust process runs four listeners: OAuth/client protocols (8080), administration (8081), the user website/API (8082), and API-key metered inference (8083). Each router registers only its own surface and credential audience. The administrator and user Next.js projects produce separate static exports embedded in the same executable. Production does not run a Node.js server.
 
 | Crate | Responsibility |
 | --- | --- |
@@ -33,12 +33,25 @@ One Rust process runs three listeners: AI API (8080), administration (8081), and
 | codex2api-auth | Supplier OAuth, token refresh/revoke and isolated account transports |
 | codex2api-upstream | Official outbound endpoints, headers, body normalization, HTTP/SSE/WS |
 | codex2api-service | Shared execution authorization and effective entitlement policy |
+| codex2api-scheduler | Provider-neutral supplier selection, affinity, capacity, pre-output inspection and classified failover primitives |
 | codex2api-api | Consumer OAuth and independently scoped client protocol adapters |
+| codex2api-gateway | API-key inference, Responses/Chat Completions/image adapters, per-user API group/model admission and metered request settlement |
 | codex2api-admin | Administrator session, CSRF, typed REST contracts and operations |
-| codex2api-user | User browser sessions, wallet purchases, own subscriptions/devices and OAuth consent |
+| codex2api-user | User browser sessions, own API keys/catalog/usage, wallet purchases, subscriptions/devices and OAuth consent |
 | codex2api-web | Embedded static assets and source freshness validation |
 | codex2api-version | Exact official release and independent application release tag |
 | codex2api | Startup, dependency composition, listener and graceful shutdown |
+
+`codex2api-api` and `codex2api-gateway` both call `codex2api-scheduler`; neither
+inference surface calls the other. The scheduler takes an explicit provider,
+consumer identity and tag set, and never authenticates OAuth or API keys, reads
+wallets, or decides subscription benefits. The caller supplies revalidation for
+waits and retries. Existing OAuth subscription admission remains in
+`codex2api-service`; metered API admission and settlement use independent API
+records and the ordinary user's wallet. Administrator and user HTTP modules
+receive only a read-only current-concurrency callback, not gateway execution
+capabilities. API product configuration and public DTO contracts are described in
+[Metered API](API.md).
 
 Incoming routes are explicit in `codex2api-api/src/providers/chatgpt/routes.rs` and
 the resource modules under `codex2api-admin/src/rest/` and `codex2api-user/src/rest/`.
@@ -462,7 +475,7 @@ Desktop's `plan-names` resource; accepted protocol variants follow the pinned
 
 The AI API authorization entry redirects to the configured public user origin. Browser consent and device-code approval run only on the user listener. An authenticated user browser session selects that user's platform identity. Otherwise, a single username/password form verifies either kind of user for the current cookie-bound, CSRF-protected authorization flow only. The identity is displayed before a separate confirmation request. No code or device session is created by password verification alone.
 
-Administrator Settings / Public addresses stores the API, user and administrator HTTP(S) origins together in SQLite with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website address to the user HTTP module. Listener bindings and router isolation are unchanged.
+Administrator Settings / Public addresses stores the OAuth/client API, metered API, user and administrator HTTP(S) origins together in SQLite with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website and metered API public addresses to the user HTTP module. Existing settings without a metered API origin use the configured startup default until the administrator saves it. Listener bindings and router isolation are unchanged.
 
 Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Virtual users cannot log into the user website, and administrators authenticate only on the administrator listener. Expiration does not itself disable login.
 

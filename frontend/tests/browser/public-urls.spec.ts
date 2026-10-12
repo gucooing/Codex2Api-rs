@@ -5,6 +5,7 @@ test("public base addresses retain explicit schemes and ports across saves and r
 }, info) => {
   let settings = {
     api_url: "http://127.0.0.1:8080",
+    metered_api_url: "http://127.0.0.1:8083",
     user_url: "http://127.0.0.1:8082",
     admin_url: "http://127.0.0.1:8081",
     revision: 0,
@@ -41,19 +42,22 @@ test("public base addresses retain explicit schemes and ports across saves and r
   });
   await page.goto("/admin/settings/");
   await page.getByRole("tab", { name: "访问地址", exact: true }).click();
-  for (const [api, user, admin] of [
+  for (const [api, meteredApi, user, admin] of [
     [
       "https://api.example.test:9443",
+      "http://metered-api.example.test:9083",
       "http://users.example.test:9082",
       "https://admin.example.test:9441",
     ],
     [
       "http://api.example.test:9080",
+      "https://metered-api.example.test:9443",
       "https://users.example.test:9442",
       "http://admin.example.test:9081",
     ],
   ]) {
-    await page.getByLabel("API 基础地址", { exact: true }).fill(api);
+    await page.getByLabel("OAuth 客户端基础地址", { exact: true }).fill(api);
+    await page.getByLabel("按量 API 基础地址", { exact: true }).fill(meteredApi);
     await page.getByLabel("用户端基础地址", { exact: true }).fill(user);
     await page.getByLabel("管理端基础地址", { exact: true }).fill(admin);
     const before = writes.length;
@@ -61,6 +65,7 @@ test("public base addresses retain explicit schemes and ports across saves and r
     await expect.poll(() => writes.length).toBe(before + 1);
     expect(writes[before]).toEqual({
       api_url: api,
+      metered_api_url: meteredApi,
       user_url: user,
       admin_url: admin,
       revision: before,
@@ -71,17 +76,24 @@ test("public base addresses retain explicit schemes and ports across saves and r
   failRead = true;
   await page.getByRole("button", { name: "刷新", exact: true }).last().click();
   await expect(page.getByText("暂时无法读取访问地址", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("API 基础地址", { exact: true })).toHaveValue(settings.api_url);
+  await expect(page.getByLabel("OAuth 客户端基础地址", { exact: true })).toHaveValue(
+    settings.api_url,
+  );
+  await expect(page.getByLabel("按量 API 基础地址", { exact: true })).toHaveValue(
+    settings.metered_api_url,
+  );
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   failRead = false;
   await page.getByRole("button", { name: "刷新", exact: true }).last().click();
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
   await page
-    .getByLabel("API 基础地址", { exact: true })
+    .getByLabel("OAuth 客户端基础地址", { exact: true })
     .fill("https://api.example.test/api/oauth/grok");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(
-    page.getByText("API 基础地址仅填写协议、域名和可选端口，不含路径或参数", { exact: true }),
+    page.getByText("OAuth 客户端基础地址仅填写协议、域名和可选端口，不含路径或参数", {
+      exact: true,
+    }),
   ).toBeVisible();
   expect(writes).toHaveLength(2);
 });

@@ -105,6 +105,8 @@ impl GrokUpstream {
             "responses"
                 | "chat/completions"
                 | "messages"
+                | "images/generations"
+                | "images/edits"
                 | "models"
                 | "user?include=subscription"
                 | "settings"
@@ -155,7 +157,10 @@ impl GrokUpstream {
                 headers.insert(name, value.clone());
             }
         }
-        if matches!(path, "responses" | "chat/completions" | "messages") {
+        if matches!(
+            path,
+            "responses" | "chat/completions" | "messages" | "images/generations" | "images/edits"
+        ) {
             headers.entry("x-grok-req-id").or_insert_with(|| {
                 HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).expect("UUID")
             });
@@ -195,11 +200,26 @@ impl GrokUpstream {
             let status = response.status();
             let headers = response.headers().clone();
             let raw: Value = response.json().await.unwrap_or_default();
+            let mut normalized = json!({"error":errors::normalize(&raw)});
+            let measured = raw.get("response").unwrap_or(&raw);
+            // Keep generation evidence for request settlement and replay protection.
+            // Consumer error responses still expose only the public error allowlist.
+            for field in [
+                "usage",
+                "output",
+                "choices",
+                "data",
+                "model",
+                "size",
+                "resolution",
+            ] {
+                if let Some(value) = measured.get(field) {
+                    normalized[field] = value.clone();
+                }
+            }
             let mut rebuilt = http::Response::builder()
                 .status(status)
-                .body(reqwest::Body::from(
-                    json!({"error":errors::normalize(&raw)}).to_string(),
-                ))
+                .body(reqwest::Body::from(normalized.to_string()))
                 .expect("response");
             *rebuilt.headers_mut() = headers;
             rebuilt.headers_mut().remove(http::header::CONTENT_LENGTH);

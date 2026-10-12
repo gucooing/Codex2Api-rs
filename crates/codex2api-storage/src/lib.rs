@@ -6,6 +6,15 @@
 
 mod account_scope;
 pub use account_scope::AccountScope;
+mod api_access;
+mod api_billing;
+mod api_groups;
+pub use api_access::{ApiKeyView, ApiPrincipal, CreatedApiKey};
+pub use api_billing::{ApiRequestStart, ApiSettlement};
+pub use api_groups::{
+    ApiCatalogModel, ApiGroup, ApiImagePrice, ApiListQuery, ApiModelRule, ApiPublicGroup,
+    ApiTokenPrice,
+};
 #[cfg(test)]
 extern crate self as codex2api_storage;
 mod billing;

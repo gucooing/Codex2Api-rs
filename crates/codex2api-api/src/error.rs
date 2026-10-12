@@ -10,6 +10,23 @@ use codex2api_upstream::UpstreamError;
 
 pub type Result<T> = std::result::Result<T, ApiError>;
 
+impl From<codex2api_scheduler::SchedulerError> for ApiError {
+    fn from(error: codex2api_scheduler::SchedulerError) -> Self {
+        use codex2api_scheduler::SchedulerError as E;
+        match error {
+            E::Storage(error) => Self::Storage(error),
+            E::Upstream(error) => Self::Upstream(error),
+            E::ConsumerInvalid => Self::invalid_token(),
+            E::Rejected {
+                status,
+                error_type,
+                message,
+                code,
+            } => Self::openai(status, error_type, message, code),
+        }
+    }
+}
+
 /// Public API failure mapped to OpenAI-style `{ "error": { ... } }` JSON.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {

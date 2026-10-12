@@ -4,6 +4,11 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("{message}")]
+    Api {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("Runtime cache is unavailable")]
     Runtime,
     #[error("Request journal is unavailable")]

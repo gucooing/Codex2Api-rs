@@ -84,6 +84,8 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
     .merge(codex2api_user::router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://service.example.test".into(),
+        metered_api_base_url: "http://127.0.0.1:8083".into(),
+        api_concurrency: std::sync::Arc::new(|_| 0),
     }));
     let issued = request(
         &app,
