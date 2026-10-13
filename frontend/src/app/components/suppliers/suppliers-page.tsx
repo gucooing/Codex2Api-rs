@@ -2,6 +2,8 @@
 import { OAuthWizard } from "@/app/components/suppliers/oauth-wizard";
 import { SupplierRecordDialog } from "@/app/components/suppliers/supplier-record-dialog";
 import { SupplierTagsBatchDialog } from "@/app/components/suppliers/supplier-tag-dialog";
+import { SupplierModelsDialog } from "@/app/components/suppliers/supplier-models-dialog";
+import { SupplierTransferDialog } from "@/app/components/suppliers/supplier-transfer-dialog";
 import { useSuppliersPage } from "@/app/data/suppliers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,6 +82,10 @@ export default function SuppliersPage() {
     setBatchOpen,
     batchAccounts,
     setBatchAccounts,
+    modelAccounts,
+    setModelAccounts,
+    transfer,
+    setTransfer,
     empty,
     filters,
     setFilters,
@@ -302,6 +308,14 @@ export default function SuppliersPage() {
                 <Plus />
                 添加供应账户
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={batchBusy}
+                onClick={() => setTransfer({ mode: "import", ids: [] })}
+              >
+                导入
+              </Button>
             </div>
           </div>
           {selectedAccounts.length > 0 && (
@@ -322,6 +336,26 @@ export default function SuppliersPage() {
                 }}
               >
                 更新标签
+              </Button>
+              {selectedProvider && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!resource.ready || batchBusy}
+                  onClick={() => setModelAccounts([...selectedAccounts])}
+                >
+                  更新模型
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!resource.ready || batchBusy}
+                onClick={() => setTransfer({ mode: "export", ids: [...selectedIds] })}
+              >
+                导出
               </Button>
               <Button
                 type="button"
@@ -860,6 +894,26 @@ export default function SuppliersPage() {
           onComplete={() => {
             setAdd(false);
             resource.reload();
+          }}
+        />
+      )}
+      {modelAccounts && (
+        <SupplierModelsDialog
+          accounts={modelAccounts}
+          onClose={() => setModelAccounts(null)}
+          onSaved={() => {
+            setModelAccounts(null);
+            resource.reload();
+          }}
+        />
+      )}
+      {transfer && (
+        <SupplierTransferDialog
+          {...transfer}
+          onClose={() => setTransfer(null)}
+          onSaved={() => {
+            resource.reload();
+            tags.reload();
           }}
         />
       )}

@@ -32,8 +32,20 @@ import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-r
 import { useId } from "react";
 export function SupplierModels({ id }: { id: string }) {
   const fieldId = useId();
-  const { resource, options, selected, setSelected, setSearch, actions, sync, add, remove } =
-    useSupplierModels(id);
+  const {
+    resource,
+    options,
+    choices,
+    selected,
+    setSelected,
+    setSearch,
+    busy,
+    syncing,
+    ready,
+    reload,
+    sync,
+    remove,
+  } = useSupplierModels(id);
   const { pagination } = resource;
   return (
     <div className="space-y-3">
@@ -41,45 +53,33 @@ export function SupplierModels({ id }: { id: string }) {
         <Field className="w-full sm:w-80">
           <FieldLabel htmlFor={fieldId}>添加自定义模型</FieldLabel>
           <Combobox
-            items={options.data?.items ?? []}
+            multiple
+            items={choices}
             value={selected}
             onValueChange={setSelected}
             filter={null}
-            itemToStringLabel={(item) => item.model}
-            itemToStringValue={(item) => item.model}
-            isItemEqualToValue={(a, b) => a.model === b.model}
             onInputValueChange={(text, details) => {
-              if (details.reason === "input-change") setSearch(text);
+              if (details.reason === "input-change" || details.reason === "input-clear")
+                setSearch(text);
             }}
           >
-            <ComboboxInput id={fieldId} placeholder="搜索计费配置中的模型" />
+            <ComboboxInput id={fieldId} placeholder="选择或输入模型名称" />
             <ComboboxContent>
               <ComboboxEmpty>{options.loading ? "加载中…" : "没有匹配模型"}</ComboboxEmpty>
               <ComboboxList>
                 {(item) => (
-                  <ComboboxItem key={item.model} value={item}>
-                    {item.model}
-                    {item.enabled ? "" : "（未启用）"}
+                  <ComboboxItem key={item} value={item} disabled={!ready || !options.ready || busy}>
+                    {item}
                   </ComboboxItem>
                 )}
               </ComboboxList>
             </ComboboxContent>
           </Combobox>
         </Field>
-        <Button
-          disabled={!resource.ready || !options.ready || !selected || actions.isBusy("add-model")}
-          onClick={add}
-        >
-          添加
+        <Button variant="outline" disabled={!ready || busy} onClick={sync}>
+          {syncing && <Spinner />}同步上游模型
         </Button>
-        <Button
-          variant="outline"
-          disabled={!resource.ready || actions.isBusy("sync-models")}
-          onClick={sync}
-        >
-          {actions.isBusy("sync-models") && <Spinner />}同步上游模型
-        </Button>
-        <Button variant="outline" onClick={resource.reload} disabled={resource.refreshing}>
+        <Button variant="outline" onClick={reload} disabled={resource.refreshing || busy}>
           刷新
         </Button>
       </div>
@@ -100,7 +100,7 @@ export function SupplierModels({ id }: { id: string }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={!resource.ready || actions.isBusy(`remove-${item.model}`)}
+                  disabled={!ready || busy}
                   onClick={() => remove(item.model)}
                 >
                   移除

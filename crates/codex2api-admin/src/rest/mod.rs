@@ -16,6 +16,7 @@ mod settings;
 mod subscriptions;
 mod supplier_models;
 mod supplier_tags;
+pub(crate) mod supplier_transfer;
 mod suppliers;
 mod usage;
 mod users;
@@ -35,6 +36,7 @@ pub(crate) fn router(state: AdminState) -> Router {
         .merge(models::router())
         .merge(suppliers::router())
         .merge(supplier_models::router())
+        .merge(supplier_transfer::router())
         .merge(wallet::router())
         .merge(coupons::router())
         .merge(orders::router())

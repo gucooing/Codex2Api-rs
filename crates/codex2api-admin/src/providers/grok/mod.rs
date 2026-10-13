@@ -1,4 +1,5 @@
 //! Grok supplier administration. All auth and official-data requests stay in this channel.
+pub(crate) mod transfer;
 use crate::{
     AdminState,
     rest::error::{ApiError, ApiResult},

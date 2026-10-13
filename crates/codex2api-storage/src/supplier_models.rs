@@ -98,11 +98,16 @@ impl Storage {
     }
     pub async fn supplier_model_options(&self, id: &str, search: &str) -> Result<Vec<Value>> {
         let rows: Vec<(String, bool)> = sqlx::query_as(
-            "SELECT m.model,m.enabled FROM model_catalog m
+            "SELECT model,MAX(enabled) FROM (
+             SELECT m.model,m.enabled FROM model_catalog m
              JOIN supplier_accounts a ON a.provider_id=m.provider_id
              WHERE a.id=? AND m.deleted=0 AND instr(lower(m.model),lower(?))>0
-             ORDER BY m.model LIMIT 100",
+             UNION ALL SELECT model,0 FROM supplier_models
+             WHERE account_id=? AND instr(lower(model),lower(?))>0)
+             GROUP BY model ORDER BY model LIMIT 100",
         )
+        .bind(id)
+        .bind(search.trim())
         .bind(id)
         .bind(search.trim())
         .fetch_all(self.pool())
@@ -118,21 +123,61 @@ impl Storage {
         }
         let changed = sqlx::query(
             "INSERT INTO supplier_models(account_id,model,source)
-             SELECT a.id,m.model,'custom' FROM supplier_accounts a
-             JOIN model_catalog m ON m.provider_id=a.provider_id
-             WHERE a.id=? AND m.model=? AND m.deleted=0
+             SELECT id,?,'custom' FROM supplier_accounts WHERE id=?
              ON CONFLICT(account_id,model) DO UPDATE SET source='custom'",
         )
-        .bind(id)
         .bind(model)
+        .bind(id)
         .execute(self.pool())
         .await?
         .rows_affected();
         if changed == 0 {
-            return Err(StorageError::Constraint(
-                "请先在计费配置中添加同平台模型；无需启用或配置价格".into(),
-            ));
+            return Err(StorageError::AccountNotFound(id.into()));
         }
+        self.invalidate_runtime_cache();
+        Ok(())
+    }
+    /// Replace the complete availability list atomically for one provider's suppliers.
+    pub async fn replace_supplier_models(&self, ids: &[String], models: &[String]) -> Result<()> {
+        if ids.is_empty()
+            || ids.len() > 10_000
+            || models.len() > 2048
+            || models
+                .iter()
+                .any(|model| !codex2api_core::valid_model(model))
+        {
+            return Err(StorageError::Constraint("账户或模型列表无效".into()));
+        }
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut provider = None;
+        for id in ids {
+            let current: String =
+                sqlx::query_scalar("SELECT provider_id FROM supplier_accounts WHERE id=?")
+                    .bind(id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| StorageError::AccountNotFound(id.clone()))?;
+            if provider.as_ref().is_some_and(|value| value != &current) {
+                return Err(StorageError::Constraint("请选择同一平台的供应账户".into()));
+            }
+            provider = Some(current);
+        }
+        for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
+            sqlx::query("DELETE FROM supplier_models WHERE account_id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            for model in models.iter().collect::<std::collections::BTreeSet<_>>() {
+                sqlx::query(
+                    "INSERT INTO supplier_models(account_id,model,source) VALUES(?,?,'custom')",
+                )
+                .bind(id)
+                .bind(model)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        tx.commit().await?;
         self.invalidate_runtime_cache();
         Ok(())
     }

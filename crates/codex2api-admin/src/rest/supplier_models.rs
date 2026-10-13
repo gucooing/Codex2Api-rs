@@ -5,12 +5,13 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::Deserialize;
 use serde_json::json;
 pub(super) fn router() -> Router<AdminState> {
     Router::new()
+        .route("/suppliers/models", put(replace))
         .route(
             "/suppliers/{id}/scheduling",
             get(scheduling).put(save_scheduling),
@@ -65,13 +66,26 @@ async fn options(
         return Err(ApiError::bad("查询过长"));
     }
     Ok(Json(
-        json!({"items":s.storage.supplier_model_options(&id,&q.search).await?}),
+        json!({"items":s.storage.supplier_model_options(&id,&q.search).await?,
+            "selected":s.storage.supplier_models(&id).await?.into_iter().map(|m|m.model).collect::<Vec<_>>()}),
     ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Model {
     model: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelBatch {
+    account_ids: Vec<String>,
+    models: Vec<String>,
+}
+async fn replace(State(s): State<AdminState>, Json(value): Json<ModelBatch>) -> ApiResult {
+    s.storage
+        .replace_supplier_models(&value.account_ids, &value.models)
+        .await?;
+    Ok(ok())
 }
 async fn add(
     State(s): State<AdminState>,

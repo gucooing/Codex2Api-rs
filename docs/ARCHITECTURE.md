@@ -98,11 +98,27 @@ Each generation filters enabled, authorized suppliers by the requested model and
 observed availability before scheduling. Supplier model lists live in
 `supplier_models`, separately from the administrator billing catalog. A supplier
 with no configured models cannot serve generation requests. Discovery replaces
-only that supplier's upstream entries and preserves its custom entries; custom
-additions must already exist in the same provider's billing catalog, even if
-unpriced or disabled there. Neither operation changes catalog enablement or prices.
+only that supplier's upstream entries and preserves its custom entries. Custom
+models can be selected from the same provider's billing catalog or entered by name.
+Batch replacement validates a single provider and atomically replaces both upstream
+and custom entries with the chosen custom list. These operations never change
+catalog enablement or prices, and batch replacement never requests upstream discovery.
 Migration retains existing Grok discoveries in this common supplier list; ChatGPT
 suppliers need an explicit discovery or custom selection.
+
+Administrator JSON exports contain supplier identities, frozen fingerprints,
+credentials, model lists, scheduling and tag names. Proxy URLs, authentication and
+bindings are included only when selected. Exports offer native and Sub2api formats;
+Sub2api exports map credentials and model names to its OAuth account fields and
+deduplicate proxies using its `proxy_key` references. Native imports restore the exported
+fields; Sub2api imports read `accounts` and `proxies` from its data export and accept
+OpenAI OAuth and Grok OAuth accounts. Unsupported platforms and credential types
+are skipped. Sub2api accounts receive independent local fingerprints; their explicit
+model-mapping targets become supplier models, without inventing a catalog when no
+mapping was exported. Each imported account and its proxy binding are saved in one
+transaction. Identical proxy URLs are reused. Existing supplier identities are
+skipped, preserving newer credentials, frozen identity and administrator state.
+Import results display account emails as names alongside outcomes, never credential values.
 
 Session affinity stores an account ID with a TTL. The Redis key includes the
 provider, pool tag, consumer identity and session hash so ownership remains

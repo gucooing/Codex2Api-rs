@@ -28,43 +28,69 @@ export function useSupplierModels(id: string) {
   const path = `/suppliers/${encodeURIComponent(id)}/models`;
   const resource = useListResource<SupplierModel>(path);
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<SupplierModelOption | null>(null);
-  const options = useResource<List<SupplierModelOption>>(
-    `${path}/options${query({ search })}`,
-    search ? 250 : 0,
+  const initialOptions = useResource<List<SupplierModelOption> & { selected: string[] }>(
+    `${path}/options`,
   );
+  const searchOptions = useResource<List<SupplierModelOption>>(
+    search ? `${path}/options${query({ search })}` : null,
+    250,
+  );
+  const options = search ? searchOptions : initialOptions;
   const actions = useActions();
+  const selected = initialOptions.data?.selected ?? [];
+  const busy = actions.isBusy(`supplier-model-change-${id}`);
+  const syncing = actions.isBusy(`supplier-model-sync-${id}`);
+  const reload = () => {
+    resource.reload();
+    initialOptions.reload();
+    searchOptions.reload();
+  };
+  const choices = [
+    ...new Set([
+      ...(options.data?.items.map((item) => item.model) ?? []),
+      ...selected.filter((model) => model.toLowerCase().includes(search.trim().toLowerCase())),
+      ...(search.trim() ? [search.trim()] : []),
+    ]),
+  ];
   useErrorToast(resource.error);
   useErrorToast(options.error);
+  useErrorToast(initialOptions.error);
   const sync = () =>
-    void actions.run("sync-models", async () => {
+    void actions.run(`supplier-model-sync-${id}`, async () => {
       if (!resource.ready) throw new Error("请先加载可用模型");
       await request(`${path}/sync`, { method: "POST" });
-      resource.reload();
+      reload();
     });
-  const add = () =>
-    void actions.run("add-model", async () => {
-      if (!resource.ready || !options.ready || !selected) throw new Error("请选择计费配置中的模型");
-      await request(path, { method: "POST", body: { model: selected.model } });
-      setSelected(null);
-      resource.reload();
+  const setSelected = (next: string[]) =>
+    void actions.run(`supplier-model-change-${id}`, async () => {
+      if (!resource.ready || !options.ready || !initialOptions.ready)
+        throw new Error("请先加载可用模型");
+      const added = next.find((model) => !selected.includes(model));
+      const removed = selected.find((model) => !next.includes(model));
+      if (added) await request(path, { method: "POST", body: { model: added } });
+      else if (removed) await request(path, { method: "DELETE", body: { model: removed } });
+      reload();
     });
   const remove = (model: string) =>
-    void actions.run(`remove-${model}`, async () => {
+    void actions.run(`supplier-model-change-${id}`, async () => {
       if (!resource.ready) throw new Error("请先加载可用模型");
       await request(path, { method: "DELETE", body: { model } });
-      resource.reload();
+      reload();
     });
   return {
     resource,
     options,
+    choices,
     search,
     setSearch,
     selected,
     setSelected,
     actions,
+    busy: busy || syncing,
+    syncing,
+    ready: resource.ready && initialOptions.ready,
+    reload,
     sync,
-    add,
     remove,
   };
 }
@@ -467,6 +493,10 @@ export function useSuppliersPage() {
   const [selected, setSelected] = useState<SupplierSelection[]>([]);
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchAccounts, setBatchAccounts] = useState<SupplierSelection[]>([]);
+  const [modelAccounts, setModelAccounts] = useState<SupplierSelection[] | null>(null);
+  const [transfer, setTransfer] = useState<{ mode: "import" | "export"; ids: string[] } | null>(
+    null,
+  );
   const empty = { search: "", provider_id: "", status: "", tag: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters(
     "suppliers.filters",
@@ -494,7 +524,11 @@ export function useSuppliersPage() {
     selectionVersion.current++;
     setSelected([]);
   };
-  const batchBusy = actions.isBusy("supplier-tags-batch") || actions.isBusy("supplier-select");
+  const batchBusy =
+    actions.isBusy("supplier-tags-batch") ||
+    actions.isBusy("supplier-select") ||
+    actions.isBusy("supplier-models-batch") ||
+    actions.isBusy("supplier-transfer");
   const toggleSelection = (ids: string[], checked: boolean) =>
     setSelected((current) => {
       const remaining = current.filter((item) => !ids.includes(item.id));
@@ -567,6 +601,10 @@ export function useSuppliersPage() {
     setBatchOpen,
     batchAccounts,
     setBatchAccounts,
+    modelAccounts,
+    setModelAccounts,
+    transfer,
+    setTransfer,
     empty,
     filters,
     setFilters,
@@ -593,6 +631,61 @@ export function useSuppliersPage() {
     handleSelect3,
     handleClick4,
   } as const;
+}
+
+export function useSupplierModelsBatch(accounts: SupplierSelection[], onSaved: () => void) {
+  const [search, setSearch] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [changed, setChanged] = useState(false);
+  const actions = useActions();
+  const provider = selectedSupplierProvider(accounts);
+  const options = useResource<List<SupplierModelOption>>(
+    provider && accounts[0]
+      ? `/suppliers/${encodeURIComponent(accounts[0].id)}/models/options${query({ search })}`
+      : null,
+    search ? 250 : 0,
+  );
+  useErrorToast(options.error);
+  const choices = [
+    ...new Set([
+      ...(options.data?.items.map((item) => item.model) ?? []),
+      ...models.filter((model) => model.toLowerCase().includes(search.trim().toLowerCase())),
+      ...(search.trim() ? [search.trim()] : []),
+    ]),
+  ];
+  const busy = actions.isBusy("supplier-models-batch");
+  const select = (next: string[]) => {
+    setModels(next);
+    setChanged(true);
+  };
+  const remove = (model: string) => select(models.filter((item) => item !== model));
+  const submit = (event: React.SubmitEvent<HTMLFormElement>) =>
+    actions.submit(
+      event,
+      "supplier-models-batch",
+      async () => {
+        if (!provider || accounts.length === 0 || !options.ready || !changed)
+          throw new Error("请选择同一平台的账户并设置模型");
+        await request("/suppliers/models", {
+          method: "PUT",
+          body: { account_ids: accounts.map((account) => account.id), models },
+        });
+        onSaved();
+      },
+      "可用模型已覆盖更新",
+    );
+  return {
+    search,
+    setSearch,
+    models,
+    select,
+    remove,
+    choices,
+    options,
+    busy,
+    changed,
+    submit,
+  };
 }
 
 export function useSupplierTagEditor({
