@@ -246,7 +246,7 @@ pub(crate) async fn conversation(
     };
     if let Some(account) = state
         .storage
-        .effective_platform_account(&access.virtual_account_id)
+        .platform_account(&access.virtual_account_id)
         .await?
     {
         crate::providers::chatgpt::identity::mask(&mut value, &account, &ctx.account);

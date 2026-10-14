@@ -56,23 +56,23 @@ async fn setup() -> (tempfile::TempDir, Storage, User) {
 async fn preview(
     storage: &Storage,
     user: &User,
+    subscription_id: Option<&str>,
     plan_id: &str,
     coupon: &str,
 ) -> codex2api_storage::Result<serde_json::Value> {
     let plan = storage.virtual_plan(plan_id).await?.unwrap();
-    let subscription = storage
-        .user_subscriptions(Some(&user.id), true)
-        .await?
-        .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
-        .unwrap();
+    let revision = match subscription_id {
+        Some(id) => Some(storage.platform_revision(id).await?),
+        None => None,
+    };
     storage
         .checkout_preview(
             &user.id,
             CheckoutInput {
+                subscription_id: subscription_id.map(str::to_owned),
                 plan_id: plan_id.into(),
                 plan_revision: plan.revision,
-                subscription_revision: Some(subscription.revision),
+                subscription_revision: revision,
                 payment_method: "wallet".into(),
                 coupon_code: coupon.into(),
             },
@@ -82,9 +82,10 @@ async fn preview(
 async fn quote(
     storage: &Storage,
     user: &User,
+    subscription_id: Option<&str>,
     plan_id: &str,
 ) -> codex2api_storage::Result<SubscriptionOrder> {
-    let preview = preview(storage, user, plan_id, "").await?;
+    let preview = preview(storage, user, subscription_id, plan_id, "").await?;
     storage
         .create_subscription_order(OrderRequest {
             user_id: &user.id,
@@ -92,25 +93,68 @@ async fn quote(
         })
         .await
 }
-async fn grant(storage: &Storage, user: &User, plan: &str, expiry: &str) {
-    let subscription = storage
-        .user_subscriptions(Some(&user.id), true)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
-        .unwrap();
+async fn grant(
+    storage: &Storage,
+    user: &User,
+    subscription_id: Option<&str>,
+    plan: &str,
+    expiry: &str,
+) -> String {
+    let revision = match subscription_id {
+        Some(id) => Some(storage.platform_revision(id).await.unwrap()),
+        None => None,
+    };
     storage
         .save_user_subscription(SubscriptionChange {
+            subscription_id,
             reissue: false,
             user_id: &user.id,
             plan_id: plan,
             expires_at: Some(expiry),
             enabled: true,
-            revision: Some(subscription.revision),
+            revision,
         })
         .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn order_payment_does_not_stale_relative_wallet_adjustments() {
+    let (_dir, storage, user) = setup().await;
+    let snapshot = storage.user(&user.id).await.unwrap().unwrap();
+    let order = quote(&storage, &user, None, "plus").await.unwrap();
+    let paid = storage
+        .pay_subscription_order(&user.id, &order.id)
+        .await
         .unwrap();
+    assert_eq!(paid.status, "paid");
+    let admin = storage.require_admin_user().await.unwrap();
+    let entry = storage
+        .adjust_user_wallet(
+            &user.id,
+            admin.id,
+            codex2api_storage::WalletAdjustment {
+                request_id: "after-order-payment".into(),
+                amount_cents: 100,
+                expected_revision: snapshot.revision,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        entry.balance_before_cents,
+        snapshot.wallet_cents - paid.amount_cents
+    );
+    assert_eq!(
+        entry.balance_cents,
+        snapshot.wallet_cents - paid.amount_cents + 100
+    );
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().revision,
+        snapshot.revision
+    );
+    storage.close().await;
 }
 
 #[tokio::test]
@@ -157,22 +201,27 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .await
             .unwrap();
     }
-    let before = storage
-        .user_platform_account(&user.id, "chatgpt")
-        .await
-        .unwrap()
-        .unwrap();
-    let order = quote(&storage, &user, "plus").await.unwrap();
+    assert!(
+        storage
+            .user_subscriptions(Some(&user.id), true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let order = quote(&storage, &user, None, "plus").await.unwrap();
     let paid = storage
         .pay_subscription_order(&user.id, &order.id)
         .await
         .unwrap();
     let subscription = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .platform_account(paid.subscription_id.as_deref().unwrap())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(subscription.id, before.id);
+    assert_eq!(
+        paid.subscription_id.as_deref(),
+        Some(subscription.id.as_str())
+    );
     assert_eq!(
         storage
             .select_pool_supplier(&subscription.id, "chatgpt", &[])
@@ -233,7 +282,6 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .binding_count,
         1
     );
-    // No API or direct SQL write can restore a subscription-level override.
     assert!(
         storage
             .save_pool_route(
@@ -243,23 +291,29 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
                 Some(route.revision)
             )
             .await
-            .is_err()
+            .unwrap()
     );
-    assert!(
-        sqlx::query("UPDATE execution_routes SET tag_id='private-pool' WHERE virtual_account_id=?")
-            .bind(&subscription.id)
-            .execute(storage.pool())
+    assert_eq!(
+        storage
+            .execution_route(&subscription.id, "chatgpt")
             .await
-            .is_err()
+            .unwrap()
+            .unwrap()
+            .tag_id
+            .as_deref(),
+        Some("private-pool")
     );
-    assert!(
-        sqlx::query(
-            "UPDATE execution_routes SET supplier_account_id='s1' WHERE virtual_account_id=?"
-        )
-        .bind(&subscription.id)
-        .execute(storage.pool())
+    let revision = storage
+        .execution_route(&subscription.id, "chatgpt")
         .await
-        .is_err()
+        .unwrap()
+        .unwrap()
+        .revision;
+    assert!(
+        storage
+            .save_pool_route(&subscription.id, "chatgpt", None, Some(revision))
+            .await
+            .unwrap()
     );
     // Removing membership and recovering supply both use the inherited pool.
     storage
@@ -322,7 +376,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
     );
 
     let unchanged = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .platform_account(&subscription.id)
         .await
         .unwrap()
         .unwrap();
@@ -349,12 +403,6 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
     assert_eq!(replay.amount_cents, paid.amount_cents);
     assert_eq!(replay.balance_cents, paid.balance_cents);
 
-    let mut free = storage.virtual_plan("free").await.unwrap().unwrap();
-    free.config["supplier_tag_id"] = json!("free-pool");
-    storage
-        .save_virtual_plan(&free, Some(free.revision))
-        .await
-        .unwrap();
     let expires = (Utc::now() - Duration::seconds(1)).to_rfc3339();
     sqlx::query("UPDATE platform_accounts SET subscription_expires_at=? WHERE id=?")
         .bind(&expires)
@@ -362,39 +410,34 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .execute(storage.pool())
         .await
         .unwrap();
-    assert_eq!(
-        storage
-            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+    storage.invalidate_runtime_cache();
+    assert!(
+        !storage
+            .effective_entitlements(&subscription.id)
             .await
             .unwrap()
-            .as_deref(),
-        Some("s3")
+            .execution_enabled
     );
-    let mut free = storage.virtual_plan("free").await.unwrap().unwrap();
-    free.config["supplier_tag_id"] = json!("replacement");
-    storage
-        .save_virtual_plan(&free, Some(free.revision))
-        .await
-        .unwrap();
     assert_eq!(
         storage
-            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+            .platform_account(&subscription.id)
             .await
             .unwrap()
-            .as_deref(),
-        Some("s2")
+            .unwrap()
+            .plan_id,
+        "plus"
     );
+    assert!(storage.virtual_plan("free").await.unwrap().is_none());
     storage.close().await;
     let reopened = Storage::open(dir.path().join("orders.sqlite"))
         .await
         .unwrap();
-    assert_eq!(
-        reopened
-            .select_pool_supplier(&subscription.id, "chatgpt", &[])
+    assert!(
+        !reopened
+            .effective_entitlements(&subscription.id)
             .await
             .unwrap()
-            .as_deref(),
-        Some("s2")
+            .execution_enabled
     );
     reopened.close().await;
 }
@@ -406,8 +449,8 @@ async fn order_filters_and_plan_options_preserve_user_ownership() {
     other.id = "other-buyer".into();
     other.username = "other-buyer".into();
     storage.save_user(&other, None).await.unwrap();
-    let order = quote(&storage, &user, "plus").await.unwrap();
-    quote(&storage, &other, "pro").await.unwrap();
+    let order = quote(&storage, &user, None, "plus").await.unwrap();
+    quote(&storage, &other, None, "pro").await.unwrap();
     let filter = OrderFilter {
         plan_id: "plus".into(),
         ..Default::default()
@@ -436,7 +479,7 @@ async fn order_filters_and_plan_options_preserve_user_ownership() {
 #[tokio::test]
 async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
     let (_dir, storage, user) = setup().await;
-    let preview = preview(&storage, &user, "plus", "").await.unwrap();
+    let preview = preview(&storage, &user, None, "plus", "").await.unwrap();
     assert_eq!(
         storage
             .user_subscription_orders(&user.id, &OrderFilter::default())
@@ -497,7 +540,7 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
             .id,
         first.id
     );
-    let second = quote(&storage, &user, "plus").await.unwrap();
+    let second = quote(&storage, &user, None, "plus").await.unwrap();
     let (one, two) = tokio::join!(
         storage.pay_subscription_order(&user.id, &first.id),
         storage.pay_subscription_order(&user.id, &first.id)
@@ -509,21 +552,30 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
         97000
     );
     assert_eq!(storage.wallet_entries(&user.id).await.unwrap().len(), 1);
-    assert!(
-        storage
-            .pay_subscription_order(&user.id, &second.id)
-            .await
-            .is_err()
-    );
+    let second_paid = storage
+        .pay_subscription_order(&user.id, &second.id)
+        .await
+        .unwrap();
+    assert_eq!(second_paid.status, "paid");
+    let first_paid = storage
+        .subscription_order(Some(&user.id), &first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(first_paid.subscription_id, second_paid.subscription_id);
     assert_eq!(
         storage
-            .subscription_order(Some(&user.id), &second.id)
+            .user_subscriptions(Some(&user.id), true)
             .await
             .unwrap()
-            .unwrap()
-            .status,
-        "cancelled"
+            .len(),
+        2
     );
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        94000
+    );
+    assert_eq!(storage.wallet_entries(&user.id).await.unwrap().len(), 2);
     assert!(
         storage
             .cancel_subscription_order(Some(&user.id), &first.id)
@@ -554,9 +606,9 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
 async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_anchor() {
     let (_dir, storage, user) = setup().await;
     let expiry = (Utc::now() + Duration::days(15)).to_rfc3339();
-    grant(&storage, &user, "plus", &expiry).await;
+    let account_id = grant(&storage, &user, None, "plus", &expiry).await;
     let account = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .platform_account(&account_id)
         .await
         .unwrap()
         .unwrap();
@@ -572,7 +624,9 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
         .save_virtual_plan(&old_plan, Some(old_plan.revision))
         .await
         .unwrap();
-    let order = quote(&storage, &user, "pro").await.unwrap();
+    let order = quote(&storage, &user, Some(&account.id), "pro")
+        .await
+        .unwrap();
     assert_eq!(order.kind, "upgrade");
     assert_eq!(order.gross_cents, 3000);
     assert_eq!(order.credit_cents, 1500);
@@ -583,7 +637,7 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
         .unwrap();
     assert_eq!(paid.balance_cents, Some(98500));
     let after = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .platform_account(&account.id)
         .await
         .unwrap()
         .unwrap();
@@ -603,23 +657,35 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
             .await
             .unwrap();
     assert_eq!(anchor, after_anchor);
-    assert!(quote(&storage, &user, "pro").await.is_ok());
+    assert!(
+        quote(&storage, &user, Some(&account.id), "pro")
+            .await
+            .is_ok()
+    );
     old_plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     old_plan.config["sale_price_usd"] = json!("30");
     storage
         .save_virtual_plan(&old_plan, Some(old_plan.revision))
         .await
         .unwrap();
-    assert!(quote(&storage, &user, "plus").await.is_err());
+    assert!(
+        quote(&storage, &user, Some(&account.id), "plus")
+            .await
+            .is_err()
+    );
     grant(
         &storage,
         &user,
+        Some(&account.id),
         "pro",
         &(Utc::now() - Duration::seconds(1)).to_rfc3339(),
     )
     .await;
     assert_eq!(
-        quote(&storage, &user, "plus").await.unwrap().kind,
+        quote(&storage, &user, Some(&account.id), "plus")
+            .await
+            .unwrap()
+            .kind,
         "purchase"
     );
     storage.close().await;
@@ -628,9 +694,10 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
 #[tokio::test]
 async fn prepaid_renewal_prices_are_independent_snapshots_in_upgrade_credit() {
     let (_dir, storage, user) = setup().await;
-    grant(
+    let subscription_id = grant(
         &storage,
         &user,
+        None,
         "plus",
         &(Utc::now() + Duration::days(15)).to_rfc3339(),
     )
@@ -641,14 +708,18 @@ async fn prepaid_renewal_prices_are_independent_snapshots_in_upgrade_credit() {
         .save_virtual_plan(&plus, Some(plus.revision))
         .await
         .unwrap();
-    let renewal = quote(&storage, &user, "plus").await.unwrap();
+    let renewal = quote(&storage, &user, Some(&subscription_id), "plus")
+        .await
+        .unwrap();
     assert_eq!(renewal.kind, "renew");
     assert_eq!(renewal.amount_cents, 2000);
     storage
         .pay_subscription_order(&user.id, &renewal.id)
         .await
         .unwrap();
-    let upgrade = quote(&storage, &user, "pro").await.unwrap();
+    let upgrade = quote(&storage, &user, Some(&subscription_id), "pro")
+        .await
+        .unwrap();
     assert_eq!(upgrade.gross_cents, 9000);
     assert_eq!(upgrade.credit_cents, 3500);
     assert_eq!(upgrade.amount_cents, 5500);
@@ -665,7 +736,7 @@ async fn prepaid_renewal_prices_are_independent_snapshots_in_upgrade_credit() {
 #[tokio::test]
 async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment() {
     let (_dir, storage, user) = setup().await;
-    let order = quote(&storage, &user, "plus").await.unwrap();
+    let order = quote(&storage, &user, None, "plus").await.unwrap();
     assert!(
         storage
             .subscription_order(Some("other"), &order.id)
@@ -704,10 +775,11 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
             .await
             .is_err()
     );
-    assert!(quote(&storage, &user, "plus").await.is_err());
-    grant(
+    assert!(quote(&storage, &user, None, "plus").await.is_err());
+    let subscription_id = grant(
         &storage,
         &user,
+        None,
         "plus",
         &(Utc::now() + Duration::days(15)).to_rfc3339(),
     )
@@ -726,7 +798,9 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
         created_at: Utc::now().to_rfc3339(),
     };
     storage.save_account_fixture(&standalone).await.unwrap();
-    let expiring = quote(&storage, &user, "pro").await.unwrap();
+    let expiring = quote(&storage, &user, Some(&subscription_id), "pro")
+        .await
+        .unwrap();
     sqlx::query("UPDATE subscription_orders SET quote_expires_at_ms=0 WHERE id=?")
         .bind(&expiring.id)
         .execute(storage.pool())
@@ -752,7 +826,9 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
         100000
     );
-    let cancel = quote(&storage, &user, "pro").await.unwrap();
+    let cancel = quote(&storage, &user, Some(&subscription_id), "pro")
+        .await
+        .unwrap();
     assert_eq!(
         storage
             .cancel_subscription_order(None, &cancel.id)
@@ -771,42 +847,101 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
 }
 
 #[tokio::test]
-async fn publication_is_the_only_catalog_gate_and_unknown_prices_never_become_free_orders() {
+async fn catalog_preview_confirmation_and_payment_require_published_priced_plans() {
     let (_dir, storage, user) = setup().await;
+    for (price, published) in [(None, true), (Some("30"), false), (None, false)] {
+        let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+        plan.config["sale_price_usd"] = json!("30");
+        plan.config["supplier_tag_id"] = json!(null);
+        plan.allow_purchase = true;
+        storage
+            .save_virtual_plan(&plan, Some(plan.revision))
+            .await
+            .unwrap();
+        let stale_preview = preview(&storage, &user, None, "plus", "").await.unwrap();
+        let pending = quote(&storage, &user, None, "plus").await.unwrap();
+
+        plan = storage.virtual_plan("plus").await.unwrap().unwrap();
+        plan.config["sale_price_usd"] = json!(price);
+        plan.allow_purchase = published;
+        storage
+            .save_virtual_plan(&plan, Some(plan.revision))
+            .await
+            .unwrap();
+        let page = storage
+            .user_store()
+            .plans(&codex2api_storage::ListQuery {
+                search: plan.name.clone(),
+                page_size: Some(10),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 0);
+        assert!(page.items.is_empty());
+        assert!(preview(&storage, &user, None, "plus", "").await.is_err());
+        assert!(
+            storage
+                .create_subscription_order(OrderRequest {
+                    user_id: &user.id,
+                    preview_token: stale_preview["preview_token"].as_str().unwrap(),
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            storage
+                .pay_subscription_order(&user.id, &pending.id)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            storage
+                .subscription_order(Some(&user.id), &pending.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "cancelled"
+        );
+        assert_eq!(
+            storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+            100000
+        );
+        assert!(storage.wallet_entries(&user.id).await.unwrap().is_empty());
+        assert!(
+            storage
+                .user_subscriptions(Some(&user.id), true)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["sale_price_usd"] = serde_json::Value::Null;
-    plan.config["supplier_tag_id"] = serde_json::Value::Null;
+    plan.config["sale_price_usd"] = json!("0");
+    plan.allow_purchase = true;
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
         .unwrap();
     let listed = storage
         .user_store()
-        .plans(&Default::default())
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .find(|item| item["id"] == "plus")
-        .unwrap();
-    assert!(listed["sale_price_usd"].is_null());
-    assert!(listed.get("supplier_tag_id").is_none());
-    assert!(quote(&storage, &user, "plus").await.is_err());
-    plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.allow_purchase = false;
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
+        .plans(&codex2api_storage::ListQuery {
+            search: plan.name.clone(),
+            ..Default::default()
+        })
         .await
         .unwrap();
-    assert!(
-        !storage
-            .user_store()
-            .plans(&Default::default())
+    assert_eq!(listed.total, 1);
+    assert_eq!(listed.items[0]["id"], "plus");
+    assert!(listed.items[0]["sale_price_usd"].is_string());
+    assert!(listed.items[0].get("supplier_tag_id").is_none());
+    assert_eq!(
+        quote(&storage, &user, None, "plus")
             .await
             .unwrap()
-            .items
-            .iter()
-            .any(|item| item["id"] == "plus")
+            .amount_cents,
+        0
     );
     storage.close().await;
 }
@@ -815,13 +950,13 @@ async fn publication_is_the_only_catalog_gate_and_unknown_prices_never_become_fr
 async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
     let (_dir, storage, user) = setup().await;
     let expiry = (Utc::now() + Duration::days(15)).to_rfc3339();
-    grant(&storage, &user, "plus", &expiry).await;
+    let subscription_id = grant(&storage, &user, None, "plus", &expiry).await;
     let subscription = storage
         .user_subscriptions(Some(&user.id), true)
         .await
         .unwrap()
         .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
+        .find(|s| s.virtual_account_id == subscription_id)
         .unwrap();
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["sale_price_usd"] = json!("40");
@@ -835,11 +970,12 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
         .await
         .unwrap()
         .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
+        .find(|s| s.virtual_account_id == subscription_id)
         .unwrap();
     assert!(refreshed.revision > subscription.revision);
     storage
         .save_user_subscription(SubscriptionChange {
+            subscription_id: Some(&refreshed.virtual_account_id),
             reissue: true,
             user_id: &user.id,
             plan_id: "plus",
@@ -849,7 +985,9 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
         })
         .await
         .unwrap();
-    let order = quote(&storage, &user, "pro").await.unwrap();
+    let order = quote(&storage, &user, Some(&subscription_id), "pro")
+        .await
+        .unwrap();
     assert_eq!(order.gross_cents, 3000);
     assert_eq!(order.credit_cents, 2000);
     assert_eq!(order.amount_cents, 1000);
@@ -890,8 +1028,12 @@ async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_suppl
         )
         .await
         .unwrap();
-    let one = preview(&storage, &user, "plus", "save-five").await.unwrap();
-    let two = preview(&storage, &user, "plus", "SAVE-FIVE").await.unwrap();
+    let one = preview(&storage, &user, None, "plus", "save-five")
+        .await
+        .unwrap();
+    let two = preview(&storage, &user, None, "plus", "SAVE-FIVE")
+        .await
+        .unwrap();
     assert_eq!(one["amount_cents"], 2500);
     assert_eq!(
         serde_json::to_value(storage.coupon_page(&Default::default()).await.unwrap()).unwrap()["items"]
@@ -976,7 +1118,9 @@ async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_suppl
         serde_json::to_value(storage.coupon_page(&Default::default()).await.unwrap()).unwrap();
     assert_eq!(stats["items"][0]["used_count"], 1);
     assert_eq!(stats["items"][0]["reserved_count"], 0);
-    let upgrade = preview(&storage, &user, "pro", "").await.unwrap();
+    let upgrade = preview(&storage, &user, paid.subscription_id.as_deref(), "pro", "")
+        .await
+        .unwrap();
     assert_eq!(upgrade["credit_cents"], 2500);
     assert_eq!(upgrade["amount_cents"], 3500);
     storage.close().await;
@@ -985,8 +1129,12 @@ async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_suppl
 #[tokio::test]
 async fn invalid_coupon_proofs_and_stale_previews_never_create_orders() {
     let (_dir, storage, user) = setup().await;
-    assert!(preview(&storage, &user, "plus", "unknown").await.is_err());
-    let value = preview(&storage, &user, "plus", "").await.unwrap();
+    assert!(
+        preview(&storage, &user, None, "plus", "unknown")
+            .await
+            .is_err()
+    );
+    let value = preview(&storage, &user, None, "plus", "").await.unwrap();
     let proof = value["preview_token"].as_str().unwrap();
     let mut parts: Vec<_> = proof.split('.').map(str::to_owned).collect();
     parts[1].push('A');

@@ -137,14 +137,8 @@ export default function PlansPage() {
                     </p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("售价 / 有效期")}>
-                    {plan.plan_type === "free"
-                      ? "自动提供"
-                      : plan.sale_price_usd === null
-                        ? "未开放购买"
-                        : money(plan.sale_price_usd)}
-                    {plan.plan_type !== "free" && (
-                      <p className="text-xs text-muted-foreground">{plan.duration_days} 天</p>
-                    )}
+                    {plan.sale_price_usd === null ? "未开放购买" : money(plan.sale_price_usd)}
+                    <p className="text-xs text-muted-foreground">{plan.duration_days} 天</p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("模型权限")}>
                     {plan.model_access === "all"
@@ -163,11 +157,7 @@ export default function PlansPage() {
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("允许购买")}>
                     <Badge variant="secondary">
-                      {plan.plan_type === "free"
-                        ? "自动提供"
-                        : plan.allow_purchase
-                          ? "允许购买"
-                          : "未开放购买"}
+                      {plan.allow_purchase ? "允许购买" : "未开放购买"}
                     </Badge>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("操作")}>
@@ -183,11 +173,7 @@ export default function PlansPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={
-                          !resource.ready ||
-                          plan.plan_type === "free" ||
-                          actions.isBusy(`delete-${plan.id}`)
-                        }
+                        disabled={!resource.ready || actions.isBusy(`delete-${plan.id}`)}
                         onClick={() => handleClick(plan)}
                       >
                         删除

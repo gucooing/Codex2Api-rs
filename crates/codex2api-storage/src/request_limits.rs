@@ -2,10 +2,10 @@ use crate::{Result, Storage, StorageError};
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VirtualRpmLimit {
     pub rpm: Option<u32>,
-    pub default_rpm: u32,
+    pub plan_rpm: u32,
     pub effective_rpm: u32,
     pub concurrency: Option<u32>,
-    pub default_concurrency: u32,
+    pub plan_concurrency: u32,
     pub effective_concurrency: u32,
 }
 impl Storage {
@@ -28,16 +28,23 @@ impl Storage {
         }
         let epoch = self.runtime.epoch();
         let (rpm,concurrency):(Option<i64>,Option<i64>)=sqlx::query_as("SELECT (SELECT rpm FROM virtual_rpm_limits WHERE virtual_account_id=?),(SELECT concurrency FROM virtual_concurrency_limits WHERE virtual_account_id=?)").bind(owner).bind(owner).fetch_one(self.pool()).await?;
-        let settings = self.gateway_settings().await?;
+        let account = self
+            .platform_account(owner)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+        let plan = self
+            .virtual_plan(&account.plan_id)
+            .await?
+            .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
         let rpm = rpm.map(|v| v as u32);
         let concurrency = concurrency.map(|v| v as u32);
         let value = VirtualRpmLimit {
             rpm,
-            default_rpm: settings.default_rpm,
-            effective_rpm: rpm.unwrap_or(settings.default_rpm),
+            plan_rpm: plan.rpm_limit(),
+            effective_rpm: rpm.unwrap_or(plan.rpm_limit()),
             concurrency,
-            default_concurrency: settings.default_concurrency,
-            effective_concurrency: concurrency.unwrap_or(settings.default_concurrency),
+            plan_concurrency: plan.concurrency_limit(),
+            effective_concurrency: concurrency.unwrap_or(plan.concurrency_limit()),
         };
         self.runtime
             .cache(key, &value, epoch, std::time::Duration::from_secs(30));

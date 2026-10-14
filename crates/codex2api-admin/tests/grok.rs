@@ -158,23 +158,19 @@ async fn presets_and_custom_models_are_equal_catalog_entries_and_grok_plans_are_
     assert_eq!(saved.status(), StatusCode::OK);
     let saved = body(saved).await;
     let user=body(f.request("POST","/admin/api/users",json!({"username":"grok-customer","password":"fixture-password","name":"Customer","email":"customer@example.test","enabled":true,"revision":null})).await).await;
-    let subs = f.get("/admin/api/subscriptions").await;
-    let owned = subs["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|s| s["user_id"] == user["id"])
-        .collect::<Vec<_>>();
-    assert_eq!(owned.len(), 2);
-    let grok_sub = owned.iter().find(|s| s["provider_id"] == "grok").unwrap();
-    let id = grok_sub["virtual_account_id"].as_str().unwrap();
-    assert_eq!(f.request("PUT",&format!("/admin/api/subscriptions/{id}"),json!({"user_id":user["id"],"plan_id":saved["id"],"expires_at":"2099-01-01T00:00:00Z","enabled":true,"reissue":false,"revision":grok_sub["revision"]})).await.status(),StatusCode::OK);
-    let effective = f
-        .storage
-        .effective_platform_account(id)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(
+        f.get(&format!(
+            "/admin/api/subscriptions?user_id={}",
+            user["id"].as_str().unwrap()
+        ))
+        .await["total"],
+        0
+    );
+    let created=f.request("POST","/admin/api/subscriptions",json!({"user_id":user["id"],"plan_id":saved["id"],"expires_at":"2099-01-01T00:00:00Z","enabled":true,"reissue":false,"revision":null})).await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = body(created).await;
+    let id = created["id"].as_str().unwrap();
+    let effective = f.storage.platform_account(id).await.unwrap().unwrap();
     assert_eq!(effective.plan_type, "supergrok");
     assert!(
         f.storage

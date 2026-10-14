@@ -26,7 +26,7 @@ type Props = {
   viewedId: string | undefined;
   setViewedId: Dispatch<SetStateAction<string | undefined>>;
   viewed: Plan | undefined;
-  purchaseStatus: (plan: Plan) => { disabled: boolean; label: string };
+  purchaseDisabled: boolean;
   beginCheckout: (plan: Plan) => void;
 };
 
@@ -34,7 +34,7 @@ export function PlanDetailDialog({
   viewedId,
   setViewedId,
   viewed,
-  purchaseStatus,
+  purchaseDisabled,
   beginCheckout,
 }: Props) {
   return (
@@ -61,13 +61,15 @@ export function PlanDetailDialog({
                     : (viewed?.provider_id ?? "—")}
               </dd>
               <dt className="text-muted-foreground">售价</dt>
-              <dd>
-                {viewed?.sale_price_usd == null
-                  ? "暂未定价"
-                  : `${money(viewed.sale_price_usd)} USD`}
-              </dd>
+              <dd>{viewed ? `${money(viewed.sale_price_usd)} USD` : "—"}</dd>
               <dt className="text-muted-foreground">有效期</dt>
               <dd>{viewed ? `${viewed.duration_days} 天` : "—"}</dd>
+              <dt className="text-muted-foreground">RPM 限制</dt>
+              <dd>{viewed?.rpm_limit === 0 ? "不限" : (viewed?.rpm_limit ?? "—")}</dd>
+              <dt className="text-muted-foreground">并发限制</dt>
+              <dd>
+                {viewed?.concurrency_limit === 0 ? "不限" : (viewed?.concurrency_limit ?? "—")}
+              </dd>
               <dt className="text-muted-foreground">可用模型</dt>
               <dd>{viewed?.models.length ?? "—"}</dd>
             </dl>
@@ -154,12 +156,12 @@ export function PlanDetailDialog({
             关闭
           </Button>
           <Button
-            disabled={!viewed || purchaseStatus(viewed).disabled}
+            disabled={!viewed || purchaseDisabled}
             onClick={() => {
               if (viewed) beginCheckout(viewed);
             }}
           >
-            {viewed ? purchaseStatus(viewed).label : "下单"}
+            下单
           </Button>
         </DialogFooter>
       </DialogContent>

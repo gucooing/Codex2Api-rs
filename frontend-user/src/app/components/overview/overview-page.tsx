@@ -116,7 +116,7 @@ export default function OverviewPage() {
                   <TableCell>{date(item.expires_at)}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">
-                      {!item.enabled ? "已停用" : item.plan_type === "free" ? "Free" : "有效"}
+                      {!item.enabled ? "已停用" : item.expired ? "已到期" : "有效"}
                     </Badge>
                   </TableCell>
                   <TableCell className="min-w-60">

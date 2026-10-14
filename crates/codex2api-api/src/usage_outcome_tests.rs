@@ -104,6 +104,9 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
     ];
     let mut count = 0;
     for (name, event, kind, status) in cases {
+        let failure = ResponseOutcome::from_value(&event, None).unwrap();
+        assert_eq!(failure.failure().unwrap().kind.as_str(), kind, "{name}");
+        assert_eq!(failure.failure().unwrap().status, status, "{name}");
         for transport in ["http", "websocket"] {
             let id = format!("{name}-{transport}");
             let mut log = RequestLog::begin(
@@ -154,11 +157,9 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
                     "failed"
                 }
             );
-            assert_eq!(record.failure_kind.as_deref(), Some(kind), "{id}");
             if name == "content-filter" {
                 assert_eq!(record.error_code.as_deref(), Some("content_filter"));
             }
-            assert_eq!(record.failure_status, status, "{id}");
             assert_eq!(record.http_status, (transport == "http").then_some(200));
         }
     }
@@ -223,7 +224,6 @@ async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_ava
             record.status,
             if completed { "completed" } else { "failed" }
         );
-        assert_eq!(record.failure_status, (!completed).then_some(502));
         if completed {
             assert_eq!(record.input_tokens, Some(7));
             assert_eq!(record.output_tokens, Some(3));

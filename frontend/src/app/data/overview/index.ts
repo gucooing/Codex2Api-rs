@@ -1,7 +1,7 @@
 "use client";
 import { type ChartConfig } from "@/components/ui/chart";
 import { toastError, useErrorToast } from "@/lib/actions";
-import { query, type Consumer, type List, type Supplier } from "@/lib/api";
+import { query, type SubscriptionAccount, type List, type Supplier } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import { usePreference, useSavedFilters } from "@/lib/preferences";
 import {
@@ -81,9 +81,9 @@ export function useOverviewStatistics() {
   const selectedSupplier = filters.supplier_id
     ? { id: filters.supplier_id, display_name: filters.supplier_label, email: "" }
     : null;
-  const consumers = useResource<List<Consumer>>(
+  const consumers = useResource<List<SubscriptionAccount>>(
     userLookup.open
-      ? `/consumers/options${query({ search: userLookup.search.trim(), limit: 5 })}`
+      ? `/subscriptions/options${query({ search: userLookup.search.trim(), limit: 5 })}`
       : null,
     userLookup.search.trim() ? 250 : 0,
   );

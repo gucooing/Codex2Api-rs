@@ -43,7 +43,7 @@ async fn log_pages_report_totals_and_jump_without_crossing_accounts() {
         let actual = page.min(3);
         let logs = f
             .get(&format!(
-                "/admin/api/consumers/{owner}/logs?page={page}&page_size=50"
+                "/admin/api/subscriptions/{owner}/logs?page={page}&page_size=50"
             ))
             .await;
         for value in [&logs] {
@@ -62,14 +62,14 @@ async fn log_pages_report_totals_and_jump_without_crossing_accounts() {
         assert!(!logs.to_string().contains("other-only"));
     }
     for size in [10, 20, 30, 50] {
-        for path in [format!("/admin/api/consumers/{owner}/logs")] {
+        for path in [format!("/admin/api/subscriptions/{owner}/logs")] {
             let page = f.get(&format!("{path}?page=2&page_size={size}")).await;
             assert_eq!(page["page_size"], size);
             assert_eq!(page["items"].as_array().unwrap().len(), size as usize);
         }
     }
     for path in [
-        format!("/admin/api/consumers/{owner}/logs"),
+        format!("/admin/api/subscriptions/{owner}/logs"),
         "/admin/api/usage".into(),
     ] {
         let default = f.get(&path).await;
@@ -89,14 +89,14 @@ async fn log_pages_report_totals_and_jump_without_crossing_accounts() {
     }
     let filtered = f
         .get(&format!(
-            "/admin/api/consumers/{owner}/logs?page=2&page_size=50&result=success&method=GET&path=/page/"
+            "/admin/api/subscriptions/{owner}/logs?page=2&page_size=50&result=success&method=GET&path=/page/"
         ))
         .await;
     assert_eq!(filtered["total"], 55);
     assert_eq!(filtered["items"].as_array().unwrap().len(), 5);
     let empty = f
         .get(&format!(
-            "/admin/api/consumers/{owner}/logs?page=3&path=missing"
+            "/admin/api/subscriptions/{owner}/logs?page=3&path=missing"
         ))
         .await;
     assert_eq!(empty["total"], 0);
@@ -212,7 +212,7 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
             .unwrap();
         suppliers.push(supplier.id);
     }
-    for path in ["/admin/api/consumers", "/admin/api/suppliers"] {
+    for path in ["/admin/api/subscriptions", "/admin/api/suppliers"] {
         assert_eq!(f.get(path).await["items"].as_array().unwrap().len(), 7);
         assert_eq!(
             f.get(&format!("{path}/options?limit=5")).await["items"]
@@ -252,8 +252,8 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
         }
     }
     for (path, search, id) in [
-        ("consumers", "sEr-6", "consumer-6"),
-        ("consumers", "AIL-6@EXAMPLE", "consumer-6"),
+        ("subscriptions", "sEr-6", "consumer-6"),
+        ("subscriptions", "AIL-6@EXAMPLE", "consumer-6"),
         ("suppliers", "PLIER-6", suppliers[6].as_str()),
         ("suppliers", "REAM-6@EXAMPLE", suppliers[6].as_str()),
     ] {
@@ -282,9 +282,12 @@ async fn account_selectors_search_live_lists_and_filter_usage_by_exact_ids() {
         f.get("/admin/api/usage?supplier_id=missing").await["total"],
         0
     );
-    f.storage.delete_virtual_user("consumer-6").await.unwrap();
+    f.storage
+        .delete_user_subscription("consumer-6")
+        .await
+        .unwrap();
     assert!(
-        f.get("/admin/api/consumers/options?search=User-6&limit=5")
+        f.get("/admin/api/subscriptions/options?search=User-6&limit=5")
             .await["items"]
             .as_array()
             .unwrap()

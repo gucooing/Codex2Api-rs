@@ -114,7 +114,7 @@ impl UserStore {
         let page = self
             .storage
             .read_list::<crate::VirtualPlan>(query, "p.*", "virtual_plans p", "p.rowid", |q| {
-                q.push(" AND p.allow_purchase=1 AND p.plan_type!='free'");
+                q.push(" AND p.allow_purchase=1 AND json_type(p.config,'$.sale_price_usd')='text' AND trim(json_extract(p.config,'$.sale_price_usd'))!=''");
                 crate::list_query::exact(q, "p.provider_id", &query.provider_id);
                 crate::list_query::search(
                     q,
@@ -124,14 +124,16 @@ impl UserStore {
             })
             .await?;
         for plan in page.items {
-            let price = plan
-                .sale_price_cents()?
-                .map(|value| crate::format_units(value, 2));
+            let price = crate::format_units(
+                plan.sale_price_cents()?
+                    .ok_or(crate::StorageError::InvalidAdminUpdate("套餐未配置售价"))?,
+                2,
+            );
             let models: Vec<(String,String,String)> = sqlx::query_as("SELECT m.provider_id,m.model,m.kind FROM model_catalog m JOIN virtual_plans p ON p.provider_id=m.provider_id WHERE p.id=? AND m.enabled=1 AND m.deleted=0 AND (json_extract(p.config,'$.model_access')='all' OR (json_extract(p.config,'$.model_access')='selected' AND EXISTS(SELECT 1 FROM json_each(p.config,'$.models') selected WHERE json_extract(selected.value,'$.provider_id')=m.provider_id AND json_extract(selected.value,'$.model')=m.model))) ORDER BY m.provider_id,m.model")
                 .bind(&plan.id).fetch_all(self.storage.pool()).await?;
             let models: Vec<Value> = models.into_iter().map(|(provider,model,kind)|json!({"provider_id":provider,"model":model,"kind":kind})).collect();
             items.push(json!({"id":plan.id,"name":plan.name,"provider_id":plan.provider_id,"plan_type":plan.plan_type,
-                "description":plan.description(),"sale_price_usd":price,"duration_days":plan.duration_days()?,"revision":plan.revision,
+                "rpm_limit":plan.rpm_limit(),"concurrency_limit":plan.concurrency_limit(),"description":plan.description(),"sale_price_usd":price,"duration_days":plan.duration_days()?,"revision":plan.revision,
                 "model_access":plan.config["model_access"],"models":models,"spending_windows":crate::plan_spending_windows(&plan.config)?}));
         }
         Ok(crate::ListPage {
@@ -158,7 +160,7 @@ impl UserStore {
         for subscription in page.items {
             let account = self
                 .storage
-                .effective_platform_account(&subscription.virtual_account_id)
+                .platform_account(&subscription.virtual_account_id)
                 .await?
                 .ok_or_else(|| {
                     crate::StorageError::AccountNotFound(subscription.virtual_account_id.clone())
@@ -171,10 +173,7 @@ impl UserStore {
             let pricing:Option<(Option<i64>,i64)>=sqlx::query_as("SELECT unit_price_cents,duration_days FROM subscription_pricing_periods WHERE subscription_id=? AND superseded_at_ms IS NULL AND starts_at_ms<=? AND ends_at_ms>? ORDER BY starts_at_ms DESC LIMIT 1")
                 .bind(&account.id).bind(chrono::Utc::now().timestamp_millis()).bind(chrono::Utc::now().timestamp_millis()).fetch_optional(self.storage.pool()).await?;
             let now = chrono::Utc::now().timestamp();
-            let anchor = self
-                .storage
-                .subscription_anchor_at(&account.id, now)
-                .await?;
+            let anchor = self.storage.subscription_anchor(&account.id).await?;
             let raw_windows = self
                 .storage
                 .nested_spending_windows(
@@ -195,8 +194,9 @@ impl UserStore {
                 windows.push(json!({"duration_seconds":window["limit_window_seconds"],"reset_at":window["reset_at"],"used_percent":window["used_percent"],
                     "used_usd":window["used_usd"],"limit_usd":window["limit_usd"],"remaining_usd":window["effective_remaining_usd"],"unpriced_requests":unpriced}));
             }
-            items.push(json!({"spending_windows":windows,"current_price_cents":pricing.as_ref().and_then(|p|p.0),"current_duration_days":pricing.map(|p|p.1),"id":account.id,"provider_id":account.provider_id,"plan_id":plan.id,"plan_name":plan.name,
-                "plan_type":account.plan_type,"expires_at":account.subscription_expires_at,"enabled":account.enabled,"expired":false,"revision":subscription.revision}));
+            let limits = self.storage.virtual_rpm_limit(&account.id).await?;
+            items.push(json!({"rpm_limit":limits.effective_rpm,"concurrency_limit":limits.effective_concurrency,"spending_windows":windows,"current_price_cents":pricing.as_ref().and_then(|p|p.0),"current_duration_days":pricing.map(|p|p.1),"id":account.id,"provider_id":account.provider_id,"plan_id":plan.id,"plan_name":plan.name,
+                "plan_type":account.plan_type,"expires_at":account.subscription_expires_at,"enabled":account.enabled,"expired":subscription.expired(),"revision":subscription.revision}));
         }
         Ok(crate::ListPage {
             items,
@@ -204,6 +204,15 @@ impl UserStore {
             page: page.page,
             page_size: page.page_size,
         })
+    }
+    pub async fn subscription_options(&self, owner: &str) -> Result<Value> {
+        self.storage
+            .require_account_scope(owner, crate::AccountScope::User)
+            .await?;
+        let items = self.storage.user_subscriptions(Some(owner), true).await?;
+        Ok(
+            json!({"items":items.iter().map(crate::UserSubscription::user_view).collect::<Vec<_>>()}),
+        )
     }
     pub async fn devices(
         &self,
@@ -219,12 +228,35 @@ impl UserStore {
         Ok(sqlx::query("DELETE FROM virtual_devices WHERE id=? AND virtual_account_id IN(SELECT s.id FROM platform_accounts s JOIN user_identities u ON u.id=s.user_id WHERE u.id=? AND u.enabled=1 AND u.kind='regular')")
             .bind(id).bind(owner).execute(self.storage.pool()).await?.rows_affected()==1)
     }
-    pub async fn user_platform_account(
+    pub async fn oauth_subscriptions(&self, user: &str, provider: &str) -> Result<Vec<Value>> {
+        let mut items = Vec::new();
+        for account in self.storage.oauth_subscriptions(user, provider).await? {
+            let plan = self
+                .storage
+                .virtual_plan(&account.plan_id)
+                .await?
+                .ok_or_else(|| crate::StorageError::AccountNotFound(account.plan_id.clone()))?;
+            items.push(json!({"id":account.id,"plan_name":plan.name,"plan_type":account.plan_type,"expires_at":account.subscription_expires_at}));
+        }
+        Ok(items)
+    }
+    pub async fn bind_browser_user(
         &self,
-        user: &str,
+        flow: &str,
+        user: &User,
+        session: Option<&str>,
+    ) -> Result<bool> {
+        self.storage.bind_browser_user(flow, user, session).await
+    }
+    pub async fn select_browser_subscription(
+        &self,
+        flow: &str,
+        id: &str,
         provider: &str,
     ) -> Result<Option<PlatformAccount>> {
-        self.storage.user_platform_account(user, provider).await
+        self.storage
+            .select_browser_subscription(flow, id, provider)
+            .await
     }
     pub async fn create_oauth_browser_flow(
         &self,

@@ -24,12 +24,14 @@ pub(super) fn router() -> Router<AdminState> {
 
 pub async fn plan_options(State(s): State<AdminState>, Query(q): Query<OptionsQuery>) -> ApiResult {
     Ok(Json(
-        json!({"items":s.storage.plan_options(&q.provider_id,q.paid_only).await?}),
+        json!({"items":s.storage.plan_options(&q.provider_id).await?}),
     ))
 }
 
 fn plan_dto(p: &VirtualPlan) -> dto::Plan {
     dto::Plan {
+        rpm_limit: p.rpm_limit(),
+        concurrency_limit: p.concurrency_limit(),
         description: p.description().into(),
         id: p.id.clone(),
         provider_id: p.provider_id.clone(),
@@ -76,6 +78,8 @@ pub async fn plans(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanInput {
+    rpm_limit: u32,
+    concurrency_limit: u32,
     description: Option<String>,
     plan_type: String,
     name: String,
@@ -155,8 +159,8 @@ async fn save_plan(s: AdminState, id: Option<String>, f: PlanInput) -> ApiResult
     let description = f
         .description
         .unwrap_or_else(|| old.as_ref().map_or("", VirtualPlan::description).to_owned());
-    let config = json!({"description":description,"model_access":f.model_access,"models":if f.model_access=="selected"{f.models}else{vec![]},"spending_windows":f.spending_windows,
-        "sale_price_usd":if f.plan_type=="free"{None}else{f.sale_price_usd.filter(|v|!v.trim().is_empty())},"duration_days":f.duration_days,
+    let config = json!({"rpm_limit":f.rpm_limit,"concurrency_limit":f.concurrency_limit,"description":description,"model_access":f.model_access,"models":if f.model_access=="selected"{f.models}else{vec![]},"spending_windows":f.spending_windows,
+        "sale_price_usd":f.sale_price_usd.filter(|v|!v.trim().is_empty()),"duration_days":f.duration_days,
         "supplier_tag_id":f.supplier_tag_id.filter(|v|!v.is_empty())});
     let plan = VirtualPlan {
         id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),

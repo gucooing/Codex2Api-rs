@@ -52,9 +52,6 @@ pub async fn save_gateway(
     State(s): State<AdminState>,
     Json(f): Json<GatewaySettings>,
 ) -> ApiResult {
-    if f.default_rpm > 1_000_000 || f.default_concurrency > 1_000_000 {
-        return Err(ApiError::bad("默认 RPM 与并发限制须为 0 到 1000000 的整数"));
-    }
     if !matches!(f.scheduler_mode.as_str(), "advanced" | "traditional")
         || !(1..=100).contains(&f.pool_top_k)
         || !(60..=604800).contains(&f.sticky_ttl_seconds)

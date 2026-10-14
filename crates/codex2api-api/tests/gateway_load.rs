@@ -200,12 +200,8 @@ async fn thousand_suppliers_three_thousand_requests() {
     let supplier_count = 1000;
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("load.sqlite")).await.unwrap();
-    let mut settings = storage.gateway_settings().await.unwrap();
-    settings.default_concurrency = 0;
-    settings.default_rpm = 0;
-    storage.save_gateway_settings(&settings).await.unwrap();
-    let mut free = storage.platform_free_plan(provider).await.unwrap();
-    free.config = json!({"model_access":"all","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"1000"}]});
+    let mut free = storage.plan_fixture(provider).await.unwrap();
+    free.config = json!({"rpm_limit":0,"concurrency_limit":0,"model_access":"all","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"1000"}]});
     storage
         .save_virtual_plan(&free, Some(free.revision))
         .await
@@ -218,7 +214,7 @@ async fn thousand_suppliers_three_thousand_requests() {
         name: "Load fixture".into(),
         email: "fixture@example.test".into(),
         plan_id: free.id,
-        plan_type: "free".into(),
+        plan_type: free.plan_type.clone(),
         subscription_expires_at: None,
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -329,7 +325,7 @@ async fn thousand_suppliers_three_thousand_requests() {
             .unwrap();
     }
     storage
-        .save_pool_route(&owner.id, provider, Some("load-pool"), None)
+        .save_pool_route(&owner.id, provider, Some("load-pool"), Some(1))
         .await
         .unwrap();
     assert_eq!(

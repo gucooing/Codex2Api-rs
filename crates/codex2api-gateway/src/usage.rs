@@ -214,15 +214,12 @@ impl ApiLog {
         self.record.total_ms =
             Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
         if let Some(failure) = outcome.and_then(ResponseOutcome::failure) {
-            self.record.failure_kind = Some(failure.kind.as_str().into());
-            self.record.failure_status = failure.status.map(i64::from);
             self.record.error_code = failure.code.clone();
             self.record.error_message = failure
                 .message
                 .as_deref()
                 .map(|message| message.chars().take(512).collect());
         } else if outcome.is_none() {
-            self.record.failure_kind = Some("transport".into());
             self.record.error_code = Some("request_interrupted".into());
             self.record.error_message = Some("请求处理已中断".into());
         }

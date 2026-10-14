@@ -72,11 +72,9 @@ export type SupplierCycleUsage = {
   unpriced_requests: number;
   missing_token_requests: number;
 };
-export type Consumer = {
-  user_kind: "regular" | "virtual";
+export type SubscriptionAccount = {
   revision: number;
-  user_revision: number;
-  user_id: string | null;
+  user_id: string;
   id: string;
   username: string;
   name: string;
@@ -84,18 +82,15 @@ export type Consumer = {
   provider_id: string;
   plan_id: string;
   plan_name: string;
-  subscription_status: "active" | "expired" | "free";
+  subscription_status: "active" | "expired";
   plan_type: string;
   subscription_expires_at: string | null;
   enabled: boolean;
   created_at: string;
-  effective_plan: string;
 };
-export type ConsumerWrite = Pick<
-  Consumer,
-  "username" | "name" | "email" | "provider_id" | "plan_id" | "subscription_expires_at" | "enabled"
-> & { password: string; revision: number | null; user_revision: number | null };
 export type Plan = {
+  rpm_limit: number;
+  concurrency_limit: number;
   description: string;
   sale_price_usd: string | null;
   duration_days: number;
@@ -256,8 +251,6 @@ export type UsageRecord = {
   total_ms: number | null;
   requested_at_ms: number;
   status: string;
-  failure_kind: string | null;
-  failure_status: number | null;
   error_code: string | null;
   error_message: string | null;
   cost_nano_usd: number | null;
@@ -299,8 +292,6 @@ export type AccountUsage = {
 export type GatewaySettings = {
   ua_mode: "blacklist" | "whitelist";
   ua_rules: string[];
-  default_rpm: number;
-  default_concurrency: number;
   scheduler_mode: "advanced" | "traditional";
   sticky_weighted: boolean;
   sticky_escape: boolean;
@@ -324,10 +315,10 @@ export type SupplierTag = {
 };
 export type RpmLimit = {
   rpm: number | null;
-  default_rpm: number;
+  plan_rpm: number;
   effective_rpm: number;
   concurrency: number | null;
-  default_concurrency: number;
+  plan_concurrency: number;
   effective_concurrency: number;
 };
 export type DesktopSettings = {

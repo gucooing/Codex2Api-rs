@@ -350,25 +350,13 @@ async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
                 .await
                 .unwrap();
         }
-        let mut plan = storage.platform_free_plan(provider).await.unwrap();
+        let mut plan = storage.plan_fixture(provider).await.unwrap();
         plan.id = format!("paid-{provider}");
         plan.plan_type = tier.into();
         plan.config["supplier_tag_id"] = serde_json::json!(format!("{provider}-first"));
         storage.save_virtual_plan(&plan, None).await.unwrap();
         let subscription = storage
-            .user_platform_account(&user.id, provider)
-            .await
-            .unwrap()
-            .unwrap();
-        storage
-            .save_user_subscription(codex2api_storage::SubscriptionChange {
-                reissue: false,
-                user_id: &user.id,
-                plan_id: &plan.id,
-                expires_at: None,
-                enabled: true,
-                revision: Some(1),
-            })
+            .grant_subscription_fixture(&user.id, &plan.id)
             .await
             .unwrap();
         assert_eq!(
@@ -432,7 +420,7 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), None)
+        .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
         .await
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -609,7 +597,7 @@ async fn obsolete_request_cooldowns_are_ignored_and_migrated_without_clearing_re
         .unwrap();
     assert!(
         storage
-            .save_pool_route("v", "chatgpt", Some("pool"), None)
+            .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
             .await
             .unwrap()
     );
@@ -686,7 +674,7 @@ async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
         .unwrap();
     consumer(&storage, "v").await;
     storage
-        .save_pool_route("v", "chatgpt", Some("a"), None)
+        .save_pool_route("v", "chatgpt", Some("a"), Some(1))
         .await
         .unwrap();
     let original = storage.require_account("s1").await.unwrap();
@@ -768,7 +756,7 @@ async fn concurrent_pool_configuration_is_provider_isolated() {
         consumer(&storage, &owner).await;
         let s = storage.clone();
         handles.push(tokio::spawn(async move {
-            s.save_pool_route(&owner, "chatgpt", Some("pool"), None)
+            s.save_pool_route(&owner, "chatgpt", Some("pool"), Some(1))
                 .await
                 .unwrap()
         }));
@@ -856,7 +844,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), None)
+        .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
         .await
         .unwrap();
     let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -952,7 +940,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), None)
+        .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
         .await
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -1177,7 +1165,7 @@ async fn rpm_is_atomic_sliding_and_process_local_and_honors_policy() {
     consumer(&storage, "v").await;
     assert_eq!(
         storage.virtual_rpm_limit("v").await.unwrap().effective_rpm,
-        20
+        40
     );
     storage.save_virtual_rpm_limit("v", Some(2)).await.unwrap();
     let mut attempts = Vec::new();
@@ -1228,11 +1216,19 @@ async fn rpm_is_atomic_sliding_and_process_local_and_honors_policy() {
     storage.save_virtual_rpm_limit("v", None).await.unwrap();
     assert_eq!(
         storage.virtual_rpm_limit("v").await.unwrap().effective_rpm,
-        20
+        40
     );
-    let mut settings = storage.gateway_settings().await.unwrap();
-    settings.default_rpm = 1;
-    storage.save_gateway_settings(&settings).await.unwrap();
+    let account = storage.platform_account("v").await.unwrap().unwrap();
+    let mut plan = storage
+        .virtual_plan(&account.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.config["rpm_limit"] = 1.into();
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
+        .await
+        .unwrap();
     assert_eq!(
         storage.virtual_rpm_limit("v").await.unwrap().effective_rpm,
         1
@@ -1263,7 +1259,7 @@ async fn plan_display_tier_updates_members_without_resetting_subscription_or_bil
             .unwrap()
     );
     let after = storage.platform_account("v").await.unwrap().unwrap();
-    assert_eq!(after.effective_plan(), "prolite");
+    assert_eq!(after.plan_type.as_str(), "prolite");
     assert_eq!(after.id, before.id);
     assert_eq!(
         after.subscription_expires_at,

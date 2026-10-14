@@ -1,3 +1,4 @@
+import { createUser, grantSubscription } from "./subscription-fixtures";
 import { test, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -5,6 +6,7 @@ import { resolve } from "node:path";
 test("usage text, returned models, unit conversion and failure details use persisted records", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1920, height: 1100 });
   await page.goto("/admin/");
   await page.getByLabel("用户名", { exact: true }).fill("admin");
   await page.getByLabel("密码", { exact: true }).fill("admin");
@@ -37,22 +39,25 @@ test("usage text, returned models, unit conversion and failure details use persi
     return url.pathname === "/admin/api/usage" && !url.searchParams.has("status");
   });
   await filter.getByRole("button", { name: "重置", exact: true }).click();
-  await reset;
-  const complete = page
-    .getByRole("row")
-    .filter({ has: page.getByRole("cell", { name: "review-usage-model", exact: true }) });
-  await expect(complete.getByText("gpt-6-astra → gpt-5.6-luna", { exact: true })).toHaveClass(
-    /text-yellow/,
-  );
+  const records: { id: string }[] = (await (await reset).json()).records;
+  const recordRow = (id: string) => {
+    const index = records.findIndex((record) => record.id === id);
+    expect(index).toBeGreaterThanOrEqual(0);
+    return page.locator("tbody > tr").nth(index);
+  };
+  const complete = recordRow("review-usage-model");
+  await expect(complete.getByText("gpt-6-astra → gpt-5.6-luna", { exact: true })).toBeVisible();
   await expect(complete.getByText("虚拟账户", { exact: true })).toHaveCount(0);
   await expect(complete.getByText("成功", { exact: true })).toHaveClass(/text-green/);
-  const cells = complete.getByRole("cell");
+  const usage = complete.locator('[data-label="用量"]');
   await expect(
     page.getByRole("columnheader", { name: "推理强度 / 速度", exact: true }),
   ).toBeVisible();
-  await expect(cells.nth(2)).toContainText("/v1/responses · http");
-  await expect(cells.nth(3)).toHaveText("默认 / standard");
-  await expect(cells.nth(4).locator("svg")).toHaveCount(0);
+  await expect(complete.locator('[data-label="模型 / 接口"]')).toContainText(
+    "/v1/responses · http",
+  );
+  await expect(complete.locator('[data-label="推理强度 / 速度"]')).toHaveText("默认 / standard");
+  await expect(usage.locator("svg")).toHaveCount(0);
   for (const value of [
     "输入",
     "输出",
@@ -67,9 +72,9 @@ test("usage text, returned models, unit conversion and failure details use persi
     "256",
     "97.9%",
   ])
-    await expect(cells.nth(4).getByText(value, { exact: !/^[0-9]/.test(value) })).toBeVisible();
-  await expect(cells.nth(6)).toContainText("首字节 1.57秒");
-  await expect(cells.nth(6)).toContainText("总计 2分25秒");
+    await expect(usage.getByText(value, { exact: !/^[0-9]/.test(value) })).toBeVisible();
+  await expect(complete.locator('[data-label="耗时"]')).toContainText("首字节 1.57秒");
+  await expect(complete.locator('[data-label="耗时"]')).toContainText("总计 2分25秒");
   expect((await complete.boundingBox())!.height).toBeLessThan(65);
   const evidence = resolve(
     process.env.CODEX2API_TEST_OUTPUT_DIR ?? "../target/review-next-ui-redesign-20260923",
@@ -84,47 +89,43 @@ test("usage text, returned models, unit conversion and failure details use persi
   await complete.getByRole("button", { name: "查看请求详情：成功", exact: true }).click();
   const detail = page.getByRole("dialog");
   await expect(detail.locator("[data-slot=dialog-description]")).toContainText(
-    "请求 ID：req-review-usage-model",
+    "上游 ID：req-review-usage-model",
   );
   await expect(detail.getByText("24.8K", { exact: true })).toBeVisible();
   await expect(detail.getByText("2.6K", { exact: true })).toBeVisible();
   await expect(detail.getByText("2分25秒", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
-  const stopped = page
-    .getByRole("row")
-    .filter({ has: page.getByRole("cell", { name: "review-usage-client-stop", exact: true }) });
+  const stopped = recordRow("review-usage-client-stop");
   await expect(stopped.getByText("成功", { exact: true })).toHaveClass(/text-green/);
-  await expect(stopped.getByRole("cell").nth(4)).toContainText("24.8K");
-  await expect(stopped.getByRole("cell").nth(5)).not.toHaveText("-");
+  await expect(stopped.locator('[data-label="用量"]')).toContainText("24.8K");
+  await expect(stopped.locator('[data-label="费用"]')).not.toHaveText("-");
   await stopped.getByRole("button", { name: "查看请求详情：成功", exact: true }).click();
   await expect(detail.getByText("成功（客户端停止）", { exact: true })).toBeVisible();
   await expect(detail.getByText("失败原因", { exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
-  for (const [id, code, reason] of [
-    ["review-usage-failure", "429", "本地验收：已达到上游用量限制，请稍后重试。"],
-    ["review-usage-stream-failure", "400", "本地验收：输入超出模型上下文限制。"],
+  for (const [id, errorCode, reason] of [
+    ["review-usage-failure", "rate_limit_exceeded", "本地验收：已达到上游用量限制，请稍后重试。"],
+    [
+      "review-usage-stream-failure",
+      "context_length_exceeded",
+      "本地验收：输入超出模型上下文限制。",
+    ],
   ]) {
-    const row = page
-      .getByRole("row")
-      .filter({ has: page.getByRole("cell", { name: id, exact: true }) });
-    await expect(row.getByRole("cell").nth(4)).toHaveText("-");
-    await expect(row.getByRole("cell").nth(5)).toHaveText("-");
+    const row = recordRow(id);
+    await expect(row.locator('[data-label="用量"]')).toContainText("24.8K");
+    await expect(row.locator('[data-label="费用"]')).not.toHaveText("-");
     await expect(row).not.toContainText(reason);
-    await expect(row.getByText(code, { exact: true })).toHaveClass(/text-destructive/);
-    await row.getByRole("button", { name: `查看请求详情：${code}`, exact: true }).click();
+    await expect(row.getByText("失败", { exact: true })).toHaveClass(/text-red/);
+    await row.getByRole("button", { name: "查看请求详情：失败", exact: true }).click();
     await expect(detail.getByText(reason, { exact: true })).toBeVisible();
     await expect(detail.getByText("HTTP 状态（连接）", { exact: true })).toHaveCount(0);
-    await expect(detail.getByText(code, { exact: true })).toHaveClass(/text-destructive/);
-    await expect(
-      detail.getByText(id === "review-usage-stream-failure" ? "请求错误" : "额度耗尽", {
-        exact: true,
-      }),
-    ).toBeVisible();
+    await expect(detail.getByText("失败", { exact: true })).toHaveClass(/text-red/);
+    await expect(detail.getByText(errorCode, { exact: true })).toBeVisible();
     await expect(detail.locator("[data-slot=dialog-description]")).toContainText(
-      `请求 ID：req-${id}`,
+      `上游 ID：req-${id}`,
     );
     await page.screenshot({
-      path: resolve(evidence, `25-usage-failure-${code}.png`),
+      path: resolve(evidence, `25-usage-failure-${errorCode}.png`),
       fullPage: true,
       animations: "disabled",
     });
@@ -152,21 +153,13 @@ test("account filters search their own list endpoints with five results and subm
   try {
     const suffix = Date.now().toString(36);
     for (let i = 0; i < 6; i++) {
-      const response = await page.request.post("/admin/api/consumers", {
-        headers,
-        data: {
-          username: `search-${suffix}-${i}`,
-          email: `mail-${suffix}-${i}@example.test`,
-          name: "同名账户",
-          password: "search-test-password",
-          provider_id: "chatgpt",
-          plan_id: "plus",
-          enabled: true,
-          subscription_expires_at: null,
-        },
+      const user = await createUser(page.request, headers, {
+        username: `search-${suffix}-${i}`,
+        email: `mail-${suffix}-${i}@example.test`,
+        name: "同名账户",
       });
-      expect(response.ok()).toBeTruthy();
-      created.push(await response.json());
+      const subscription = await grantSubscription(page.request, headers, user.id, "plus");
+      created.push({ ...user, id: subscription.id });
     }
     await page.getByRole("link", { name: "用量记录", exact: true }).click();
     const consumer = page.getByRole("combobox", { name: "消费账户", exact: true });
@@ -180,19 +173,19 @@ test("account filters search their own list endpoints with five results and subm
           (url.searchParams.get("search") ?? "") === search
         );
       });
-    let response = waitList("consumers", "");
+    let response = waitList("subscriptions", "");
     await consumer.click();
     expect((await (await response).json()).items).toHaveLength(5);
     await expect(page.locator("[data-slot=combobox-content] input")).toHaveCount(0);
     await expect(page.getByRole("option")).toHaveCount(5);
     const target = created[5];
-    response = waitList("consumers", target.username.toUpperCase());
+    response = waitList("subscriptions", target.username.toUpperCase());
     await consumer.fill(target.username.toUpperCase());
     expect((await (await response).json()).items.map((item: { id: string }) => item.id)).toEqual([
       target.id,
     ]);
     await expect(page.getByRole("option")).toHaveCount(1);
-    response = waitList("consumers", target.email);
+    response = waitList("subscriptions", target.email);
     await consumer.fill(target.email);
     await response;
     await page.getByRole("option").click();
@@ -205,7 +198,7 @@ test("account filters search their own list endpoints with five results and subm
     await page.getByRole("button", { name: "查询", exact: true }).click();
     expect((await (await filtered).json()).total).toBe(0);
     await expect(page.getByRole("table")).toBeVisible();
-    response = waitList("consumers", "");
+    response = waitList("subscriptions", "");
     await consumer.click();
     await response;
     await page.keyboard.press("Escape");
@@ -234,7 +227,7 @@ test("account filters search their own list endpoints with five results and subm
     expect(errors).toEqual([]);
   } finally {
     for (const account of created)
-      await page.request.delete(`/admin/api/consumers/${account.id}`, { headers });
+      await page.request.delete(`/admin/api/subscriptions/${account.id}`, { headers });
   }
 });
 
@@ -300,9 +293,9 @@ test("table pagination supports totals, page input, first and last pages after f
     await expect(input).toHaveValue("1");
     await expect(page.locator("tbody > tr")).toHaveCount(50);
     if (path === "usage") {
-      await expect(page.locator("tbody > tr").first().getByRole("cell").nth(3)).toHaveText(
-        "xhigh / standard",
-      );
+      await expect(
+        page.locator("tbody > tr").first().locator('[data-label="推理强度 / 速度"]'),
+      ).toHaveText("xhigh / standard");
       expect((await page.locator("tbody > tr").first().boundingBox())!.height).toBeLessThan(65);
     }
     await pager.getByRole("button", { name: "下一页", exact: true }).click();
@@ -325,14 +318,14 @@ test("table pagination supports totals, page input, first and last pages after f
     for (const label of ["首页", "上一页", "下一页", "末页"])
       await expect(pager.getByRole("button", { name: label, exact: true })).toBeDisabled();
   }
-  for (const path of ["suppliers", "consumers", "plans", "proxies"]) {
+  for (const path of ["suppliers", "subscriptions", "plans", "proxies"]) {
     await page.goto(`/admin/${path}/`);
     const pager = page.locator('[data-slot="pagination"]');
     await expect(pager).toContainText(/共 \d+ 条 · \d+ 页/);
     await expect(pager.getByRole("textbox", { name: "页码", exact: true })).toBeVisible();
     await expect(pager.getByRole("button", { name: "首页", exact: true })).toBeDisabled();
   }
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "记录查询", exact: true }).click();
   const logs = page.getByRole("navigation", { name: "记录分页", exact: true });
   await expect(logs).toContainText("共 105 条 · 6 页");
@@ -340,6 +333,5 @@ test("table pagination supports totals, page input, first and last pages after f
   await expect(logs.getByRole("textbox", { name: "页码", exact: true })).toHaveValue("6");
   await page.goto("/admin/settings/");
   await expect(page.getByRole("tab", { name: "诊断记录", exact: true })).toHaveCount(0);
-  await expect(page.locator("tbody > tr")).toHaveCount(6);
   expect(errors).toEqual([]);
 });

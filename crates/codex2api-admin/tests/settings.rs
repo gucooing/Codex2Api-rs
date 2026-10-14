@@ -14,19 +14,23 @@ async fn gateway_settings_require_session_and_csrf_and_persist_mode_and_rules() 
             .status(),
         StatusCode::OK
     );
-    value["default_rpm"] = 20.into();
     assert_eq!(f.get("/admin/api/settings/gateway").await, value);
-    value["default_rpm"] = 0.into();
+    value["default_rpm"] = 20.into();
     assert_eq!(
-        f.request("PUT", "/admin/api/settings/gateway", value.clone())
+        f.request("PUT", "/admin/api/settings/gateway", value)
             .await
             .status(),
-        StatusCode::OK
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     let reopened = codex2api_storage::Storage::open(f.dir.path().join("test.sqlite"))
         .await
         .unwrap();
-    assert_eq!(reopened.gateway_settings().await.unwrap().default_rpm, 0);
+    assert!(
+        serde_json::to_value(reopened.gateway_settings().await.unwrap())
+            .unwrap()
+            .get("default_rpm")
+            .is_none()
+    );
     assert!(
         reopened
             .gateway_settings()

@@ -9,7 +9,6 @@ use sqlx::FromRow;
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 pub enum UserKind {
     Regular,
-    Virtual,
 }
 
 #[derive(Clone, FromRow)]
@@ -22,6 +21,7 @@ pub struct User {
     pub email: String,
     pub enabled: bool,
     pub wallet_cents: i64,
+    /// Identity revision; wallet movements do not change it.
     pub revision: i64,
     pub created_at: String,
 }
@@ -83,7 +83,7 @@ impl Storage {
         let now = Utc::now().timestamp_millis();
         let zone = i64::from(tz_offset) * 60_000;
         let start = (now - zone).div_euclid(86_400_000) * 86_400_000 + zone;
-        let (suppliers,consumers,normal,users,active,models):(i64,i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM supplier_accounts),(SELECT COUNT(*) FROM virtual_users),(SELECT COUNT(*) FROM virtual_platforms v WHERE v.enabled=1 AND (v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>?)),(SELECT COUNT(*) FROM regular_users),(SELECT COUNT(DISTINCT r.user_id) FROM usage_records r JOIN regular_users u ON u.id=r.user_id WHERE r.requested_at_ms>=? AND r.requested_at_ms<?),(SELECT COUNT(*) FROM model_catalog WHERE deleted=0)")
+        let (suppliers,consumers,normal,users,active,models):(i64,i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM supplier_accounts),(SELECT COUNT(*) FROM regular_platforms),(SELECT COUNT(*) FROM regular_platforms v WHERE v.enabled=1 AND (v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>?)),(SELECT COUNT(*) FROM regular_users),(SELECT COUNT(DISTINCT r.user_id) FROM usage_records r JOIN regular_users u ON u.id=r.user_id WHERE r.requested_at_ms>=? AND r.requested_at_ms<?),(SELECT COUNT(*) FROM model_catalog WHERE deleted=0)")
             .bind(now/1000).bind(start).bind(now+1).fetch_one(self.pool()).await?;
         Ok(
             serde_json::json!({"supplier_count":suppliers,"consumer_count":consumers,"normal_consumer_count":normal,"user_count":users,"active_user_count":active,"models_count":models,"activity_from_ms":start,"activity_until_ms":now+1}),
@@ -100,10 +100,16 @@ impl Storage {
         )
     }
     pub async fn clear_browser_identity(&self, flow: &str) -> Result<()> {
+        let mut tx = self.pool().begin().await?;
         sqlx::query("DELETE FROM oauth_browser_identities WHERE flow_id=?")
             .bind(flow)
-            .execute(self.pool())
+            .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM oauth_browser_users WHERE flow_id=?")
+            .bind(flow)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
     pub async fn users(&self) -> Result<Vec<User>> {
@@ -133,26 +139,8 @@ impl Storage {
         .await?)
     }
     pub async fn save_user(&self, user: &User, expected: Option<i64>) -> Result<bool> {
-        if user.kind != UserKind::Regular {
-            return Err(StorageError::InvalidAdminUpdate(
-                "虚拟用户请在虚拟账户中管理",
-            ));
-        }
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let changed = write_identity(&mut tx, user, expected).await?;
-        if expected.is_none() && changed {
-            let defaults: Vec<crate::VirtualPlan> = sqlx::query_as(
-                "SELECT p.* FROM virtual_plans p JOIN platform_free_plans f ON f.plan_id=p.id",
-            )
-            .fetch_all(&mut *tx)
-            .await?;
-            for plan in defaults {
-                crate::user_subscriptions::write_subscription(
-                    &mut tx, user, &plan, None, None, true, "free", None,
-                )
-                .await?;
-            }
-        }
         tx.commit().await?;
         if changed {
             self.invalidate_runtime_cache();
@@ -160,9 +148,6 @@ impl Storage {
         Ok(changed)
     }
     pub async fn create_user_session(&self, user: &User, csrf: &str) -> Result<Option<String>> {
-        if user.kind != UserKind::Regular {
-            return Ok(None);
-        }
         let now = Utc::now().timestamp();
         let expires = now + i64::from(crate::WEB_REFRESH_TTL_SECONDS);
         let id = uuid::Uuid::new_v4().to_string();
@@ -274,22 +259,53 @@ impl Storage {
         .fetch_optional(self.pool())
         .await?)
     }
-    pub async fn user_platform_account(
+    pub async fn oauth_subscriptions(
         &self,
         user: &str,
         provider: &str,
+    ) -> Result<Vec<PlatformAccount>> {
+        Ok(sqlx::query_as("SELECT * FROM regular_platforms WHERE user_id=? AND provider_id=? AND enabled=1 AND (subscription_expires_at IS NULL OR unixepoch(subscription_expires_at)>?) ORDER BY created_at,id")
+            .bind(user).bind(provider).bind(Utc::now().timestamp()).fetch_all(self.pool()).await?)
+    }
+    pub async fn bind_browser_user(
+        &self,
+        flow: &str,
+        user: &User,
+        session: Option<&str>,
+    ) -> Result<bool> {
+        Ok(sqlx::query("INSERT INTO oauth_browser_users(flow_id,user_id,password_hash,session_id) SELECT ?,id,password_hash,? FROM regular_users WHERE id=? AND enabled=1 AND password_hash=? ON CONFLICT(flow_id) DO UPDATE SET user_id=excluded.user_id,password_hash=excluded.password_hash,session_id=excluded.session_id")
+            .bind(flow).bind(session).bind(&user.id).bind(&user.password_hash).execute(self.pool()).await?.rows_affected()==1)
+    }
+    pub async fn browser_user(&self, flow: &str) -> Result<Option<User>> {
+        Ok(sqlx::query_as("SELECT u.* FROM oauth_browser_users b JOIN oauth_browser_flows f ON f.id=b.flow_id JOIN regular_users u ON u.id=b.user_id WHERE b.flow_id=? AND f.expires_at>? AND u.enabled=1 AND u.password_hash=b.password_hash AND (b.session_id IS NULL OR EXISTS(SELECT 1 FROM user_sessions s WHERE s.id=b.session_id AND s.user_id=u.id AND s.expires_at>?))")
+            .bind(flow).bind(Utc::now().timestamp()).bind(Utc::now().timestamp()).fetch_optional(self.pool()).await?)
+    }
+    pub async fn select_browser_subscription(
+        &self,
+        flow: &str,
+        id: &str,
+        provider: &str,
     ) -> Result<Option<PlatformAccount>> {
-        let id: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM platform_principals WHERE user_id=? AND provider_id=? AND enabled=1",
-        )
-        .bind(user)
-        .bind(provider)
-        .fetch_optional(self.pool())
-        .await?;
-        match id {
-            Some(id) => self.effective_platform_account(&id).await,
-            None => Ok(None),
+        let Some(user) = self.browser_user(flow).await? else {
+            return Ok(None);
+        };
+        let account: Option<PlatformAccount> = sqlx::query_as("SELECT * FROM regular_platforms WHERE id=? AND user_id=? AND provider_id=? AND enabled=1 AND (subscription_expires_at IS NULL OR unixepoch(subscription_expires_at)>?)")
+            .bind(id).bind(&user.id).bind(provider).bind(Utc::now().timestamp()).fetch_optional(self.pool()).await?;
+        let Some(account) = account else {
+            return Ok(None);
+        };
+        let session: Option<String> =
+            sqlx::query_scalar("SELECT session_id FROM oauth_browser_users WHERE flow_id=?")
+                .bind(flow)
+                .fetch_one(self.pool())
+                .await?;
+        if !self
+            .bind_browser_identity(flow, &account, session.as_deref())
+            .await?
+        {
+            return Ok(None);
         }
+        Ok(Some(account))
     }
 
     pub async fn platform_account_owner(&self, account: &str) -> Result<Option<String>> {
@@ -314,8 +330,8 @@ impl Storage {
         account: &PlatformAccount,
         session_id: Option<&str>,
     ) -> Result<bool> {
-        let changed=sqlx::query("INSERT INTO oauth_browser_identities(flow_id,virtual_account_id,password_hash,session_id) SELECT ?,id,password_hash,? FROM platform_principals v WHERE id=? AND password_hash=? AND enabled=1 ON CONFLICT(flow_id) DO UPDATE SET virtual_account_id=excluded.virtual_account_id,password_hash=excluded.password_hash,session_id=excluded.session_id")
-            .bind(flow).bind(session_id).bind(&account.id).bind(&account.password_hash).execute(self.pool()).await?.rows_affected();
+        let changed=sqlx::query("INSERT INTO oauth_browser_identities(flow_id,virtual_account_id,password_hash,session_id) SELECT ?,id,password_hash,? FROM platform_principals v WHERE id=? AND password_hash=? AND enabled=1 AND EXISTS(SELECT 1 FROM oauth_browser_users b WHERE b.flow_id=? AND b.user_id=v.user_id AND b.password_hash=v.password_hash AND b.session_id IS ?) ON CONFLICT(flow_id) DO UPDATE SET virtual_account_id=excluded.virtual_account_id,password_hash=excluded.password_hash,session_id=excluded.session_id")
+            .bind(flow).bind(session_id).bind(&account.id).bind(&account.password_hash).bind(flow).bind(session_id).execute(self.pool()).await?.rows_affected();
         Ok(changed == 1)
     }
     pub async fn browser_identity(&self, flow: &str) -> Result<Option<PlatformAccount>> {
@@ -329,7 +345,7 @@ pub(crate) async fn confirmed_browser_identity(
     flow: &str,
     account: &PlatformAccount,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_browser_identities i JOIN platform_principals v ON v.id=i.virtual_account_id WHERE i.flow_id=? AND v.id=? AND v.password_hash=? AND i.password_hash=v.password_hash AND v.enabled=1 AND (i.session_id IS NULL OR EXISTS(SELECT 1 FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.id=i.session_id AND s.expires_at>? AND u.enabled=1 AND s.user_id=v.user_id)))")
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oauth_browser_identities i JOIN platform_principals v ON v.id=i.virtual_account_id WHERE i.flow_id=? AND v.id=? AND v.password_hash=? AND i.password_hash=v.password_hash AND v.enabled=1 AND (v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>unixepoch()) AND EXISTS(SELECT 1 FROM oauth_browser_users b WHERE b.flow_id=i.flow_id AND b.user_id=v.user_id AND b.password_hash=v.password_hash) AND (i.session_id IS NULL OR EXISTS(SELECT 1 FROM user_sessions s JOIN regular_users u ON u.id=s.user_id WHERE s.id=i.session_id AND s.expires_at>? AND u.enabled=1 AND s.user_id=v.user_id)))")
         .bind(flow).bind(&account.id).bind(&account.password_hash).bind(Utc::now().timestamp()).fetch_one(connection).await?)
 }
 
@@ -352,15 +368,7 @@ pub(crate) async fn write_identity(
     // Wallet amounts cannot be set through identity edits, including account creation.
     let now = Utc::now().to_rfc3339();
     let changed = if let Some(revision) = expected {
-        crate::account_scope::require_on(
-            connection,
-            &user.id,
-            match user.kind {
-                UserKind::Regular => crate::AccountScope::User,
-                UserKind::Virtual => crate::AccountScope::VirtualUser,
-            },
-        )
-        .await?;
+        crate::account_scope::require_on(connection, &user.id, crate::AccountScope::User).await?;
         let changed=sqlx::query("UPDATE users SET name=?,email=?,revision=revision+1 WHERE id=? AND revision=? AND kind=? AND EXISTS(SELECT 1 FROM accounts WHERE accounts.id=users.id AND account_type='user')")
                 .bind(user.name.trim()).bind(user.email.trim()).bind(&user.id).bind(revision).bind(user.kind).execute(&mut *connection).await?.rows_affected();
         if changed == 1 {

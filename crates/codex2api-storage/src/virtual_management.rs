@@ -42,12 +42,6 @@ pub fn virtual_config_specs() -> Vec<VirtualConfigSpec> {
             json!({"branch_format":"codex/{task_id}","git_diff_mode":"unified"}),
         ),
         (
-            "subscription_policy",
-            "免费层访问策略",
-            "无有效付费订阅时的执行权限与独立免费层费用窗口；不会停用登录。",
-            json!({"model_access":"none","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"0"}]}),
-        ),
-        (
             "feature_bootstrap",
             "客户端功能配置",
             "Statsig 功能开关与动态配置；身份由虚拟账号注入，不读取供应账户实验状态。",
@@ -367,7 +361,7 @@ pub fn validate_virtual_config(key: &str, value: &Value) -> std::result::Result<
             }
         }
     }
-    if matches!(key, "quota" | "subscription_policy")
+    if key == "quota"
         && ["primary_cost_limit_usd", "weekly_cost_limit_usd"]
             .iter()
             .any(|key| {
@@ -625,7 +619,7 @@ impl Storage {
     }
     pub(crate) async fn virtual_quota_at(&self, owner: &str, now: i64) -> Result<Value> {
         let account = self
-            .effective_platform_account_at(owner, now)
+            .platform_account(owner)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -638,7 +632,7 @@ impl Storage {
             .effective_entitlements_at(owner, now)
             .await?
             .execution_enabled;
-        let stored_anchor = self.subscription_anchor_at(owner, now).await?;
+        let stored_anchor = self.subscription_anchor(owner).await?;
         let anchor = if stored_anchor > now {
             0
         } else {
@@ -651,7 +645,7 @@ impl Storage {
         let reset_count = self.virtual_reset_credit_count(owner).await?;
         let mut value = crate::spending_windows::quota_view(
             owner,
-            account.effective_plan_at(now),
+            account.plan_type.as_str(),
             allowed,
             &windows,
             now,

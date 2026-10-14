@@ -4,35 +4,37 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    routing::get,
+    extract::{Path, State},
+    routing::{get, post},
 };
 use codex2api_storage::SubscriptionChange;
 use serde::Deserialize;
-use serde_json::json;
 
 pub(super) fn router() -> Router<AdminState> {
     Router::new()
         .merge(super::platform_accounts::router("/subscriptions"))
         .route(
             "/subscriptions/{id}",
-            get(super::platform_accounts::detail).put(update_subscription),
+            get(super::platform_accounts::detail)
+                .put(update_subscription)
+                .delete(delete_subscription),
         )
-        .route("/subscriptions", get(subscriptions).post(grant))
-}
-
-pub async fn subscriptions(
-    State(state): State<AdminState>,
-    Query(query): Query<codex2api_storage::ListQuery>,
-) -> ApiResult {
-    Ok(Json(json!(
-        state.storage.subscription_page(&query).await?.map(|s| {
-            let expired = s.expired();
-            let mut value = json!(s);
-            value["expired"] = expired.into();
-            value
-        })
-    )))
+        .route(
+            "/subscriptions/options",
+            get(super::subscription_accounts::options),
+        )
+        .route(
+            "/subscriptions/batch",
+            post(super::subscription_accounts::batch),
+        )
+        .route(
+            "/subscriptions/{id}/routing",
+            get(super::platform_accounts::routes).put(super::platform_accounts::save_route),
+        )
+        .route(
+            "/subscriptions",
+            get(super::subscription_accounts::list).post(grant),
+        )
 }
 
 #[derive(Deserialize)]
@@ -53,7 +55,7 @@ pub async fn grant(
     if input.revision.is_some() {
         return Err(ApiError::bad("新增订阅不能指定已有版本"));
     }
-    save_subscription(state, input).await
+    save_subscription(state, None, input).await
 }
 
 pub async fn update_subscription(
@@ -76,13 +78,18 @@ pub async fn update_subscription(
     if current.provider_id != plan.provider_id || input.revision != Some(current.revision) {
         return Err(ApiError::conflict());
     }
-    save_subscription(state, input).await
+    save_subscription(state, Some(&id), input).await
 }
 
-async fn save_subscription(state: AdminState, input: SubscriptionInput) -> ApiResult {
-    state
+async fn save_subscription(
+    state: AdminState,
+    id: Option<&str>,
+    input: SubscriptionInput,
+) -> ApiResult {
+    let id = state
         .storage
         .save_user_subscription(SubscriptionChange {
+            subscription_id: id,
             reissue: input.reissue,
             user_id: &input.user_id,
             plan_id: &input.plan_id,
@@ -91,5 +98,18 @@ async fn save_subscription(state: AdminState, input: SubscriptionInput) -> ApiRe
             revision: input.revision,
         })
         .await?;
+    Ok(Json(
+        super::platform_accounts::dto(
+            &state,
+            &super::platform_accounts::require(&state, &id).await?,
+        )
+        .await?,
+    ))
+}
+pub async fn delete_subscription(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    state.storage.delete_user_subscription(&id).await?;
     Ok(ok())
 }

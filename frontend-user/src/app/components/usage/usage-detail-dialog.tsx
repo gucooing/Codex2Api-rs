@@ -18,8 +18,8 @@ import {
   requestSpeed,
   tokenCount,
   usageFailure,
-  usageFailureKind,
   usageResult,
+  usageStatus,
   usageType,
   usageSourceDetail,
   usageConsumption,
@@ -57,9 +57,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
             ["消费", selected ? money(usageConsumption(selected)) : null],
             ["请求模型", selected?.model],
             ["实际模型", selected?.actual_model],
-            ...(selected && failedUsage(selected)
-              ? [["失败类别", usageFailureKind(selected.failure_kind)]]
-              : []),
+            ...(selected && failedUsage(selected) ? [["错误码", selected.error_code || "-"]] : []),
             [
               "请求状态",
               selected
@@ -77,7 +75,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
             <Field key={String(label)}>
               <FieldTitle>{label}</FieldTitle>
               <FieldDescription
-                className={`break-words${label === "请求状态" && selected && failedUsage(selected) ? " text-destructive" : ""}`}
+                className={`break-words${label === "请求状态" && selected ? ` ${usageStatus(selected.status).className}` : ""}`}
               >
                 {value ?? "-"}
               </FieldDescription>

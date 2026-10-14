@@ -18,6 +18,7 @@ pub struct OrderRequest<'a> {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutInput {
+    pub subscription_id: Option<String>,
     pub plan_id: String,
     pub plan_revision: i64,
     pub subscription_revision: Option<i64>,
@@ -51,7 +52,7 @@ struct CheckoutQuote {
 }
 impl CheckoutQuote {
     fn view(&self) -> Value {
-        json!({"provider_id":self.provider_id,"plan_id":self.input.plan_id,"plan_name":self.plan_name,
+        json!({"subscription_id":self.subscription_id,"provider_id":self.provider_id,"plan_id":self.input.plan_id,"plan_name":self.plan_name,
             "kind":self.kind,"previous_plan_name":self.previous_plan_name,"unit_price_cents":self.unit_price_cents,
             "duration_days":self.duration_days,"period_start_ms":self.period_start_ms,"period_end_ms":self.period_end_ms,
             "gross_cents":self.gross_cents,"credit_cents":self.credit_cents,"discount_cents":self.discount_cents,
@@ -267,16 +268,20 @@ async fn quote_on(
         .fetch_optional(&mut *connection)
         .await?
         .ok_or_else(|| checkout_error("plan_changed", "套餐信息已变化，请重新预览"))?;
-    if !plan.allow_purchase || plan.plan_type == "free" {
+    if !plan.allow_purchase {
         return Err(checkout_error("plan_not_for_sale", "该套餐已关闭购买"));
     }
     let price = plan
         .sale_price_cents()?
         .ok_or_else(|| checkout_error("plan_unpriced", "该套餐暂未定价"))?;
     let days = plan.duration_days()?;
-    let current =
-        crate::user_subscriptions::subscription_account(&mut *connection, owner, &plan.provider_id)
-            .await?;
+    let current = crate::user_subscriptions::subscription_account(
+        &mut *connection,
+        owner,
+        &plan.provider_id,
+        input.subscription_id.as_deref(),
+    )
+    .await?;
     if current.as_ref().map(|(_, revision)| *revision) != input.subscription_revision {
         return Err(checkout_error(
             "subscription_changed",
@@ -300,7 +305,7 @@ async fn quote_on(
             .as_deref()
             .map(timestamp)
             .transpose()?;
-        if account.plan_type != "free" && expiry.is_none_or(|end| end > now) {
+        if expiry.is_none_or(|end| end > now) {
             let expiry = expiry.ok_or_else(|| invalid("长期有效订阅请联系管理员调整"))?;
             if account.plan_id == plan.id {
                 kind = "renew";
@@ -591,14 +596,23 @@ impl Storage {
             .bind(&order.plan_id)
             .fetch_optional(&mut *tx)
             .await?;
-        let current =
-            crate::user_subscriptions::subscription_account(&mut tx, owner, &order.provider_id)
-                .await?;
-        let failure = if plan
-            .as_ref()
-            .is_none_or(|p| !p.allow_purchase || p.plan_type == "free")
-        {
+        let current = crate::user_subscriptions::subscription_account(
+            &mut tx,
+            owner,
+            &order.provider_id,
+            order.subscription_id.as_deref(),
+        )
+        .await?;
+        let failure = if plan.as_ref().is_none_or(|p| !p.allow_purchase) {
             Some(("plan_not_for_sale", "套餐已关闭购买，订单已取消"))
+        } else if plan
+            .as_ref()
+            .map(|p| p.sale_price_cents())
+            .transpose()?
+            .flatten()
+            .is_none()
+        {
+            Some(("plan_unpriced", "套餐未配置售价，订单已取消"))
         } else if plan
             .as_ref()
             .is_some_and(|p| p.revision != order.plan_revision)
@@ -636,7 +650,7 @@ impl Storage {
             return Err(checkout_error(code, message));
         }
         let plan = plan.ok_or_else(|| checkout_error("plan_not_for_sale", "套餐不存在"))?;
-        let balance:i64=sqlx::query_scalar("UPDATE users SET wallet_cents=wallet_cents-?,revision=revision+1 WHERE id=? AND wallet_cents-?>=COALESCE((SELECT pending_nano_usd/10000000+(pending_nano_usd%10000000!=0) FROM usage_wallet_state WHERE user_id=users.id),0) RETURNING wallet_cents")
+        let balance:i64=sqlx::query_scalar("UPDATE users SET wallet_cents=wallet_cents-? WHERE id=? AND wallet_cents-?>=COALESCE((SELECT pending_nano_usd/10000000+(pending_nano_usd%10000000!=0) FROM usage_wallet_state WHERE user_id=users.id),0) RETURNING wallet_cents")
             .bind(order.amount_cents).bind(owner).bind(order.amount_cents).fetch_optional(&mut *tx).await?.ok_or_else(||checkout_error("insufficient_balance", "钱包余额不足，订单保留待支付状态"))?;
         let (start, end) = if order.kind == "purchase" {
             (
@@ -692,8 +706,8 @@ impl Storage {
             .bind(uuid::Uuid::new_v4().to_string()).bind(owner).bind(format!("order:{}",order.id)).bind(&order.request_signature)
             .bind(&order.plan_id).bind(order.plan_revision).bind(&order.plan_name).bind(&order.provider_id).bind(-order.amount_cents).bind(balance)
             .bind(order.duration_days).bind(&expires).bind(rfc3339(now)?).bind(&order.id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE subscription_orders SET status='paid',paid_at_ms=?,balance_cents=?,period_start_ms=?,period_end_ms=? WHERE id=? AND status='pending'")
-            .bind(now).bind(balance).bind(start).bind(end).bind(id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE subscription_orders SET status='paid',paid_at_ms=?,balance_cents=?,period_start_ms=?,period_end_ms=?,subscription_id=COALESCE(subscription_id,?) WHERE id=? AND status='pending'")
+            .bind(now).bind(balance).bind(start).bind(end).bind(&subscription).bind(id).execute(&mut *tx).await?;
         let paid = find_order(&mut tx, Some(owner), id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(id.into()))?;
@@ -747,8 +761,8 @@ async fn insert_period(
     }
     let value = credit.map(|c| c.0).or(plan.sale_price_cents()?);
     let duration = credit.map_or(plan.duration_days()? * DAY_MS, |c| c.1);
-    sqlx::query("INSERT INTO subscription_pricing_periods(id,subscription_id,plan_id,starts_at_ms,ends_at_ms,unit_price_cents,duration_days,source,order_id,created_at_ms,credit_value_cents,credit_duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
-        .bind(uuid::Uuid::new_v4().to_string()).bind(id).bind(&plan.id).bind(start).bind(end).bind(plan.sale_price_cents()?).bind(plan.duration_days()?).bind(source).bind(order).bind(now).bind(value).bind(duration).execute(connection).await?;
+    sqlx::query("INSERT INTO subscription_pricing_periods(user_id,id,subscription_id,plan_id,starts_at_ms,ends_at_ms,unit_price_cents,duration_days,source,order_id,created_at_ms,credit_value_cents,credit_duration_ms) VALUES((SELECT user_id FROM platform_accounts WHERE id=?),?,?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(id).bind(uuid::Uuid::new_v4().to_string()).bind(id).bind(&plan.id).bind(start).bind(end).bind(plan.sale_price_cents()?).bind(plan.duration_days()?).bind(source).bind(order).bind(now).bind(value).bind(duration).execute(connection).await?;
     Ok(())
 }
 
@@ -768,7 +782,7 @@ pub(crate) async fn record_admin_pricing(
     if previous.is_some_and(|a| a.plan_id == plan.id) && end == old_end {
         return Ok(());
     }
-    if plan.plan_type == "free" || end.is_none_or(|end| end <= now) {
+    if end.is_none_or(|end| end <= now) {
         supersede(connection, id, now).await?;
         return Ok(());
     }

@@ -1,10 +1,11 @@
 "use client";
 import { useSubscriptionDetail } from "@/app/data/subscriptions";
-import { RateLimitForm } from "@/components/forms/platform-rate-limit-form";
+import { SubscriptionForm } from "@/components/forms/subscription-form";
 import { ClientRecords } from "@/components/platform-account/client-records";
 import { ConfigPanel } from "@/components/platform-account/config/config-panel";
 import { Devices } from "@/components/platform-account/devices";
 import { ConsumerResetCredits } from "@/components/platform-account/reset-credits";
+import { Routing } from "@/components/platform-account/routing";
 import { ConsumerUsage } from "@/components/platform-account/usage";
 import { supplierChannel } from "@/components/providers";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +50,7 @@ export function SubscriptionDetail() {
   if (!id)
     return (
       <Empty>
-        <EmptyDescription>{"请选择用户订阅"}</EmptyDescription>
+        <EmptyDescription>{"请选择订阅"}</EmptyDescription>
         <Button asChild variant="outline">
           <Link href={platformPrefix + "/"}>返回列表</Link>
         </Button>
@@ -60,7 +61,7 @@ export function SubscriptionDetail() {
       <Tabs value={tab} onValueChange={setTab} className="min-w-0 gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           <div className="min-w-0 max-w-full flex-1 overflow-x-auto overflow-y-hidden pb-1">
-            <TabsList variant="line" aria-label={"用户订阅详情"}>
+            <TabsList variant="line" aria-label={"订阅详情"}>
               {[
                 ["settings", "账户设置"],
                 ["usage", "用量统计"],
@@ -87,15 +88,7 @@ export function SubscriptionDetail() {
               {resource.refreshing && <Spinner />}刷新
             </Button>
             <Button variant="outline" size="sm" asChild>
-              <Link
-                href={
-                  account?.user_id
-                    ? `/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`
-                    : "/subscriptions/"
-                }
-              >
-                返回列表
-              </Link>
+              <Link href="/subscriptions/">返回列表</Link>
             </Button>
           </div>
         </div>
@@ -136,50 +129,17 @@ export function SubscriptionDetail() {
                     </CardHeader>
                     <CardContent>
                       {
-                        <div className="space-y-3">
-                          <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                            <div>
-                              <dt className="text-muted-foreground">用户名</dt>
-                              <dd>{account?.username ?? "—"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-muted-foreground">名称</dt>
-                              <dd>{account?.name ?? "—"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-muted-foreground">邮箱</dt>
-                              <dd>{account?.email ?? "—"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-muted-foreground">订阅套餐</dt>
-                              <dd>{account?.plan_name ?? "—"}</dd>
-                            </div>
-                          </dl>
-                          <Button asChild variant="outline">
-                            <Link
-                              href={
-                                account?.user_id
-                                  ? `/subscriptions/?user_id=${encodeURIComponent(account.user_id)}`
-                                  : "/subscriptions/"
-                              }
-                            >
-                              管理用户订阅
-                            </Link>
-                          </Button>
-                        </div>
+                        <SubscriptionForm
+                          key={id}
+                          editing
+                          disabled={!resource.ready}
+                          account={account}
+                          onSaved={resource.reload}
+                        />
                       }
                     </CardContent>
                   </Card>
-                  <Card size="sm">
-                    <CardHeader>
-                      <CardTitle role="heading" aria-level={2}>
-                        请求限制
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <RateLimitForm key={id} id={id} />
-                    </CardContent>
-                  </Card>
+                  <Routing key={id} id={id} account={account} />
                 </div>
               ) : (
                 <ConfigPanel key={id} id={id} group={group} />

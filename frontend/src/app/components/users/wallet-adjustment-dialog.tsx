@@ -38,7 +38,6 @@ export function WalletAdjustmentDialog({
     resource,
     amount,
     delta,
-    after,
   });
   return (
     <Dialog
@@ -57,13 +56,13 @@ export function WalletAdjustmentDialog({
             <FieldGroup>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <p>
-                  当前余额{" "}
+                  参考余额{" "}
                   <span className="font-medium">
                     {before === null ? "—" : money(before / 100)} USD
                   </span>
                 </p>
                 <p>
-                  调整后{" "}
+                  预计调整后{" "}
                   <span className="font-medium">
                     {after === null || !Number.isSafeInteger(after) || after < 0
                       ? "—"

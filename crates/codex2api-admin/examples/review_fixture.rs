@@ -221,17 +221,6 @@ async fn main() -> anyhow::Result<()> {
         record.cache_write_tokens = Some(256);
         record.reasoning_tokens = Some(2573);
         record.error_message = error.map(str::to_owned);
-        if error.is_some() {
-            record.failure_status = Some(if http_status == 429 { 429 } else { 400 });
-            record.failure_kind = Some(
-                if http_status == 429 {
-                    "quota_exhausted"
-                } else {
-                    "invalid_request"
-                }
-                .into(),
-            );
-        }
         record.error_code = error.map(|_| {
             if http_status == 429 {
                 "rate_limit_exceeded"

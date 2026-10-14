@@ -31,11 +31,9 @@ pub struct Session {
     pub csrf_token: Option<String>,
 }
 #[derive(Serialize)]
-pub struct Consumer {
-    pub user_kind: codex2api_storage::UserKind,
+pub struct SubscriptionAccount {
     pub revision: i64,
-    pub user_revision: i64,
-    pub user_id: Option<String>,
+    pub user_id: String,
     pub id: String,
     pub provider_id: String,
     pub username: String,
@@ -46,38 +44,8 @@ pub struct Consumer {
     pub subscription_expires_at: Option<String>,
     pub enabled: bool,
     pub created_at: String,
-    pub effective_plan: String,
     pub plan_name: String,
     pub subscription_status: &'static str,
-}
-impl From<&codex2api_storage::PlatformAccount> for Consumer {
-    fn from(a: &codex2api_storage::PlatformAccount) -> Self {
-        Self {
-            user_id: None,
-            user_kind: codex2api_storage::UserKind::Virtual,
-            revision: 0,
-            user_revision: 0,
-            id: a.id.clone(),
-            provider_id: a.provider_id.clone(),
-            username: a.username.clone(),
-            name: a.name.clone(),
-            email: a.email.clone(),
-            plan_id: a.plan_id.clone(),
-            plan_type: a.plan_type.clone(),
-            subscription_expires_at: a.subscription_expires_at.clone(),
-            enabled: a.enabled,
-            created_at: a.created_at.clone(),
-            effective_plan: a.effective_plan().into(),
-            plan_name: String::new(),
-            subscription_status: if a.effective_plan() != "free" {
-                "active"
-            } else if a.plan_type != "free" {
-                "expired"
-            } else {
-                "free"
-            },
-        }
-    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +56,8 @@ pub struct ModelRef {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    pub rpm_limit: u32,
+    pub concurrency_limit: u32,
     pub description: String,
     pub supplier_tag_id: Option<String>,
     pub sale_price_usd: Option<String>,
@@ -175,6 +145,5 @@ pub fn value<T: Serialize>(v: T) -> serde_json::Value {
 pub struct OptionsQuery {
     pub provider_id: String,
     pub search: String,
-    pub paid_only: bool,
     pub plan_id: String,
 }

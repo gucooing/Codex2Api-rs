@@ -447,7 +447,7 @@ export function useSupplierDetail() {
       {
         confirm:
           account?.status === "active"
-            ? "停用此供应账户？其虚拟账户将在下次请求时自动改选号池内可用账户。"
+            ? "停用此供应账户？其订阅将在下次请求时自动改选号池内可用账户。"
             : undefined,
         danger: false,
         success: undefined,
@@ -563,7 +563,7 @@ export function useSuppliersPage() {
       },
       {
         confirm: item.enabled
-          ? "停用此供应账户？其虚拟账户将在下次请求时自动改选号池内可用账户。"
+          ? "停用此供应账户？其订阅将在下次请求时自动改选号池内可用账户。"
           : undefined,
         danger: false,
         success: undefined,

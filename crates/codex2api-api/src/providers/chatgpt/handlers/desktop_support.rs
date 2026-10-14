@@ -127,7 +127,7 @@ pub(crate) async fn bootstrap(
 ) -> crate::Result<Value> {
     let account = state
         .storage
-        .effective_platform_account(&access.virtual_account_id)
+        .platform_account(&access.virtual_account_id)
         .await?
         .filter(|a| a.enabled)
         .ok_or_else(crate::ApiError::invalid_token)?;
@@ -199,7 +199,7 @@ pub(crate) async fn bootstrap(
     if let Some(stable) = &stable {
         ids["stableID"] = stable.clone().into();
     }
-    payload["user"] = json!({"userID":format!("user-{}",account.id),"email":account.email,"customIDs":ids,"custom":{"auth_method":"chatgpt","plan_type":account.effective_plan(),"desktop_app_beta_enabled":beta}});
+    payload["user"] = json!({"userID":format!("user-{}",account.id),"email":account.email,"customIDs":ids,"custom":{"auth_method":"chatgpt","plan_type":account.plan_type.as_str(),"desktop_app_beta_enabled":beta}});
     payload["evaluated_keys"] = json!({"userID":format!("user-{}",account.id),"customIDs":ids});
     payload["hash_used"] = "djb2".into();
     payload["has_updates"] = true.into();

@@ -113,7 +113,7 @@ pub(super) fn claims(
         "client_id":codex2api_version::OAUTH_CLIENT_ID,
         "https://api.openai.com/auth":{
             "amr":amr,"chatgpt_account_id":account.id,"chatgpt_account_user_id":user,
-            "chatgpt_compute_residency":"no_constraint","chatgpt_plan_type":account.effective_plan_at(now),
+            "chatgpt_compute_residency":"no_constraint","chatgpt_plan_type":account.plan_type.as_str(),
             "chatgpt_user_id":user,"localhost":true,"poid":organization,"user_id":user
         },
         "https://api.openai.com/mfa":{"required":"no"},
@@ -128,7 +128,7 @@ pub(super) fn claims(
         "acr":"0","amr":amr,"aud":[codex2api_version::OAUTH_CLIENT_ID],
         "auth_provider":"password","auth_time":authenticated_at_ms/1000,
         "https://api.openai.com/auth":{
-            "chatgpt_account_id":account.id,"chatgpt_plan_type":account.effective_plan_at(now),
+            "chatgpt_account_id":account.id,"chatgpt_plan_type":account.plan_type.as_str(),
             "chatgpt_subscription_active_start":subscription_started_at,
             "chatgpt_subscription_active_until":account.subscription_expires_at,
             "chatgpt_subscription_last_checked":chrono::DateTime::from_timestamp(now,0).expect("current time").to_rfc3339(),

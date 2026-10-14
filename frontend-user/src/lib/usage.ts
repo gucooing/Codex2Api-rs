@@ -28,8 +28,7 @@ export type UsageRecord = {
   endpoint: string;
   transport: string;
   stream: boolean | null;
-  failure_kind: string | null;
-  failure_status: number | null;
+  error_code: string | null;
   multiplier_micros: number;
   wallet_debit_cents: number;
   image_count: number | null;

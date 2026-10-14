@@ -270,10 +270,10 @@ async fn management_lists_search_before_paging_and_bind_injection_text_literally
     check_page(
         &f.get("/admin/api/subscriptions?user_id=list-user-00&include_expired=true")
             .await,
-        2,
+        0,
         1,
         20,
-        2,
+        0,
     );
     check_page(
         &f.get(&query(
@@ -364,7 +364,7 @@ async fn account_record_pages_keep_owner_and_json_paths_bound() {
             .await
             .unwrap();
     }
-    let path = format!("/admin/api/consumers/{owner}/records");
+    let path = format!("/admin/api/subscriptions/{owner}/records");
     let page = f
         .get(&query(
             &path,
@@ -394,7 +394,7 @@ async fn account_record_pages_keep_owner_and_json_paths_bound() {
         .save_virtual_client_state(owner, "browser_settings", &settings, None)
         .await
         .unwrap();
-    let path = format!("/admin/api/consumers/{owner}/client-state/browser_settings/rows");
+    let path = format!("/admin/api/subscriptions/{owner}/client-state/browser_settings/rows");
     check_page(
         &f.get(&query(
             &path,
@@ -421,7 +421,7 @@ async fn account_record_pages_keep_owner_and_json_paths_bound() {
     );
     check_page(
         &f.get(&format!(
-            "/admin/api/consumers/{other}/client-state/browser_settings/rows?section=$.rules.origin"
+            "/admin/api/subscriptions/{other}/client-state/browser_settings/rows?section=$.rules.origin"
         ))
         .await,
         0,

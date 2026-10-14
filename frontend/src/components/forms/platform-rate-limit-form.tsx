@@ -20,11 +20,11 @@ export function RateLimitForm({ id: accountId }: { id: string }) {
               max={1000000}
               step={1}
               value={value}
-              placeholder="继承默认限制"
+              placeholder="继承套餐限制"
               onChange={(event) => setDraft(event.target.value)}
             />
             <FieldDescription>
-              留空用默认值（{rpm.data?.default_rpm ?? "—"}），0 为无限。
+              留空继承套餐（{rpm.data?.plan_rpm ?? "—"}），0 为无限。
             </FieldDescription>
           </Field>
           <Field>
@@ -36,11 +36,11 @@ export function RateLimitForm({ id: accountId }: { id: string }) {
               max={1000000}
               step={1}
               value={concurrency}
-              placeholder="继承默认限制"
+              placeholder="继承套餐限制"
               onChange={(event) => setConcurrencyDraft(event.target.value)}
             />
             <FieldDescription>
-              留空用默认值（{rpm.data?.default_concurrency ?? "—"}），0 为无限。
+              留空继承套餐（{rpm.data?.plan_concurrency ?? "—"}），0 为无限。
             </FieldDescription>
           </Field>
         </FieldGroup>

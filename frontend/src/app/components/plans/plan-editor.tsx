@@ -39,6 +39,8 @@ export function PlanEditor({
   onSaved: () => void;
 }) {
   const {
+    rpmInput,
+    concurrencyInput,
     value,
     setValue,
     search,
@@ -114,10 +116,10 @@ export function PlanEditor({
                         setValue((old) => ({
                           ...old,
                           provider_id: v,
-                          plan_type: "free",
+                          plan_type: v === "grok" ? "supergrok" : "plus",
                           models: [],
                           supplier_tag_id: null,
-                          allow_purchase: false,
+                          allow_purchase: true,
                         }))
                       }
                     >
@@ -134,12 +136,11 @@ export function PlanEditor({
                     <FieldLabel htmlFor={`${id}-tier`}>官方客户端订阅档位</FieldLabel>
                     <Select
                       value={value.plan_type}
-                      disabled={plan.plan_type === "free"}
                       onValueChange={(v) =>
                         setValue((old) => ({
                           ...old,
                           plan_type: v,
-                          allow_purchase: v === "free" ? false : old.allow_purchase,
+                          allow_purchase: old.allow_purchase,
                         }))
                       }
                     >
@@ -160,6 +161,28 @@ export function PlanEditor({
                       </SelectContent>
                     </Select>
                   </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-rpm`}>RPM 限制</FieldLabel>
+                    <Input
+                      id={`${id}-rpm`}
+                      type="number"
+                      min={0}
+                      max={1000000}
+                      step={1}
+                      {...rpmInput}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`${id}-concurrency`}>并发限制</FieldLabel>
+                    <Input
+                      id={`${id}-concurrency`}
+                      type="number"
+                      min={0}
+                      max={1000000}
+                      step={1}
+                      {...concurrencyInput}
+                    />
+                  </Field>
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor={`${id}-description`}>套餐描述</FieldLabel>
                     <Textarea
@@ -176,10 +199,9 @@ export function PlanEditor({
                     <Input
                       id={`${id}-price`}
                       inputMode="decimal"
-                      disabled={value.plan_type === "free"}
                       value={value.sale_price_usd ?? ""}
                       onChange={(e) => update("sale_price_usd", e.target.value || null)}
-                      placeholder={value.plan_type === "free" ? "自动提供" : "留空不开放购买"}
+                      placeholder="留空不开放购买"
                     />
                   </Field>
                   <Field>
@@ -190,7 +212,6 @@ export function PlanEditor({
                       required
                       min={1}
                       max={3650}
-                      disabled={value.plan_type === "free"}
                       value={value.duration_days}
                       onChange={(e) => update("duration_days", Number(e.target.value))}
                     />
@@ -234,7 +255,6 @@ export function PlanEditor({
                     <Switch
                       id={`${id}-allow-purchase`}
                       checked={value.allow_purchase}
-                      disabled={value.plan_type === "free"}
                       onCheckedChange={(v) => update("allow_purchase", v)}
                     />
                     <FieldLabel htmlFor={`${id}-allow-purchase`}>允许购买</FieldLabel>

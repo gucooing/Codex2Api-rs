@@ -48,7 +48,7 @@ async fn fixture_for(
         .await
         .unwrap();
     let plan = if provider == "grok" {
-        storage.platform_free_plan(provider).await.unwrap()
+        storage.plan_fixture(provider).await.unwrap()
     } else {
         storage.virtual_plan("plus").await.unwrap().unwrap()
     };
@@ -106,7 +106,7 @@ async fn fixture_for(
         .await
         .unwrap();
     storage
-        .save_pool_route("owner", provider, Some("pool"), None)
+        .save_pool_route("owner", provider, Some("pool"), Some(1))
         .await
         .unwrap();
     let mut settings = storage.gateway_settings().await.unwrap();

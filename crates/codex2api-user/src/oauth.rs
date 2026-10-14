@@ -96,11 +96,8 @@ async fn flow_cookie(state: &UserState, flow: &str, value: &str, age: u32) -> Re
         }
     ))
 }
-async fn identity_view(_state: &UserState, account: &PlatformAccount) -> Result<Value> {
-    Ok(
-        json!({"account_id":account.id,"username":account.username,"name":account.name,"email":account.email,
-        "provider_id":account.provider_id,"plan_type":account.effective_plan()}),
-    )
+fn identity_view(user: &codex2api_storage::User) -> Value {
+    json!({"username":user.username,"name":user.name,"email":user.email})
 }
 async fn start(
     state: UserState,
@@ -117,38 +114,33 @@ async fn start(
         .create_oauth_browser_flow(&flow, &browser, &csrf, &request)
         .await?;
     let mut identity = Value::Null;
-    let mut user = Value::Null;
-    let mut account_unavailable = false;
+    let mut subscriptions = Vec::new();
     if let Some(session) = auth::load_session(&state, &headers).await? {
-        if let Some(account) = state
+        let user = state
             .storage
-            .user_platform_account(&session.user_id, provider)
+            .user(&session.user_id)
+            .await?
+            .ok_or_else(UserError::unauthorized)?;
+        if state
+            .storage
+            .bind_browser_user(&flow, &user, Some(&session.id))
             .await?
         {
-            if state
+            subscriptions = state
                 .storage
-                .bind_browser_identity(&flow, &account, Some(&session.id))
-                .await?
-            {
-                identity = identity_view(&state, &account).await?;
-            }
-        } else {
-            let current = state
-                .storage
-                .user(&session.user_id)
-                .await?
-                .ok_or_else(UserError::unauthorized)?;
-            user = json!({"username":current.username,"name":current.name,"email":current.email});
-            account_unavailable = true;
+                .oauth_subscriptions(&user.id, provider)
+                .await?;
+            identity = identity_view(&user);
         }
     }
+    let account_unavailable = !identity.is_null() && subscriptions.is_empty();
     Ok((
         [(
             header::SET_COOKIE,
             flow_cookie(&state, &flow, &browser, 600).await?,
         )],
         Json(json!({"request_id":flow,
-        "csrf_token":csrf,"client_name":crate::providers::by_id(provider).map(|p|p.client_name),"provider_id":provider,"scope":scope,"identity":identity,"user":user,
+        "csrf_token":csrf,"client_name":crate::providers::by_id(provider).map(|p|p.client_name),"provider_id":provider,"scope":scope,"identity":identity,"subscriptions":subscriptions,
         "account_unavailable":account_unavailable,"expires_in":600})),
     )
         .into_response())
@@ -294,23 +286,22 @@ pub(crate) async fn identify(
         .clear_browser_identity(&input.request_id)
         .await?;
     let user = auth::verify_user(&state, &input.username, input.password).await?;
-    let account = state
-        .storage
-        .user_platform_account(&user.id, provider)
-        .await?
-        .ok_or_else(|| UserError::bad("该平台账户不可用，请联系管理员"))?;
     if !state
         .storage
-        .bind_browser_identity(&input.request_id, &account, None)
+        .bind_browser_user(&input.request_id, &user, None)
         .await?
     {
         return Err(failure());
     }
-    // No persistent login cookie: this credential proof applies only to this authorization link.
+    let subscriptions = state
+        .storage
+        .oauth_subscriptions(&user.id, provider)
+        .await?;
     Ok(Json(
-        json!({"identity":identity_view(&state,&account).await?}),
+        json!({"identity":identity_view(&user),"account_unavailable":subscriptions.is_empty(),"subscriptions":subscriptions}),
     ))
 }
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Approve {
@@ -321,15 +312,18 @@ pub(crate) struct Approve {
     #[serde(default)]
     user_code: Option<String>,
 }
-async fn approved_account(state: &UserState, input: &Approve) -> Result<PlatformAccount> {
+async fn approved_account(
+    state: &UserState,
+    input: &Approve,
+    provider: &str,
+) -> Result<PlatformAccount> {
     if !input.confirmed {
         return Err(UserError::bad("请先确认登录身份"));
     }
     state
         .storage
-        .browser_identity(&input.request_id)
+        .select_browser_subscription(&input.request_id, &input.account_id, provider)
         .await?
-        .filter(|a| a.id == input.account_id)
         .ok_or_else(failure)
 }
 pub(crate) async fn approve(
@@ -342,7 +336,7 @@ pub(crate) async fn approve(
     if !request.valid() || input.user_code.is_some() {
         return Err(failure());
     }
-    let account = approved_account(&state, &input).await?;
+    let account = approved_account(&state, &input, request.provider()).await?;
     if account.provider_id != request.provider() {
         return Err(failure());
     }
@@ -387,7 +381,7 @@ pub(crate) async fn device_approve(
     if !crate::providers::by_device_flow(&raw).is_some() {
         return Err(failure());
     }
-    let account = approved_account(&state, &input).await?;
+    let account = approved_account(&state, &input, flow_provider(&raw)?).await?;
     if account.provider_id != flow_provider(&raw)? {
         return Err(failure());
     }

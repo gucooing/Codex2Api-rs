@@ -1,7 +1,7 @@
 {
   "session": {
     "authenticated": true,
-    "app_version": "v0.0.34",
+    "app_version": "v0.0.39",
     "codex_cli_version": "0.162.1",
     "grok_build_version": "1.0.45",
     "username": "admin",
@@ -11,8 +11,8 @@
     "supplier_count": 1,
     "consumer_count": 1,
     "normal_consumer_count": 1,
-    "user_count": 0,
-    "active_user_count": 0,
+    "user_count": 1,
+    "active_user_count": 1,
     "models_count": 9,
     "activity_from_ms": 1,
     "activity_until_ms": 1
@@ -20,31 +20,8 @@
   "plans": {
     "items": [
       {
-        "description": "",
-        "supplier_tag_id": null,
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "plan_type": "free",
-        "id": "free",
-        "provider_id": "chatgpt",
-        "name": "ChatGPT Free",
-        "allow_purchase": false,
-        "revision": 0,
-        "updated_at_ms": 1,
-        "model_access": "none",
-        "models": [],
-        "spending_windows": [
-          {
-            "duration_seconds": 604800,
-            "cost_limit_usd": "0"
-          },
-          {
-            "duration_seconds": 18000,
-            "cost_limit_usd": "0"
-          }
-        ]
-      },
-      {
+        "rpm_limit": 40,
+        "concurrency_limit": 10,
         "description": "",
         "supplier_tag_id": null,
         "sale_price_usd": null,
@@ -70,6 +47,8 @@
         ]
       },
       {
+        "rpm_limit": 40,
+        "concurrency_limit": 10,
         "description": "",
         "supplier_tag_id": null,
         "sale_price_usd": null,
@@ -86,6 +65,8 @@
         "spending_windows": []
       },
       {
+        "rpm_limit": 40,
+        "concurrency_limit": 10,
         "description": "",
         "supplier_tag_id": null,
         "sale_price_usd": null,
@@ -102,6 +83,8 @@
         "spending_windows": []
       },
       {
+        "rpm_limit": 40,
+        "concurrency_limit": 10,
         "description": "",
         "supplier_tag_id": null,
         "sale_price_usd": null,
@@ -118,6 +101,8 @@
         "spending_windows": []
       },
       {
+        "rpm_limit": 40,
+        "concurrency_limit": 10,
         "description": "",
         "supplier_tag_id": null,
         "sale_price_usd": null,
@@ -132,30 +117,9 @@
         "model_access": "all",
         "models": [],
         "spending_windows": []
-      },
-      {
-        "description": "",
-        "supplier_tag_id": null,
-        "sale_price_usd": null,
-        "duration_days": 30,
-        "plan_type": "free",
-        "id": "platform-free-grok",
-        "provider_id": "grok",
-        "name": "Grok Free",
-        "allow_purchase": false,
-        "revision": 0,
-        "updated_at_ms": 1,
-        "model_access": "none",
-        "models": [],
-        "spending_windows": [
-          {
-            "duration_seconds": 2592000,
-            "cost_limit_usd": "0"
-          }
-        ]
       }
     ],
-    "total": 7,
+    "total": 5,
     "page": 1,
     "page_size": 20
   },
@@ -591,10 +555,8 @@
     "page_size": 20
   },
   "consumer": {
-    "user_kind": "virtual",
     "revision": 2,
-    "user_revision": 1,
-    "user_id": "8d8c408c-572f-47b6-ba39-dfda5eece2d9",
+    "user_id": "a6374b2c-e6f6-4b7b-9497-88af19fdc008",
     "id": "contract-consumer",
     "provider_id": "chatgpt",
     "username": "contract-consumer",
@@ -605,7 +567,6 @@
     "subscription_expires_at": null,
     "enabled": true,
     "created_at": "2026-09-22T00:00:00+00:00",
-    "effective_plan": "plus",
     "plan_name": "ChatGPT Plus",
     "subscription_status": "active"
   },
@@ -615,7 +576,7 @@
         "tag_id": null,
         "virtual_account_id": "contract-consumer",
         "provider_id": "chatgpt",
-        "revision": 1
+        "revision": 2
       }
     ]
   },
@@ -627,10 +588,21 @@
         "account_name": "Contract supplier",
         "subject_id": "contract-consumer",
         "subject_name": "Contract consumer",
+        "consumer_name": "contract-consumer",
         "subject_kind": "virtual_account",
+        "source_name": "ChatGPT Plus",
         "provider_id": "chatgpt",
+        "user_id": "a6374b2c-e6f6-4b7b-9497-88af19fdc008",
+        "key_id": null,
+        "group_id": null,
+        "group_name": null,
+        "multiplier_micros": 1000000,
+        "base_cost_nano_usd": 14100000,
+        "wallet_debit_cents": 0,
+        "completed_at_ms": 1,
         "endpoint": "/v1/responses",
         "transport": "http",
+        "stream": null,
         "model": "gpt-6-astra",
         "actual_model": null,
         "upstream_request_id": null,
@@ -650,14 +622,54 @@
         "requested_at_ms": 1,
         "status": "completed",
         "http_status": 200,
-        "failure_kind": null,
-        "failure_status": null,
         "error_code": null,
         "error_message": null,
         "cost_nano_usd": 14100000,
         "billing_status": "priced",
         "billing_model": "gpt-6-astra",
-        "billing_tier": "standard"
+        "billing_tier": "standard",
+        "billing_calculation": {
+          "terms": [
+            {
+              "kind": "cache_read",
+              "quantity": 100,
+              "unit_price_usd": "1"
+            },
+            {
+              "kind": "output",
+              "quantity": 100,
+              "unit_price_usd": "50"
+            },
+            {
+              "kind": "input",
+              "quantity": 900,
+              "unit_price_usd": "10"
+            }
+          ],
+          "multiplier_micros": 1000000,
+          "total_nano_usd": 14100000
+        },
+        "cost_calculation": {
+          "terms": [
+            {
+              "kind": "cache_read",
+              "quantity": 100,
+              "unit_price_usd": "1"
+            },
+            {
+              "kind": "output",
+              "quantity": 100,
+              "unit_price_usd": "50"
+            },
+            {
+              "kind": "input",
+              "quantity": 900,
+              "unit_price_usd": "10"
+            }
+          ],
+          "multiplier_micros": 1000000,
+          "total_nano_usd": 14100000
+        }
       }
     ],
     "total": 1,
@@ -669,7 +681,7 @@
       {
         "id": "contract-task",
         "owner": "contract-consumer",
-        "source": "71fcbaf7-31c0-4189-bf66-0cfe9d74b2e2",
+        "source": "1664334a-186a-4610-815f-888841531f5b",
         "value": {
           "task": {
             "id": "contract-task",
@@ -746,29 +758,9 @@
         },
         "created_at_ms": 1,
         "updated_at_ms": 1
-      },
-      {
-        "id": "0d3ccc28-ad70-43b7-b42c-e6f917acaa6d",
-        "owner": "contract-consumer",
-        "source": null,
-        "value": {
-          "operation": "grant",
-          "origin": "admin",
-          "plan_type": "plus",
-          "plan_id": "plus",
-          "plan_name": "ChatGPT Plus",
-          "previous_plan": null,
-          "previous_plan_id": null,
-          "previous_plan_name": null,
-          "previous_expires_at": null,
-          "expires_at": null,
-          "created_at_ms": 1
-        },
-        "created_at_ms": 1,
-        "updated_at_ms": 1
       }
     ],
-    "total": 5,
+    "total": 4,
     "page": 1,
     "page_size": 20
   },
@@ -792,7 +784,7 @@
       "longest_running_turn_sec": null,
       "daily_usage_buckets": [
         {
-          "start_date": "2026-10-08",
+          "start_date": "2026-10-14",
           "tokens": 1100
         }
       ]
@@ -807,7 +799,7 @@
         "primary_window": {
           "depth": 1,
           "limit_window_seconds": 18000,
-          "started_at": 1791447302,
+          "started_at": 1791975801,
           "reset_at": 1,
           "reset_after_seconds": 1,
           "used_percent": 0,
@@ -820,7 +812,7 @@
         "secondary_window": {
           "depth": 0,
           "limit_window_seconds": 604800,
-          "started_at": 1791244800,
+          "started_at": 1791849600,
           "reset_at": 1,
           "reset_after_seconds": 1,
           "used_percent": 0,
@@ -834,7 +826,7 @@
           {
             "depth": 0,
             "limit_window_seconds": 604800,
-            "started_at": 1791244800,
+            "started_at": 1791849600,
             "reset_at": 1,
             "reset_after_seconds": 1,
             "used_percent": 0,
@@ -847,7 +839,7 @@
           {
             "depth": 1,
             "limit_window_seconds": 18000,
-            "started_at": 1791447302,
+            "started_at": 1791975801,
             "reset_at": 1,
             "reset_after_seconds": 1,
             "used_percent": 0,
@@ -874,7 +866,7 @@
         "pending_requests": 0,
         "unpriced_requests": 0,
         "legacy_requests": 0,
-        "started_at": "2026-10-08T08:14:59Z"
+        "started_at": "2026-10-14T11:03:14Z"
       }
     }
   },
@@ -883,7 +875,7 @@
       {
         "id": "contract-task",
         "owner": "contract-consumer",
-        "source": "71fcbaf7-31c0-4189-bf66-0cfe9d74b2e2",
+        "source": "1664334a-186a-4610-815f-888841531f5b",
         "value": {
           "task_id": "contract-task",
           "model": "gpt-6-astra"
@@ -901,7 +893,7 @@
       {
         "id": "operation-fixture",
         "owner": "contract-consumer",
-        "source": "71fcbaf7-31c0-4189-bf66-0cfe9d74b2e2",
+        "source": "1664334a-186a-4610-815f-888841531f5b",
         "value": {
           "task_id": "contract-task",
           "operation": "follow_up",

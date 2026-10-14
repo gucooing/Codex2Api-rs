@@ -1,3 +1,10 @@
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+use account_fixture::AccountFixture;
 mod common;
 use common::*;
 use serde_json::json;
@@ -20,20 +27,15 @@ async fn wallet_ledger_lists_all_users_and_filters_owner_source_and_time() {
         .await
         .unwrap();
     let plan = f.storage.virtual_plan("plus").await.unwrap().unwrap();
-    let subscription = f
-        .storage
-        .user_subscriptions(Some(&ids[0]), true)
-        .await
-        .unwrap()
-        .remove(0);
     let preview = f
         .storage
         .checkout_preview(
             &ids[0],
             codex2api_storage::CheckoutInput {
+                subscription_id: None,
                 plan_id: plan.id,
                 plan_revision: plan.revision,
-                subscription_revision: Some(subscription.revision),
+                subscription_revision: None,
                 payment_method: "wallet".into(),
                 coupon_code: String::new(),
             },
@@ -93,7 +95,7 @@ async fn wallet_ledger_lists_all_users_and_filters_owner_source_and_time() {
 }
 
 #[tokio::test]
-async fn overview_counts_standalone_health_and_distinct_users_with_usage_today() {
+async fn overview_counts_all_subscription_health_and_distinct_active_users() {
     let f = Fixture::new().await;
     let healthy = f.consumer("healthy").await;
     let disabled = f.consumer("disabled").await;
@@ -116,15 +118,13 @@ async fn overview_counts_standalone_health_and_distinct_users_with_usage_today()
     }
     let active = f
         .storage
-        .user_platform_account(&owners[0], "chatgpt")
+        .grant_subscription_fixture(&owners[0], "plus")
         .await
-        .unwrap()
         .unwrap();
     let idle = f
         .storage
-        .user_platform_account(&owners[1], "chatgpt")
+        .grant_subscription_fixture(&owners[1], "plus")
         .await
-        .unwrap()
         .unwrap();
     let now = chrono::Utc::now().timestamp_millis();
     for (id, subject, at) in [
@@ -145,10 +145,10 @@ async fn overview_counts_standalone_health_and_distinct_users_with_usage_today()
             .unwrap();
     }
     let overview = f.get("/admin/api/overview?tz_offset=-480").await;
-    assert_eq!(overview["consumer_count"], 3);
-    assert_eq!(overview["normal_consumer_count"], 1);
-    assert_eq!(overview["user_count"], 2);
-    assert_eq!(overview["active_user_count"], 1);
+    assert_eq!(overview["consumer_count"], 5);
+    assert_eq!(overview["normal_consumer_count"], 3);
+    assert_eq!(overview["user_count"], 5);
+    assert_eq!(overview["active_user_count"], 2);
     let records = f
         .get(&format!("/admin/api/usage?user_id={}", owners[0]))
         .await;
@@ -201,6 +201,21 @@ async fn administrator_wallet_route_requires_csrf_and_records_each_change_once()
     assert_eq!(entries["total"], 1);
     assert_eq!(entries["items"].as_array().unwrap().len(), 1);
     assert_eq!(entries["items"][0]["kind"], "system_adjustment");
+    let decrease = json!({"request_id":"wallet-decrease","amount_cents":-234,"expected_revision":user["revision"]});
+    let response = f.request("POST", &path, decrease.clone()).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let entry = body(response).await;
+    assert_eq!(entry["entry"]["balance_before_cents"], 1234);
+    assert_eq!(entry["entry"]["balance_cents"], 1000);
+    assert_eq!(body(f.request("POST", &path, decrease).await).await, entry);
+    let detail = f
+        .get(&format!(
+            "/admin/api/users/{}",
+            user["id"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(detail["user"]["wallet_balance_usd"], "10");
+    assert_eq!(detail["user"]["revision"], user["revision"]);
     let choices = f.get("/admin/api/users/options?search=WALLET").await;
     assert_eq!(choices["items"][0]["id"], user["id"]);
     assert!(choices["items"][0].get("password_hash").is_none());
@@ -225,14 +240,7 @@ async fn closing_purchases_does_not_restrict_administrator_assignments() {
         .unwrap();
     assert_eq!(f.consumer("closed-plan-consumer").await["plan_id"], "plus");
     let user=body(f.request("POST","/admin/api/users",json!({"username":"closed-plan-user","password":"password","name":"User","email":"u@example.test","enabled":true,"revision":null})).await).await;
-    let subs = f.get("/admin/api/subscriptions").await;
-    let sub = subs["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["provider_id"] == "chatgpt")
-        .unwrap();
-    assert_eq!(f.request("PUT",&format!("/admin/api/subscriptions/{}",sub["virtual_account_id"].as_str().unwrap()),json!({"user_id":user["id"],"plan_id":"plus","expires_at":"2099-01-01T00:00:00Z","reissue":false,"enabled":true,"revision":sub["revision"]})).await.status(),axum::http::StatusCode::OK);
+    assert_eq!(f.request("POST","/admin/api/subscriptions",json!({"user_id":user["id"],"plan_id":"plus","expires_at":"2099-01-01T00:00:00Z","reissue":false,"enabled":true,"revision":null})).await.status(),axum::http::StatusCode::OK);
     let plans = f.get("/admin/api/plans").await;
     let plus = plans["items"]
         .as_array()
@@ -246,59 +254,23 @@ async fn closing_purchases_does_not_restrict_administrator_assignments() {
 }
 
 #[tokio::test]
-async fn users_and_subscription_expiry_share_free_policy_without_migrating_standalone_accounts() {
+async fn new_users_have_no_subscription_and_expiration_has_no_fallback() {
     let f = Fixture::new().await;
-    let standalone = f.consumer("standalone").await;
     let created=f.request("POST","/admin/api/users",json!({"username":"customer","password":"customer-password","name":"Customer","email":"customer@example.test","enabled":true,"revision":null})).await;
     assert_eq!(created.status(), axum::http::StatusCode::OK);
     let user = body(created).await;
-    let user_id = user["id"].as_str().unwrap();
-    assert_eq!(user["wallet_balance_usd"], "0");
-    assert!(user.get("password_hash").is_none());
-    let consumers = f.get("/admin/api/consumers").await;
-    assert_eq!(consumers["items"].as_array().unwrap().len(), 1);
-    assert_eq!(consumers["items"][0]["id"], standalone["id"]);
-    let subscriptions = f.get("/admin/api/subscriptions").await;
-    let current = subscriptions["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["provider_id"] == "chatgpt")
-        .unwrap();
-    assert_eq!(current["plan_type"], "free");
-    let id = current["virtual_account_id"].as_str().unwrap();
-    let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
-    let response=f.request("PUT",&format!("/admin/api/subscriptions/{id}"),json!({"user_id":user_id,"plan_id":"plus","expires_at":expired,"reissue":false,"enabled":true,"revision":current["revision"]})).await;
+    let owner = user["id"].as_str().unwrap();
+    assert_eq!(
+        f.get(&format!("/admin/api/subscriptions?user_id={owner}"))
+            .await["total"],
+        0
+    );
+    let response=f.request("POST","/admin/api/subscriptions",json!({"user_id":owner,"plan_id":"plus","expires_at":"2020-01-01T00:00:00Z","enabled":true,"reissue":false,"revision":null})).await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert!(
-        f.get("/admin/api/subscriptions").await["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|s| s["provider_id"] != "chatgpt")
-    );
-    let historical = f.get("/admin/api/subscriptions?include_expired=true").await;
-    assert_eq!(
-        historical["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| s["provider_id"] == "chatgpt")
-            .unwrap()["expired"],
-        true
-    );
-    let effective = f
-        .storage
-        .effective_platform_account(id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        effective.plan_id,
-        f.storage.platform_free_plan("chatgpt").await.unwrap().id
-    );
-    assert_eq!(effective.username, "customer");
-    assert!(effective.subscription_expires_at.is_none());
+    let sub = body(response).await;
+    let id = sub["id"].as_str().unwrap();
+    assert_eq!(sub["subscription_status"], "expired");
+    assert_eq!(sub["plan_id"], "plus");
     assert!(
         !f.storage
             .effective_entitlements(id)
@@ -306,87 +278,48 @@ async fn users_and_subscription_expiry_share_free_policy_without_migrating_stand
             .unwrap()
             .execution_enabled
     );
-    let tampered = json!({"username":"customer","password":"","name":"Customer","email":"customer@example.test","enabled":true,"revision":user["revision"],"wallet_balance_usd":"999"});
     assert_eq!(
-        f.request("PUT", &format!("/admin/api/users/{user_id}"), tampered)
-            .await
-            .status(),
-        axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        f.get(&format!(
+            "/admin/api/subscriptions?user_id={owner}&subscription=expired"
+        ))
+        .await["total"],
+        1
     );
+    assert_eq!(f.request("PUT",&format!("/admin/api/users/{owner}"),json!({"username":"customer","password":"","name":"Customer","email":"customer@example.test","enabled":true,"revision":user["revision"],"wallet_balance_usd":"999"})).await.status(),axum::http::StatusCode::UNPROCESSABLE_ENTITY);
 }
-
 #[tokio::test]
-async fn free_cannot_be_deleted_or_retyped_and_paid_plans_have_no_expiry_free_fields() {
+async fn no_default_free_catalog_or_removed_free_access_settings_are_accepted() {
     let f = Fixture::new().await;
-    let plans = f.get("/admin/api/plans").await;
-    let free = plans["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["id"] == "free")
-        .unwrap();
-    for plan in plans["items"].as_array().unwrap() {
-        assert!(plan.get("free_access_enabled").is_none());
-        assert!(plan.get("free_models").is_none());
-        assert!(plan.get("free_spending_windows").is_none());
-    }
-    assert_eq!(
-        f.request(
-            "DELETE",
-            "/admin/api/plans/free",
-            json!({"revision":free["revision"]})
-        )
-        .await
-        .status(),
-        axum::http::StatusCode::BAD_REQUEST
+    assert!(f.storage.virtual_plan("free").await.unwrap().is_none());
+    assert!(
+        f.get("/admin/api/plans").await["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["plan_type"] != "free")
     );
     let mut input = plan_input();
-    input["revision"] = free["revision"].clone();
-    assert_eq!(
-        f.request("PUT", "/admin/api/plans/free", input.clone())
-            .await
-            .status(),
-        axum::http::StatusCode::BAD_REQUEST
-    );
-    input["revision"] = serde_json::Value::Null;
-    input["free_access_enabled"] = true.into();
+    input["plan_type"] = "free".into();
     assert_eq!(
         f.request("POST", "/admin/api/plans", input).await.status(),
-        axum::http::StatusCode::UNPROCESSABLE_ENTITY
-    );
-    assert!(
-        sqlx::query("DELETE FROM virtual_plans WHERE id='free'")
-            .execute(f.storage.pool())
-            .await
-            .is_err()
+        axum::http::StatusCode::BAD_REQUEST
     );
 }
-
 #[tokio::test]
-async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_routes() {
+async fn user_and_subscription_id_scopes_are_distinct_and_the_removed_namespace_is_absent() {
     use axum::http::StatusCode;
     let f = Fixture::new().await;
-    let special = f.consumer("isolated-virtual").await;
-    let special_platform = special["id"].as_str().unwrap();
-    let special_user = special["user_id"].as_str().unwrap();
-    let created = f.request("POST", "/admin/api/users", json!({"username":"isolated-user","name":"User","email":"user@example.test","password":"password","enabled":true,"revision":null})).await;
-    assert_eq!(created.status(), StatusCode::OK);
-    let regular = body(created).await;
-    let regular_id = regular["id"].as_str().unwrap();
-    let regular_platform = f
-        .storage
-        .user_platform_account(regular_id, "chatgpt")
-        .await
-        .unwrap()
-        .unwrap();
+    let account = f.consumer("scoped-owner").await;
+    let user = account["user_id"].as_str().unwrap();
+    let subscription = account["id"].as_str().unwrap();
     for suffix in [
         "", "/configs", "/devices", "/routing", "/usage", "/logs", "/records",
     ] {
         assert_eq!(
             f.request(
                 "GET",
-                &format!("/admin/api/consumers/{}{suffix}", regular_platform.id),
-                serde_json::Value::Null
+                &format!("/admin/api/subscriptions/{user}{suffix}"),
+                json!(null)
             )
             .await
             .status(),
@@ -395,8 +328,18 @@ async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_route
         assert_eq!(
             f.request(
                 "GET",
-                &format!("/admin/api/subscriptions/{special_platform}{suffix}"),
-                serde_json::Value::Null
+                &format!("/admin/api/subscriptions/{subscription}{suffix}"),
+                json!(null)
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            f.request(
+                "GET",
+                &format!("/admin/api/consumers/{subscription}{suffix}"),
+                json!(null)
             )
             .await
             .status(),
@@ -406,70 +349,26 @@ async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_route
     assert_eq!(
         f.request(
             "GET",
-            &format!("/admin/api/users/{special_user}"),
-            serde_json::Value::Null
+            &format!("/admin/api/users/{subscription}"),
+            json!(null)
         )
         .await
         .status(),
         StatusCode::NOT_FOUND
     );
+    let other=f.request("POST","/admin/api/subscriptions",json!({"user_id":user,"plan_id":"plus","expires_at":null,"enabled":true,"reissue":false,"revision":null})).await;
+    assert_eq!(other.status(), StatusCode::OK);
+    assert_ne!(body(other).await["id"], account["id"]);
     assert_eq!(
-        f.request(
-            "POST",
-            &format!("/admin/api/users/{special_user}/wallet-adjustments"),
-            json!({"request_id":"forbidden","amount_cents":100,"expected_revision":1})
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
+        f.get(&format!("/admin/api/subscriptions?user_id={user}"))
+            .await["total"],
+        2
     );
-    assert_eq!(
-        f.get("/admin/api/users").await["items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        f.get("/admin/api/consumers").await["items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert!(
-        f.get("/admin/api/subscriptions?include_expired=true").await["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["user_id"] == regular_id)
-    );
-    assert_eq!(
-        f.get(&format!("/admin/api/subscriptions/{}", regular_platform.id))
-            .await["user_kind"],
-        "regular"
-    );
-    // Subscription supply belongs to the plan; the old read/write resource is gone.
-    for method in ["GET", "PUT"] {
-        assert_eq!(
-            f.request(
-                method,
-                &format!("/admin/api/subscriptions/{}/routing", regular_platform.id),
-                json!({"tag_id":null,"revision":null})
-            )
-            .await
-            .status(),
-            StatusCode::NOT_FOUND
-        );
-    }
     assert_eq!(
         f.request(
             "PUT",
-            &format!(
-                "/admin/api/subscriptions/{}/rate-limit",
-                regular_platform.id
-            ),
-            json!({"rpm":12})
+            &format!("/admin/api/subscriptions/{subscription}/rate-limit"),
+            json!({"rpm":12,"concurrency":3})
         )
         .await
         .status(),
@@ -477,13 +376,9 @@ async fn automatic_scope_middleware_rejects_cross_type_ids_on_all_resource_route
     );
     assert_eq!(
         f.get(&format!(
-            "/admin/api/subscriptions/{}/rate-limit",
-            regular_platform.id
+            "/admin/api/subscriptions/{subscription}/rate-limit"
         ))
-        .await["rpm"],
+        .await["effective_rpm"],
         12
     );
-    // Missing revision is rejected by the store, independently of the UI.
-    let missing_revision = f.with_auth("PUT", &format!("/admin/api/consumers/{special_platform}"), json!({"username":"isolated-virtual","name":"Virtual","email":"virtual@example.test","password":"","provider_id":"chatgpt","plan_id":"plus","subscription_expires_at":null,"enabled":true}), Some(&f.cookie), Some(&f.csrf)).await;
-    assert_eq!(missing_revision.status(), StatusCode::CONFLICT);
 }

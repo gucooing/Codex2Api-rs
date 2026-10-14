@@ -55,23 +55,7 @@ impl Fixture {
             csrf,
         }
     }
-    pub async fn request(&self, method: &str, path: &str, mut value: Value) -> Response {
-        if method == "PUT" {
-            if let Some(id) = path
-                .strip_prefix("/admin/api/consumers/")
-                .filter(|id| !id.contains('/'))
-            {
-                if let Some(user) = self.storage.virtual_user(id).await.unwrap() {
-                    if value.get("revision").is_none() {
-                        value["revision"] =
-                            self.storage.platform_revision(id).await.unwrap().into();
-                    }
-                    if value.get("user_revision").is_none() {
-                        value["user_revision"] = user.revision.into();
-                    }
-                }
-            }
-        }
+    pub async fn request(&self, method: &str, path: &str, value: Value) -> Response {
         self.with_auth(method, path, value, Some(&self.cookie), Some(&self.csrf))
             .await
     }
@@ -105,9 +89,10 @@ impl Fixture {
         body(r).await
     }
     pub async fn consumer(&self, id: &str) -> Value {
-        let r=self.request("POST","/admin/api/consumers",json!({"username":id,"password":"secret-fixture","provider_id":"chatgpt","name":id,"email":format!("{id}@example.test"),"plan_id":"plus","subscription_expires_at":null,"enabled":true})).await;
-        assert_eq!(r.status(), StatusCode::OK);
-        body(r).await
+        let user = body(self.request("POST","/admin/api/users",json!({"username":id,"password":"secret-fixture","name":id,"email":format!("{id}@example.test"),"enabled":true,"revision":null})).await).await;
+        let response = self.request("POST","/admin/api/subscriptions",json!({"user_id":user["id"],"plan_id":"plus","expires_at":null,"enabled":true,"revision":null,"reissue":false})).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        body(response).await
     }
 }
 pub async fn body(response: Response) -> Value {
@@ -120,5 +105,5 @@ pub fn model_input(model: &str) -> Value {
     json!({"provider_id":"chatgpt","model":model,"kind":"text","enabled":true,"revision":null,"token_prices":[{"tier":"standard","min_input_tokens":0,"input_rate":"2.5","cached_rate":"0.5","cache_write_rate":"1","output_rate":"10"}],"image_prices":[]})
 }
 pub fn plan_input() -> Value {
-    json!({"sale_price_usd":null,"duration_days":30,"supplier_tag_id":null,"plan_type":"plus","provider_id":"chatgpt","name":"Integration Plan","model_access":"all","models":[],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}],"allow_purchase":true,"revision":null})
+    json!({"rpm_limit":40,"concurrency_limit":10,"sale_price_usd":null,"duration_days":30,"supplier_tag_id":null,"plan_type":"plus","provider_id":"chatgpt","name":"Integration Plan","model_access":"all","models":[],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}],"allow_purchase":true,"revision":null})
 }

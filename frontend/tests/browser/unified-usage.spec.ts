@@ -57,8 +57,7 @@ test("unified user usage matches the admin table on desktop and phone", async ({
     requested_at_ms: Date.now(),
     status: "failed",
     http_status: 200,
-    failure_kind: "transport",
-    failure_status: 502,
+    error_code: "upstream_error",
     input_tokens: 1000,
     output_tokens: 200,
     cached_tokens: 300,
@@ -113,14 +112,14 @@ test("unified user usage matches the admin table on desktop and phone", async ({
   await expect(page.getByRole("table")).toContainText("流式");
   await expect(page.getByRole("table")).toContainText("1K");
   await expect(page.getByRole("table")).toContainText("$0.003");
-  await page.getByRole("button", { name: "查看请求详情：502", exact: true }).click();
+  await page.getByRole("button", { name: "查看请求详情：失败", exact: true }).click();
   const detail = page.getByRole("dialog");
   for (const label of ["HTTP 状态（连接）", "生成错误状态", "计费状态", "命中计费挡位", "成本"]) {
     await expect(detail.getByText(label, { exact: true })).toHaveCount(0);
   }
-  await expect(detail.getByText("502", { exact: true })).toHaveClass(/text-destructive/);
-  await expect(detail.getByText("失败", { exact: true })).toHaveCount(0);
-  await expect(detail).toContainText("传输中断");
+  await expect(detail.getByText("失败", { exact: true })).toHaveClass(/text-red/);
+  await expect(detail.getByText("502", { exact: true })).toHaveCount(0);
+  await expect(detail).toContainText("upstream_error");
   await expect(detail).toContainText("Api:Pro 200");
   await expect(detail.getByText("API 组", { exact: true })).toHaveCount(0);
   await expect(detail.getByText("钱包扣款", { exact: true })).toHaveCount(0);
@@ -144,6 +143,6 @@ test("unified user usage matches the admin table on desktop and phone", async ({
   );
   expect(overflow).toBe(false);
   await page.getByRole("button", { name: "查看详情：gpt-6-astra", exact: true }).click();
-  await expect(detail).toContainText("传输中断");
+  await expect(detail).toContainText("upstream_error");
   expect(errors).toEqual([]);
 });

@@ -77,24 +77,24 @@ export function duration(value: number | null | undefined) {
   return `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分` : ""}`;
 }
 export function usageFailure(record: UsageRecord) {
-  return record.failure_kind ? usageFailureKind(record.failure_kind) : "此历史记录未保存失败原因";
+  return record.error_code || "此历史记录未保存失败原因";
 }
 
 export const usageStatuses = [
   {
     value: "in_progress",
     label: "进行中",
-    className: "text-muted-foreground",
+    className: "text-blue-600 dark:text-blue-400",
   },
   {
     value: "completed",
     label: "成功",
-    className: "text-foreground",
+    className: "text-green-600 dark:text-green-400",
   },
   {
     value: "failed",
     label: "失败",
-    className: "text-destructive",
+    className: "text-red-600 dark:text-red-400",
   },
 ] as const;
 
@@ -112,36 +112,8 @@ export function usageStatus(status: string) {
   );
 }
 
-export function usageResultCode(record: Pick<UsageRecord, "status" | "failure_status">) {
-  const code = record.failure_status;
-  return failedUsage(record) && code != null && Number.isInteger(code) && code >= 400 && code <= 599
-    ? code
-    : null;
-}
-
-export function usageResult(record: Pick<UsageRecord, "status" | "failure_status">) {
-  const code = usageResultCode(record);
-  return failedUsage(record)
-    ? code == null
-      ? "-"
-      : String(code)
-    : usageStatus(record.status).label;
-}
-export function usageFailureKind(kind: string | null | undefined) {
-  const labels: Record<string, string> = {
-    authentication: "授权失效",
-    payment_required: "账单受限",
-    permission: "权限拒绝",
-    rate_limit: "临时限流",
-    quota_exhausted: "额度耗尽",
-    limit_unknown: "429（上游未说明限制原因）",
-    invalid_request: "请求错误",
-    timeout: "超时",
-    transport: "传输中断",
-    upstream: "上游错误",
-    incomplete: "生成未完成",
-  };
-  return kind ? (labels[kind] ?? kind) : "未记录";
+export function usageResult(record: Pick<UsageRecord, "status">) {
+  return usageStatus(record.status).label;
 }
 
 export const usageType = (stream: boolean | null | undefined) =>

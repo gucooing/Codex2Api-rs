@@ -22,7 +22,6 @@ pub(super) async fn enforce(
         .next();
     let scope = match namespace {
         Some("users") => Some(AccountScope::User),
-        Some("consumers") => Some(AccountScope::VirtualAccount),
         Some("subscriptions") => Some(AccountScope::UserPlatform),
         _ => None,
     };

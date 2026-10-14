@@ -3,6 +3,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useAuthorization } from "@/lib/authorization";
 import Link from "next/link";
@@ -27,6 +34,8 @@ export function Authorization({ device = false }: { device?: boolean }) {
     actions,
     id,
     flow,
+    subscriptionId,
+    setSubscriptionId,
     error,
     setRevision,
     username,
@@ -70,15 +79,17 @@ export function Authorization({ device = false }: { device?: boolean }) {
                 <div>
                   <dt>当前用户</dt>
                   <dd>
-                    {flow.user?.name}（{flow.user?.username}）
+                    {flow.identity?.name}（{flow.identity?.username}）
                   </dd>
                 </div>
                 <div>
                   <dt>邮箱</dt>
-                  <dd>{flow.user?.email}</dd>
+                  <dd>{flow.identity?.email}</dd>
                 </div>
               </dl>
-              <p className="text-sm text-muted-foreground">该平台账户已停用，请联系管理员。</p>
+              <p className="text-sm text-muted-foreground">
+                该平台暂无可用订阅，请购买套餐或联系管理员。
+              </p>
               <Button asChild>
                 <Link href="/">进入用户中心</Link>
               </Button>
@@ -121,7 +132,7 @@ export function Authorization({ device = false }: { device?: boolean }) {
               </FieldSet>
             </form>
           )}
-          {flow?.identity && !completed && (
+          {flow?.identity && !flow.account_unavailable && !completed && (
             <>
               <dl className="space-y-2 break-words text-sm">
                 <div>
@@ -149,6 +160,24 @@ export function Authorization({ device = false }: { device?: boolean }) {
               <form noValidate onSubmit={(event) => handleSubmit3(event)}>
                 <FieldSet disabled={actions.isBusy("approve") || !!error}>
                   <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor={`${id}-subscription`}>目标订阅</FieldLabel>
+                      <Select value={subscriptionId} onValueChange={setSubscriptionId}>
+                        <SelectTrigger id={`${id}-subscription`} className="w-full">
+                          <SelectValue placeholder="请选择订阅" />
+                        </SelectTrigger>
+                        <SelectContent position="popper">
+                          {flow.subscriptions.map((item) => (
+                            <SelectItem key={item.id} value={item.id}>
+                              {item.plan_name} · {item.id.slice(0, 8)}
+                              {item.expires_at
+                                ? ` · ${new Date(item.expires_at).toLocaleDateString()}`
+                                : " · 长期有效"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
                     {device && (
                       <Field>
                         <FieldLabel htmlFor={`${id}-code`}>设备码</FieldLabel>

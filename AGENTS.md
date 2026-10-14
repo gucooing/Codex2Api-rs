@@ -54,23 +54,24 @@ validation are complete.
 - User web/API, administrator web/API, and AI API have separate routers and
   configurable listening ports in the same process. Build the two Next.js
   frontends independently; never mount administrator routes on other listeners.
-- Ordinary and virtual users share `accounts`/`users` identity storage, with immutable
-  `users.kind` (`regular`/`virtual`). Their business domains remain independent.
-  Virtual users can authenticate only through OAuth, never the user website; manage
-  them only in administrator Virtual accounts. Never include virtual users in regular
-  user management, catalogs, wallets, orders, user records or user statistics.
-  Use the storage `require_account_scope` guard, scoped database views and the
-  account-scope middleware on whole routers; keep SQL triggers enforcing session,
-  wallet, order and ownership restrictions even if a handler omits a check.
-  Only administrators create users. Each regular user has one subscription identity per
-  platform, initially Free. Expired paid benefits resolve to the platform Free
-  plan without changing identity or history. Free plans cannot be deleted or
-  changed to a paid tier. Do not restore paid-plan-specific free-access settings.
+- Only administrators create users. Login credentials belong to `accounts` and
+  ordinary `users`; subscriptions never have their own usernames or passwords.
+  A new user has no subscriptions. A user may hold multiple independent subscriptions
+  on one platform. Subscription IDs select ownership, OAuth identity, client state,
+  usage, budgets and request limits. Creation and purchase add a new subscription;
+  renewal, upgrade and management must name the exact existing subscription ID.
+  No default Free plan, automatic identity, expiration fallback or standalone
+  virtual-user administration exists. Expired subscriptions retain their records
+  and stop execution benefits. Keep scoped user/subscription routers and SQL ownership guards.
 - Wallet balances and sale prices use USD and integer cents. Administrator-only
   wallet adjustments must atomically change the balance and append an immutable
   system-operation ledger entry with operator, optional reason and before/after amounts;
-  require a revision and idempotency key. No user funding route exists. Plan allow_purchase controls user catalog publication/purchase only;
-  administrator assignment must not depend on it. Preview is read-only and must
+  require a user identity revision and idempotency key. Wallet movements never
+  increment the identity revision; relative adjustments apply to the transaction's
+  current balance, including concurrent consumption and other adjustments.
+  No user funding route exists. User catalogs and purchases require both an explicitly
+  configured sale price and plan allow_purchase. Check both at preview, confirmation
+  and payment. Administrator assignment must not depend on these sale conditions. Preview is read-only and must
   precede explicit order confirmation, separate payment and completion. Coupons
   reserve only on confirmation and keep immutable discounts on confirmed orders;
   payment atomically validates revisions, debits the wallet, updates entitlements
@@ -152,6 +153,14 @@ validation are complete.
   device fingerprints and installation IDs; reauthorization preserves the existing
   account identity. Never print, persist in browser preferences, or echo RT values
   in batch results.
+- RPM and concurrency limits belong to plans, defaulting to 40 and 10. Subscription
+  overrides may inherit the plan or use an explicit value; zero means unlimited.
+  Do not restore gateway-wide default RPM/concurrency settings. User catalogs and
+  subscription views expose these limits without supplier routing data.
+- Subscription management uses the former virtual-account table/detail structure,
+  with a User column and a Manage action. All settings and records belong to that
+  subscription. OAuth verification lists only the user's available subscriptions
+  on the requested platform; confirmation binds the explicitly selected ID.
 - Filter dropdowns follow the administrator usage-record filter form: official
   shadcn Select/Combobox, compact labelled fields, full-width triggers and popper
   dropdowns. Do not introduce alternate filter controls or visual wrappers.
@@ -197,10 +206,13 @@ validation are complete.
   account-detail refreshes.
 - Frontend code owns page structure and field definitions. Never gate entire pages, tables, tabs or forms on API data/loading/error, or use backend field descriptors to construct the UI. Render structure first and bind values/rows as they arrive. Keep same-resource data on refresh failure and disable writes until actual data is ready. Never save placeholder defaults.
 - Use the official shadcn/ui neutral palette; do not add custom accent-color choices or overrides. Light, dark and system theme modes are browser-local preferences; persist the mode locally, never in a business account or server policy.
+- Usage result text uses blue for in-progress, green for success and red for failure.
+  Show the result label, with persisted error codes in details; do not restore
+  `failure_kind` or `failure_status` in the usage ledger or its DTOs.
 - Show loading, request, login, save and validation failures as small floating toast messages. Error feedback must not occupy page/form layout, move keyboard focus or use a blocking browser validation popup; persistent business statuses remain normal record content.
 - See [Frontend UI](docs/FRONTEND_UI.md) for the component and interaction conventions.
 
-### Virtual-account client data (user-confirmed 2026-09-20)
+### Subscription client data (user-confirmed 2026-09-20)
 
 Ownership clarification (user-confirmed 2026-09-21): admin editing applies to
 server-owned identity, catalog, billing and service policy. Client-owned sessions,
@@ -213,19 +225,17 @@ This clarification supersedes the older blanket requirement to edit every client
 
 Subscription operations clarification (user-confirmed 2026-09-21): operate each
 virtual account as a subscription account, following the ChatGPT subscription
-account model. Standalone accounts are administered directly; user subscriptions
-are administrator grants or local-wallet purchases, never official checkout payments.
-Subscription grants, renewals, plan changes
-and expiration are service-owned business state, not cosmetic display fields.
-Admin operations, persisted entitlements, client responses and execution checks
-must agree. Expiration must end the expired subscription's benefits; any remaining
-free-tier access follows the service policy and is distinct from disabling login.
+account model. Every client identity belongs to a user's explicitly created subscription.
+Subscriptions are administrator grants or local-wallet purchases, never official
+checkout payments. Grants, renewals, plan changes and expiration must agree in
+administration, SQLite, client responses and execution checks. Expiration ends
+subscription benefits without selecting another plan.
 Keep client-owned state under the ownership rule above. Every requested subscription
 or endpoint repair must include its corresponding administration operation or record
 view; do not fabricate purchases, payments or supplier-account entitlements.
 
-Before changing virtual-account endpoints, read
-[Virtual-account data and management](docs/ARCHITECTURE.md#virtual-account-data-and-management).
+Before changing subscription client endpoints, read
+[Subscription client data and management](docs/ARCHITECTURE.md#subscription-client-data-and-management).
 
 - Client identity, private data, preferences and feature configuration belong to the
   virtual account. Configure and persist them locally in SQLite and expose them in
@@ -317,6 +327,9 @@ Before changing virtual-account endpoints, read
   baseline update. Implement each requested repair through its data and UI path.
 
 - Match existing crate boundaries.
+- Remove superseded routes, fields and runtime branches when replacing behavior.
+  Migrate persisted data with SQL only; do not retain legacy aliases, dual reads,
+  dual writes or compatibility fallbacks.
 - Keep account isolation. Never share auth, installation_id, HTTP client, or session state.
 - Persist identity; do not regenerate installation_id on re-login of the same ChatGPT account.
 - Dynamic IDs (session/thread/turn/request) stay request-scoped.

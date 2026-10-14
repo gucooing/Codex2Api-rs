@@ -169,24 +169,15 @@ test("device polling preserves pending authorization context", () => {
   assert.throws(() => mergeOAuth(undefined, { status: "pending" }));
 });
 
-test("generation failures display numeric statuses and keep connection statuses separate", async () => {
-  const { usageResultCode, usageFailureKind } = await import("../src/lib/usage-display.ts");
-  assert.equal(
-    usageResultCode({
-      status: "failed",
-      http_status: 200,
-      failure_status: 503,
-      error_code: "server_is_overloaded",
-    }),
-    503,
-  );
-  assert.equal(usageResultCode({ status: "failed", http_status: 429, failure_status: null }), null);
-  assert.equal(
-    usageResultCode({ status: "completed", http_status: 200, failure_status: 503 }),
-    null,
-  );
-  assert.equal(usageFailureKind("quota_exhausted"), "额度耗尽");
-  assert.equal(usageFailureKind("rate_limit"), "临时限流");
+test("status display styles and failure results keep protocol codes without mapped labels", async () => {
+  const { usageStatus, usageResult } = await import("../src/lib/usage-display.ts");
+  assert.equal(usageStatus("in_progress").className, "text-blue-600 dark:text-blue-400");
+  assert.equal(usageStatus("completed").className, "text-green-600 dark:text-green-400");
+  assert.equal(usageStatus("failed").className, "text-red-600 dark:text-red-400");
+  assert.equal(usageResult({ status: "in_progress" }), "进行中");
+  assert.equal(usageResult({ status: "completed" }), "成功");
+  assert.equal(usageResult({ status: "client_stopped" }), "成功");
+  assert.equal(usageResult({ status: "failed" }), "失败");
 });
 
 test("usage fee formulas preserve token buckets and omit a unit multiplier", async () => {
@@ -228,8 +219,7 @@ test("usage source and consumption distinguish API debits from subscription spen
   const record = { status: "completed", wallet_debit_cents: 2, cost_nano_usd: 15_000_000 };
   assert.equal(usageConsumption({ ...record, subject_kind: "api_key" }), 0.02);
   assert.equal(usageConsumption({ ...record, subject_kind: "virtual_account" }), 0.015);
-  assert.equal(usageResult({ status: "failed", failure_status: 503 }), "503");
-  assert.equal(usageResult({ status: "failed", failure_status: null }), "-");
+  assert.equal(usageResult({ status: "failed" }), "失败");
   assert.equal(isTextUsage({ endpoint: "/v1/responses", image_count: null }), true);
   assert.equal(isTextUsage({ endpoint: "/v1/images/generations", image_count: null }), false);
 });

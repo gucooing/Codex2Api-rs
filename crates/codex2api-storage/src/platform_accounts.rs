@@ -17,8 +17,8 @@ pub struct PlatformAccount {
     pub created_at: String,
 }
 impl PlatformAccount {
-    pub fn effective_plan_at(&self, now: i64) -> &str {
-        if self.plan_type != "free"
+    pub fn subscription_active_at(&self, now: i64) -> bool {
+        self.enabled
             && self
                 .subscription_expires_at
                 .as_deref()
@@ -26,14 +26,6 @@ impl PlatformAccount {
                     chrono::DateTime::parse_from_rfc3339(expiry)
                         .is_ok_and(|time| time.timestamp() > now)
                 })
-        {
-            &self.plan_type
-        } else {
-            "free"
-        }
-    }
-    pub fn effective_plan(&self) -> &str {
-        self.effective_plan_at(Utc::now().timestamp())
     }
 }
 #[derive(Clone, FromRow, serde::Serialize)]
@@ -70,6 +62,10 @@ pub struct MissingEndpoint {
 }
 
 impl Storage {
+    pub(crate) async fn subscription_anchor(&self, id: &str) -> Result<i64> {
+        Ok(sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM platform_accounts WHERE id=?").bind(id).fetch_one(self.pool()).await?)
+    }
+
     pub async fn platform_revision(&self, id: &str) -> Result<i64> {
         sqlx::query_scalar("SELECT revision FROM platform_accounts WHERE id=?")
             .bind(id)
@@ -79,7 +75,7 @@ impl Storage {
     }
     pub async fn platform_accounts(&self) -> Result<Vec<PlatformAccount>> {
         Ok(
-            sqlx::query_as("SELECT * FROM virtual_platforms WHERE 1=1 ORDER BY created_at,id")
+            sqlx::query_as("SELECT * FROM regular_platforms WHERE 1=1 ORDER BY created_at,id")
                 .fetch_all(self.pool())
                 .await?,
         )
@@ -100,7 +96,7 @@ impl Storage {
     ) -> Result<Vec<PlatformAccount>> {
         Ok(sqlx::query_as(
             "SELECT * FROM platform_principals
-             WHERE kind='virtual' AND (instr(lower(username), lower(?)) > 0 OR instr(lower(email), lower(?)) > 0)
+             WHERE kind='regular' AND (instr(lower(username), lower(?)) > 0 OR instr(lower(email), lower(?)) > 0)
              ORDER BY created_at, id LIMIT ?",
         )
         .bind(search)

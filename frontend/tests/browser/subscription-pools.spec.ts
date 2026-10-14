@@ -1,6 +1,7 @@
+import { grantSubscription } from "./subscription-fixtures";
 import { test, expect } from "@playwright/test";
 
-test("subscription supply is managed through the plan and RPM stays editable", async ({
+test("subscriptions inherit plan pools and support independent limits", async ({
   page,
   context,
 }, info) => {
@@ -36,6 +37,8 @@ test("subscription supply is managed through the plan and RPM stays editable", a
       models: [],
       spending_windows: [],
       allow_purchase: true,
+      rpm_limit: 40,
+      concurrency_limit: 10,
       sale_price_usd: "10",
       duration_days: 30,
       supplier_tag_id: null,
@@ -60,24 +63,8 @@ test("subscription supply is managed through the plan and RPM stays editable", a
   const subscriptions = await (
     await context.request.get(`/admin/api/subscriptions?user_id=${user.id}`)
   ).json();
-  const subscription = subscriptions.items.find(
-    (item: { provider_id: string }) => item.provider_id === "chatgpt",
-  );
-  const grant = await context.request.put(
-    `/admin/api/subscriptions/${subscription.virtual_account_id}`,
-    {
-      headers,
-      data: {
-        user_id: user.id,
-        plan_id: plan.id,
-        expires_at: null,
-        enabled: true,
-        revision: subscription.revision,
-        reissue: false,
-      },
-    },
-  );
-  expect(grant.ok()).toBe(true);
+  expect(subscriptions.items).toHaveLength(0);
+  const subscription = await grantSubscription(context.request, headers, user.id, plan.id);
 
   await page.goto("/admin/plans/");
   await page.getByLabel("搜索套餐", { exact: true }).fill(planName);
@@ -98,26 +85,33 @@ test("subscription supply is managed through the plan and RPM stays editable", a
   const boundTags = await (await context.request.get("/admin/api/supplier-tags/options")).json();
   expect(boundTags.items.find((tag: { id: string }) => tag.id === pool.id).binding_count).toBe(1);
 
-  await page.goto(`/admin/subscriptions/detail/?id=${subscription.virtual_account_id}`);
-  await expect(page.getByText(planName, { exact: true })).toBeVisible();
+  const optionsLoaded = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith("/plans/options"),
+  );
+  await page.route(`**/admin/api/subscriptions/${subscription.id}`, async (route) => {
+    await optionsLoaded;
+    await route.continue();
+  });
+  await page.goto(`/admin/subscriptions/detail/?id=${subscription.id}`);
+  await expect(page.getByLabel("套餐", { exact: true })).toHaveText(planName);
   await expect(page.getByRole("heading", { name: "供应绑定", exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("标签号池", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("标签号池", { exact: true })).toHaveText("继承套餐号池");
   await expect(page.getByLabel("分配账户", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("RPM 限制", { exact: true })).toBeEnabled();
   await page.getByLabel("RPM 限制", { exact: true }).fill("23");
   const saved = page.waitForResponse(
     (response) => response.url().endsWith("/rate-limit") && response.request().method() === "PUT",
   );
-  await page.getByRole("button", { name: "保存 RPM", exact: true }).click();
+  await page.getByRole("button", { name: "保存限制", exact: true }).click();
   expect((await saved).ok()).toBe(true);
   await page.reload();
   await expect(page.getByLabel("RPM 限制", { exact: true })).toHaveValue("23");
   await page.screenshot({ path: info.outputPath("subscription-settings.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel("RPM 限制", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存 RPM", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存限制", exact: true })).toBeVisible();
   expect(requests.some((path) => /^\/admin\/api\/subscriptions\/[^/]+\/routing$/.test(path))).toBe(
-    false,
+    true,
   );
   expect(errors).toEqual([]);
 });

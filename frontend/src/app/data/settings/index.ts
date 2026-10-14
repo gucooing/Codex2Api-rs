@@ -69,8 +69,7 @@ export function useDesktop() {
   } as const;
 }
 
-type GatewayNumber =
-  "default_rpm" | "default_concurrency" | "pool_top_k" | "sticky_ttl_seconds" | "pool_wait_ms";
+type GatewayNumber = "pool_top_k" | "sticky_ttl_seconds" | "pool_wait_ms";
 type GatewayDraft = Partial<
   Omit<GatewaySettings, GatewayNumber | "ua_rules"> & Record<GatewayNumber | "ua_rules", string>
 >;
@@ -110,8 +109,6 @@ export function useGateway() {
           return value;
         };
         const body: GatewaySettings = {
-          default_rpm: integer("default_rpm", "RPM", 0, 1_000_000),
-          default_concurrency: integer("default_concurrency", "默认并发限制", 0, 1_000_000),
           pool_top_k: integer("pool_top_k", "候选账户数", 1, 100),
           sticky_ttl_seconds: integer("sticky_ttl_seconds", "会话有效期", 60, 604800),
           pool_wait_ms: integer("pool_wait_ms", "粘连等待时间", 1, 60000),
@@ -132,8 +129,6 @@ export function useGateway() {
     );
   const form = {
     id,
-    rpm: numberInput("default_rpm"),
-    concurrency: numberInput("default_concurrency"),
     candidates: { ...numberInput("pool_top_k"), disabled: disabled || mode !== "advanced" },
     sessionTtl: numberInput("sticky_ttl_seconds"),
     wait: numberInput("pool_wait_ms"),

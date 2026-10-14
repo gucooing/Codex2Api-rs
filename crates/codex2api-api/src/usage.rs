@@ -149,8 +149,6 @@ impl RequestLog {
             r.error_message = None;
             r.upstream_request_id = None;
             r.actual_model = None;
-            r.failure_kind = None;
-            r.failure_status = None;
             r.first_byte_ms = None;
             r.input_tokens = None;
             r.output_tokens = None;
@@ -579,8 +577,6 @@ impl RequestLog {
         };
         record.status = outcome.record_status().into();
         if let Some(failure) = outcome.failure() {
-            record.failure_kind = Some(failure.kind.as_str().into());
-            record.failure_status = failure.status.map(i64::from);
             record.error_code = failure.code.as_deref().map(|v| error_text(v, 128));
             record.error_message = failure.message.as_deref().map(|v| error_text(v, 512));
         }

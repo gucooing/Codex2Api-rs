@@ -171,15 +171,15 @@ async function fixture(page: Page, includeGrok = false) {
       if (tag && method === "PUT") tag.name = route.request().postDataJSON().name;
       if (tag && method === "DELETE") tags.splice(tags.indexOf(tag), 1);
       value = { ok: true };
-    } else if (path === "/consumers/v1")
+    } else if (path === "/subscriptions/v1")
       value = {
         ...contracts.consumer,
         id: "v1",
         plan_id: "plus",
         provider_id: "chatgpt",
-        name: "测试虚拟账户",
+        name: "测试订阅用户",
       };
-    else if (path === "/consumers/v1/routing") {
+    else if (path === "/subscriptions/v1/routing") {
       if (method === "PUT") {
         const input = route.request().postDataJSON();
         allocations.push(input);
@@ -196,14 +196,14 @@ async function fixture(page: Page, includeGrok = false) {
           },
         ],
       };
-    } else if (path === "/consumers/v1/rate-limit")
+    } else if (path === "/subscriptions/v1/rate-limit")
       value = {
         rpm: null,
-        default_rpm: 20,
-        effective_rpm: 20,
+        plan_rpm: 40,
+        effective_rpm: 40,
         concurrency: null,
-        default_concurrency: 5,
-        effective_concurrency: 5,
+        plan_concurrency: 10,
+        effective_concurrency: 10,
       };
     else if (path === "/plans/options") value = contracts.plans;
     else if (path === "/plans") value = paginate(contracts.plans.items);
@@ -530,7 +530,7 @@ test("left-side cross-page selection updates complete tag sets and tag managemen
 
 test("routing configures only the pool and allows clearing it", async ({ page }, info) => {
   const { state, allocations } = await fixture(page);
-  await page.goto("/admin/consumers/detail/?id=v1");
+  await page.goto("/admin/subscriptions/detail/?id=v1");
   await expect(page.getByRole("combobox", { name: "分配账户", exact: true })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "标签号池", exact: true })).toContainText(
     "高级池",
@@ -548,13 +548,13 @@ test("routing configures only the pool and allows clearing it", async ({ page },
   );
 
   await page.getByRole("combobox", { name: "标签号池", exact: true }).click();
-  await page.getByRole("option", { name: "未配置", exact: true }).click();
+  await page.getByRole("option", { name: "继承套餐号池", exact: true }).click();
   await page.getByRole("button", { name: "保存号池", exact: true }).click();
   await expect.poll(() => allocations.length).toBe(2);
   expect(allocations[1]).toEqual({ tag_id: null, revision: 2 });
   expect(state.tag).toBeNull();
   await expect(page.getByRole("combobox", { name: "标签号池", exact: true })).toContainText(
-    "未配置",
+    "继承套餐号池",
   );
   await page.screenshot({ path: info.outputPath("unconfigured-pool.png"), fullPage: true });
 });

@@ -10,6 +10,8 @@ export type User = {
 };
 export type Session = { user: User; csrf_token: string };
 export type Subscription = {
+  rpm_limit: number;
+  concurrency_limit: number;
   spending_windows: {
     duration_seconds: number;
     reset_at: number | null;
@@ -32,12 +34,14 @@ export type Subscription = {
   revision: number;
 };
 export type Plan = {
+  rpm_limit: number;
+  concurrency_limit: number;
   description: string;
   id: string;
   name: string;
   provider_id: string;
   plan_type: string;
-  sale_price_usd: string | null;
+  sale_price_usd: string;
   duration_days: number;
   revision: number;
   model_access: string;

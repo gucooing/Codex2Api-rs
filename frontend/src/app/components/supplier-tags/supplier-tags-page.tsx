@@ -138,7 +138,7 @@ export default function SupplierTagsPage() {
               <TableRow>
                 <TableHead>标签</TableHead>
                 <TableHead>平台</TableHead>
-                <TableHead>供应 / 虚拟账户</TableHead>
+                <TableHead>供应 / 订阅</TableHead>
                 <TableHead>操作</TableHead>
               </TableRow>
             </TableHeader>

@@ -285,7 +285,7 @@ pub async fn token(
         {
             Ok(Some(device)) if device.provider_id == codex2api_core::GROK => match state
                 .storage
-                .effective_platform_account(&device.virtual_account_id)
+                .platform_account(&device.virtual_account_id)
                 .await
             {
                 Ok(Some(account)) if account.enabled => Ok(Some((account, device.id))),
@@ -330,7 +330,7 @@ pub async fn token(
         identity["nonce"] = nonce.into();
     }
     let mut access = json!({"iss":issuer,"aud":"codex2api-grok","sub":account.id,"provider_id":"grok","token_use":"access","scope":scopes,"iat":now,"exp":now+wire::ACCESS_TOKEN_TTL,"jti":oauth_secret()});
-    if let Some(tier) = codex2api_core::providers::grok::subscription(account.effective_plan()) {
+    if let Some(tier) = codex2api_core::providers::grok::subscription(account.plan_type.as_str()) {
         access["tier"] = tier.jwt_tier.into();
     }
     let (access, id_token) = match super::jwt::issue(&state.storage, [access, identity]).await {

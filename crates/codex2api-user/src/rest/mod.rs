@@ -26,6 +26,7 @@ pub(crate) fn router(state: UserState) -> Router {
         .route("/password", post(profile::password))
         .route("/plans", get(subscriptions::plans))
         .route("/subscriptions", get(subscriptions::subscriptions))
+        .route("/subscriptions/options", get(subscriptions::options))
         .route("/usage", get(usage::usage))
         .route("/checkout/preview", post(orders::preview))
         .route("/orders", get(orders::orders).post(orders::create_order))

@@ -1,10 +1,10 @@
-# 虚拟账户重置卡
+# 订阅重置卡
 
 重置卡使用后清零用量，刷新周期也重新计时，但订阅到期时间不变；发送给客户端的响应必须遵守官方协议，不能夹带本地管理字段。
 
-虚拟账户详情的“重置卡”标签提供发放、使用和记录查询。每次发放 1–100 张，默认立即启用、有效期 30 天；管理员也可指定启用时间和 1–3650 天有效时长，时长从启用时间起计算。启用前或过期后客户端不会获取、也不会看到卡片，管理端仍可看到待启用／过期记录。管理备注只在管理 API 中返回。每张卡使用一次，不附带订阅、付款或供应账户权益。已到期订阅不能通过用卡恢复，未消耗的卡保留。
+订阅详情的“重置卡”标签提供发放、使用和记录查询。每次发放 1–100 张，默认立即启用、有效期 30 天；管理员也可指定启用时间和 1–3650 天有效时长，时长从启用时间起计算。启用前或过期后客户端不会获取、也不会看到卡片，管理端仍可看到待启用／过期记录。管理备注只在管理 API 中返回。每张卡使用一次，不附带订阅、付款或供应账户权益。已到期订阅不能通过用卡恢复，未消耗的卡保留。
 
-虚拟账户列表提供逐行 Checkbox、当前页全选和“当前筛选条件下的全部账户”选择。批量删除、直接重置用量、发放重置卡共用 `/admin/api/consumers/batch`；全选筛选结果只提交筛选条件，由 SQLite 查询账户 ID，不将所有匹配账户加载到浏览器。行的“更多”菜单提供直接重置和发卡，使用同一业务校验。直接重置创建管理员内部重置代次，不产生客户端可见卡片。
+订阅列表提供逐行 Checkbox、当前页全选和“当前筛选条件下的全部账户”选择。批量删除、直接重置用量、发放重置卡共用 `/admin/api/subscriptions/batch`；全选筛选结果只提交筛选条件，由 SQLite 查询账户 ID，不将所有匹配账户加载到浏览器。行的“更多”菜单提供直接重置和发卡，使用同一业务校验。直接重置创建管理员内部重置代次，不产生客户端可见卡片。
 
 成功使用会清空当前外层和内层用量，将 7 天／30 天外层起点设为使用时间，清除原 5 小时内层起点；内层仍按套餐规则在下次实际使用时开始。订阅期限、套餐、原订阅生效时间、历史 Token 和已结算费用均不改动。没有当前用量或订阅已到期时返回 `nothing_to_reset`，不扣卡。
 
@@ -14,4 +14,4 @@
 
 协议基线由版本常量固定。官方客户端合同为：GET `/wham/usage` 的 `rate_limit_reset_credits.available_count`；GET `/wham/rate-limit-reset-credits` 的 `credits/available_count/total_earned_count` 和官方卡片字段；POST `/wham/rate-limit-reset-credits/consume` 的 `redeem_request_id`、可选 `credit_id`，以及 `reset/nothing_to_reset/no_credit/already_redeemed`、整数 `windows_reset` 和可选 `credit`。客户端响应不返回管理备注、美元计费、供应账户信息或内部窗口数组。证据来自 pinned `backend-client/src/types.rs`、`client/rate_limit_resets.rs` 及 `rate_limit_resets_tests.rs`。
 
-本地回归覆盖：`cargo test -p codex2api-storage --lib --test migrations`、`cargo test -p codex2api-admin --test reset_credits --test contracts --test virtual_accounts`、`cargo test -p codex2api-api --test virtual_oauth reset_credits_match_official_clients -- --nocapture`、`frontend/tests/browser/reset-credits.spec.ts`。原生验证仅使用进程内测试 token 和临时 TLS fixture，不代表部署或真实官方供应用卡。
+本地回归覆盖：`cargo test -p codex2api-storage --lib --test migrations`、`cargo test -p codex2api-admin --test reset_credits --test contracts --test subscriptions`、`cargo test -p codex2api-api --test virtual_oauth reset_credits_match_official_clients -- --nocapture`、`frontend/tests/browser/reset-credits.spec.ts`。原生验证仅使用进程内测试 token 和临时 TLS fixture，不代表部署或真实官方供应用卡。

@@ -871,13 +871,12 @@ async fn failed_response_with_reported_usage_is_charged_without_replay() {
                 assert!(!text.contains("[DONE]"));
                 assert!(!text.contains("\"finish_reason\":\"stop\""));
                 assert_eq!(
-                    sqlx::query_scalar::<_, Option<i64>>(
-                        "SELECT failure_status FROM usage_records"
-                    )
-                    .fetch_one(fixture.storage.pool())
-                    .await
-                    .unwrap(),
-                    ai_status.map(i64::from)
+                    sqlx::query_scalar::<_, Option<String>>("SELECT error_code FROM usage_records")
+                        .fetch_one(fixture.storage.pool())
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some("usage_limit_reached")
                 );
                 let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,http_status,cost_nano_usd FROM usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
                 assert_eq!(

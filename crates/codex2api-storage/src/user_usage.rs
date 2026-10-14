@@ -53,8 +53,7 @@ struct UserUsageRecord {
     endpoint: String,
     transport: String,
     stream: Option<bool>,
-    failure_kind: Option<String>,
-    failure_status: Option<i64>,
+    error_code: Option<String>,
     multiplier_micros: i64,
     wallet_debit_cents: i64,
     image_count: Option<i64>,
@@ -232,7 +231,7 @@ impl Storage {
             .fetch_all(&mut *tx)
             .await?;
         let mut records = QueryBuilder::new(format!(
-            "SELECT id,{} AS consumer_name,subject_kind,reasoning_effort,service_tier,image_usage_json,image_input_usage_json,key_id,COALESCE(source_name,group_name) AS source_name,endpoint,transport,stream,failure_kind,failure_status,multiplier_micros,wallet_debit_cents,image_count,image_size,provider_id,model,actual_model,requested_at_ms,status,input_tokens,output_tokens,cached_tokens,cache_write_tokens,reasoning_tokens,total_ms,first_byte_ms,cost_nano_usd,billing_status,pricing_snapshot_json FROM usage_records",
+            "SELECT id,{} AS consumer_name,subject_kind,reasoning_effort,service_tier,image_usage_json,image_input_usage_json,key_id,COALESCE(source_name,group_name) AS source_name,endpoint,transport,stream,error_code,multiplier_micros,wallet_debit_cents,image_count,image_size,provider_id,model,actual_model,requested_at_ms,status,input_tokens,output_tokens,cached_tokens,cache_write_tokens,reasoning_tokens,total_ms,first_byte_ms,cost_nano_usd,billing_status,pricing_snapshot_json FROM usage_records",
             crate::usage::CONSUMER_NAME,
         ));
         scope(&mut records, owner, filter, from, until);

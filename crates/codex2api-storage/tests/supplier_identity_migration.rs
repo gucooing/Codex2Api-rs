@@ -27,7 +27,7 @@ async fn snapshot(pool: &SqlitePool, table: &str, columns: &[String]) -> Vec<Str
 }
 
 #[tokio::test]
-async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_foreign_keys() {
+async fn supplier_migration_preserves_supplier_data_while_removing_standalone_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("v44.sqlite");
     let pool = SqlitePoolOptions::new()
@@ -95,16 +95,12 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
     pool.close().await;
     let storage = Storage::open(&path).await.unwrap();
     for (table, (original_columns, expected)) in tables.iter().zip(&before) {
-        if *table == "execution_routes" {
-            // The current routing migration intentionally removes supplier binding.
-            let route = storage
-                .execution_route("consumer", "chatgpt")
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(route.tag_id.as_deref(), Some("legacy-supplier"));
-            assert_eq!(route.provider_id, "chatgpt");
-            assert!(route.revision > 7);
+        if matches!(*table, "execution_routes" | "usage_records") {
+            assert!(
+                snapshot(storage.pool(), table, &columns(storage.pool(), table).await)
+                    .await
+                    .is_empty()
+            );
             continue;
         }
         // Later migrations may append fields; every pre-existing column and value must survive.
@@ -155,12 +151,6 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
     );
     storage.close().await;
     let reopened = Storage::open(&path).await.unwrap();
-    let route_revision = reopened
-        .execution_route("consumer", "chatgpt")
-        .await
-        .unwrap()
-        .unwrap()
-        .revision;
     assert_eq!(
         reopened
             .require_account("supplier")
@@ -177,20 +167,20 @@ async fn changing_supplier_uniqueness_preserves_every_related_row_and_enforces_f
             .unwrap()
             .is_none()
     );
-    let route = reopened
-        .execution_route("consumer", "chatgpt")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(route.tag_id.as_deref(), Some("legacy-supplier"));
-    assert_eq!(route.revision, route_revision);
+    assert!(
+        reopened
+            .execution_route("consumer", "chatgpt")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         reopened
             .query_usage(&Default::default())
             .await
             .unwrap()
             .total,
-        1
+        0
     );
     reopened.close().await;
 }

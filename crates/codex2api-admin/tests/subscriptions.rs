@@ -1,3 +1,10 @@
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+use account_fixture::AccountFixture;
 mod common;
 use axum::http::StatusCode;
 use common::*;
@@ -14,13 +21,13 @@ async fn realtime_creation_records_are_readonly_and_scoped_to_the_consumer() {
         .save_virtual_resource(id, "realtime_call", "rtc_fixture", None, &call)
         .await
         .unwrap();
-    let path = format!("/admin/api/consumers/{id}/records?kind=realtime_call");
+    let path = format!("/admin/api/subscriptions/{id}/records?kind=realtime_call");
     let response = f.get(&path).await;
     assert_eq!(response["items"].as_array().unwrap().len(), 1);
     assert_eq!(response["items"][0]["value"], call);
     let empty = f
         .get(&format!(
-            "/admin/api/consumers/{}/records?kind=realtime_call",
+            "/admin/api/subscriptions/{}/records?kind=realtime_call",
             other["id"].as_str().unwrap()
         ))
         .await;
@@ -35,46 +42,31 @@ async fn realtime_creation_records_are_readonly_and_scoped_to_the_consumer() {
 }
 
 #[tokio::test]
-async fn consumers_are_provider_fixed_and_never_expose_passwords() {
+async fn subscriptions_keep_the_owner_and_provider_fixed_and_never_expose_passwords() {
     let f = Fixture::new().await;
-    let c = f.consumer("alice").await;
-    let id = c["id"].as_str().unwrap();
-    assert!(c.get("password_hash").is_none());
-    assert!(c.get("password").is_none());
-    assert!(
-        !f.get("/admin/api/consumers")
-            .await
-            .to_string()
-            .contains("secret-fixture")
-    );
-    let mut input = json!({"username":"alice","password":"","provider_id":"grok","name":"Alice","email":"alice@example.test","plan_id":"plus","subscription_expires_at":null,"enabled":true});
-    let path = format!("/admin/api/consumers/{id}");
+    let account = f.consumer("alice").await;
+    let id = account["id"].as_str().unwrap();
+    assert!(account.get("password_hash").is_none());
+    let mut input = json!({"user_id":account["user_id"],"plan_id":"plus","expires_at":null,"enabled":true,"reissue":false,"revision":account["revision"]});
+    let path = format!("/admin/api/subscriptions/{id}");
+    input["user_id"] = "someone-else".into();
     assert_eq!(
         f.request("PUT", &path, input.clone()).await.status(),
-        StatusCode::BAD_REQUEST
+        StatusCode::NOT_FOUND
     );
-    input["provider_id"] = "chatgpt".into();
-    let previous = f
-        .storage
-        .platform_account(id)
-        .await
-        .unwrap()
-        .unwrap()
-        .password_hash;
+    input["user_id"] = account["user_id"].clone();
+    let grok = f.storage.plan_fixture("grok").await.unwrap();
+    input["plan_id"] = grok.id.into();
+    assert_eq!(
+        f.request("PUT", &path, input.clone()).await.status(),
+        StatusCode::CONFLICT
+    );
+    input["plan_id"] = "plus".into();
     assert_eq!(
         f.request("PUT", &path, input.clone()).await.status(),
         StatusCode::OK
     );
-    assert_eq!(
-        f.storage
-            .platform_account(id)
-            .await
-            .unwrap()
-            .unwrap()
-            .password_hash,
-        previous
-    );
-    input["account_id"] = "legacy-supplier".into();
+    input["password"] = "not-a-subscription-field".into();
     assert_eq!(
         f.request("PUT", &path, input).await.status(),
         StatusCode::UNPROCESSABLE_ENTITY
@@ -108,15 +100,15 @@ async fn plans_are_shared_revision_checked_and_subscription_operations_are_actua
     );
     let c = f.consumer("subscriber").await;
     let owner = c["id"].as_str().unwrap();
-    let input = json!({"username":"subscriber","password":"","provider_id":"chatgpt","name":"subscriber","email":"subscriber@example.test","plan_id":id,"subscription_expires_at":"2020-01-01T00:00:00Z","enabled":true});
+    let input = json!({"user_id":c["user_id"],"plan_id":id,"expires_at":"2020-01-01T00:00:00Z","enabled":true,"reissue":false,"revision":c["revision"]});
     let r = f
-        .request("PUT", &format!("/admin/api/consumers/{owner}"), input)
+        .request("PUT", &format!("/admin/api/subscriptions/{owner}"), input)
         .await;
     assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!(body(r).await["effective_plan"], "free");
+    assert_eq!(body(r).await["subscription_status"], "expired");
     let records = f
         .get(&format!(
-            "/admin/api/consumers/{owner}/records?kind=subscription_operation"
+            "/admin/api/subscriptions/{owner}/records?kind=subscription_operation"
         ))
         .await;
     assert!(!records["items"].as_array().unwrap().is_empty());
@@ -136,7 +128,7 @@ async fn service_configuration_validates_revisions_and_preserves_client_owned_st
     let f = Fixture::new().await;
     let c = f.consumer("managed").await;
     let id = c["id"].as_str().unwrap();
-    let base = format!("/admin/api/consumers/{id}");
+    let base = format!("/admin/api/subscriptions/{id}");
     let list = f.get(&format!("{base}/configs")).await;
     assert!(
         list["items"]
@@ -160,7 +152,6 @@ async fn service_configuration_validates_revisions_and_preserves_client_owned_st
         "config_bundle",
         "models",
         "quota",
-        "subscription_policy",
         "subscription_entitlements",
     ] {
         let before = f
@@ -278,9 +269,9 @@ async fn consumer_history_and_quota_are_isolated_and_only_have_two_cost_windows(
     f.storage.insert_usage(&record).await.unwrap();
     record.status = "completed".into();
     f.storage.finish_usage(&record).await.unwrap();
-    let usage = f.get(&format!("/admin/api/consumers/{a}/usage")).await;
+    let usage = f.get(&format!("/admin/api/subscriptions/{a}/usage")).await;
     assert_eq!(usage["summary"]["lifetime_tokens"], 120);
-    let other = f.get(&format!("/admin/api/consumers/{b}/usage")).await;
+    let other = f.get(&format!("/admin/api/subscriptions/{b}/usage")).await;
     assert_ne!(other["summary"]["lifetime_tokens"], 120);
     assert_eq!(
         usage["quota"]["rate_limit"]["primary_window"]["limit_usd"],
@@ -293,14 +284,18 @@ async fn consumer_history_and_quota_are_isolated_and_only_have_two_cost_windows(
     assert!(usage["quota"]["billing"].get("used_usd").is_some());
     assert!(!usage.to_string().contains("total_cost_limit"));
     assert!(
-        f.get(&format!("/admin/api/consumers/{a}/remote-servers"))
+        f.get(&format!("/admin/api/subscriptions/{a}/remote-servers"))
             .await["items"]
             .is_array()
     );
     assert_eq!(
-        f.request("GET", "/admin/api/consumers/missing/configs", Value::Null)
-            .await
-            .status(),
+        f.request(
+            "GET",
+            "/admin/api/subscriptions/missing/configs",
+            Value::Null
+        )
+        .await
+        .status(),
         StatusCode::NOT_FOUND
     );
 }
@@ -327,18 +322,19 @@ async fn configuration_options_use_separate_account_owned_lists() {
         .await
         .unwrap();
     assert_eq!(
-        f.get(&format!("/admin/api/consumers/{owner}/plugins"))
+        f.get(&format!("/admin/api/subscriptions/{owner}/plugins"))
             .await["items"][0]["id"],
         "owner-plugin"
     );
     assert_eq!(
-        f.get(&format!("/admin/api/consumers/{owner}/connectors"))
+        f.get(&format!("/admin/api/subscriptions/{owner}/connectors"))
             .await["items"][0]["id"],
         "owner-connector"
     );
     for kind in ["plugins", "connectors"] {
         assert!(
-            f.get(&format!("/admin/api/consumers/{other}/{kind}")).await["items"]
+            f.get(&format!("/admin/api/subscriptions/{other}/{kind}"))
+                .await["items"]
                 .as_array()
                 .unwrap()
                 .is_empty()
@@ -346,7 +342,7 @@ async fn configuration_options_use_separate_account_owned_lists() {
         assert_eq!(
             f.request(
                 "GET",
-                &format!("/admin/api/consumers/missing/{kind}"),
+                &format!("/admin/api/subscriptions/missing/{kind}"),
                 json!(null)
             )
             .await
@@ -356,7 +352,7 @@ async fn configuration_options_use_separate_account_owned_lists() {
         assert_eq!(
             f.with_auth(
                 "GET",
-                &format!("/admin/api/consumers/{owner}/{kind}"),
+                &format!("/admin/api/subscriptions/{owner}/{kind}"),
                 json!(null),
                 None,
                 None

@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type Consumer } from "@/lib/api";
+import { type SubscriptionAccount } from "@/lib/api";
 import { type RoutingResponse, useRoutingForm } from "@/lib/platform-account";
 export function RoutingForm({
   id: accountId,
@@ -19,7 +19,7 @@ export function RoutingForm({
   onSaved,
 }: {
   id: string;
-  account?: Consumer;
+  account?: SubscriptionAccount;
   data: RoutingResponse;
   disabled: boolean;
   onSaved: () => void;
@@ -41,7 +41,7 @@ export function RoutingForm({
                 <SelectValue placeholder="选择标签号池" />
               </SelectTrigger>
               <SelectContent position="popper">
-                <SelectItem value="none">未配置</SelectItem>
+                <SelectItem value="none">继承套餐号池</SelectItem>
                 {(tags.data?.items ?? []).map((tag) => (
                   <SelectItem key={tag.id} value={tag.id}>
                     {tag.name}（{tag.supplier_count} 个供应账户）

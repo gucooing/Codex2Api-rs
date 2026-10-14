@@ -417,7 +417,7 @@ mod tests {
         );
         assert!(check_virtual_quota(&storage, &account.id).await.is_err());
         storage
-            .bind_supplier_fixture(&account.id, "chatgpt", Some(&second.id), Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&second.id), Some(2))
             .await
             .unwrap();
         storage.save_account_fixture(&account).await.unwrap();

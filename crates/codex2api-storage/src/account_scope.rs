@@ -5,18 +5,14 @@ use crate::{Result, Storage, StorageError};
 #[derive(Clone, Copy)]
 pub enum AccountScope {
     User,
-    VirtualUser,
     UserPlatform,
-    VirtualAccount,
 }
 
 impl AccountScope {
     pub(crate) fn view(self) -> &'static str {
         match self {
             Self::User => "regular_users",
-            Self::VirtualUser => "virtual_users",
             Self::UserPlatform => "regular_platforms",
-            Self::VirtualAccount => "virtual_platforms",
         }
     }
 }

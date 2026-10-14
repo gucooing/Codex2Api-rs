@@ -39,14 +39,6 @@ export const navigation = [
     description: "用户资料与钱包记录",
   },
   {
-    href: "/consumers/",
-    label: "虚拟账户",
-    group: "用户与订阅",
-    icon: Users,
-    keywords: "consumer 订阅 登录 身份",
-    description: "消费身份、订阅与执行路由",
-  },
-  {
     href: "/subscriptions/",
     label: "订阅管理",
     group: "用户与订阅",

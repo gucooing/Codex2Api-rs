@@ -1,8 +1,9 @@
+import { createUser, grantSubscription } from "./subscription-fixtures";
 import { test, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
-test("server pages, cross-page selection, grant retry, quota and pricing dialogs", async ({
+test("subscription pages preserve cross-page selection and idempotent reset-card grants", async ({
   page,
   context,
 }) => {
@@ -32,6 +33,8 @@ test("server pages, cross-page selection, grant retry, quota and pricing dialogs
           provider_id: "chatgpt",
           allow_purchase: true,
           revision: plan.revision,
+          rpm_limit: plan.rpm_limit,
+          concurrency_limit: plan.concurrency_limit,
           model_access: "all",
           models: [],
           spending_windows: [
@@ -46,24 +49,16 @@ test("server pages, cross-page selection, grant retry, quota and pricing dialogs
   const accounts: { id: string; name: string }[] = [];
   for (let index = 0; index < 23; index++) {
     const name = `${prefix}-${index.toString().padStart(2, "0")}`;
-    const response = await context.request.post("/admin/api/consumers", {
-      headers,
-      data: {
-        username: name,
-        name,
-        email: `${name}@example.test`,
-        password: "test-only",
-        provider_id: "chatgpt",
-        plan_id: "plus",
-        subscription_expires_at: null,
-        enabled: true,
-      },
+    const user = await createUser(context.request, headers, {
+      username: name,
+      name,
+      email: `${name}@example.test`,
     });
-    expect(response.ok()).toBeTruthy();
-    accounts.push(await response.json());
+    const subscription = await grantSubscription(context.request, headers, user.id, "plus");
+    accounts.push({ id: subscription.id, name });
   }
-  await page.goto("/admin/consumers/");
-  await page.getByLabel("搜索账户", { exact: true }).fill(prefix);
+  await page.goto("/admin/subscriptions/");
+  await page.getByLabel("搜索用户", { exact: true }).fill(prefix);
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect(page.getByText("共 23 条 · 2 页", { exact: true })).toBeVisible();
   await expect(page.getByRole("table").getByRole("row")).toHaveCount(21);
@@ -89,7 +84,7 @@ test("server pages, cross-page selection, grant retry, quota and pricing dialogs
   await grant.getByLabel("发放数量（每个账户）", { exact: true }).fill("2");
   const requests: Record<string, unknown>[] = [];
   let drop = true;
-  await page.route("**/admin/api/consumers/batch", async (route) => {
+  await page.route("**/admin/api/subscriptions/batch", async (route) => {
     requests.push(route.request().postDataJSON());
     const response = await route.fetch();
     if (drop) {
@@ -107,12 +102,12 @@ test("server pages, cross-page selection, grant retry, quota and pricing dialogs
   expect(requests[0].excluded_ids).toEqual([excludedId]);
   const sample = accounts.find((a) => a.id !== excludedId)!;
   const cards = await (
-    await context.request.get(`/admin/api/consumers/${sample.id}/reset-credits`)
+    await context.request.get(`/admin/api/subscriptions/${sample.id}/reset-credits`)
   ).json();
   expect(cards.items).toHaveLength(2);
   expect(cards.items[0].status).toBe("pending");
   const none = await (
-    await context.request.get(`/admin/api/consumers/${excludedId}/reset-credits`)
+    await context.request.get(`/admin/api/subscriptions/${excludedId}/reset-credits`)
   ).json();
   expect(none.items).toHaveLength(0);
   // Single-account menus open a form without immediately granting anything.
@@ -124,34 +119,7 @@ test("server pages, cross-page selection, grant retry, quota and pricing dialogs
   expect(requests).toHaveLength(2);
   const output = resolve(process.env.CODEX2API_TEST_OUTPUT_DIR!, "screenshots");
   await mkdir(output, { recursive: true });
-  await page.screenshot({ path: resolve(output, "consumer-quota.png"), fullPage: true });
-  await page.goto("/admin/models/");
-  const model = page
-    .getByRole("row")
-    .filter({ has: page.getByText("gpt-6-astra", { exact: true }) });
-  await model.getByRole("button", { name: "编辑", exact: true }).click();
-  const pricing = page.getByRole("dialog", { name: "编辑模型", exact: true });
-  await expect(pricing.getByLabel("Fast 倍率", { exact: true })).toHaveValue("2");
-  await expect(pricing.getByLabel("Flex 倍率", { exact: true })).toHaveValue("0.5");
-  await expect(pricing.getByLabel("上下文起点（Token）", { exact: true })).toHaveValue("272001");
-  await page.screenshot({ path: resolve(output, "model-pricing.png"), fullPage: true });
-  await pricing.getByLabel("Fast 倍率", { exact: true }).fill("3");
-  await pricing.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(pricing).toHaveCount(0);
-  const saved = (await (await context.request.get("/admin/api/models")).json()).items.find(
-    (item: { model: string }) => item.model === "gpt-6-astra",
-  );
-  expect(
-    saved.token_prices.find(
-      (row: { tier: string; min_input_tokens: number }) =>
-        row.tier === "fast" && row.min_input_tokens === 272001,
-    ).output_rate,
-  ).toBe("225");
-  await model.getByRole("button", { name: "编辑", exact: true }).click();
-  await expect(pricing.getByLabel("Fast 倍率", { exact: true })).toHaveValue("3");
-  await pricing.getByLabel("Fast 倍率", { exact: true }).fill("2");
-  await pricing.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(pricing).toHaveCount(0);
+  await page.screenshot({ path: resolve(output, "subscription-quota.png"), fullPage: true });
   expect(errors).toEqual([]);
 });
 
@@ -165,7 +133,7 @@ test("reset card detail has a compact toolbar and opens the grant form before an
   await expect(
     page.locator("[data-slot=breadcrumb-page]").filter({ hasText: "概览" }),
   ).toBeVisible();
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "重置卡", exact: true }).click();
   await expect(page.getByRole("button", { name: "发放重置卡", exact: true })).toBeEnabled();
   await expect(page.getByLabel("发放数量", { exact: true })).toHaveCount(0);

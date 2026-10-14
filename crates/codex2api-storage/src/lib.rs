@@ -40,12 +40,12 @@ pub use entitlements::EffectiveEntitlements;
 pub use execution_routes::ExecutionRoute;
 mod client_fields;
 mod client_ownership;
-mod consumer_management;
 mod desktop_support;
 mod oauth;
 mod oauth_authorization;
 mod oauth_device;
 mod providers;
+mod subscription_management;
 pub use oauth_device::{
     DeviceAuthorization, DeviceAuthorizationApproval, DeviceAuthorizationCode,
     DeviceAuthorizationPoll, GrokDevicePoll,
@@ -55,7 +55,7 @@ mod proxy;
 mod quota;
 mod remote_servers;
 mod reset_credits;
-pub use consumer_management::{ConsumerFilters, ConsumerSelection, ResetCardGrant};
+pub use subscription_management::{ResetCardGrant, SubscriptionFilters, SubscriptionSelection};
 mod public_urls;
 mod request_limits;
 mod request_writer;
@@ -83,12 +83,9 @@ mod types;
 mod usage;
 mod usage_statistics;
 pub use usage_statistics::{UsageGroup, UsageStatistics, UsageStatisticsRow, UsageTotals};
-mod free_plan;
 mod jwt;
 mod user_subscriptions;
 mod users;
-mod virtual_users;
-pub use virtual_users::VirtualUserChange;
 mod wallet;
 pub use jwt::TokenPurpose;
 pub use wallet::{WalletAdjustment, WalletEntryFilter};

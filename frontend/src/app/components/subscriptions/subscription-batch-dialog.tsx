@@ -1,5 +1,5 @@
 "use client";
-import { ConsumerBatchDialogProps, useConsumerBatchDialog } from "@/app/data/consumers";
+import { SubscriptionBatchDialogProps, useSubscriptionBatchDialog } from "@/app/data/subscriptions";
 import { Button } from "@/components/ui/button";
 import { CardDescription } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 
-export function ConsumerBatchDialog({
+export function SubscriptionBatchDialog({
   batchOpen,
   batchBusy,
   setBatchOpen,
@@ -34,8 +34,8 @@ export function ConsumerBatchDialog({
   setGrantDuration,
   grantNote,
   setGrantNote,
-}: ConsumerBatchDialogProps) {
-  const { handleSubmit } = useConsumerBatchDialog({ actions, runBatch });
+}: SubscriptionBatchDialogProps) {
+  const { handleSubmit } = useSubscriptionBatchDialog({ actions, runBatch });
   return (
     <Dialog
       open={batchOpen}
@@ -60,7 +60,7 @@ export function ConsumerBatchDialog({
               ? "发放重置卡"
               : batchDialog?.operation === "reset"
                 ? "重置用量"
-                : "删除虚拟账户"}
+                : "删除订阅"}
           </DialogTitle>
         </DialogHeader>
         <form noValidate onSubmit={(event) => handleSubmit(event)}>
@@ -140,7 +140,7 @@ export function ConsumerBatchDialog({
             ) : (
               <CardDescription>
                 {batchDialog?.operation === "delete"
-                  ? "删除所选账户并撤销登录？"
+                  ? "删除所选订阅并撤销对应设备登录？"
                   : "重置所选账户用量及周期？订阅到期时间不变。"}
               </CardDescription>
             )}

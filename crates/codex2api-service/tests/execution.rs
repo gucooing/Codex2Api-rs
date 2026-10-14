@@ -289,7 +289,7 @@ async fn model_permissions_are_exact_current_and_provider_scoped() {
 }
 
 #[tokio::test]
-async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() {
+async fn expired_subscriptions_never_fall_back_to_another_plan() {
     let temp = tempfile::tempdir().unwrap();
     let storage = Storage::open(temp.path().join("expiry.sqlite"))
         .await
@@ -326,24 +326,13 @@ async fn expiry_uses_only_explicit_free_entitlements_and_never_expands_to_all() 
             .unwrap()
             .is_empty()
     );
-    let mut plan = storage.platform_free_plan("chatgpt").await.unwrap();
-    plan.config["model_access"] = json!("selected");
-    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"}]);
-    plan.config["spending_windows"] = json!([{"duration_seconds":2592000,"cost_limit_usd":null}]);
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
-    service
-        .authorize(&account.id, "chatgpt", request("gpt-5.6-luna"))
-        .await
-        .unwrap();
-    assert!(
+    assert!(storage.virtual_plan("free").await.unwrap().is_none());
+    assert!(matches!(
         service
-            .authorize(&account.id, "chatgpt", request("gpt-6-astra"))
-            .await
-            .is_err()
-    );
+            .authorize(&account.id, "chatgpt", request("gpt-5.6-luna"))
+            .await,
+        Err(ServiceError::Policy(PolicyError::SubscriptionRequired))
+    ));
     assert!(
         storage
             .platform_account(&account.id)

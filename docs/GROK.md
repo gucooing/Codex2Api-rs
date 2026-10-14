@@ -24,9 +24,9 @@ RT 创建一行一个，每批最多 50 条；页面依次提交并显示每行�
 
 “模型配置”的价格预设来自 [xAI 官方计价](https://docs.x.ai/developers/pricing)。已核实的文本预设覆盖 Grok 4.7、4.6、4.5、4.3、grok-build-0.1 以及列出的 4.20 模型；200,000 输入 Token 起使用官方长上下文价格。预设不推断未公布档位、不改已有人工价格，管理员可以添加任意有效模型名并设置价格。输入、缓存读取、缓存写入、输出按请求开始时的价格快照结算，推理不重复计费。未知费用保持未知，有额度限制时不能把缺价当免费。
 
-Grok 套餐独立选择 Grok 订阅档位、模型范围、售价、供应池及 7 天／30 天外层和可选 5 小时内层额度。新旧用户各有独立 Grok Free 身份；管理员授予、钱包预览／确认／支付、到期回落、用量和设备撤销共用同一持久化事实，不能跨平台绑定供应或模型。
+Grok 套餐独立选择 Grok 订阅档位、模型范围、售价、供应池及 7 天／30 天外层和可选 5 小时内层额度，RPM 与并发限制默认分别为 40 和 10。用户默认无订阅，同一用户可持有多个 Grok 订阅，OAuth 确认时选择具体订阅。管理员发放与钱包购买新增独立订阅；续费、升级、用量和设备撤销按订阅 ID 管理。到期保留记录并停止执行权益，不创建或回退到 Free，不能跨平台绑定供应或模型。
 
-订阅选项对应 Grok Build 的完整已知档位：Free、X Basic、X Premium、X Premium+、SuperGrok Lite、SuperGrok、SuperGrok Plus、SuperGrok Heavy。客户端 `/settings` 使用官方展示名，不使用管理员自定义的套餐名称；`/user.subscriptionTier` 和访问令牌的数字 `tier` 分别遵循客户端枚举。例如 `GrokPro` 对应 SuperGrok，`SuperGrokPro` 对应 SuperGrok Heavy。旧套餐和订单历史保留；旧 `premium`、`premium_plus`、`supergrok_pro` 值按对应档位读取，原有 `team` 不冒充任何官方档位，也不再作为新增选项。
+本地套餐的订阅选项为 X Basic、X Premium、X Premium+、SuperGrok Lite、SuperGrok、SuperGrok Plus、SuperGrok Heavy；供应账户仍可显示官方返回的 Free 档位。客户端 `/settings` 使用官方展示名，不使用管理员自定义的套餐名称；`/user.subscriptionTier` 和访问令牌的数字 `tier` 分别遵循客户端枚举。例如 `GrokPro` 对应 SuperGrok，`SuperGrokPro` 对应 SuperGrok Heavy。普通用户的订单历史保留；旧 `premium`、`premium_plus`、`supergrok_pro` 值按对应档位读取，原有 `team` 不冒充任何官方档位，也不再作为新增选项。
 
 ## cgrok 接入
 

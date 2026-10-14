@@ -54,8 +54,6 @@ pub struct UsageRecord {
     pub requested_at_ms: i64,
     pub status: String,
     pub http_status: Option<i64>,
-    pub failure_kind: Option<String>,
-    pub failure_status: Option<i64>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub cost_nano_usd: Option<i64>,
@@ -113,8 +111,6 @@ impl Default for UsageRecord {
             requested_at_ms: Default::default(),
             status: Default::default(),
             http_status: Default::default(),
-            failure_kind: None,
-            failure_status: None,
             error_code: None,
             error_message: None,
             cost_nano_usd: Default::default(),
@@ -402,7 +398,7 @@ impl Storage {
     }
     /// Called once by the process at startup; a prior process cannot still own these requests.
     pub async fn recover_interrupted_usage(&self) -> Result<u64> {
-        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(unixepoch('subsec')*1000 AS INTEGER),status='interrupted',failure_kind='transport',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
+        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(unixepoch('subsec')*1000 AS INTEGER),status='interrupted',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
             .execute(self.pool())
             .await?.rows_affected())
     }
@@ -687,7 +683,10 @@ mod tests {
             storage.search_platform_accounts("", 5).await.unwrap()[0].id,
             consumer.id
         );
-        storage.delete_virtual_user(&consumer.id).await.unwrap();
+        storage
+            .delete_user_subscription(&consumer.id)
+            .await
+            .unwrap();
         assert!(
             storage
                 .search_platform_accounts("", 5)

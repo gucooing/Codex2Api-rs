@@ -1,3 +1,4 @@
+import { createUser } from "./subscription-fixtures";
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -127,7 +128,7 @@ test("failed reads keep all pages visible and settings disabled until retry succ
   });
   for (const [label, expected] of [
     ["供应账户", "搜索账户"],
-    ["虚拟账户", "搜索账户"],
+    ["订阅管理", "搜索用户"],
     ["套餐管理", "搜索套餐"],
     ["计费配置", "搜索模型"],
     ["出站代理", "搜索代理"],
@@ -158,12 +159,12 @@ test("failed reads keep all pages visible and settings disabled until retry succ
   await expect(page.getByRole("button", { name: "刷新", exact: true })).toBeVisible();
   await expect(page.getByLabel("账户与模型概况").getByRole("link")).toHaveCount(4);
   await expect(page.getByLabel("账户与模型概况").getByText("—", { exact: true })).toHaveCount(4);
-  for (const kind of ["suppliers", "consumers"]) {
+  for (const kind of ["suppliers", "subscriptions"]) {
     await page.goto(`/admin/${kind}/detail/?id=missing-review-record`);
     await expect(page.getByRole("tablist")).toBeVisible();
-    if (kind === "consumers") {
-      await expect(page.getByLabel("账户名称", { exact: true })).toBeVisible();
-      await expect(page.getByLabel("账户名称", { exact: true })).toBeDisabled();
+    if (kind === "subscriptions") {
+      await expect(page.getByLabel("用户", { exact: true })).toBeVisible();
+      await expect(page.getByLabel("用户", { exact: true })).toBeDisabled();
     } else {
       await expect(page.getByRole("heading", { name: "供应账户资料", exact: true })).toBeVisible();
       await page.getByRole("tab", { name: "指纹与网络", exact: true }).click();
@@ -172,7 +173,7 @@ test("failed reads keep all pages visible and settings disabled until retry succ
     }
   }
   await page.getByRole("link", { name: "系统设置", exact: true }).click();
-  await page.getByRole("tab", { name: "网关与限流", exact: true }).click();
+  await page.getByRole("tab", { name: "网关", exact: true }).click();
   await page.unroute("**/admin/api/**");
   await page.getByRole("button", { name: "重新加载", exact: true }).click();
   await expect(page.getByLabel("UA 规则", { exact: true })).toBeEnabled();
@@ -230,26 +231,36 @@ async function noPageOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
-test("account forms, filters, view controls and destructive confirmation use real writes", async ({
+test("subscription forms, filters, view controls and destructive confirmation use real writes", async ({
   page,
   context,
 }) => {
   await mkdir(evidence, { recursive: true });
   await login(page);
-  await page.getByRole("link", { name: "虚拟账户", exact: true }).click();
-  await page.getByRole("button", { name: "创建虚拟账户", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  const session = await (await context.request.get("/admin/api/session")).json();
   const accountName = `交互验收 ${suffix}`;
-  await dialog.getByLabel("账户名称", { exact: true }).fill(accountName);
-  await dialog.getByLabel("登录用户名", { exact: true }).fill("review-consumer");
-  await dialog.getByLabel("登录密码", { exact: true }).fill("test-only-password");
-  await dialog.getByLabel("邮箱", { exact: true }).fill(`interaction-${suffix}@example.test`);
+  const user = await createUser(
+    context.request,
+    { "x-csrf-token": session.csrf_token },
+    {
+      username: `interaction-${suffix}`,
+      name: accountName,
+      email: `interaction-${suffix}@example.test`,
+    },
+  );
+  await page.getByRole("link", { name: "订阅管理", exact: true }).click();
+  await page.getByLabel("搜索用户", { exact: true }).fill(accountName);
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await page.getByRole("button", { name: "新增订阅", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("用户", { exact: true }).fill(user.username);
+  await page.getByRole("option", { name: `${user.username} · ${user.name}`, exact: true }).click();
   const plans = await (await context.request.get("/admin/api/plans")).json();
   const plan = plans.items.find((item: { id: string }) => item.id === "plus");
   expect(plan).toBeDefined();
-  await dialog.getByLabel("订阅套餐", { exact: true }).click();
+  await dialog.getByLabel("套餐", { exact: true }).click();
   await page.getByRole("option", { name: plan.name, exact: true }).click();
-  const loginSwitch = dialog.getByRole("switch", { name: "允许账户登录", exact: true });
+  const loginSwitch = dialog.getByRole("switch", { name: "启用订阅", exact: true });
   await expect(loginSwitch).toBeChecked();
   await loginSwitch.click();
   await expect(loginSwitch).not.toBeChecked();
@@ -258,21 +269,24 @@ test("account forms, filters, view controls and destructive confirmation use rea
   const mutationGate = new Promise<void>((resolve) => {
     releaseMutation = resolve;
   });
-  await page.route("**/admin/api/consumers", async (route) => {
-    if (route.request().method() === "POST") await mutationGate;
-    await route.continue();
+  await page.route("**/admin/api/subscriptions", async (route) => {
+    if (route.request().method() === "POST") {
+      await mutationGate;
+      await route.fulfill({ status: 409, json: { error: { message: "测试保存冲突" } } });
+    } else await route.continue();
   });
   const pendingCheck = page
     .waitForRequest(
       (request) =>
-        request.method() === "POST" && new URL(request.url()).pathname === "/admin/api/consumers",
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/admin/api/subscriptions",
     )
     .then(async () => {
       await page.keyboard.press("Escape");
       await expect(dialog).toBeVisible();
       await expect(dialog.getByRole("button", { name: "关闭", exact: true })).toBeDisabled();
     });
-  await dialog.getByRole("button", { name: "创建账户", exact: true }).click();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
   try {
     await pendingCheck;
   } finally {
@@ -289,18 +303,25 @@ test("account forms, filters, view controls and destructive confirmation use rea
       Boolean(document.activeElement?.closest("[data-sonner-toast], .form-error")),
     ),
   ).toBe(false);
-  await expect(dialog.getByLabel("账户名称", { exact: true })).toHaveValue(accountName);
-  await dialog.getByLabel("登录用户名", { exact: true }).fill(`interaction-${suffix}`);
+  await expect(dialog.getByLabel("用户", { exact: true })).toHaveValue(
+    `${user.username} · ${user.name}`,
+  );
+  await page.unroute("**/admin/api/subscriptions");
   let creates = 0;
   page.on("request", (request) => {
-    if (request.method() === "POST" && new URL(request.url()).pathname === "/admin/api/consumers")
+    if (
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/admin/api/subscriptions"
+    )
       creates++;
   });
-  await dialog.getByRole("button", { name: "创建账户", exact: true }).click({ clickCount: 2 });
+  await dialog.getByRole("button", { name: "保存", exact: true }).click({ clickCount: 2 });
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole("link", { name: accountName, exact: true })).toBeVisible();
   expect(creates).toBe(1);
-  const consumers = await (await context.request.get("/admin/api/consumers")).json();
+  const consumers = await (
+    await context.request.get(`/admin/api/subscriptions?search=${encodeURIComponent(accountName)}`)
+  ).json();
   const account = consumers.items.find((item: { name: string }) => item.name === accountName);
   expect(account.enabled).toBe(false);
   await expect(errorToast).not.toBeVisible();
@@ -310,14 +331,17 @@ test("account forms, filters, view controls and destructive confirmation use rea
   await expect(page.getByRole("table")).toHaveCount(0);
   await page.screenshot({ path: resolve(evidence, "10-accounts-cards-1440.png"), fullPage: true });
   await page.getByRole("radio", { name: "表格视图", exact: true }).click();
-  await page.getByLabel("搜索账户", { exact: true }).fill(accountName);
+  await page.getByLabel("搜索用户", { exact: true }).fill(accountName);
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect(page.getByRole("row")).toHaveCount(2);
-  await expect(page.getByRole("link", { name: "本地验收账户", exact: true })).toHaveCount(0);
+  const resetList = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/admin/api/subscriptions" && !url.searchParams.has("search");
+  });
   await page.getByRole("button", { name: "重置", exact: true }).click();
-  await expect(page.getByLabel("搜索账户", { exact: true })).toHaveValue("");
-  await expect(page.getByRole("link", { name: "本地验收账户", exact: true })).toBeVisible();
-  await page.getByLabel("搜索账户", { exact: true }).fill(accountName);
+  expect((await resetList).ok()).toBe(true);
+  await expect(page.getByLabel("搜索用户", { exact: true })).toHaveValue("");
+  await page.getByLabel("搜索用户", { exact: true }).fill(accountName);
   await page.getByRole("button", { name: "查询", exact: true }).click();
   const row = page.getByRole("row").filter({ has: page.getByText(accountName, { exact: true }) });
   const menuTrigger = row.getByRole("button", { name: "更多操作", exact: true });
@@ -325,13 +349,13 @@ test("account forms, filters, view controls and destructive confirmation use rea
   await expect(page.getByRole("menu")).toBeVisible();
   const heading = await page
     .locator("[data-slot=breadcrumb-page]")
-    .filter({ hasText: "虚拟账户" })
+    .filter({ hasText: "订阅管理" })
     .boundingBox();
   await page.mouse.click(heading!.x + 4, heading!.y + 4);
   await expect(page.getByRole("menu")).not.toBeVisible();
   await menuTrigger.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("menuitem", { name: "删除账户", exact: true })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "删除订阅", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).not.toBeVisible();
   await expect(menuTrigger).toBeFocused();
@@ -340,26 +364,26 @@ test("account forms, filters, view controls and destructive confirmation use rea
   page.on("request", (request) => {
     if (
       request.method() === "POST" &&
-      new URL(request.url()).pathname === "/admin/api/consumers/batch" &&
+      new URL(request.url()).pathname === "/admin/api/subscriptions/batch" &&
       request.postDataJSON().operation === "delete"
     )
       deletes++;
   });
   await menuTrigger.click();
-  await page.getByRole("menuitem", { name: "删除账户", exact: true }).click();
-  const confirmation = page.getByRole("dialog", { name: "删除虚拟账户", exact: true });
+  await page.getByRole("menuitem", { name: "删除订阅", exact: true }).click();
+  const confirmation = page.getByRole("dialog", { name: "删除订阅", exact: true });
   await expect(confirmation).toBeVisible();
   await confirmation.getByRole("button", { name: "取消", exact: true }).click();
   await expect(confirmation).not.toBeVisible();
   expect(deletes).toBe(0);
-  expect((await context.request.get(`/admin/api/consumers/${account.id}`)).ok()).toBe(true);
+  expect((await context.request.get(`/admin/api/subscriptions/${account.id}`)).ok()).toBe(true);
   await menuTrigger.click();
-  await page.getByRole("menuitem", { name: "删除账户", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除订阅", exact: true }).click();
   await confirmation.getByRole("button", { name: /^确认/ }).click({ clickCount: 2 });
   await expect(confirmation).not.toBeVisible();
   await expect(page.getByRole("link", { name: accountName, exact: true })).toHaveCount(0);
   expect(deletes).toBe(1);
-  expect((await context.request.get(`/admin/api/consumers/${account.id}`)).status()).toBe(404);
+  expect((await context.request.get(`/admin/api/subscriptions/${account.id}`)).status()).toBe(404);
 });
 
 test("usage filters are applied to actual server reads and reset cleanly", async ({ page }) => {
@@ -385,7 +409,7 @@ test("usage filters are applied to actual server reads and reset cleanly", async
   await page.getByRole("button", { name: "重置", exact: true }).click();
   expect((await reset).ok()).toBe(true);
   await expect(page.getByLabel("模型", { exact: true })).toHaveValue("");
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "记录查询", exact: true }).click();
   await expect(page.getByRole("tabpanel", { name: "记录查询", exact: true })).toBeVisible();
   await noPageOverflow(page);
@@ -415,7 +439,7 @@ test("desktop navigation, mobile drawer and long forms respect viewport and redu
   await expect(search).not.toBeVisible();
 
   await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.getByRole("link", { name: "虚拟账户", exact: true }).click();
+  await page.getByRole("link", { name: "订阅管理", exact: true }).click();
   await expect(page.getByRole("link", { name: "本地验收账户", exact: true })).toBeVisible();
   await noPageOverflow(page);
   await page.screenshot({ path: resolve(evidence, "13-accounts-table-1920.png"), fullPage: true });
@@ -472,7 +496,7 @@ test("every query and reset submits a fresh read even with unchanged conditions"
   page,
 }) => {
   await login(page);
-  for (const resource of ["usage", "suppliers", "consumers", "plans", "models", "proxies"]) {
+  for (const resource of ["usage", "suppliers", "subscriptions", "plans", "models", "proxies"]) {
     const matches = (response: import("@playwright/test").Response) =>
       new URL(response.url()).pathname === `/admin/api/${resource}` &&
       response.request().method() === "GET";
@@ -483,9 +507,9 @@ test("every query and reset submits a fresh read even with unchanged conditions"
       expect((await refreshed).ok()).toBe(true);
     }
   }
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   const logs = (response: import("@playwright/test").Response) =>
-    new URL(response.url()).pathname === "/admin/api/consumers/review-consumer/logs";
+    new URL(response.url()).pathname === "/admin/api/subscriptions/review-consumer/logs";
   await Promise.all([
     page.waitForResponse(logs),
     page.getByRole("tab", { name: "记录查询", exact: true }).click(),
@@ -623,9 +647,9 @@ test("virtual account settings stay compact, grouped and editable without losing
     if (["error", "warning"].includes(message.type()) && !message.text().includes("500"))
       errors.push(message.text());
   });
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
-  await expect(page.getByLabel("账户名称", { exact: true })).toHaveValue("本地验收账户");
-  const tabs = page.getByRole("tablist", { name: "虚拟账户详情" });
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
+  await expect(page.getByLabel("用户", { exact: true })).toHaveValue("review-consumer");
+  const tabs = page.getByRole("tablist", { name: "订阅详情" });
   await expect(tabs.getByRole("tab")).toHaveText([
     "账户设置",
     "用量统计",
@@ -677,7 +701,7 @@ test("virtual account settings stay compact, grouped and editable without losing
   const draft = `布局验收 ${suffix}`;
   await bio.fill(draft);
   // A failed refresh must preserve the same input and its unsaved draft, while blocking writes.
-  await page.route("**/admin/api/consumers/review-consumer/configs", (route) =>
+  await page.route("**/admin/api/subscriptions/review-consumer/configs", (route) =>
     route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -687,21 +711,22 @@ test("virtual account settings stay compact, grouped and editable without losing
   await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(saveProfile).toBeDisabled();
   await expect(bio).toHaveValue(draft);
-  await page.unroute("**/admin/api/consumers/review-consumer/configs");
+  await page.unroute("**/admin/api/subscriptions/review-consumer/configs");
   await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(saveProfile).toBeEnabled();
   await expect(bio).toHaveValue(draft);
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PUT" &&
-      new URL(response.url()).pathname === "/admin/api/consumers/review-consumer/config/profile",
+      new URL(response.url()).pathname ===
+        "/admin/api/subscriptions/review-consumer/config/profile",
   );
   await saveProfile.click();
   expect((await saved).ok()).toBe(true);
   await expect(bio).toBeEnabled();
   await expect(saveProfile).toBeDisabled();
   const configs = await (
-    await page.request.get("/admin/api/consumers/review-consumer/configs")
+    await page.request.get("/admin/api/subscriptions/review-consumer/configs")
   ).json();
   expect(configs.items.find((item: { key: string }) => item.key === "profile").value.bio).toBe(
     draft,
@@ -747,11 +772,11 @@ test("feature switches save only changes, retain defaults and retry only failed 
   page,
 }) => {
   await login(page);
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByLabel("设置分类", { exact: true }).click();
   await page.getByRole("option", { name: "功能开关", exact: true }).click();
   const read = async () =>
-    (await (await page.request.get("/admin/api/consumers/review-consumer/configs")).json())
+    (await (await page.request.get("/admin/api/subscriptions/review-consumer/configs")).json())
       .items as {
       key: string;
       revision: number;
@@ -784,7 +809,7 @@ test("feature switches save only changes, retain defaults and retry only failed 
     if (request.method() === "PUT" && path.includes("/config/"))
       writes.push(path.split("/").pop()!);
   });
-  await page.route("**/admin/api/consumers/review-consumer/config/sites", (route) =>
+  await page.route("**/admin/api/subscriptions/review-consumer/config/sites", (route) =>
     route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -811,7 +836,7 @@ test("feature switches save only changes, retain defaults and retry only failed 
   );
   expect(partial.find((item) => item.key === "sites")!.value).toEqual(old("sites").value);
   await expect(sites).toBeChecked({ checked: !old("sites").value.enabled });
-  await page.unroute("**/admin/api/consumers/review-consumer/config/sites");
+  await page.unroute("**/admin/api/subscriptions/review-consumer/config/sites");
   writes.length = 0;
   const retry = page.waitForResponse(
     (response) =>

@@ -1,10 +1,10 @@
 "use client";
 import { RoutingForm } from "@/components/forms/platform-routing-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { type Consumer } from "@/lib/api";
+import { type SubscriptionAccount } from "@/lib/api";
 import { useRouting } from "@/lib/platform-account";
 
-export function Routing({ account, id }: { account?: Consumer; id: string }) {
+export function Routing({ account, id }: { account?: SubscriptionAccount; id: string }) {
   const { resource } = useRouting({ id });
   return (
     <Card size="sm">

@@ -13,7 +13,7 @@ import {
 import { Field, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { Progress } from "@/components/ui/progress";
 import type { SupplierQuotaWindow } from "@/lib/api";
-import { type Consumer } from "@/lib/api";
+import { type SubscriptionAccount } from "@/lib/api";
 import { date } from "@/lib/format";
 import { subscriptionLabel } from "@/lib/platform-account";
 import { percentLabel, quotaResetLabel, quotaWindowLabel } from "@/lib/supplier-state";
@@ -21,11 +21,11 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 
 type Props = {
-  account: Consumer & { quota: { windows: SupplierQuotaWindow[] } };
+  account: SubscriptionAccount & { quota: { windows: SupplierQuotaWindow[] } };
   now: number;
 };
 
-export function ConsumerRecordDialog({ account, now }: Props) {
+export function SubscriptionRecordDialog({ account, now }: Props) {
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -49,12 +49,12 @@ export function ConsumerRecordDialog({ account, now }: Props) {
         </DialogHeader>
         <FieldGroup className="gap-3">
           <Field>
-            <FieldTitle>虚拟账户</FieldTitle>
+            <FieldTitle>用户</FieldTitle>
             <div className="min-w-0 break-words [&_*]:max-w-full">
               <Link
                 className="block max-w-56 truncate"
                 title={account.name}
-                href={`/consumers/detail/?id=${encodeURIComponent(account.id)}`}
+                href={`/subscriptions/detail/?id=${encodeURIComponent(account.id)}`}
               >
                 <strong>{account.name}</strong>
               </Link>

@@ -143,10 +143,9 @@ export function useWalletAdjustmentDialog({
   resource,
   amount,
   delta,
-  after,
 }: Pick<
   WalletAdjustmentDialogProps,
-  "adjusting" | "actions" | "setAdjusting" | "resource" | "amount" | "delta" | "after"
+  "adjusting" | "actions" | "setAdjusting" | "resource" | "amount" | "delta"
 >) {
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(
@@ -158,11 +157,9 @@ export function useWalletAdjustmentDialog({
           !resource.ready ||
           !amount ||
           delta === null ||
-          after === null ||
-          !Number.isSafeInteger(after) ||
-          after < 0
+          !Number.isSafeInteger(delta)
         )
-          throw new Error("请输入有效金额，减少金额不能超过余额");
+          throw new Error("请输入有效的调整金额");
         await request(`/users/${encodeURIComponent(adjusting.user.id)}/wallet-adjustments`, {
           method: "POST",
           body: {

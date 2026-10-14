@@ -35,6 +35,8 @@ export function modelKey(model: ModelRef) {
 }
 export function planWrite(value: Plan) {
   return {
+    rpm_limit: value.rpm_limit,
+    concurrency_limit: value.concurrency_limit,
     description: value.description,
     sale_price_usd: value.sale_price_usd,
     duration_days: value.duration_days,

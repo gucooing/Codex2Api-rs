@@ -73,7 +73,7 @@ impl Storage {
             .iter()
             .any(|w| w.cost_limit_usd.is_some());
         let windows = if limited {
-            let anchor = self.subscription_anchor_at(owner, now).await?;
+            let anchor = self.subscription_anchor(owner).await?;
             self.nested_spending_windows(
                 owner,
                 &entitlements.spending_windows,

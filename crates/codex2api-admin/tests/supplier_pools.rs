@@ -103,8 +103,8 @@ async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
     assert_eq!(
         f.request(
             "PUT",
-            &format!("/admin/api/consumers/{id}/routing"),
-            json!({"tag_id":tag_id,"revision":null})
+            &format!("/admin/api/subscriptions/{id}/routing"),
+            json!({"tag_id":tag_id,"revision":1})
         )
         .await
         .status(),
@@ -120,15 +120,15 @@ async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
         .status(),
         StatusCode::BAD_REQUEST
     );
-    let path = format!("/admin/api/consumers/{id}/rate-limit");
-    assert_eq!(f.get(&path).await["effective_rpm"], 20);
+    let path = format!("/admin/api/subscriptions/{id}/rate-limit");
+    assert_eq!(f.get(&path).await["effective_rpm"], 40);
     assert_eq!(
         body(f.request("PUT", &path, json!({"rpm":0})).await).await["effective_rpm"],
         0
     );
     assert_eq!(
         body(f.request("PUT", &path, json!({"rpm":null})).await).await["effective_rpm"],
-        20
+        40
     );
     assert_eq!(
         f.with_auth("PUT", &path, json!({"rpm":0}), None, None)
@@ -145,7 +145,7 @@ async fn tags_routing_and_rpm_have_authenticated_admin_operations() {
     assert_eq!(
         f.request(
             "PUT",
-            &format!("/admin/api/consumers/{id}/routing"),
+            &format!("/admin/api/subscriptions/{id}/routing"),
             json!({"tag_id":tag_id,"supplier_id":"outside","revision":1})
         )
         .await

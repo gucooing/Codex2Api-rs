@@ -2,7 +2,6 @@ mod account_scope;
 mod api_groups;
 mod api_keys;
 mod auth;
-mod consumers;
 mod coupons;
 mod dto;
 pub(crate) mod error;
@@ -13,6 +12,7 @@ mod plans;
 mod platform_accounts;
 mod proxies;
 mod settings;
+mod subscription_accounts;
 mod subscriptions;
 mod supplier_models;
 mod supplier_tags;
@@ -31,7 +31,6 @@ pub(crate) fn router(state: AdminState) -> Router {
         .merge(api_groups::router())
         .merge(api_keys::router())
         .merge(users::router())
-        .merge(consumers::router())
         .merge(subscriptions::router())
         .merge(models::router())
         .merge(suppliers::router())

@@ -1,3 +1,10 @@
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+use account_fixture::AccountFixture;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -123,9 +130,8 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
         .unwrap();
     let user_cookie = format!("c2a_user_session={user_token}");
     let platform = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .grant_subscription_fixture(&user.id, "plus")
         .await
-        .unwrap()
         .unwrap();
     storage
         .create_virtual_device(&platform, "client-refresh", &Default::default())

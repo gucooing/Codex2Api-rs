@@ -35,11 +35,13 @@ test("reset cards clear real fixture usage without changing subscription or bill
         { duration_seconds: 18000, cost_limit_usd: "2" },
       ],
       allow_purchase: true,
+      rpm_limit: plan.rpm_limit,
+      concurrency_limit: plan.concurrency_limit,
       revision: plan.revision,
     },
   });
   expect(updated.ok()).toBe(true);
-  const accountPath = "/admin/api/consumers/review-consumer";
+  const accountPath = "/admin/api/subscriptions/review-consumer";
   const account = await (await context.request.get(accountPath)).json();
   const expires = new Date(Date.now() + 14 * 86400000).toISOString();
   expect(
@@ -47,14 +49,12 @@ test("reset cards clear real fixture usage without changing subscription or bill
       await context.request.put(accountPath, {
         headers,
         data: {
-          username: account.username,
-          password: "",
-          name: account.name,
-          email: account.email,
-          provider_id: "chatgpt",
+          user_id: account.user_id,
           plan_id: account.plan_id,
-          subscription_expires_at: expires,
+          expires_at: expires,
           enabled: true,
+          revision: account.revision,
+          reissue: false,
         },
       })
     ).ok(),
@@ -62,7 +62,7 @@ test("reset cards clear real fixture usage without changing subscription or bill
   const before = await (await context.request.get(`${accountPath}/usage`)).json();
   const subscription = await (await context.request.get(accountPath)).json();
   expect(Number(before.quota.rate_limit.primary_window.used_usd)).toBeGreaterThan(0);
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "重置卡", exact: true }).click();
   await expect(page.getByRole("button", { name: "发放重置卡", exact: true })).toBeEnabled();
   await expect(page.getByLabel("发放数量", { exact: true })).toHaveCount(0);

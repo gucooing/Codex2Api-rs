@@ -8,6 +8,8 @@ import type { Dispatch, SetStateAction } from "react";
 import { useId, useState } from "react";
 
 export type CheckoutDialogProps = {
+  subscriptionId: string;
+  changeSubscription: (id: string) => void;
   selected: Plan | undefined;
   busy: boolean;
   setSelected: Dispatch<SetStateAction<Plan | undefined>>;
@@ -122,12 +124,13 @@ export function useCheckoutDialog({
 }
 
 export function usePlansPage() {
-  const subscriptions = useResource<{ items: Subscription[] }>("/subscriptions", 0);
+  const subscriptions = useResource<{ items: Subscription[] }>("/subscriptions/options", 0);
   const plans = useListResource<Plan>("/plans");
   const planPage = plans.pagination;
   const wallet = useResource<{ balance_usd: string }>("/wallet", 0);
   const actions = useActions();
   const [selected, setSelected] = useState<Plan>();
+  const [subscriptionId, setSubscriptionId] = useState("");
   const [viewedId, setViewedId] = useState<string>();
   const viewed = plans.data?.items.find((plan) => plan.id === viewedId);
   const [preview, setPreview] = useState<CheckoutPreview>();
@@ -157,46 +160,12 @@ export function usePlansPage() {
   const detail = order ?? preview;
   const dirty =
     !!preview &&
-    (coupon.trim().toUpperCase() !== (preview.coupon_code ?? "") ||
+    ((preview.subscription_id ?? "") !== subscriptionId ||
+      coupon.trim().toUpperCase() !== (preview.coupon_code ?? "") ||
       payment !== preview.payment_method);
   const previewExpired = !!preview && preview.expires_at_ms <= now;
   const walletBalance = wallet.data ? `${money(wallet.data.balance_usd)} USD` : "—";
-  function purchaseStatus(plan: Plan) {
-    const current = subscriptions.data?.items.find((item) => item.provider_id === plan.provider_id);
-    const paid =
-      !!current &&
-      current.plan_type !== "free" &&
-      !current.expired &&
-      (current.expires_at === null || Date.parse(current.expires_at) > now);
-    const same = paid && current.plan_id === plan.id;
-    const lower =
-      paid &&
-      !same &&
-      current.current_price_cents != null &&
-      current.current_duration_days != null &&
-      plan.sale_price_usd !== null &&
-      Number(plan.sale_price_usd) * 100 * current.current_duration_days <=
-        current.current_price_cents * plan.duration_days;
-    const unavailable = !!current && (!current.enabled || (paid && current.expires_at === null));
-    return {
-      disabled:
-        !plans.ready ||
-        !subscriptions.ready ||
-        plan.sale_price_usd === null ||
-        unavailable ||
-        lower ||
-        busy,
-      label: unavailable
-        ? "请联系管理员"
-        : lower
-          ? "到期后可更换"
-          : same
-            ? "续订"
-            : paid
-              ? "升级套餐"
-              : "下单",
-    };
-  }
+  const purchaseDisabled = !plans.ready || !subscriptions.ready || busy;
   function beginCheckout(plan: Plan) {
     setViewedId(undefined);
     setSelected(plan);
@@ -204,13 +173,27 @@ export function usePlansPage() {
     setOrder(undefined);
     setCoupon("");
     setPayment("wallet");
-    void actions.run("preview", () => loadPreview(plan, "", "wallet"), { success: "" });
+    const target = new URLSearchParams(window.location.search).get("subscription_id") ?? "";
+    setSubscriptionId(target);
+    void actions.run("preview", () => loadPreview(plan, "", "wallet", false, target), {
+      success: "",
+    });
   }
-  async function loadPreview(plan: Plan, code: string, method: string, preserveDraft = false) {
-    const current = subscriptions.data?.items.find((item) => item.provider_id === plan.provider_id);
+  async function loadPreview(
+    plan: Plan,
+    code: string,
+    method: string,
+    preserveDraft = false,
+    targetId = subscriptionId,
+  ) {
+    const current = subscriptions.data?.items.find(
+      (item) => item.id === targetId && item.provider_id === plan.provider_id,
+    );
+    if (targetId && !current) throw new Error("请选择当前平台的本人订阅");
     const value = await request<CheckoutPreview>("/checkout/preview", {
       method: "POST",
       body: {
+        subscription_id: current?.id ?? null,
         plan_id: plan.id,
         plan_revision: plan.revision,
         subscription_revision: current?.revision ?? null,
@@ -221,6 +204,14 @@ export function usePlansPage() {
     setSelected(plan);
     setPreview(value);
     if (!preserveDraft) setCoupon(value.coupon_code ?? "");
+  }
+  function changeSubscription(next: string) {
+    setSubscriptionId(next);
+    setPreview(undefined);
+    if (selected)
+      void actions.run("preview", () => loadPreview(selected, coupon, payment, true, next), {
+        success: "",
+      });
   }
   async function pay() {
     if (!order) return;
@@ -240,6 +231,8 @@ export function usePlansPage() {
   }
 
   return {
+    subscriptionId,
+    changeSubscription,
     subscriptions,
     plans,
     planPage,
@@ -266,7 +259,7 @@ export function usePlansPage() {
     dirty,
     previewExpired,
     walletBalance,
-    purchaseStatus,
+    purchaseDisabled,
     beginCheckout,
     loadPreview,
     pay,

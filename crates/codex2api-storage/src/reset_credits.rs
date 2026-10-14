@@ -656,7 +656,7 @@ impl Storage {
         let scope = format!("grant:{owner}");
         let signature = serde_json::to_string(grant)?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        if crate::consumer_management::replay(&mut tx, &scope, grant_id, &signature)
+        if crate::subscription_management::replay(&mut tx, &scope, grant_id, &signature)
             .await?
             .is_some()
         {
@@ -684,7 +684,7 @@ impl Storage {
             now,
         )
         .await?;
-        crate::consumer_management::remember(
+        crate::subscription_management::remember(
             &mut tx,
             &scope,
             grant_id,
@@ -824,7 +824,7 @@ async fn resettable_windows(
     account: &PlatformAccount,
     now: i64,
 ) -> Result<Option<i64>> {
-    if !account.enabled || account.effective_plan_at(now / 1000) == "free" {
+    if !account.subscription_active_at(now / 1000) {
         return Ok(None);
     }
     let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")

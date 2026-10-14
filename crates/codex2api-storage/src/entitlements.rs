@@ -50,7 +50,7 @@ impl Storage {
         now: i64,
     ) -> Result<EffectiveEntitlements> {
         let account = self
-            .effective_platform_account_at(owner, now)
+            .platform_account(owner)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -60,15 +60,15 @@ impl Storage {
         if account.provider_id != plan.provider_id {
             return Err(StorageError::Constraint("账户与套餐的提供商不一致".into()));
         }
-        let subscription_active = account.effective_plan_at(now) != "free";
-        let enabled = account.enabled && plan.config["model_access"] != "none";
+        let subscription_active = account.subscription_active_at(now);
+        let enabled = subscription_active && plan.config["model_access"] != "none";
         let models = if enabled {
             plan.model_access()?
         } else {
             ModelAccess::None
         };
         Ok(EffectiveEntitlements {
-            plan_type: account.effective_plan_at(now).to_owned(),
+            plan_type: account.plan_type.as_str().to_owned(),
             spending_windows: crate::plan_spending_windows(&plan.config)?,
             expires_at: account
                 .subscription_expires_at

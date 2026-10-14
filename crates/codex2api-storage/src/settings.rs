@@ -12,12 +12,10 @@ pub enum UaMode {
 
 /// Global inbound gateway policy, persisted independently of account fingerprints.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GatewaySettings {
     pub ua_mode: UaMode,
     pub ua_rules: Vec<String>,
-    pub default_rpm: u32,
-    pub default_concurrency: u32,
     pub scheduler_mode: String,
     pub sticky_weighted: bool,
     pub sticky_escape: bool,
@@ -31,8 +29,6 @@ impl Default for GatewaySettings {
         Self {
             ua_mode: UaMode::default(),
             ua_rules: Vec::new(),
-            default_rpm: 20,
-            default_concurrency: 5,
             scheduler_mode: "advanced".into(),
             sticky_weighted: false,
             sticky_escape: true,
@@ -46,7 +42,6 @@ impl Default for GatewaySettings {
 impl GatewaySettings {
     pub fn from_lines(ua_mode: UaMode, rules: &str) -> Self {
         Self {
-            default_rpm: 20,
             ua_mode,
             ua_rules: rules
                 .lines()

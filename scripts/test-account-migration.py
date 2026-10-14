@@ -101,12 +101,14 @@ class UnifiedAccounts(unittest.TestCase):
     def test_account_queries_prepare_against_the_migrated_schema(self):
         # Current queries target the current schema, while the migration assertions
         # above intentionally inspect the historical unified-account boundary.
+        self.db.commit()
+        self.db.execute("PRAGMA foreign_keys=OFF")
         for path in sorted(MIGRATIONS.glob("*.sql")):
             if path.name > "0070_unified_users.sql":
                 self.db.executescript(path.read_text(encoding="utf-8"))
         sources = ROOT / "crates/codex2api-storage/src"
         prepared = 0
-        for name in ("users.rs", "virtual_users.rs", "platform_accounts.rs", "user_subscriptions.rs",
+        for name in ("users.rs", "platform_accounts.rs", "user_subscriptions.rs",
                      "user_store.rs", "oauth_authorization.rs", "oauth_device.rs", "wallet.rs",
                      "subscription_orders.rs", "user_usage.rs"):
             source = (sources / name).read_text(encoding="utf-8")

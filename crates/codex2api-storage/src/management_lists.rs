@@ -28,13 +28,9 @@ pub(crate) fn supplier_predicate(q: &mut QueryBuilder<'static, Sqlite>, filter: 
 }
 
 impl Storage {
-    pub async fn plan_options(
-        &self,
-        provider: &str,
-        paid_only: bool,
-    ) -> Result<Vec<serde_json::Value>> {
-        let rows: Vec<(String,String,String,String)> = sqlx::query_as("SELECT id,name,provider_id,plan_type FROM virtual_plans WHERE (?='' OR provider_id=?) AND (?=0 OR plan_type!='free') ORDER BY provider_id,name,id")
-            .bind(provider).bind(provider).bind(paid_only).fetch_all(self.pool()).await?;
+    pub async fn plan_options(&self, provider: &str) -> Result<Vec<serde_json::Value>> {
+        let rows: Vec<(String,String,String,String)> = sqlx::query_as("SELECT id,name,provider_id,plan_type FROM virtual_plans WHERE (?='' OR provider_id=?) ORDER BY provider_id,name,id")
+            .bind(provider).bind(provider).fetch_all(self.pool()).await?;
         Ok(rows.into_iter().map(|(id,name,provider,kind)|serde_json::json!({"id":id,"name":name,"provider_id":provider,"plan_type":kind})).collect())
     }
 

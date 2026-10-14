@@ -1,3 +1,10 @@
+mod account_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../codex2api-storage/test-support/accounts.rs"
+    ));
+}
+use account_fixture::AccountFixture;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -340,19 +347,6 @@ async fn setup() -> (tempfile::TempDir, Storage, Router, User) {
     other.name = "Bob private".into();
     other.email = "bob-private@example.test".into();
     storage.save_user(&other, None).await.unwrap();
-    for u in [&user, &other] {
-        storage
-            .save_user_subscription(SubscriptionChange {
-                reissue: false,
-                user_id: &u.id,
-                plan_id: "plus",
-                expires_at: None,
-                enabled: true,
-                revision: Some(1),
-            })
-            .await
-            .unwrap();
-    }
     let app = codex2api_user::router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://127.0.0.1:8082".into(),
@@ -377,24 +371,6 @@ fn query() -> String {
 #[tokio::test]
 async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amount() {
     let (_dir, storage, app, user) = setup().await;
-    let subscription = storage
-        .user_subscriptions(Some(&user.id), true)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
-        .unwrap();
-    storage
-        .save_user_subscription(SubscriptionChange {
-            reissue: false,
-            user_id: &user.id,
-            plan_id: "free",
-            expires_at: None,
-            enabled: true,
-            revision: Some(subscription.revision),
-        })
-        .await
-        .unwrap();
     storage
         .save_supplier_tag("private-pool", "chatgpt", "Hidden supplier pool")
         .await
@@ -408,13 +384,6 @@ async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amoun
         .await
         .unwrap();
     let plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    let subscription = storage
-        .user_subscriptions(Some(&user.id), true)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
-        .unwrap();
     sqlx::query("UPDATE users SET wallet_cents=5000 WHERE id=?")
         .bind(&user.id)
         .execute(storage.pool())
@@ -431,7 +400,7 @@ async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amoun
     let alice_cookie = cookie(&response);
     let session = body(response).await;
     let csrf = session["csrf_token"].as_str().unwrap();
-    let selection = json!({"plan_id":"plus","plan_revision":plan.revision,"subscription_revision":subscription.revision,"payment_method":"wallet","coupon_code":""});
+    let selection = json!({"plan_id":"plus","plan_revision":plan.revision,"subscription_id":null,"subscription_revision":null,"payment_method":"wallet","coupon_code":""});
     let preview_response = request(
         &app,
         "/user/api/checkout/preview",
@@ -592,6 +561,14 @@ async fn same_origin_dev_proxy_login_is_allowed_but_cross_site_login_is_rejected
 #[tokio::test]
 async fn user_reads_are_owner_scoped_and_mutations_require_their_browser_csrf() {
     let (_dir, storage, app, user) = setup().await;
+    storage
+        .grant_subscription_fixture(&user.id, "plus")
+        .await
+        .unwrap();
+    storage
+        .grant_subscription_fixture("bob-user", "plus")
+        .await
+        .unwrap();
     assert_eq!(
         request(
             &app,
@@ -729,9 +706,8 @@ async fn temporary_authorization_needs_explicit_confirmation_and_does_not_log_th
     let flow = body(response).await;
     assert!(flow["identity"].is_null());
     let account = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .grant_subscription_fixture(&user.id, "plus")
         .await
-        .unwrap()
         .unwrap();
     let mut approval = json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":account.id,"confirmed":true});
     assert_eq!(
@@ -823,7 +799,11 @@ async fn temporary_authorization_needs_explicit_confirmation_and_does_not_log_th
 }
 #[tokio::test]
 async fn existing_browser_login_selects_user_but_logout_invalidates_unconfirmed_grants() {
-    let (_dir, storage, app, _user) = setup().await;
+    let (_dir, storage, app, user) = setup().await;
+    storage
+        .grant_subscription_fixture(&user.id, "plus")
+        .await
+        .unwrap();
     let response = request(
         &app,
         "/user/api/login",
@@ -845,7 +825,7 @@ async fn existing_browser_login_selects_user_but_logout_invalidates_unconfirmed_
     let flow_cookie = cookie(&response);
     let flow = body(response).await;
     assert_eq!(flow["identity"]["username"], "alice");
-    let approval = json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":flow["identity"]["account_id"],"confirmed":true});
+    let approval = json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":flow["subscriptions"][0]["id"],"confirmed":true});
     request(
         &app,
         "/user/api/logout",
@@ -878,9 +858,8 @@ async fn user_usage_filters_every_query_by_owner_and_never_serializes_supplier_d
         ("bob-user", "other-request", 900, 800),
     ] {
         let account = storage
-            .user_platform_account(owner, "chatgpt")
+            .grant_subscription_fixture(owner, "plus")
             .await
-            .unwrap()
             .unwrap();
         let record = codex2api_storage::UsageRecord {
             id: id.into(),
@@ -1004,65 +983,48 @@ async fn empty_usage_has_a_stable_shape_in_both_timezone_directions() {
 }
 
 #[tokio::test]
-async fn virtual_user_can_only_verify_oauth_and_must_confirm_separately() {
-    let (_dir, storage, app, regular) = setup().await;
-    let special = User {
-        kind: codex2api_storage::UserKind::Virtual,
-        id: "oauth-only-user".into(),
-        username: "oauth-only".into(),
-        password_hash: codex2api_storage::hash_password("oauth-password").unwrap(),
-        name: "OAuth Only".into(),
-        email: "oauth@example.test".into(),
-        enabled: true,
-        wallet_cents: 0,
-        revision: 1,
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-    storage
-        .save_virtual_user(codex2api_storage::VirtualUserChange {
-            user: &special,
-            platform_id: "oauth-only-platform",
-            provider_id: "chatgpt",
+async fn oauth_requires_an_explicit_owned_subscription_and_keeps_verification_separate() {
+    let (_dir, storage, app, mut user) = setup().await;
+    user.id = "subscription-selector-user".into();
+    user.username = "subscription-selector-user".into();
+    user.password_hash = codex2api_storage::hash_password("selection-password").unwrap();
+    storage.save_user(&user, None).await.unwrap();
+    assert!(
+        storage
+            .user_subscriptions(Some(&user.id), true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        ids.push(
+            storage
+                .save_user_subscription(SubscriptionChange {
+                    subscription_id: None,
+                    reissue: false,
+                    user_id: &user.id,
+                    plan_id: "plus",
+                    expires_at: None,
+                    enabled: true,
+                    revision: None,
+                })
+                .await
+                .unwrap(),
+        );
+    }
+    let expired = storage
+        .save_user_subscription(SubscriptionChange {
+            subscription_id: None,
+            reissue: false,
+            user_id: &user.id,
             plan_id: "plus",
-            expires_at: None,
-            user_revision: None,
+            expires_at: Some("2020-01-01T00:00:00Z"),
+            enabled: true,
             revision: None,
         })
         .await
         .unwrap();
-    let denied = request(
-        &app,
-        "/user/api/login",
-        Some(json!({"username":special.username,"password":"oauth-password"})),
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-    assert!(denied.headers().get("set-cookie").is_none());
-    assert!(
-        storage
-            .create_user_session(&special, "csrf")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        storage
-            .user_store()
-            .user(&special.id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(storage.users().await.unwrap().len(), 2);
-    assert_eq!(storage.platform_accounts().await.unwrap().len(), 1);
-    assert!(
-        storage.user_options("oauth-only").await.unwrap()["items"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
     let boot = request(
         &app,
         &format!("/user/api/oauth/authorize/bootstrap?{}", query()),
@@ -1073,37 +1035,40 @@ async fn virtual_user_can_only_verify_oauth_and_must_confirm_separately() {
     .await;
     let flow_cookie = cookie(&boot);
     let flow = body(boot).await;
-    let identified = request(&app, "/user/api/oauth/authorize/identify", Some(json!({
-        "request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":special.username,"password":"oauth-password"
-    })), Some(&flow_cookie), None).await;
+    let identified = request(&app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":user.username,"password":"selection-password"})),Some(&flow_cookie),None).await;
     assert_eq!(identified.status(), StatusCode::OK);
     assert!(identified.headers().get("set-cookie").is_none());
+    let identified = body(identified).await;
+    assert_eq!(identified["subscriptions"].as_array().unwrap().len(), 2);
+    for id in &ids {
+        assert!(
+            identified["subscriptions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["id"] == *id)
+        );
+    }
     assert_eq!(
-        body(identified).await["identity"]["account_id"],
-        "oauth-only-platform"
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM virtual_authorization_codes")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap(),
+        0
     );
-    let codes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_authorization_codes")
+    for id in ["unowned-subscription", expired.as_str()] {
+        let denied=request(&app,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":id,"confirmed":true})),Some(&flow_cookie),None).await;
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    }
+    let approved=request(&app,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":ids[1],"confirmed":true})),Some(&flow_cookie),None).await;
+    assert_eq!(approved.status(), StatusCode::OK);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT virtual_account_id FROM virtual_authorization_codes"
+        )
         .fetch_one(storage.pool())
         .await
-        .unwrap();
-    assert_eq!(codes, 0);
-    let confirmed = request(&app, "/user/api/oauth/authorize/approve", Some(json!({
-        "request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":"oauth-only-platform","confirmed":true
-    })), Some(&flow_cookie), None).await;
-    assert_eq!(confirmed.status(), StatusCode::OK);
-    assert!(
-        body(confirmed).await["redirect_uri"]
-            .as_str()
-            .unwrap()
-            .contains("code=")
-    );
-    assert_eq!(
-        storage
-            .user(&regular.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .wallet_cents,
-        0
+        .unwrap(),
+        ids[1]
     );
 }

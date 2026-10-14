@@ -18,6 +18,7 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
     sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision) VALUES('v','quota','{\"primary_cost_limit_usd\":2,\"weekly_cost_limit_usd\":10,\"total_cost_limit_usd\":0}',8)").execute(&pool).await.unwrap();
     sqlx::query("UPDATE usage_records SET api_key_id='v',cost_nano_usd=7000000000,billing_status='priced' WHERE id='test'").execute(&pool).await.unwrap();
     pool.close().await;
+    own_legacy_subscriptions(&path).await;
     let storage = Storage::open(&path).await.unwrap();
     let config = storage.virtual_config("v", "quota").await.unwrap();
     assert_eq!(
@@ -233,13 +234,13 @@ async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bin
         .unwrap()
         .unwrap();
     assert_eq!(inherited.tag_id.as_deref(), Some("current"));
-    let standalone = storage
-        .execution_route("standalone", "chatgpt")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(standalone.tag_id.as_deref(), Some("old"));
-    assert_eq!(standalone.revision, 5);
+    assert!(
+        storage
+            .execution_route("standalone", "chatgpt")
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["supplier_tag_id"] = serde_json::Value::Null;
     storage
@@ -255,14 +256,12 @@ async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bin
             .tag_id
             .is_none()
     );
-    assert_eq!(
+    assert!(
         storage
-            .execution_route("standalone", "chatgpt")
+            .platform_account("standalone")
             .await
             .unwrap()
-            .unwrap()
-            .revision,
-        5
+            .is_none()
     );
     let violations = sqlx::query("PRAGMA foreign_key_check")
         .fetch_all(storage.pool())
@@ -415,21 +414,19 @@ async fn account_profiles_keep_business_data_and_existing_codex_credentials() {
         storage.oauth_jwt_private_key().await.unwrap().as_deref(),
         Some("existing-client-key")
     );
-    assert_eq!(
+    assert!(
         storage
             .platform_account("independent")
             .await
             .unwrap()
-            .unwrap()
-            .password_hash,
-        "own-hash"
+            .is_none()
     );
     assert!(
         storage
             .platform_account_owner("independent")
             .await
             .unwrap()
-            .is_some()
+            .is_none()
     );
     assert_eq!(
         storage
@@ -504,6 +501,7 @@ async fn desktop_ui_visibility_upgrade_preserves_explicit_choices() {
             .bind(id).bind(value.to_string()).execute(&pool).await.unwrap();
     }
     pool.close().await;
+    own_legacy_subscriptions(&path).await;
     let storage = Storage::open(&path).await.unwrap();
     let old = storage
         .virtual_config("old", "desktop_ui_policy")
@@ -877,6 +875,7 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
         }
     }
     pool.close().await;
+    own_legacy_subscriptions(&path).await;
     let storage = Storage::open(&path).await.unwrap();
     let a = storage.platform_account("a").await.unwrap().unwrap();
     let b = storage.platform_account("b").await.unwrap().unwrap();
@@ -903,23 +902,13 @@ async fn plan_catalog_migration_preserves_effective_limits_policies_and_account_
             .models
             .permits("chatgpt", "allowed")
     );
-    assert_eq!(
+    assert!(
         storage
             .virtual_config("a", "subscription_policy")
             .await
-            .unwrap()
-            .value,
-        serde_json::json!({"plan_id":"free","model_access":"none","models":[],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"0"},{"duration_seconds":18000,"cost_limit_usd":"0"}]})
+            .is_err()
     );
-    assert_eq!(
-        storage
-            .platform_account("d")
-            .await
-            .unwrap()
-            .unwrap()
-            .plan_id,
-        "free"
-    );
+    assert!(storage.platform_account("d").await.unwrap().is_none());
     assert_eq!(
         storage
             .virtual_client_state("a", "quota")
@@ -999,6 +988,9 @@ async fn assert_final_schema(storage: &Storage) {
     for name in ["error_message", "error_code", "upstream_request_id"] {
         assert!(columns.iter().any(|column| column == name));
     }
+    for name in ["failure_kind", "failure_status"] {
+        assert!(!columns.iter().any(|column| column == name));
+    }
     let version: i64 =
         sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success=1")
             .fetch_one(storage.pool())
@@ -1053,6 +1045,7 @@ async fn virtual_quota_removal_preserves_existing_accounts_devices_and_configura
     sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,user_agent,created_at,last_login_at) VALUES('device','v','refresh-hash','client','2026-09-01','2026-09-01')").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision) VALUES('v','voice','{\"selected\":\"Cove\"}',3)").execute(&pool).await.unwrap();
     pool.close().await;
+    own_legacy_subscriptions(&path).await;
     let storage = Storage::open(&path).await.unwrap();
     assert_final_schema(&storage).await;
     assert_eq!(
@@ -1082,6 +1075,7 @@ async fn billing_migration_keeps_token_history_without_converting_tokens_to_doll
     sqlx::query("INSERT INTO virtual_accounts(id,username,password_hash,name,email,plan_type,enabled,created_at) VALUES('v','virtual','hash','Virtual','v@example.test','pro',1,'2026-09-20')").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision) VALUES('v','quota','{\"primary_token_limit\":100,\"weekly_token_limit\":100}',4)").execute(&pool).await.unwrap();
     pool.close().await;
+    own_legacy_subscriptions(&path).await;
     let storage = Storage::open(&path).await.unwrap();
     let old: String = sqlx::query_scalar(
         "SELECT value_json FROM virtual_client_state WHERE state_key='legacy_token_quota'",
@@ -1113,6 +1107,7 @@ async fn spending_window_migrations_remove_old_total_and_detect_stale_forms() {
     sqlx::query("INSERT INTO virtual_accounts(id,username,password_hash,name,email,plan_type,enabled,created_at) VALUES('v','virtual','hash','Virtual','v@example.test','pro',1,'2026-09-20')").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision) VALUES('v','quota','{\"total_cost_limit_usd\":42.5}',4)").execute(&pool).await.unwrap();
     pool.close().await;
+    own_legacy_subscriptions(&path).await;
     let storage = Storage::open(&path).await.unwrap();
     let config = storage.virtual_config("v", "quota").await.unwrap();
     assert_eq!(config.value, serde_json::json!({"spending_windows":[]}));
@@ -1214,4 +1209,36 @@ async fn startup_migrates_fresh_v3_v4_and_manually_cleaned_v4_databases() {
         assert_final_schema(&storage).await;
         storage.close().await;
     }
+}
+
+// Historical preservation scenarios now represent user-owned subscriptions. The
+// separate cleanup test covers the intentionally deleted standalone identities.
+async fn own_legacy_subscriptions(path: &Path) {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(path)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version <= 69)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) SELECT 'fixture-owner-'||v.id,'user',v.username,v.password_hash,v.enabled,v.created_at,v.created_at FROM virtual_accounts v WHERE NOT EXISTS(SELECT 1 FROM user_subscriptions s WHERE s.virtual_account_id=v.id);
+        INSERT INTO users(id,name,email) SELECT 'fixture-owner-'||v.id,v.name,v.email FROM virtual_accounts v WHERE NOT EXISTS(SELECT 1 FROM user_subscriptions s WHERE s.virtual_account_id=v.id);
+        INSERT INTO user_subscriptions(user_id,provider_id,virtual_account_id,revision) SELECT 'fixture-owner-'||v.id,v.provider_id,v.id,1 FROM virtual_accounts v WHERE NOT EXISTS(SELECT 1 FROM user_subscriptions s WHERE s.virtual_account_id=v.id);")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
 }

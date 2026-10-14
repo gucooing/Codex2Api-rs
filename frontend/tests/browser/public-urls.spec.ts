@@ -23,8 +23,7 @@ test("public base addresses retain explicit schemes and ports across saves and r
         app_version: "test",
         codex_cli_version: "0.162.0",
       };
-    if (path === "/settings/gateway")
-      value = { ua_mode: "blacklist", ua_rules: [], default_rpm: 20 };
+    if (path === "/settings/gateway") value = { ua_mode: "blacklist", ua_rules: [] };
     if (path === "/settings/public-urls") {
       if (route.request().method() === "PUT") {
         expect(route.request().headers()["x-csrf-token"]).toBe("fixture-csrf");

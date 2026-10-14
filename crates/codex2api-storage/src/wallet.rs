@@ -135,6 +135,8 @@ impl Storage {
                 .fetch_optional(&mut *tx)
                 .await?
                 .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+        // Revisions protect identity edits. Wallet deltas use the current balance
+        // under the write transaction and do not invalidate other pending deltas.
         if revision != input.expected_revision {
             return Err(StorageError::ProxyChanged);
         }
@@ -156,14 +158,12 @@ impl Storage {
                 "调整后余额不能低于已发生的 API 待扣费用",
             ));
         }
-        sqlx::query(
-            "UPDATE users SET wallet_cents=?,revision=revision+1 WHERE id=? AND revision=?",
-        )
-        .bind(after)
-        .bind(owner)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE users SET wallet_cents=? WHERE id=? AND revision=?")
+            .bind(after)
+            .bind(owner)
+            .bind(revision)
+            .execute(&mut *tx)
+            .await?;
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,amount_cents,balance_cents,created_at,operator_account_id,operator_name,reason) VALUES(?,?,?,?,'system_adjustment',?,?,?,?,?,?)")
             .bind(&id).bind(owner).bind(key).bind(signature).bind(input.amount_cents).bind(after).bind(chrono::Utc::now().to_rfc3339()).bind(actor).bind(actor_name).bind(reason).execute(&mut *tx).await?;

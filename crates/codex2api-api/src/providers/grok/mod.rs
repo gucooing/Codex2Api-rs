@@ -171,7 +171,7 @@ async fn account(
 ) -> Result<codex2api_storage::PlatformAccount> {
     state
         .storage
-        .effective_platform_account(&access.virtual_account_id)
+        .platform_account(&access.virtual_account_id)
         .await?
         .filter(|a| a.enabled && a.provider_id == codex2api_core::GROK)
         .ok_or_else(ApiError::invalid_token)
@@ -182,8 +182,8 @@ async fn user(
 ) -> Result<Json<Value>> {
     let account = account(&state, &access).await?;
     let entitlements = state.storage.effective_entitlements(&account.id).await?;
-    let tier = codex2api_core::providers::grok::subscription(account.effective_plan());
-    let user_tier = tier.map_or(account.effective_plan(), |t| t.user_tier);
+    let tier = codex2api_core::providers::grok::subscription(account.plan_type.as_str());
+    let user_tier = tier.map_or(account.plan_type.as_str(), |t| t.user_tier);
     let mut value = json!({"userId":account.id,"principalType":"User","principalId":account.id,"subscriptionTier":user_tier,"hasGrokCodeAccess":entitlements.execution_enabled});
     if access.scopes.split_whitespace().any(|s| s == "email") {
         value["email"] = account.email.into();
@@ -214,10 +214,11 @@ async fn settings(
 ) -> Result<Json<Value>> {
     let account = account(&state, &access).await?;
     let entitlements = state.storage.effective_entitlements(&account.id).await?;
-    let tier = codex2api_core::providers::grok::subscription(account.effective_plan());
-    let (id, display) = tier.map_or((account.effective_plan(), account.effective_plan()), |t| {
-        (t.id, t.display)
-    });
+    let tier = codex2api_core::providers::grok::subscription(account.plan_type.as_str());
+    let (id, display) = tier.map_or(
+        (account.plan_type.as_str(), account.plan_type.as_str()),
+        |t| (t.id, t.display),
+    );
     Ok(Json(
         json!({"allow_access":entitlements.execution_enabled,"subscription_tier":id,"subscription_tier_display":display,"on_demand_enabled":false}),
     ))
@@ -238,9 +239,9 @@ async fn billing(
             .map(|t| t.to_rfc3339())
     };
     let config=window.map(|w|json!({"creditUsagePercent":w["used_percent"],"currentPeriod":{"start":date(&w["started_at"]),"end":date(&w["reset_at"])}}));
-    let tier = codex2api_core::providers::grok::subscription(account.effective_plan());
+    let tier = codex2api_core::providers::grok::subscription(account.plan_type.as_str());
     Ok(Json(
-        json!({"config":config,"on_demand_enabled":false,"subscription_tier":tier.map_or(account.effective_plan(), |t| t.id)}),
+        json!({"config":config,"on_demand_enabled":false,"subscription_tier":tier.map_or(account.plan_type.as_str(), |t| t.id)}),
     ))
 }
 async fn responses(

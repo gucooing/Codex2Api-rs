@@ -145,7 +145,7 @@ impl Storage {
             .bind(&id).bind(&owner).bind(hash_token(refresh)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(provider).bind(scopes).bind(authenticated_at_ms).bind(requested_at_ms).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(self
-            .effective_platform_account(&account.id)
+            .platform_account(&account.id)
             .await?
             .map(|account| (account, id)))
     }

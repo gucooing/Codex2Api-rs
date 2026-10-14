@@ -1,5 +1,5 @@
 "use client";
-import { ConsumerForm } from "@/components/forms/consumer-form";
+import { SubscriptionForm } from "@/components/forms/subscription-form";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { useActions, useDialogFocus } from "@/lib/actions";
 import type { SupplierQuotaWindow } from "@/lib/api";
-import { type Consumer, type List } from "@/lib/api";
+import { type SubscriptionAccount, type List } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import { X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
@@ -21,7 +21,7 @@ type Props = {
   dialogFocus: ReturnType<typeof useDialogFocus>;
   resource: ReturnType<
     typeof useResource<
-      List<Consumer & { quota: { windows: SupplierQuotaWindow[] } }> & {
+      List<SubscriptionAccount & { quota: { windows: SupplierQuotaWindow[] } }> & {
         total: number;
         page: number;
         page_size: number;
@@ -30,7 +30,7 @@ type Props = {
   >;
 };
 
-export function CreateConsumerDialog({ actions, setCreate, dialogFocus, resource }: Props) {
+export function CreateSubscriptionDialog({ actions, setCreate, dialogFocus, resource }: Props) {
   return (
     <Dialog
       open
@@ -51,7 +51,7 @@ export function CreateConsumerDialog({ actions, setCreate, dialogFocus, resource
         }}
       >
         <DialogHeader>
-          <DialogTitle>{"创建虚拟账户"}</DialogTitle>
+          <DialogTitle>{"新增订阅"}</DialogTitle>
         </DialogHeader>
         <DialogClose asChild>
           <Button
@@ -65,7 +65,8 @@ export function CreateConsumerDialog({ actions, setCreate, dialogFocus, resource
             <X />
           </Button>
         </DialogClose>
-        <ConsumerForm
+        <SubscriptionForm
+          actions={actions}
           onCancel={() => setCreate(false)}
           onSaved={() => {
             setCreate(false);

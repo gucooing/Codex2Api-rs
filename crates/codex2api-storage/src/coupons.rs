@@ -105,12 +105,11 @@ impl Storage {
         }
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         if let Some(plan) = &input.plan_id {
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type!='free')",
-            )
-            .bind(plan)
-            .fetch_one(&mut *tx)
-            .await?;
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=?)")
+                    .bind(plan)
+                    .fetch_one(&mut *tx)
+                    .await?;
             if !exists {
                 return Err(checkout_error(
                     "invalid_coupon_plan",

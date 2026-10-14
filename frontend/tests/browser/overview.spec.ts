@@ -95,7 +95,7 @@ test("overview statistics aggregate real records, filter dimensions, and retain 
   const supplier = form.getByLabel("供应账户", { exact: true });
   await subject.fill("review-consumer");
   await page.getByRole("option", { name: "账户 · review-consumer", exact: true }).click();
-  await choose(page, "统计维度", "按虚拟账户");
+  await choose(page, "统计维度", "按消费账户");
   const account = await submit();
   expect(account.summary.request_count).toBe(1);
   expect(account.rows[0].key).toBe("review-consumer");

@@ -100,7 +100,7 @@ mod tests {
     use tower::ServiceExt;
     #[tokio::test]
     async fn static_export_is_embedded_and_api_misses_never_return_html() {
-        for path in ["/admin/", "/admin/login/", "/admin/consumers/"] {
+        for path in ["/admin/", "/admin/login/", "/admin/subscriptions/"] {
             let r = admin_router()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
                 .await
@@ -112,6 +112,7 @@ mod tests {
         }
         for path in [
             "/admin/api/missing",
+            "/admin/consumers/",
             "/admin/missing/",
             "/admin/../data.sqlite",
         ] {
@@ -127,7 +128,7 @@ mod tests {
         for page in [
             "usage",
             "suppliers",
-            "consumers",
+            "subscriptions",
             "plans",
             "models",
             "proxies",

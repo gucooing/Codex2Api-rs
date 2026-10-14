@@ -1,6 +1,5 @@
 "use client";
 import { GatewayClientRules } from "@/app/components/settings/gateway-client-rules";
-import { GatewayLimits } from "@/app/components/settings/gateway-limits";
 import { GatewayScheduling } from "@/app/components/settings/gateway-scheduling";
 import { useGateway } from "@/app/data/settings";
 import { Button } from "@/components/ui/button";
@@ -33,7 +32,6 @@ export function Gateway() {
         </Button>
       </div>
       <FieldSet className="gap-4">
-        <GatewayLimits form={form} />
         <GatewayScheduling form={form} />
         <GatewayClientRules form={form} />
       </FieldSet>

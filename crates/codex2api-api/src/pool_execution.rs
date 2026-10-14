@@ -499,7 +499,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         storage
-            .save_pool_route(&owner.id, "chatgpt", Some("pool"), None)
+            .save_pool_route(&owner.id, "chatgpt", Some("pool"), Some(1))
             .await
             .unwrap();
         let device = storage
@@ -535,7 +535,7 @@ pub(crate) mod tests {
         let (_dir, state, oauth, ids) = setup_pool().await;
         let storage = state.storage.clone();
         let owner = storage
-            .effective_platform_account(&oauth.virtual_account_id)
+            .platform_account(&oauth.virtual_account_id)
             .await
             .unwrap()
             .unwrap();

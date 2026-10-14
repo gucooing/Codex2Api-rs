@@ -52,23 +52,39 @@ pub(super) fn router(prefix: &str) -> Router<AdminState> {
 }
 
 pub(crate) async fn dto(s: &AdminState, a: &PlatformAccount) -> Result<Value, ApiError> {
-    let mut value = crate::rest::dto::Consumer::from(a);
     let user = s
         .storage
         .platform_account_user(&a.id)
         .await?
         .ok_or_else(ApiError::missing)?;
-    value.user_id = Some(user.id);
-    value.user_kind = user.kind;
-    value.user_revision = user.revision;
-    value.revision = s.storage.platform_revision(&a.id).await?;
-    value.plan_name = s
+    let revision = s.storage.platform_revision(&a.id).await?;
+    let plan = s
         .storage
         .virtual_plan(&a.plan_id)
         .await?
-        .map(|p| p.name)
-        .unwrap_or_else(|| "已删除套餐".into());
-    Ok(crate::rest::dto::value(value))
+        .ok_or_else(ApiError::missing)?;
+    Ok(crate::rest::dto::value(
+        crate::rest::dto::SubscriptionAccount {
+            user_id: user.id,
+            revision,
+            id: a.id.clone(),
+            provider_id: a.provider_id.clone(),
+            username: a.username.clone(),
+            name: a.name.clone(),
+            email: a.email.clone(),
+            plan_id: a.plan_id.clone(),
+            plan_type: a.plan_type.clone(),
+            subscription_expires_at: a.subscription_expires_at.clone(),
+            enabled: a.enabled,
+            created_at: a.created_at.clone(),
+            plan_name: plan.name,
+            subscription_status: if a.subscription_active_at(chrono::Utc::now().timestamp()) {
+                "active"
+            } else {
+                "expired"
+            },
+        },
+    ))
 }
 
 pub(crate) async fn require(state: &AdminState, id: &str) -> Result<PlatformAccount, ApiError> {

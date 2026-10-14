@@ -29,7 +29,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
         row.name = "跨页账户".into();
         f.storage.save_account_fixture(&row).await.unwrap();
     }
-    let page=f.get("/admin/api/consumers?page=2&page_size=10&search=match-&status=enabled&subscription=active").await;
+    let page=f.get("/admin/api/subscriptions?page=2&page_size=10&search=match-&status=enabled&subscription=active").await;
     assert_eq!(page["total"], 205);
     assert_eq!(page["items"].as_array().unwrap().len(), 10);
     assert!(page["items"][0]["quota"]["windows"].is_array());
@@ -41,7 +41,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     sqlx::query("CREATE TRIGGER fail_batch BEFORE INSERT ON virtual_reset_grants WHEN NEW.virtual_account_id='batch-002' BEGIN SELECT RAISE(ABORT,'fixture failure'); END")
         .execute(f.storage.pool()).await.unwrap();
     assert_eq!(
-        f.request("POST", "/admin/api/consumers/batch", batch.clone())
+        f.request("POST", "/admin/api/subscriptions/batch", batch.clone())
             .await
             .status(),
         StatusCode::INTERNAL_SERVER_ERROR
@@ -59,7 +59,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
         .unwrap();
     for _ in 0..2 {
         let r = f
-            .request("POST", "/admin/api/consumers/batch", batch.clone())
+            .request("POST", "/admin/api/subscriptions/batch", batch.clone())
             .await;
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(
@@ -95,14 +95,18 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     let mut changed = batch.clone();
     changed["duration_days"] = 7.into();
     assert_eq!(
-        f.request("POST", "/admin/api/consumers/batch", changed)
+        f.request("POST", "/admin/api/subscriptions/batch", changed)
             .await
             .status(),
         StatusCode::BAD_REQUEST
     );
     let no_op = json!({"request_id":"noop","operation":"reset","ids":["batch-000","batch-000"]});
     assert_eq!(
-        body(f.request("POST", "/admin/api/consumers/batch", no_op).await).await,
+        body(
+            f.request("POST", "/admin/api/subscriptions/batch", no_op)
+                .await
+        )
+        .await,
         json!({"ok":true,"matched":1,"affected":0,"skipped":1})
     );
     assert_eq!(
@@ -122,7 +126,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
         json!({"request_id":"invalid-note","operation":"grant_reset","ids":["batch-000"],"quantity":1,"note":"x".repeat(257)}),
     ] {
         assert_eq!(
-            f.request("POST", "/admin/api/consumers/batch", invalid)
+            f.request("POST", "/admin/api/subscriptions/batch", invalid)
                 .await
                 .status(),
             StatusCode::BAD_REQUEST
@@ -139,7 +143,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     for _ in 0..2 {
         assert_eq!(
             body(
-                f.request("POST", "/admin/api/consumers/batch", delete.clone())
+                f.request("POST", "/admin/api/subscriptions/batch", delete.clone())
                     .await
             )
             .await["affected"],
@@ -149,7 +153,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
     assert_eq!(
         f.with_auth(
             "POST",
-            "/admin/api/consumers/batch",
+            "/admin/api/subscriptions/batch",
             batch,
             Some(&f.cookie),
             None
@@ -165,7 +169,7 @@ async fn single_grant_retries_validate_the_schedule_and_duration() {
     let f = Fixture::new().await;
     let account = f.consumer("grant-retry").await;
     let id = account["id"].as_str().unwrap();
-    let path = format!("/admin/api/consumers/{id}/reset-credits");
+    let path = format!("/admin/api/subscriptions/{id}/reset-credits");
     let input = json!({"request_id":"retry","quantity":1});
     for _ in 0..2 {
         assert_eq!(
@@ -202,7 +206,7 @@ async fn administrators_issue_and_inspect_account_owned_reset_cards_with_csrf() 
     let account = f.consumer("reset-owner").await;
     let other = f.consumer("reset-other").await;
     let id = account["id"].as_str().unwrap();
-    let path = format!("/admin/api/consumers/{id}/reset-credits");
+    let path = format!("/admin/api/subscriptions/{id}/reset-credits");
     let input = json!({"request_id":"grant-once","quantity":2,"note":"运营发放"});
     assert_eq!(
         f.with_auth("POST", &path, input.clone(), None, None)
@@ -228,7 +232,7 @@ async fn administrators_issue_and_inspect_account_owned_reset_cards_with_csrf() 
     assert_eq!(records["items"][0]["note"], "运营发放");
     let foreign = f
         .get(&format!(
-            "/admin/api/consumers/{}/reset-credits",
+            "/admin/api/subscriptions/{}/reset-credits",
             other["id"].as_str().unwrap()
         ))
         .await;
@@ -245,7 +249,7 @@ async fn administrators_issue_and_inspect_account_owned_reset_cards_with_csrf() 
     assert_eq!(body(result).await["code"], "nothing_to_reset");
     assert_eq!(f.get(&path).await["available_count"], 2);
     assert_eq!(
-        f.get(&format!("/admin/api/consumers/{id}")).await["subscription_expires_at"],
+        f.get(&format!("/admin/api/subscriptions/{id}")).await["subscription_expires_at"],
         account["subscription_expires_at"]
     );
     assert_eq!(
@@ -255,9 +259,13 @@ async fn administrators_issue_and_inspect_account_owned_reset_cards_with_csrf() 
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        f.request("POST", "/admin/api/consumers/missing/reset-credits", input)
-            .await
-            .status(),
+        f.request(
+            "POST",
+            "/admin/api/subscriptions/missing/reset-credits",
+            input
+        )
+        .await
+        .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
@@ -273,7 +281,7 @@ async fn batch_operations_resolve_all_matching_accounts_in_sqlite_and_use_same_c
     let f = Fixture::new().await;
     let first = f.consumer("batch-owner-a").await;
     let second = f.consumer("batch-owner-b").await;
-    let response = f.request("POST", "/admin/api/consumers/batch", json!({
+    let response = f.request("POST", "/admin/api/subscriptions/batch", json!({
         "request_id":"grant-batch","operation":"grant_reset","all_matching":true,"filters":{"search":"batch-owner","status":"enabled","subscription":"active"},
         "quantity":2,"note":"批量发放","activate_at":null,"duration_days":30
     })).await;
@@ -282,19 +290,19 @@ async fn batch_operations_resolve_all_matching_accounts_in_sqlite_and_use_same_c
     for account in [first, second] {
         let cards = f
             .get(&format!(
-                "/admin/api/consumers/{}/reset-credits",
+                "/admin/api/subscriptions/{}/reset-credits",
                 account["id"].as_str().unwrap()
             ))
             .await;
         assert_eq!(cards["available_count"], 2);
     }
-    let response = f.request("POST", "/admin/api/consumers/batch", json!({
+    let response = f.request("POST", "/admin/api/subscriptions/batch", json!({
         "request_id":"delete-batch","operation":"delete","all_matching":true,"filters":{"search":"batch-owner","status":"enabled","subscription":"active"}
     })).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await["affected"], 2);
     assert_eq!(
-        f.get("/admin/api/consumers").await["items"]
+        f.get("/admin/api/subscriptions").await["items"]
             .as_array()
             .unwrap()
             .iter()

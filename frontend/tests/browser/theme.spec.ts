@@ -15,7 +15,7 @@ async function login(page: Page) {
   await expect(
     page.locator("[data-slot=breadcrumb-page]").filter({ hasText: "概览" }),
   ).toBeVisible();
-  await page.getByRole("link", { name: "虚拟账户", exact: true }).click();
+  await page.getByRole("link", { name: "订阅管理", exact: true }).click();
   await expect(page.getByRole("link", { name: "本地验收账户", exact: true })).toBeVisible();
 }
 

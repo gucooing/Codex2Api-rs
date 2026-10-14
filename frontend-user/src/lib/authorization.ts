@@ -4,11 +4,9 @@ import { request } from "@/lib/api";
 import { useEffect, useId, useState } from "react";
 
 export type Identity = {
-  account_id: string;
   username: string;
   name: string;
   email: string;
-  provider_id: string;
 };
 
 export type Flow = {
@@ -18,7 +16,7 @@ export type Flow = {
   provider_id: string;
   scope: string;
   identity: Identity | null;
-  user: { name: string; username: string; email: string } | null;
+  subscriptions: { id: string; plan_name: string; plan_type: string; expires_at: string | null }[];
   account_unavailable: boolean;
 };
 
@@ -27,6 +25,7 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
   const id = useId();
   const prefix = `/oauth/${device ? "device" : "authorize"}`;
   const [flow, setFlow] = useState<Flow>();
+  const [subscriptionId, setSubscriptionId] = useState("");
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [username, setUsername] = useState("");
@@ -43,6 +42,7 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
       .then((value) => {
         if (!controller.signal.aborted) {
           setFlow(value);
+          setSubscriptionId(value.subscriptions[0]?.id ?? "");
           if (device)
             setCode(
               (previous) =>
@@ -63,7 +63,7 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
       method: "POST",
       body: { request_id: flow.request_id, csrf_token: flow.csrf_token },
     });
-    setFlow({ ...flow, identity: null, user: null, account_unavailable: false });
+    setFlow({ ...flow, identity: null, subscriptions: [], account_unavailable: false });
     setPassword("");
   };
   const cancel = async () => {
@@ -88,7 +88,9 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
       "identify",
       async () => {
         if (!flow) throw new Error("请先加载授权请求");
-        const result = await request<{ identity: Identity }>(`${prefix}/identify`, {
+        const result = await request<
+          Pick<Flow, "identity" | "subscriptions" | "account_unavailable">
+        >(`${prefix}/identify`, {
           method: "POST",
           body: {
             request_id: flow.request_id,
@@ -98,7 +100,8 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
           },
         });
         setPassword("");
-        setFlow({ ...flow, identity: result.identity });
+        setFlow({ ...flow, ...result });
+        setSubscriptionId(result.subscriptions[0]?.id ?? "");
       },
       "",
     );
@@ -108,6 +111,8 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
       "approve",
       async () => {
         if (!flow?.identity) throw new Error("请先验证登录身份");
+        if (!flow.subscriptions.some((item) => item.id === subscriptionId))
+          throw new Error("请选择目标订阅");
         const result = await request<{ redirect_uri?: string; authorized?: boolean }>(
           `${prefix}/approve`,
           {
@@ -115,7 +120,7 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
             body: {
               request_id: flow.request_id,
               csrf_token: flow.csrf_token,
-              account_id: flow.identity.account_id,
+              account_id: subscriptionId,
               confirmed: true,
               ...(device ? { user_code: code } : {}),
             },
@@ -133,6 +138,8 @@ export function useAuthorization({ device = false }: { device?: boolean }) {
     actions,
     id,
     flow,
+    subscriptionId,
+    setSubscriptionId,
     error,
     setRevision,
     username,

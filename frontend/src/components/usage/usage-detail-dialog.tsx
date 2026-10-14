@@ -19,8 +19,8 @@ import {
   requestSpeed,
   tokenCount,
   usageFailure,
-  usageFailureKind,
   usageResult,
+  usageStatus,
   usageType,
   usageSourceDetail,
   usageConsumption,
@@ -46,7 +46,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
           <DialogDescription className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             <span>{selected ? date(selected.requested_at_ms) : ""}</span>
             <span className="min-w-0 break-all text-xs">
-              请求 ID：
+              上游 ID：
               <span className="select-all font-mono">{selected?.upstream_request_id ?? "-"}</span>
             </span>
           </DialogDescription>
@@ -59,9 +59,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
             ["消费", selected ? money(usageConsumption(selected)) : null],
             ["请求模型", selected?.model],
             ["实际模型", selected?.actual_model],
-            ...(selected && failedUsage(selected)
-              ? [["失败类别", usageFailureKind(selected.failure_kind)]]
-              : []),
+            ...(selected && failedUsage(selected) ? [["错误码", selected.error_code || "-"]] : []),
             [
               "请求状态",
               selected
@@ -79,7 +77,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
             <Field key={String(label)}>
               <FieldTitle>{label}</FieldTitle>
               <FieldDescription
-                className={`break-words${label === "请求状态" && selected && failedUsage(selected) ? " text-destructive" : ""}`}
+                className={`break-words${label === "请求状态" && selected ? ` ${usageStatus(selected.status).className}` : ""}`}
               >
                 {value ?? "-"}
               </FieldDescription>

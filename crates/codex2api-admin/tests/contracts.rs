@@ -128,13 +128,13 @@ async fn real_rest_contracts_match_frontend_fixture() {
         )
         .await
         .unwrap();
-    let mut fixture = json!({"session":f.get("/admin/api/session").await,"overview":f.get("/admin/api/overview").await,"plans":f.get("/admin/api/plans").await,"models":f.get("/admin/api/models").await,"consumer":f.get("/admin/api/consumers/contract-consumer").await,"routing":f.get("/admin/api/consumers/contract-consumer/routing").await,"usage":f.get("/admin/api/usage").await,"task_records":f.get("/admin/api/consumers/contract-consumer/records?kind=task").await,"subscription_records":f.get("/admin/api/consumers/contract-consumer/records?kind=subscription_operation").await,"client_state":f.get("/admin/api/consumers/contract-consumer/client-state/cloud_preferences").await,"consumer_usage":f.get("/admin/api/consumers/contract-consumer/usage").await});
+    let mut fixture = json!({"session":f.get("/admin/api/session").await,"overview":f.get("/admin/api/overview").await,"plans":f.get("/admin/api/plans").await,"models":f.get("/admin/api/models").await,"consumer":f.get("/admin/api/subscriptions/contract-consumer").await,"routing":f.get("/admin/api/subscriptions/contract-consumer/routing").await,"usage":f.get("/admin/api/usage").await,"task_records":f.get("/admin/api/subscriptions/contract-consumer/records?kind=task").await,"subscription_records":f.get("/admin/api/subscriptions/contract-consumer/records?kind=subscription_operation").await,"client_state":f.get("/admin/api/subscriptions/contract-consumer/client-state/cloud_preferences").await,"consumer_usage":f.get("/admin/api/subscriptions/contract-consumer/usage").await});
     normalize(&mut fixture, "");
     fixture["task_execution_records"] = f
-        .get("/admin/api/consumers/contract-consumer/records?kind=task_execution")
+        .get("/admin/api/subscriptions/contract-consumer/records?kind=task_execution")
         .await;
     fixture["task_operation_records"] = f
-        .get("/admin/api/consumers/contract-consumer/records?kind=task_operation")
+        .get("/admin/api/subscriptions/contract-consumer/records?kind=task_operation")
         .await;
     normalize(&mut fixture, "");
     assert!(fixture["routing"].get("suppliers").is_none());
@@ -148,7 +148,7 @@ async fn real_rest_contracts_match_frontend_fixture() {
             .is_none()
     );
     for config in f
-        .get("/admin/api/consumers/contract-consumer/configs")
+        .get("/admin/api/subscriptions/contract-consumer/configs")
         .await["items"]
         .as_array()
         .unwrap()

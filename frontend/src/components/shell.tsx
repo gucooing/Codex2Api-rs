@@ -179,7 +179,7 @@ function AdminShell({ children }: { children: ReactNode }) {
               <CardTitle role="heading" aria-level={1}>
                 管理登录
               </CardTitle>
-              <CardDescription>Codex2API · 供应账户与虚拟账户管理</CardDescription>
+              <CardDescription>Codex2API · 供应账户与订阅管理</CardDescription>
             </CardHeader>
             <CardContent>
               <form noValidate onSubmit={(event) => handleSubmit2(event)}>

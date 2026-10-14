@@ -188,13 +188,9 @@ pub(crate) async fn insert_usage_on(
 ) -> Result<u64> {
     let source_name: Option<String> = if record.subject_kind == "virtual_account" {
         sqlx::query_scalar(
-            "SELECT p.name FROM platform_accounts a JOIN virtual_plans p ON p.provider_id=a.provider_id AND p.id=CASE
-             WHEN a.plan_type!='free' AND a.subscription_expires_at IS NOT NULL
-                AND (unixepoch(a.subscription_expires_at) IS NULL OR unixepoch(a.subscription_expires_at)<=?)
-             THEN (SELECT plan_id FROM platform_free_plans WHERE provider_id=a.provider_id)
-             ELSE a.plan_id END WHERE a.id=? AND a.provider_id=?"
+            "SELECT p.name FROM platform_accounts a JOIN virtual_plans p ON p.id=a.plan_id AND p.provider_id=a.provider_id WHERE a.id=? AND a.provider_id=?"
         )
-        .bind(record.requested_at_ms / 1000).bind(&record.subject_id).bind(&record.provider_id)
+        .bind(&record.subject_id).bind(&record.provider_id)
         .fetch_optional(&mut *connection).await?
     } else {
         record.group_name.clone()
@@ -304,10 +300,10 @@ async fn finish_usage_on(
     } else {
         0
     };
-    let changed = sqlx::query("UPDATE usage_records SET account_id=?,account_name=?,base_cost_nano_usd=?,cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?,input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,failure_kind=?,failure_status=?,error_code=?,error_message=?,upstream_request_id=?,wallet_debit_cents=?,completed_at_ms=? WHERE id=? AND status='in_progress'")
+    let changed = sqlx::query("UPDATE usage_records SET account_id=?,account_name=?,base_cost_nano_usd=?,cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?,input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,error_code=?,error_message=?,upstream_request_id=?,wallet_debit_cents=?,completed_at_ms=? WHERE id=? AND status='in_progress'")
         .bind(&record.account_id).bind(&record.account_name).bind(base).bind(cost).bind(billing_status).bind(billing_model).bind(billing_tier).bind(&billable.service_tier).bind(&record.actual_model)
         .bind(record.input_tokens).bind(record.output_tokens).bind(record.cached_tokens).bind(record.cache_write_tokens).bind(record.reasoning_tokens).bind(&record.image_size).bind(record.image_count).bind(&record.image_usage_json).bind(&record.image_input_usage_json)
-        .bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.failure_kind).bind(record.failure_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id)
+        .bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id)
         .bind(debit).bind(chrono::Utc::now().timestamp_millis()).bind(&record.id).execute(&mut *tx).await?.rows_affected();
     tx.commit().await?;
     Ok(changed)

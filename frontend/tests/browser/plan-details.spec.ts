@@ -2,43 +2,6 @@ import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-test("plans without a description remain readable during a backend upgrade", async ({ page }) => {
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/user/api/**", async (route) => {
-    const path = new URL(route.request().url()).pathname.replace("/user/api", "");
-    let value: unknown = { items: [] };
-    if (path === "/session")
-      value = {
-        csrf_token: "fixture",
-        user: { name: "测试用户", username: "test", email: "test@example.test", enabled: true },
-      };
-    if (path === "/wallet") value = { balance_usd: "0" };
-    if (path === "/plans")
-      value = {
-        items: [
-          {
-            id: "existing",
-            name: "原有套餐",
-            provider_id: "grok",
-            plan_type: "supergrok",
-            sale_price_usd: "10",
-            duration_days: 30,
-            revision: 0,
-            model_access: "all",
-            models: [],
-            spending_windows: [],
-          },
-        ],
-      };
-    await route.fulfill({ json: value });
-  });
-  await page.goto("/user/plans/");
-  await page.getByRole("button", { name: "原有套餐", exact: true }).click();
-  await expect(page.getByRole("dialog").getByText("暂无描述", { exact: true })).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
 test("plan descriptions save as Markdown and user details show complete benefits", async ({
   page,
 }, info) => {

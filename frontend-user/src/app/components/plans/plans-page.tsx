@@ -21,6 +21,8 @@ import remarkGfm from "remark-gfm";
 
 export default function PlansPage() {
   const {
+    subscriptionId,
+    changeSubscription,
     subscriptions,
     plans,
     planPage,
@@ -47,7 +49,7 @@ export default function PlansPage() {
     dirty,
     previewExpired,
     walletBalance,
-    purchaseStatus,
+    purchaseDisabled,
     beginCheckout,
     loadPreview,
     pay,
@@ -67,7 +69,6 @@ export default function PlansPage() {
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {plans.data?.items.map((plan) => {
-          const purchase = purchaseStatus(plan);
           return (
             <Card
               key={plan.id}
@@ -92,11 +93,14 @@ export default function PlansPage() {
                     : plan.provider_id === "grok"
                       ? "Grok"
                       : plan.provider_id}{" "}
-                  · {plan.duration_days} 天 ·{" "}
-                  {plan.sale_price_usd === null ? "暂未定价" : money(plan.sale_price_usd)}
+                  · {plan.duration_days} 天 · {money(plan.sale_price_usd)}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
+                <p className="text-sm">
+                  RPM：{plan.rpm_limit === 0 ? "不限" : plan.rpm_limit} · 并发：
+                  {plan.concurrency_limit === 0 ? "不限" : plan.concurrency_limit}
+                </p>
                 <div
                   className="prose prose-sm prose-neutral dark:prose-invert line-clamp-3 max-h-16 max-w-none break-words [&_*]:my-0 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm [&_pre]:whitespace-pre-wrap"
                   aria-label="套餐描述摘要"
@@ -109,8 +113,8 @@ export default function PlansPage() {
                   <Button variant="outline" onClick={() => setViewedId(plan.id)}>
                     查看详情
                   </Button>
-                  <Button disabled={purchase.disabled} onClick={() => beginCheckout(plan)}>
-                    {purchase.label}
+                  <Button disabled={purchaseDisabled} onClick={() => beginCheckout(plan)}>
+                    下单
                   </Button>
                 </div>
               </CardContent>
@@ -169,10 +173,12 @@ export default function PlansPage() {
         viewedId={viewedId}
         setViewedId={setViewedId}
         viewed={viewed}
-        purchaseStatus={purchaseStatus}
+        purchaseDisabled={purchaseDisabled}
         beginCheckout={beginCheckout}
       />
       <CheckoutDialog
+        subscriptionId={subscriptionId}
+        changeSubscription={changeSubscription}
         selected={selected}
         busy={busy}
         setSelected={setSelected}

@@ -12,9 +12,9 @@ export default function Overview() {
         {[
           { label: "供应账户", value: data?.supplier_count ?? "—", href: "/suppliers/" },
           {
-            label: "虚拟账户",
+            label: "订阅",
             value: data ? `${data.normal_consumer_count}/${data.consumer_count}` : "—",
-            href: "/consumers/",
+            href: "/subscriptions/",
             hint: "正常 / 总数",
           },
           {

@@ -25,13 +25,11 @@ pub(crate) async fn settle_usage_on(
         sqlx::query("UPDATE usage_wallet_state SET pending_nano_usd=?,last_usage_id=CASE WHEN ?>0 THEN ? ELSE last_usage_id END WHERE user_id=?")
                 .bind(pending).bind(cost).bind(&record.id).bind(&owner).execute(&mut *connection).await?;
         if debit > 0 {
-            sqlx::query(
-                "UPDATE users SET wallet_cents=?,revision=revision+1 WHERE id=? AND kind='regular'",
-            )
-            .bind(after)
-            .bind(&owner)
-            .execute(&mut *connection)
-            .await?;
+            sqlx::query("UPDATE users SET wallet_cents=? WHERE id=? AND kind='regular'")
+                .bind(after)
+                .bind(&owner)
+                .execute(&mut *connection)
+                .await?;
             sqlx::query("INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,provider_id,amount_cents,balance_cents,created_at,usage_record_id) VALUES(?,?,?,?,'usage',?,?,?,?,?)")
                     .bind(uuid::Uuid::new_v4().to_string()).bind(&owner).bind(format!("usage:{}",record.id))
                     .bind(crate::hash_token(&format!("{}:{cost}:{debit}",record.id))).bind(&provider).bind(-debit).bind(after).bind(chrono::Utc::now().to_rfc3339()).bind(&record.id).execute(&mut *connection).await?;
@@ -66,13 +64,11 @@ pub(crate) async fn settle_usage_debt_on(
             .fetch_one(&mut *connection)
             .await?;
     let after = balance - debit;
-    sqlx::query(
-        "UPDATE users SET wallet_cents=?,revision=revision+1 WHERE id=? AND kind='regular'",
-    )
-    .bind(after)
-    .bind(owner)
-    .execute(&mut *connection)
-    .await?;
+    sqlx::query("UPDATE users SET wallet_cents=? WHERE id=? AND kind='regular'")
+        .bind(after)
+        .bind(owner)
+        .execute(&mut *connection)
+        .await?;
     sqlx::query("UPDATE usage_wallet_state SET pending_nano_usd=? WHERE user_id=?")
         .bind(pending - debit * NANO_PER_CENT)
         .bind(owner)

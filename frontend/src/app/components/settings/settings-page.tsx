@@ -8,7 +8,7 @@ import { useSettingsPage } from "@/app/data/settings";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const settingTabs = [
-  ["gateway", "网关与限流"],
+  ["gateway", "网关"],
   ["public-urls", "访问地址"],
   ["security", "管理员凭据"],
   ["desktop", "Desktop 支持"],

@@ -16,15 +16,15 @@ use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::{Value, json};
 
 pub fn identity(account: &PlatformAccount) -> Value {
-    json!({"id":account.id,"account_id":account.id,"user_id":format!("user-{}",account.id),"email":account.email,"name":account.name,"plan_type":account.effective_plan(),"is_default":true})
+    json!({"id":account.id,"account_id":account.id,"user_id":format!("user-{}",account.id),"email":account.email,"name":account.name,"plan_type":account.plan_type.as_str(),"is_default":true})
 }
 pub fn account_check(account: &PlatformAccount) -> Value {
-    let active = account.effective_plan() != "free";
+    let active = account.subscription_active_at(chrono::Utc::now().timestamp());
     let mut details = identity(account);
     details["account_user_id"] = format!("user-{}", account.id).into();
     details["structure"] = "personal".into();
     details["is_deactivated"] = false.into();
-    json!({"accounts":{account.id.clone():{"account":details,"entitlement":{"subscription_plan":account.effective_plan(),"has_active_subscription":active,"expires_at":account.subscription_expires_at},"features":[],"permissions":[]}},"account_ordering":[account.id],"user":identity(account)})
+    json!({"accounts":{account.id.clone():{"account":details,"entitlement":{"subscription_plan":account.plan_type.as_str(),"has_active_subscription":active,"expires_at":account.subscription_expires_at},"features":[],"permissions":[]}},"account_ordering":[account.id],"user":identity(account)})
 }
 
 pub fn optimized_account_check(account: &PlatformAccount) -> Value {
@@ -54,7 +54,7 @@ pub fn workspace_check(account: &PlatformAccount) -> Value {
     json!({"accounts":[workspace],"default_account_id":account.id,"account_ordering":[account.id]})
 }
 pub fn subscriptions(account: &PlatformAccount) -> Value {
-    json!({"id":format!("subscription-{}",account.id),"account_id":account.id,"plan_type":account.effective_plan(),"active_until":account.subscription_expires_at,"will_renew":false})
+    json!({"id":format!("subscription-{}",account.id),"account_id":account.id,"plan_type":account.plan_type.as_str(),"active_until":account.subscription_expires_at,"will_renew":false})
 }
 pub fn json_response(value: Value) -> Response {
     (
@@ -229,7 +229,7 @@ pub fn mask(
             for (key, item) in object.iter_mut() {
                 match key.as_str() {
                     "error" if !item.is_null() => *item = crate::public_output::error(item),
-                    "plan_type" | "chatgpt_plan_type" => *item = account.effective_plan().into(),
+                    "plan_type" | "chatgpt_plan_type" => *item = account.plan_type.as_str().into(),
                     "email" => *item = account.email.clone().into(),
                     "account_id" | "chatgpt_account_id" => *item = account.id.clone().into(),
                     "user_id" | "chatgpt_user_id" => *item = format!("user-{}", account.id).into(),
@@ -279,7 +279,7 @@ pub async fn quota_headers(
         "x-codex-plan-type",
         quota["plan_type"]
             .as_str()
-            .unwrap_or("free")
+            .ok_or_else(|| crate::ApiError::internal("Missing subscription plan."))?
             .parse()
             .map_err(|_| crate::ApiError::internal("Invalid subscription plan."))?,
     );

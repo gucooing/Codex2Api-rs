@@ -292,7 +292,7 @@ impl Storage {
                 .await?;
         if bound {
             return Err(StorageError::Constraint(
-                "此标签仍用于套餐、虚拟账户或 API 组，请先更换关联标签".into(),
+                "此标签仍用于套餐、订阅或 API 组，请先更换关联标签".into(),
             ));
         }
         sqlx::query("DELETE FROM supplier_tags WHERE id=?")
@@ -404,8 +404,7 @@ impl Storage {
         expected: Option<i64>,
     ) -> Result<bool> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::VirtualAccount)
-            .await?;
+        crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::UserPlatform).await?;
         let current: Option<i64> = sqlx::query_scalar(
             "SELECT revision FROM execution_routes WHERE virtual_account_id=? AND provider_id=?",
         )

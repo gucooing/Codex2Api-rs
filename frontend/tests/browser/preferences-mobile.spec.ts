@@ -139,7 +139,7 @@ test("filters, list views, page size and overview series survive reload locally"
   await expect(
     page.getByRole("cell", { name: "pagination-fixture-104", exact: true }),
   ).toBeVisible();
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "用量统计", exact: true }).click();
   await expect(page.getByLabel("模型", { exact: true })).toHaveValue("");
 
@@ -174,7 +174,7 @@ test("mobile tables keep compact aligned rows and open full fields on demand", a
   expect(proxy.ok()).toBe(true);
   const evidence = resolve(process.env.CODEX2API_TEST_OUTPUT_DIR!, "screenshots");
   await mkdir(evidence, { recursive: true });
-  for (const route of ["suppliers", "consumers", "models", "proxies", "usage"]) {
+  for (const route of ["suppliers", "subscriptions", "models", "proxies", "usage"]) {
     const response = page.waitForResponse(
       (response) => new URL(response.url()).pathname === `/admin/api/${route}`,
     );
@@ -240,7 +240,7 @@ test("mobile tables keep compact aligned rows and open full fields on demand", a
   await page.getByRole("button", { name: "查看请求详情：成功", exact: true }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
-  await page.goto("/admin/consumers/detail/?id=review-consumer");
+  await page.goto("/admin/subscriptions/detail/?id=review-consumer");
   await page.getByRole("tab", { name: "记录查询", exact: true }).click();
   const logTable = page.getByRole("table").first();
   await expect(logTable.getByRole("columnheader", { name: "接口", exact: true })).toBeVisible();

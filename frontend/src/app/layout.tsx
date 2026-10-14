@@ -15,7 +15,7 @@ import {
 
 export const metadata: Metadata = {
   title: "Codex2API 管理",
-  description: "供应账户与虚拟账户管理",
+  description: "供应账户与订阅管理",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

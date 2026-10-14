@@ -1030,7 +1030,7 @@ async fn oauth_grants_are_consumer_only_scope_bounded_and_not_admin_credentials(
         "insufficient_scope"
     );
     for path in [
-        "/admin/api/consumers",
+        "/admin/api/subscriptions",
         "/admin/api/plans",
         "/admin/api/models",
     ] {
@@ -1164,7 +1164,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
         codex2api_admin::AdminState::new(storage.clone()).unwrap(),
     ));
     let (cookie, csrf) = admin_login(&app).await;
-    let mut input = json!({"sale_price_usd": null, "duration_days": 30, "supplier_tag_id": null, "provider_id": "chatgpt", "name": "研发专用", "model_access": "selected", "models": [{"provider_id": "chatgpt", "model": "gpt-6-astra"}], "allow_purchase": true, "plan_type": "plus", "spending_windows": [{"duration_seconds": 604800, "cost_limit_usd": "10"}, {"duration_seconds": 18000, "cost_limit_usd": "2"}]});
+    let mut input = json!({"rpm_limit":40,"concurrency_limit":10,"sale_price_usd": null, "duration_days": 30, "supplier_tag_id": null, "provider_id": "chatgpt", "name": "研发专用", "model_access": "selected", "models": [{"provider_id": "chatgpt", "model": "gpt-6-astra"}], "allow_purchase": true, "plan_type": "plus", "spending_windows": [{"duration_seconds": 604800, "cost_limit_usd": "10"}, {"duration_seconds": 18000, "cost_limit_usd": "2"}]});
     let saved = app
         .clone()
         .oneshot(admin_request(
@@ -3342,7 +3342,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
             .unwrap()
             .is_none()
     );
-    storage.delete_virtual_user(&account.id).await.unwrap();
+    storage.delete_user_subscription(&account.id).await.unwrap();
     assert!(
         storage
             .virtual_client_state(&account.id, "browser_settings")
@@ -4076,7 +4076,7 @@ async fn desktop_plugin_catalog_matches_only_this_accounts_enabled_plugins() {
             .oneshot(admin_request(
                 "GET",
                 &format!(
-                    "/admin/api/consumers/{}/client-state/installed_plugins/rows?section=$.plugins",
+                    "/admin/api/subscriptions/{}/client-state/installed_plugins/rows?section=$.plugins",
                     account.id
                 ),
                 &cookie,
@@ -4330,7 +4330,7 @@ async fn admin_config(app: &Router, owner: &str, key: &str, cookie: &str) -> Val
         .clone()
         .oneshot(admin_request(
             "GET",
-            &format!("/admin/api/consumers/{owner}/configs"),
+            &format!("/admin/api/subscriptions/{owner}/configs"),
             cookie,
             "",
             Value::Null,
@@ -4359,7 +4359,7 @@ async fn admin_save_config(
         .clone()
         .oneshot(admin_request(
             "PUT",
-            &format!("/admin/api/consumers/{owner}/config/{key}"),
+            &format!("/admin/api/subscriptions/{owner}/config/{key}"),
             cookie,
             csrf,
             serde_json::json!({"revision":config["revision"],"value":value}),
@@ -5301,7 +5301,7 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
     storage.save_account_fixture(&account).await.unwrap();
     assert_eq!(refresh(&app, rt).await.status(), StatusCode::BAD_REQUEST);
     let fresh = login(&app).await;
-    storage.delete_virtual_user(&account.id).await.unwrap();
+    storage.delete_user_subscription(&account.id).await.unwrap();
     assert_eq!(
         refresh(&app, fresh["refresh_token"].as_str().unwrap())
             .await
@@ -5559,10 +5559,10 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
         .await
         .unwrap();
     let (app, mut account) = fixture(&storage).await;
+    let tokens = login(&app).await;
     account.subscription_expires_at =
         Some((chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339());
     storage.save_account_fixture(&account).await.unwrap();
-    let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
     let claims: Value = serde_json::from_slice(
         &URL_SAFE_NO_PAD
@@ -5579,7 +5579,7 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     .unwrap();
     assert_eq!(
         claims["https://api.openai.com/auth"]["chatgpt_plan_type"],
-        "free"
+        account.plan_type
     );
     for (path, pointer) in [
         ("/backend-api/wham/usage", "/plan_type"),
@@ -5598,7 +5598,7 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             json_body(response).await.pointer(pointer),
-            Some(&json!("free")),
+            Some(&json!(account.plan_type)),
             "{path}"
         );
     }
@@ -6325,15 +6325,19 @@ async fn admin_json_operations_persist_valid_nonempty_desktop_configuration() {
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    let current_user = storage.virtual_user(&account.id).await.unwrap().unwrap();
+    let current_user = storage
+        .platform_account_user(&account.id)
+        .await
+        .unwrap()
+        .unwrap();
     let saved = app
         .clone()
         .oneshot(admin_request(
             "PUT",
-            &format!("/admin/api/consumers/{}", account.id),
+            &format!("/admin/api/subscriptions/{}", account.id),
             &cookie,
             &csrf,
-            json!({"provider_id":"chatgpt","username":account.username,"name":account.name,"email":account.email,"plan_id":"plus","subscription_expires_at":expiry,"enabled":true,"revision":current_revision,"user_revision":current_user.revision}),
+            json!({"user_id":current_user.id,"plan_id":"plus","expires_at":expiry,"enabled":true,"revision":current_revision,"reissue":false}),
         ))
         .await
         .unwrap();
@@ -6367,7 +6371,7 @@ async fn admin_json_operations_persist_valid_nonempty_desktop_configuration() {
             .oneshot(admin_request(
                 "GET",
                 &format!(
-                    "/admin/api/consumers/{}/records?kind=subscription_operation",
+                    "/admin/api/subscriptions/{}/records?kind=subscription_operation",
                     account.id
                 ),
                 &cookie,
@@ -6937,7 +6941,7 @@ async fn desktop_layout_environments_and_metrics_use_persisted_account_data() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/admin/api/consumers/{}/records?kind=cloud_environment",
+                    "/admin/api/subscriptions/{}/records?kind=cloud_environment",
                     account.id
                 ))
                 .header("cookie", &cookie)
@@ -7183,7 +7187,7 @@ async fn ultra_slider_default_settings_parse_and_real_client_toggle_roundtrips()
             .oneshot(admin_request(
                 "GET",
                 &format!(
-                    "/admin/api/consumers/{}/client-state/user_settings",
+                    "/admin/api/subscriptions/{}/client-state/user_settings",
                     account.id
                 ),
                 &cookie,
@@ -7454,7 +7458,7 @@ async fn family_graduation_notices_are_owned_persistent_and_dismiss_only_capture
             .oneshot(admin_request(
                 "GET",
                 &format!(
-                    "/admin/api/consumers/{}/records?kind=family_notices",
+                    "/admin/api/subscriptions/{}/records?kind=family_notices",
                     account.id
                 ),
                 &cookie,
@@ -7629,7 +7633,7 @@ async fn consent(
             .map(|(_, v)| *v)
             .unwrap_or("")
     };
-    let value = serde_json::json!({"request_id":field("flow"),"csrf_token":field("csrf"),"account_id":identity["identity"]["account_id"],"confirmed":true});
+    let value = serde_json::json!({"request_id":field("flow"),"csrf_token":field("csrf"),"account_id":identity["subscriptions"][0]["id"],"confirmed":true});
     let mut request = Request::post("/user/api/oauth/authorize/approve")
         .header("content-type", "application/json");
     if let Some(cookie) = cookie {

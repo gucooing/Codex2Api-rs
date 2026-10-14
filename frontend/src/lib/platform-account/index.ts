@@ -4,7 +4,7 @@ import {
   query,
   request,
   type AccountUsage,
-  type Consumer,
+  type SubscriptionAccount,
   type Device,
   type Json,
   type List,
@@ -20,8 +20,8 @@ import { mobileRecordColumns, recordColumns } from "@/lib/records";
 import type { Dispatch, SetStateAction } from "react";
 import { useId, useState } from "react";
 
-export const subscriptionLabel = (status: Consumer["subscription_status"]) =>
-  ({ active: "订阅有效", expired: "订阅已到期", free: "免费层" })[status];
+export const subscriptionLabel = (status: SubscriptionAccount["subscription_status"]) =>
+  ({ active: "订阅有效", expired: "订阅已到期" })[status];
 
 export const recordKinds = [
   ["task", "任务与执行来源"],
@@ -67,7 +67,7 @@ export type ResetCreditRecord = {
 export function useConsumerResetCredits({ id }: { id: string }) {
   const platformPrefix = usePlatformPrefix();
   const tableColumns1 = useColumnVisibility(
-    "components/consumers.tsx:1",
+    "components/subscriptions.tsx:1",
     [
       "类型",
       "发放时间",
@@ -152,12 +152,12 @@ export function useConsumerUsage({ id }: { id: string }) {
 export function useDevices({ id }: { id: string }) {
   const platformPrefix = usePlatformPrefix();
   const tableColumns2 = useColumnVisibility(
-    "components/consumers.tsx:2",
+    "components/subscriptions.tsx:2",
     ["客户端 / 安装标识", "授权范围", "首次登录", "最近续期 / 使用", "操作"],
     ["客户端 / 安装标识", "最近续期 / 使用", "操作"],
   );
   const tableColumns3 = useColumnVisibility(
-    "components/consumers.tsx:3:" + "remote_servers",
+    "components/subscriptions.tsx:3:" + "remote_servers",
     recordColumns("remote_servers"),
     mobileRecordColumns("remote_servers"),
   );
@@ -270,17 +270,17 @@ export function useGrantResetCreditsDialog({
 export function useLogs({ id }: { id: string }) {
   const platformPrefix = usePlatformPrefix();
   const tableColumns5 = useColumnVisibility(
-    "components/consumers.tsx:5:" + "logs",
+    "components/subscriptions.tsx:5:" + "logs",
     recordColumns("logs"),
     mobileRecordColumns("logs"),
   );
   const tableColumns6 = useColumnVisibility(
-    "components/consumers.tsx:6:" + "analytics",
+    "components/subscriptions.tsx:6:" + "analytics",
     recordColumns("analytics"),
     mobileRecordColumns("analytics"),
   );
   const tableColumns7 = useColumnVisibility(
-    "components/consumers.tsx:7:" + "site_status",
+    "components/subscriptions.tsx:7:" + "site_status",
     recordColumns("site_status"),
     mobileRecordColumns("site_status"),
   );
@@ -350,7 +350,7 @@ export function useLogs({ id }: { id: string }) {
 export function useRecords({ id, kind }: { id: string; kind: string }) {
   const platformPrefix = usePlatformPrefix();
   const tableColumns4 = useColumnVisibility(
-    "components/consumers.tsx:4:" + kind,
+    "components/subscriptions.tsx:4:" + kind,
     recordColumns(kind),
     mobileRecordColumns(kind),
   );
@@ -427,7 +427,7 @@ export function useRoutingForm({
   disabled,
   onSaved,
 }: {
-  account?: Consumer;
+  account?: SubscriptionAccount;
   data: RoutingResponse;
   disabled: boolean;
   onSaved: () => void;

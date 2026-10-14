@@ -1,4 +1,4 @@
-//! Shared SQL selection and atomic administrator operations for consumers.
+//! Shared SQL selection and atomic administrator operations for subscriptions.
 use crate::{PlatformAccount, Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -6,20 +6,23 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ConsumerFilters {
+pub struct SubscriptionFilters {
+    pub user_id: String,
+    pub provider_id: String,
+    pub plan_id: String,
     pub search: String,
     pub status: String,
     pub subscription: String,
 }
 
-impl ConsumerFilters {
+impl SubscriptionFilters {
     pub fn validate(&self) -> Result<()> {
-        if self.search.len() > 1024
+        if self.user_id.len() > 128
+            || self.provider_id.len() > 64
+            || self.plan_id.len() > 128
+            || self.search.len() > 1024
             || !matches!(self.status.as_str(), "" | "enabled" | "disabled")
-            || !matches!(
-                self.subscription.as_str(),
-                "" | "active" | "expired" | "free"
-            )
+            || !matches!(self.subscription.as_str(), "" | "active" | "expired")
         {
             return Err(StorageError::InvalidAdminUpdate("账户筛选条件无效"));
         }
@@ -29,6 +32,19 @@ impl ConsumerFilters {
     pub(crate) fn conditions(&self, query: &mut QueryBuilder<'_, Sqlite>, now: i64) {
         // Both the visible list and 'all matching' use this exact predicate.
         query.push(" WHERE 1=1");
+        for (column, value) in [
+            ("user_id", &self.user_id),
+            ("provider_id", &self.provider_id),
+            ("plan_id", &self.plan_id),
+        ] {
+            if !value.is_empty() {
+                query
+                    .push(" AND ")
+                    .push(column)
+                    .push("=")
+                    .push_bind(value.clone());
+            }
+        }
         if !self.search.trim().is_empty() {
             query
                 .push(" AND instr(lower(name || ' ' || username || ' ' || email),lower(")
@@ -45,14 +61,11 @@ impl ConsumerFilters {
             _ => {}
         }
         match self.subscription.as_str() {
-            "free" => {
-                query.push(" AND plan_type='free'");
-            }
             "active" => {
-                query.push(" AND plan_type!='free' AND (subscription_expires_at IS NULL OR unixepoch(subscription_expires_at)>").push_bind(now).push(")");
+                query.push(" AND (subscription_expires_at IS NULL OR unixepoch(subscription_expires_at)>").push_bind(now).push(")");
             }
             "expired" => {
-                query.push(" AND plan_type!='free' AND subscription_expires_at IS NOT NULL AND COALESCE(unixepoch(subscription_expires_at),0)<=").push_bind(now);
+                query.push(" AND subscription_expires_at IS NOT NULL AND COALESCE(unixepoch(subscription_expires_at),0)<=").push_bind(now);
             }
             _ => {}
         }
@@ -110,17 +123,17 @@ impl ResetCardGrant {
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConsumerSelection {
+pub struct SubscriptionSelection {
     #[serde(default)]
     pub ids: Vec<String>,
     #[serde(default)]
     pub all_matching: bool,
     #[serde(default)]
-    pub filters: ConsumerFilters,
+    pub filters: SubscriptionFilters,
     #[serde(default)]
     pub excluded_ids: Vec<String>,
 }
-impl ConsumerSelection {
+impl SubscriptionSelection {
     fn normalize(&mut self) -> Result<()> {
         self.filters.search = self.filters.search.trim().into();
         self.filters.validate()?;
@@ -145,7 +158,7 @@ impl ConsumerSelection {
         Ok(())
     }
     fn query(&self, now: i64, columns: &str) -> QueryBuilder<'static, Sqlite> {
-        let mut q = QueryBuilder::new(format!("SELECT {columns} FROM virtual_platforms"));
+        let mut q = QueryBuilder::new(format!("SELECT {columns} FROM regular_platforms"));
         if self.all_matching {
             self.filters.conditions(&mut q, now);
             if !self.excluded_ids.is_empty() {
@@ -173,7 +186,7 @@ pub(crate) async fn replay(
     signature: &str,
 ) -> Result<Option<Value>> {
     crate::reset_credits::request_id(id)?;
-    let previous: Option<(String,String)> = sqlx::query_as("SELECT signature,result_json FROM admin_consumer_operations WHERE scope=? AND request_id=?")
+    let previous: Option<(String,String)> = sqlx::query_as("SELECT signature,result_json FROM admin_subscription_operations WHERE scope=? AND request_id=?")
         .bind(scope).bind(id).fetch_optional(connection).await?;
     if let Some((stored, result)) = previous {
         if stored != signature {
@@ -193,7 +206,7 @@ pub(crate) async fn remember(
     result: &Value,
     now: i64,
 ) -> Result<()> {
-    sqlx::query("INSERT INTO admin_consumer_operations VALUES(?,?,?,?,?)")
+    sqlx::query("INSERT INTO admin_subscription_operations VALUES(?,?,?,?,?)")
         .bind(scope)
         .bind(id)
         .bind(signature)
@@ -209,7 +222,7 @@ impl Storage {
     pub async fn virtual_list_quota(&self, account: &PlatformAccount) -> Result<Value> {
         let now = chrono::Utc::now().timestamp();
         let account = self
-            .effective_platform_account_at(&account.id, now)
+            .platform_account(&account.id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(account.id.clone()))?;
         let plan = self
@@ -217,7 +230,7 @@ impl Storage {
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(account.plan_id.clone()))?;
         let rules = crate::plan_spending_windows(&plan.config)?;
-        let anchor = self.subscription_anchor_at(&account.id, now).await?;
+        let anchor = self.subscription_anchor(&account.id).await?;
         let windows = self
             .nested_spending_windows(
                 &account.id,
@@ -236,7 +249,7 @@ impl Storage {
 
     pub async fn platform_account_page(
         &self,
-        filters: &ConsumerFilters,
+        filters: &SubscriptionFilters,
         page: u32,
         page_size: Option<u32>,
     ) -> Result<(Vec<PlatformAccount>, i64, u32)> {
@@ -244,13 +257,13 @@ impl Storage {
         let size = crate::table_page_size(page_size)?;
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        let mut count = QueryBuilder::new("SELECT COUNT(*) FROM virtual_platforms");
+        let mut count = QueryBuilder::new("SELECT COUNT(*) FROM regular_platforms");
         filters.conditions(&mut count, now);
         let total: i64 = count.build_query_scalar().fetch_one(&mut *tx).await?;
         let page = page
             .max(1)
             .min(((total.saturating_sub(1) / size) + 1) as u32);
-        let mut q = QueryBuilder::new("SELECT * FROM virtual_platforms");
+        let mut q = QueryBuilder::new("SELECT * FROM regular_platforms");
         filters.conditions(&mut q, now);
         q.push(" ORDER BY id LIMIT ")
             .push_bind(size)
@@ -261,11 +274,11 @@ impl Storage {
         Ok((rows, total, page))
     }
 
-    pub async fn consumer_batch(
+    pub async fn subscription_batch(
         &self,
         request_id: &str,
         operation: &str,
-        mut selection: ConsumerSelection,
+        mut selection: SubscriptionSelection,
         grant: Option<ResetCardGrant>,
     ) -> Result<Value> {
         selection.normalize()?;
@@ -312,7 +325,7 @@ impl Storage {
             for id in ids {
                 match operation {
                     "delete" => {
-                        crate::virtual_users::delete_on(&mut tx, &id).await?;
+                        crate::user_subscriptions::delete_on(&mut tx, &id).await?;
                         affected += 1;
                     }
                     "reset" => {

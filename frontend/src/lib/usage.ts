@@ -3,7 +3,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useErrorToast } from "@/lib/actions";
 import {
   query,
-  type Consumer,
+  type SubscriptionAccount,
   type List,
   type Supplier,
   type UsagePage,
@@ -18,7 +18,7 @@ import { useId, useState } from "react";
 
 export type SupplierOption = Pick<Supplier, "id" | "display_name" | "email">;
 
-export type ConsumerOption = Pick<Consumer, "id" | "username" | "email">;
+export type ConsumerOption = Pick<SubscriptionAccount, "id" | "username" | "email">;
 
 export const emptyFilters = {
   user_id: "",
@@ -71,9 +71,9 @@ export function useUsagePageView({ consumerId }: { consumerId?: string }) {
     supplierOpen ? `/suppliers/options${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
     supplierSearch.trim() ? 250 : 0,
   );
-  const consumers = useResource<List<Consumer>>(
+  const consumers = useResource<List<SubscriptionAccount>>(
     consumerOpen && !consumerId
-      ? `/consumers/options${query({ search: consumerSearch.trim(), limit: 5 })}`
+      ? `/subscriptions/options${query({ search: consumerSearch.trim(), limit: 5 })}`
       : null,
     consumerSearch.trim() ? 250 : 0,
   );

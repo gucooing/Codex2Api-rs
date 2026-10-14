@@ -114,7 +114,7 @@ export function useCouponEditorDialog({
 }
 
 export function useCouponsPage() {
-  const plans = useResource<{ items: PlanOption[] }>("/plans/options?paid_only=true");
+  const plans = useResource<{ items: PlanOption[] }>("/plans/options");
   const [edit, setEdit] = useState<Edit>();
   const [search, setSearch] = useState("");
   const [applied, setApplied] = useState("");

@@ -106,11 +106,11 @@ try:
     query=urllib.parse.urlsplit(authorization).query
     with opener.open(user_api + "/oauth/authorize/bootstrap?" + query, timeout=10) as response:
         flow=json.load(response)
-    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"kind":"virtual","username":"alice","password":"fixture-password"}).encode()
+    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"alice","password":"fixture-password"}).encode()
     with opener.open(urllib.request.Request(user_api+"/oauth/authorize/identify",data=payload,headers={"Content-Type":"application/json"}),timeout=20) as response:
         identified=json.load(response)
     assert identified["identity"]["username"]=="alice"
-    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":identified["identity"]["account_id"],"confirmed":True}).encode()
+    payload=json.dumps({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"account_id":identified["subscriptions"][0]["id"],"confirmed":True}).encode()
     with opener.open(urllib.request.Request(user_api+"/oauth/authorize/approve",data=payload,headers={"Content-Type":"application/json"}),timeout=20) as response:
         approved=json.load(response)
     with opener.open(approved["redirect_uri"],timeout=20) as response:

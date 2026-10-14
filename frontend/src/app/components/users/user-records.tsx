@@ -146,9 +146,9 @@ export function UserRecords({ id, close }: { id: string; close: () => void }) {
                     <TableCell>
                       <Button variant="outline" asChild>
                         <Link
-                          href={`/consumers/detail/?id=${encodeURIComponent(s.virtual_account_id)}`}
+                          href={`/subscriptions/detail/?id=${encodeURIComponent(s.virtual_account_id)}`}
                         >
-                          配置与记录
+                          管理
                         </Link>
                       </Button>
                     </TableCell>

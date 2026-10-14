@@ -77,6 +77,7 @@ export type CheckoutPreview = Pick<
   | "pricing"
 > & {
   preview_token: string;
+  subscription_id: string | null;
   quoted_at_ms: number;
   expires_at_ms: number;
   wallet_balance_cents: number;

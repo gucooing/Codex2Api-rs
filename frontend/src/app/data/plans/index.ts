@@ -21,6 +21,8 @@ import {
 import { useId, useState } from "react";
 
 export const emptyPlan: Plan = {
+  rpm_limit: 40,
+  concurrency_limit: 10,
   description: "",
   id: "",
   provider_id: "chatgpt",
@@ -57,6 +59,8 @@ export function usePlanEditor({
     description: plan.description ?? "",
     plan_type: subscriptionValue(plan.plan_type, plan.provider_id),
   }));
+  const [rpmText, setRpmText] = useState(String(plan.rpm_limit));
+  const [concurrencyText, setConcurrencyText] = useState(String(plan.concurrency_limit));
   const [search, setSearch] = useState("");
   const models = useResource<List<ModelOption>>(
     `/models/options${query({ provider_id: value.provider_id, search, plan_id: plan.id })}`,
@@ -69,7 +73,9 @@ export function usePlanEditor({
   const focus = useDialogFocus();
   const id = useId();
   const busy = actions.isBusy("plan-save");
-  const tiers = value.provider_id === "grok" ? grokSubscriptionChoices : subscriptionChoices;
+  const tiers = (
+    value.provider_id === "grok" ? grokSubscriptionChoices : subscriptionChoices
+  ).filter((tier) => tier.value !== "free");
   const update = <K extends keyof Plan>(key: K, next: Plan[K]) =>
     setValue((v) => ({ ...v, [key]: next }));
   const outer = value.spending_windows[0];
@@ -89,11 +95,24 @@ export function usePlanEditor({
         throw new Error("请至少选择一个模型");
       await request(plan.id ? `/plans/${plan.id}` : "/plans", {
         method: plan.id ? "PUT" : "POST",
-        body: planWrite(value),
+        body: planWrite({
+          ...value,
+          rpm_limit: requestLimit(rpmText, "RPM 限制"),
+          concurrency_limit: requestLimit(concurrencyText, "并发限制"),
+        }),
       });
       onSaved();
     });
   return {
+    rpmInput: {
+      value: rpmText,
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) => setRpmText(event.target.value),
+    },
+    concurrencyInput: {
+      value: concurrencyText,
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+        setConcurrencyText(event.target.value),
+    },
     value,
     setValue,
     search,
@@ -152,4 +171,11 @@ export function usePlansPage() {
     pagination,
     handleClick,
   } as const;
+}
+
+function requestLimit(text: string, label: string) {
+  const value = Number(text);
+  if (!text.trim() || !Number.isSafeInteger(value) || value < 0 || value > 1000000)
+    throw new Error(`${label}须为 0 到 1000000 的整数`);
+  return value;
 }

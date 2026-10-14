@@ -92,7 +92,7 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         .edit_supplier_tags(&[supplier.id.clone()], &["other-pool".into()], false)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id) VALUES(?,'grok','other-pool')").bind(&b.id).execute(storage.pool()).await.unwrap();
+    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id) VALUES(?,'grok','other-pool') ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id").bind(&b.id).execute(storage.pool()).await.unwrap();
     storage
         .save_virtual_resource(
             &b.id,
@@ -166,7 +166,7 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
     );
     assert!(
         storage
-            .bind_supplier_fixture(&account.id, "chatgpt", None, Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", None, Some(2))
             .await
             .unwrap()
     );
@@ -177,23 +177,23 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
             .unwrap()
             .unwrap()
             .revision,
-        2
+        3
     );
     assert!(
         !storage
-            .bind_supplier_fixture(&account.id, "chatgpt", Some(&supplier.id), Some(1))
-            .await
-            .unwrap()
-    );
-    assert!(
-        storage
             .bind_supplier_fixture(&account.id, "chatgpt", Some(&supplier.id), Some(2))
             .await
             .unwrap()
     );
     assert!(
+        storage
+            .bind_supplier_fixture(&account.id, "chatgpt", Some(&supplier.id), Some(3))
+            .await
+            .unwrap()
+    );
+    assert!(
         !storage
-            .bind_supplier_fixture(&account.id, "chatgpt", None, Some(1))
+            .bind_supplier_fixture(&account.id, "chatgpt", None, Some(2))
             .await
             .unwrap()
     );
@@ -203,7 +203,7 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cleared.revision, 3);
+    assert_eq!(cleared.revision, 4);
     assert!(
         storage
             .select_pool_supplier(&account.id, "chatgpt", &[])
@@ -315,7 +315,6 @@ async fn consumer_writes_cannot_change_service_policy_or_another_consumers_state
     let b = consumer(&storage, "b", "chatgpt", "plus").await;
     for key in [
         "quota",
-        "subscription_policy",
         "subscription_entitlements",
         "models",
         "computer_use_policy",

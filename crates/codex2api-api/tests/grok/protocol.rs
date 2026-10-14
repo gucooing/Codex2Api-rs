@@ -89,7 +89,7 @@ async fn authorize(app: &Router) -> Value {
     let identified=request(app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await;
     assert_eq!(identified.status(), StatusCode::OK);
     let identity = payload(identified).await;
-    let approval=request(app,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identity["identity"]["account_id"]})),Some(&cookie),None).await;
+    let approval=request(app,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identity["subscriptions"][0]["id"]})),Some(&cookie),None).await;
     assert_eq!(approval.status(), StatusCode::OK);
     let target = payload(approval).await;
     let target = url::Url::parse(target["redirect_uri"].as_str().unwrap()).unwrap();
@@ -117,7 +117,7 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     let storage = Storage::open(dir.path().join("subscription-names.sqlite"))
         .await
         .unwrap();
-    let mut plan = storage.platform_free_plan("grok").await.unwrap();
+    let mut plan = storage.plan_fixture("grok").await.unwrap();
     plan.id = "local-heavy".into();
     plan.name = "本地开发套餐".into();
     plan.plan_type = "supergrok_heavy".into();
@@ -175,7 +175,8 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
     storage.save_account_fixture(&account).await.unwrap();
     let settings =
         payload(request(&app, "/grok/v1/settings", None, None, Some(access)).await).await;
-    assert_eq!(settings["subscription_tier_display"], "Free");
+    assert_eq!(settings["subscription_tier_display"], "SuperGrok Heavy");
+    assert_eq!(settings["allow_access"], false);
     storage
         .save_public_url_settings(&codex2api_storage::PublicUrlSettings {
             api_url: "https://public.example.test:9443".into(),
@@ -208,7 +209,7 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(claims["tier"], 0);
+    assert_eq!(claims["tier"], 5);
     assert_eq!(claims["iss"], "https://public.example.test:9443/grok");
     let identity: Value = serde_json::from_slice(
         &URL_SAFE_NO_PAD
@@ -232,7 +233,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     let storage = Storage::open(dir.path().join("protocol.sqlite"))
         .await
         .unwrap();
-    let mut free = storage.platform_free_plan("grok").await.unwrap();
+    let mut free = storage.plan_fixture("grok").await.unwrap();
     free.config = json!({"model_access":"all","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"10"}]});
     storage
         .save_virtual_plan(&free, Some(free.revision))
@@ -246,7 +247,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         name: "Local Grok User".into(),
         email: "local@example.test".into(),
         plan_id: free.id.clone(),
-        plan_type: "free".into(),
+        plan_type: free.plan_type.clone(),
         subscription_expires_at: None,
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -357,7 +358,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .await
         .unwrap();
     storage
-        .save_pool_route(&account.id, "grok", Some("grok-pool"), None)
+        .save_pool_route(&account.id, "grok", Some("grok-pool"), Some(1))
         .await
         .unwrap();
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
@@ -522,7 +523,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .to_owned();
     let flow = payload(flow).await;
     let identified=payload(request(&app,"/user/api/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await).await;
-    assert_eq!(request(&app,"/user/api/oauth/device/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identified["identity"]["account_id"],"user_code":issued["user_code"]})),Some(&cookie),None).await.status(),StatusCode::OK);
+    assert_eq!(request(&app,"/user/api/oauth/device/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identified["subscriptions"][0]["id"],"user_code":issued["user_code"]})),Some(&cookie),None).await.status(),StatusCode::OK);
     let device_tokens=payload(request(&app,"/api/oauth/grok/oauth2/token",Some(json!({"client_id":codex2api_version::grok::CLIENT_ID,"grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":issued["device_code"]})),None,None).await).await;
     assert_eq!(device_tokens["scope"], "openid profile offline_access");
     let claims: Value = serde_json::from_slice(

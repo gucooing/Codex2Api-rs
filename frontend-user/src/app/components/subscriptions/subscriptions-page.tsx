@@ -43,7 +43,10 @@ export default function SubscriptionsPage() {
                 <TableHead>平台</TableHead>
                 <TableHead>套餐</TableHead>
                 <TableHead>到期时间</TableHead>
+                <TableHead>RPM 限制</TableHead>
+                <TableHead>并发限制</TableHead>
                 <TableHead>状态</TableHead>
+                <TableHead>操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -56,18 +59,30 @@ export default function SubscriptionsPage() {
                         ? "Grok"
                         : s.provider_id}
                   </TableCell>
-                  <TableCell>{s.plan_name}</TableCell>
+                  <TableCell>
+                    {s.plan_name}
+                    <div className="text-xs text-muted-foreground">{s.id.slice(0, 8)}</div>
+                  </TableCell>
                   <TableCell>{date(s.expires_at)}</TableCell>
+                  <TableCell>{s.rpm_limit === 0 ? "不限" : s.rpm_limit}</TableCell>
+                  <TableCell>{s.concurrency_limit === 0 ? "不限" : s.concurrency_limit}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">
                       {!s.enabled ? "已停用" : s.expired ? "已到期" : "有效"}
                     </Badge>
                   </TableCell>
+                  <TableCell>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/plans/?subscription_id=${encodeURIComponent(s.id)}`}>
+                        续订 / 升级
+                      </Link>
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
               {subscriptions.ready && !subscriptions.data?.items.length && (
                 <TableRow>
-                  <TableCell colSpan={4}>暂无订阅，可在“购买套餐”中选择。</TableCell>
+                  <TableCell colSpan={7}>暂无订阅，可在“购买套餐”中选择。</TableCell>
                 </TableRow>
               )}
             </TableBody>

@@ -142,6 +142,88 @@ fn request(id: &str) -> UsageRecord {
 }
 
 #[tokio::test]
+async fn wallet_deltas_use_current_balance_after_usage_and_debt_settlement() {
+    let (_dir, storage, user, group, _) = setup().await;
+    let snapshot = storage.user(&user.id).await.unwrap().unwrap();
+    let admin = storage.require_admin_user().await.unwrap();
+    let (_, principal) = credential(&storage, &user, &group).await;
+    let adjustment = |id: &str, amount| WalletAdjustment {
+        request_id: id.into(),
+        amount_cents: amount,
+        expected_revision: snapshot.revision,
+        reason: None,
+    };
+    let mut usage = request("wallet-consumption");
+    storage.admit_api_request(&principal, &usage).await.unwrap();
+    usage.status = "completed".into();
+    usage.input_tokens = Some(200_000);
+    usage.cached_tokens = Some(0);
+    usage.cache_write_tokens = Some(0);
+    usage.output_tokens = Some(0);
+    assert_eq!(storage.settle(&usage).await.unwrap().wallet_debit_cents, 30);
+    let increase = storage
+        .adjust_user_wallet(&user.id, admin.id, adjustment("increase-after-usage", 25))
+        .await
+        .unwrap();
+    assert_eq!(
+        (increase.balance_before_cents, increase.balance_cents),
+        (70, 95)
+    );
+    let decrease = storage
+        .adjust_user_wallet(&user.id, admin.id, adjustment("decrease-after-usage", -20))
+        .await
+        .unwrap();
+    assert_eq!(
+        (decrease.balance_before_cents, decrease.balance_cents),
+        (95, 75)
+    );
+    let replay = storage
+        .adjust_user_wallet(&user.id, admin.id, adjustment("increase-after-usage", 25))
+        .await
+        .unwrap();
+    assert_eq!(replay.id, increase.id);
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        75
+    );
+
+    let mut debt = request("wallet-debt");
+    storage.admit_api_request(&principal, &debt).await.unwrap();
+    debt.status = "completed".into();
+    debt.input_tokens = Some(1_000_000);
+    debt.cached_tokens = Some(0);
+    debt.cache_write_tokens = Some(0);
+    debt.output_tokens = Some(0);
+    assert_eq!(storage.settle(&debt).await.unwrap().wallet_debit_cents, 75);
+    let replenished = storage
+        .adjust_user_wallet(&user.id, admin.id, adjustment("repay-debt", 100))
+        .await
+        .unwrap();
+    assert_eq!(
+        (replenished.balance_before_cents, replenished.balance_cents),
+        (0, 100)
+    );
+    let current = storage.user(&user.id).await.unwrap().unwrap();
+    assert_eq!(current.wallet_cents, 25);
+    assert_eq!(current.revision, snapshot.revision);
+    let entries: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT amount_cents,balance_before_cents,balance_cents FROM wallet_entries WHERE user_id=? ORDER BY rowid")
+        .bind(&user.id).fetch_all(storage.pool()).await.unwrap();
+    assert_eq!(
+        entries,
+        vec![
+            (100, 0, 100),
+            (-30, 100, 70),
+            (25, 70, 95),
+            (-20, 95, 75),
+            (-75, 75, 0),
+            (100, 0, 100),
+            (-75, 100, 25)
+        ]
+    );
+    storage.close().await;
+}
+
+#[tokio::test]
 async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isolation() {
     let (_dir, storage, user, group, supplier) = setup().await;
     let (secret, principal) = credential(&storage, &user, &group).await;
@@ -237,10 +319,14 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
             .unwrap()
     );
     sqlx::query("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES('virtual','user','virtual','hash',1,'now','now')").execute(storage.pool()).await.unwrap();
-    sqlx::query("INSERT INTO users(id,name,email,kind) VALUES('virtual','Virtual','','virtual')")
+    assert!(
+        sqlx::query(
+            "INSERT INTO users(id,name,email,kind) VALUES('virtual','Virtual','','virtual')"
+        )
         .execute(storage.pool())
         .await
-        .unwrap();
+        .is_err()
+    );
     assert!(
         storage
             .user_store()
@@ -481,20 +567,14 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
         .await
         .unwrap();
     let plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    let subscription = storage
-        .user_subscriptions(Some(&user.id), true)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|s| s.provider_id == "chatgpt")
-        .unwrap();
     let preview = storage
         .checkout_preview(
             &user.id,
             codex2api_storage::CheckoutInput {
+                subscription_id: None,
                 plan_id: plan.id,
                 plan_revision: plan.revision,
-                subscription_revision: Some(subscription.revision),
+                subscription_revision: None,
                 payment_method: "wallet".into(),
                 coupon_code: String::new(),
             },
@@ -1324,13 +1404,18 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
     use codex2api_storage::{UsageFilter, UsageGroup};
     let (_dir, storage, user, group, supplier) = setup().await;
     let (_, principal) = credential(&storage, &user, &group).await;
-    let subscription: String = sqlx::query_scalar(
-        "SELECT id FROM regular_platforms WHERE user_id=? AND provider_id='chatgpt'",
-    )
-    .bind(&user.id)
-    .fetch_one(storage.pool())
-    .await
-    .unwrap();
+    let subscription = storage
+        .save_user_subscription(codex2api_storage::SubscriptionChange {
+            subscription_id: None,
+            reissue: false,
+            user_id: &user.id,
+            plan_id: "plus",
+            expires_at: None,
+            enabled: true,
+            revision: None,
+        })
+        .await
+        .unwrap();
     let mut oauth = request("oauth-shared");
     let original_plan: (String, String) = sqlx::query_as("SELECT p.id,p.name FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id WHERE a.id=?")
         .bind(&subscription).fetch_one(storage.pool()).await.unwrap();
@@ -1370,8 +1455,6 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
     failed.http_status = Some(200);
     failed.first_byte_ms = Some(35);
     failed.total_ms = Some(1200);
-    failed.failure_kind = Some("transport".into());
-    failed.failure_status = Some(502);
     failed.error_code = Some("upstream_incomplete".into());
     failed.error_message = Some("private diagnostic for administrators".into());
     failed.upstream_request_id = Some("private-upstream-request".into());
@@ -1387,7 +1470,7 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
     assert_eq!(page.total, 2);
     let row = page.records.iter().find(|r| r.id == failed.id).unwrap();
     assert_eq!(row.error_message, failed.error_message);
-    assert_eq!(row.failure_status, Some(502));
+    assert_eq!(row.error_code, failed.error_code);
     assert_eq!(row.http_status, Some(200));
     assert_eq!(row.first_byte_ms, Some(35));
     assert_eq!(row.total_ms, Some(1200));

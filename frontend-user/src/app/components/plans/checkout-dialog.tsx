@@ -26,6 +26,8 @@ import { cents, orderKinds, orderStatuses, orderTime } from "@/lib/orders";
 import Link from "next/link";
 
 export function CheckoutDialog({
+  subscriptionId,
+  changeSubscription,
   selected,
   busy,
   setSelected,
@@ -95,6 +97,31 @@ export function CheckoutDialog({
         </div>
         <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-16rem)]">
           <div className="space-y-4 pr-3">
+            {stage === 1 && (
+              <Field>
+                <FieldLabel htmlFor={`${id}-target-subscription`}>目标订阅</FieldLabel>
+                <Select
+                  value={subscriptionId || "new"}
+                  disabled={busy || !subscriptions.ready}
+                  onValueChange={(value) => changeSubscription(value === "new" ? "" : value)}
+                >
+                  <SelectTrigger id={`${id}-target-subscription`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    <SelectItem value="new">购买新订阅</SelectItem>
+                    {subscriptions.data?.items
+                      .filter((item) => item.provider_id === selected?.provider_id && item.enabled)
+                      .map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.plan_name} · {item.id.slice(0, 8)}
+                          {item.expired ? " · 已到期" : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
               <dt className="text-muted-foreground">平台 / 套餐</dt>
               <dd>

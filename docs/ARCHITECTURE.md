@@ -59,7 +59,7 @@ Each administrator business resource owns its router and handlers in one module.
 Plans, models, users and subscriptions have separate business modules; identical
 platform-account operations share one module instead of duplicating their handlers.
 The root routers assemble these resources and apply session and account-scope
-middleware. Virtual users and regular subscriptions have separate namespace routers;
+middleware. Users and their subscriptions have separate namespace routers;
 only identical platform-resource operations share handlers. Handlers adapt requests to services; they do not
 derive routes from outbound endpoint enums. Gateway provider adapters own the
 conversion from public API semantics to official client bodies and request-scoped
@@ -117,7 +117,11 @@ select or impersonate that identity. Request IDs remain fixed across retries of 
 thereby authorized for upstream forwarding.
 
 All OAuth and API-key requests use `usage_records`, the same insert/finalization
-functions, failure fields, queries and statistics. Gateway admission snapshots
+functions, failure fields, queries and statistics. The ledger stores `error_code`
+and administrator-only `error_message`; `http_status` describes the transport.
+It does not store `failure_kind` or `failure_status`. Provider classification and
+structured client errors remain part of execution, independent of these ledger fields.
+Gateway admission snapshots
 model prices and group multipliers before execution. ChatGPT search uses the API
 group's independently configured final per-call USD price, without a multiplier or
 fallback to subscription search pricing; Grok groups cannot configure it. Wallet settlement is atomic
@@ -161,7 +165,7 @@ and refresh must preserve owner identity; missing user identity does not fall ba
 to email or workspace-only merging. Supplier IDs, credentials, routing revisions,
 quota snapshots and historical attribution survive upgrades.
 
-Consumer login identities share `accounts` and `users`, with immutable `users.kind` (`regular` or `virtual`). This is storage reuse, not a shared business domain: virtual users are OAuth-only and administered exclusively in Virtual accounts. Ordinary user lists, subscription management, wallets, orders, records and user statistics exclude them. `platform_accounts` owns the stable execution/client identity, provider, entitlements and revision, uniquely keyed by `(user_id, provider_id)`. An ordinary user has an identity per configured platform; a virtual user has one administrator-managed platform identity. Supplier accounts and administrator sessions remain separate.
+User login identities live in `accounts` and `users`. `platform_accounts` stores independently owned subscription identities, with a nonunique `(user_id, provider_id)` index. A user starts with no subscriptions and can hold several on one platform. Each subscription isolates client state, OAuth devices, usage, spending windows and request limits. Standalone virtual-user identities and their data are removed by SQL migration; ordinary-user wallet, order and usage history remains intact.
 
 A consumer's provider is fixed at creation; execution routes select
 only pools of that provider. ChatGPT and Grok have independent protocol adapters.
@@ -329,8 +333,8 @@ Responses serialization places `model`, `stream` and an explicitly supplied
 Cyber access-program selections, warmups or interrupts.
 
 Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags.
-Standalone virtual accounts choose one pool; ordinary subscriptions inherit the
-effective plan's pool. Selection is per generation with runtime affinity and
+Subscriptions inherit their plan's pool unless an administrator explicitly selects
+a subscription-specific pool. Selection is per generation with runtime affinity and
 concurrency, as described above; it never counts or persists fixed assignments.
 Referenced tags cannot be deleted. Existing migrated tags are retained.
 
@@ -428,7 +432,7 @@ Realtime/Live creation, WebSocket and sideband aliases reject with HTTP 501
 are disabled; user settings publish `voice_enabled=false`. Independent dictation
 is unchanged.
 
-## Virtual-account data and management
+## Subscription client data and management
 
 ### Ownership and subscription policy
 
@@ -444,11 +448,12 @@ authorizes execution without inheriting supplier private data, usage, tasks, pro
 or quotas. Account/resource IDs in paths, queries and bodies must pass ownership
 checks. Pool changes preserve virtual identity, configuration and historical records.
 
-Standalone virtual subscriptions are issued by administrators. User subscriptions can be granted by administrators or purchased with the user wallet. Grants, renewals, plan changes and
-expiration update the same persisted entitlements used by client responses and
-execution checks. Expiration removes paid benefits but does not disable login.
-Unsubscribed users receive the platform Free plan automatically. Expired paid subscriptions resolve to the same Free plan for identity, model permission, quotas and execution. `platform_free_plans` identifies this administrable policy; Free plans cannot be deleted or changed to a paid tier. There are no paid-plan-specific free-access controls. Model access explicitly distinguishes
-all enabled models, a selected list, and no models.
+Subscriptions are issued by administrators or purchased with the owner's wallet.
+Every grant or new purchase creates an independent platform identity. Renewals and
+plan changes explicitly identify an owned subscription. Expiration ends its
+execution benefits while retaining the assigned plan and historical records.
+There is no implicit Free identity, Free plan or expiration fallback. Model access
+still distinguishes all enabled models, a selected list and no models.
 
 Management uses named fields and choices. Actual activity, requests, device
 authorizations and resource operations are viewable as records; they cannot be
@@ -464,44 +469,43 @@ a user account and owns profile, wallet and revision data. SQL constraints/trigg
 reject cross-role profiles and identity/type changes. Usernames are unique within
 each account type, and each login endpoint always specifies its own type.
 
-`admin_identities` and `user_identities` join only the corresponding role.
-`platform_principals` resolves credentials and profile fields through its owner;
-platform rows never duplicate them. `regular_users`, `virtual_users`,
-`regular_platforms` and `virtual_platforms` are fixed business-scope views.
-`Storage::require_account_scope` is the shared route/transaction guard. The
-administrator API installs it once as middleware, selecting the scope by route namespace for all `/users/{id}`,
-`/consumers/{id}` and `/subscriptions/{id}` resources. IDs from the other business
-domain are rejected before handlers run. Ordinary subscriptions have their own
-resource routes and detail page; shared component code receives a fixed route
-scope. Lists, searches, counts and aggregates query the corresponding scoped view.
-SQL triggers also reject virtual-user website sessions, wallets and orders, as
-well as role changes, owner changes and additional virtual-user platforms.
-Credential changes revoke only that owner's sessions, devices and pending grants.
+`admin_identities` and `user_identities` join only their corresponding role.
+`platform_principals` resolves credentials through the subscription's owning user.
+`regular_users` and `regular_platforms` are fixed scope views. Administrator
+`/users/{id}` and `/subscriptions/{id}` routes install the shared account-scope
+middleware; transactions enforce the same ownership guard. Subscription IDs
+cannot be substituted for user IDs or reassigned to another owner or provider.
+Credential changes revoke all devices and pending authorizations owned by that
+user; disabling or deleting one subscription affects only that subscription.
+The removed `/consumers` administrator namespace has no compatibility routes.
 
-SQL migration moves independent virtual credentials into special-user profiles,
-keeps all platform/device/history IDs, credentials, expiry and spending anchors,
-and removes the old credential table and subscription mapping. A conflicting
-virtual username receives a `~virtual-<new-user-id>` suffix; the administrator
-sees the resulting username in Virtual accounts. No unrelated identities are
-merged, and no purchase or payment history is manufactured. Runtime code uses
-only the new schema.
+SQL migration removes standalone virtual users, their platforms, credentials,
+resources, configuration, usage and batch-operation history. Implicit Free
+platforms and the Free plan catalog disappear. Ordinary-user usage, wallet and
+order history is retained. Historical price periods carry an explicit `user_id`
+even after an implicit identity or administered subscription is deleted.
 The user HTTP crate receives `UserStore`, a narrow repository with no raw SQL,
 supplier or administrator access. Response DTOs explicitly select user-visible
 fields; common signing primitives do not create a shared HTTP login/data endpoint.
 
 ### User wallet and subscription transactions
 
-User creation atomically provisions a stable Free platform identity for each configured platform. Paid expiration is evaluated on reads; the paid expiration and purchase records remain inspectable without rewriting history.
+User creation does not create platform identities. A grant or new purchase creates one subscription. Expired subscriptions remain inspectable without acquiring fallback benefits.
 
-Ordinary subscriptions always use the current effective plan's supplier pool, including the platform Free pool after paid expiration. They have no separately configurable pool or fixed supplier. `regular_subscription_pools` and `effective_execution_routes` resolve the effective pool in SQLite; ordinary route rows hold only provider and revision. Plan pool edits take effect on the next selection; clearing a pool leaves no fallback. SQL guards reject ordinary-account pool overrides. Only `/consumers/{id}/routing` exposes standalone pool administration. Subscription RPM and concurrency remain independently editable. Pool changes preserve platform identity, expiration, spending anchors, paid orders and price snapshots.
+Subscriptions inherit the assigned plan's supplier pool unless administration
+sets an explicit pool override. `regular_subscription_pools` and
+`effective_execution_routes` resolve that choice in SQLite. Clearing the override
+restores plan inheritance. The administration route is
+`/subscriptions/{id}/routing`; user APIs never expose supplier routing.
+Pool edits preserve identity, expiration, spending anchors and price snapshots.
 
-Wallet balance is `users.wallet_cents`, with a nonnegative integer constraint. It starts at zero. Identity forms and user APIs cannot set it. Administrators use `/admin/api/users/{id}/wallet-adjustments` with a signed-in administrator session, CSRF, expected user revision, idempotency key, signed integer-cent delta and optional reason. Missing, null and blank reasons normalize to null; nonempty reasons retain their length limit. A single immediate transaction applies the delta and appends a `system_adjustment` ledger entry containing the operator snapshot and before/after balances. Overdraw, unsafe amounts and stale revisions are rejected. Replays return the same entry without another balance change. Ledger updates/deletions are prohibited; historical purchase entries remain intact. The administrator-only `GET /admin/api/wallet-entries` reads all users' ledger entries with exact user ID, source, optional Unix-millisecond start/end bounds and pagination. The count and rows share a read transaction, timestamps are compared as instants, and ordering breaks time ties by insertion order. List DTOs add only the owner username/name to ledger fields, including the original order reference. This capability is not exposed through UserStore or the user listener. User wallet DTOs show the change as a system operation without administrator identity or private reason. There is no external payment integration; checkout offers the USD wallet. Plan sale price uses at most two decimal USD places, separately from model-priced inference budgets. Plans have a purchase duration and an administrator-only supplier pool. `virtual_plans.allow_purchase` is the only paid-catalog publication switch. Published plans appear even without a price or supplier pool; an unknown price stays null and cannot be ordered as zero. Supplier execution configuration does not gate wallet checkout or payment. Closing purchases blocks user purchases/renewals, not administrator assignments or existing benefits. Free is supplied automatically and is not sold.
+Wallet balance is `users.wallet_cents`, with a nonnegative integer constraint. It starts at zero. Identity forms and user APIs cannot set it. Administrators use `/admin/api/users/{id}/wallet-adjustments` with a signed-in administrator session, CSRF, expected user identity revision, idempotency key, signed integer-cent delta and optional reason. Missing, null and blank reasons normalize to null; nonempty reasons retain their length limit. A single immediate transaction applies the delta and appends a `system_adjustment` ledger entry containing the operator snapshot and before/after balances. The identity revision changes only when user identity/profile data changes; usage charges, debt settlement, order payments and administrative wallet adjustments leave it unchanged. Relative adjustments apply to the transaction's current balance, so intervening wallet movements do not cause a revision conflict. Overdraw, spending already reserved for measured API debt, unsafe amounts and stale identity revisions are rejected. The frontend shows only an estimated balance and leaves balance validation to the transaction. Replays return the same entry without another balance change. Ledger updates/deletions are prohibited; historical purchase entries remain intact. The administrator-only `GET /admin/api/wallet-entries` reads all users' ledger entries with exact user ID, source, optional Unix-millisecond start/end bounds and pagination. The count and rows share a read transaction, timestamps are compared as instants, and ordering breaks time ties by insertion order. List DTOs add only the owner username/name to ledger fields, including the original order reference. This capability is not exposed through UserStore or the user listener. User wallet DTOs show the change as a system operation without administrator identity or private reason. There is no external payment integration; checkout offers the USD wallet. Plan sale price uses at most two decimal USD places, separately from model-priced inference budgets. Plans have a purchase duration and an administrator-only supplier pool. User catalog publication and purchase require both `virtual_plans.allow_purchase` and an explicitly configured sale price. Unpriced or closed plans are absent from catalog rows and totals; unknown prices are never zero. An explicit zero price is configured pricing. Supplier execution configuration does not gate wallet checkout or payment. Closing purchases blocks user purchases/renewals, not administrator assignments or existing benefits. No Free plan is provisioned.
 
-`POST /user/api/checkout/preview` computes an unpersisted, five-minute quote with plan, effective period, current-subscription credit, coupon discount and payable amount. It never creates an order, reserves a coupon or debits the wallet. A short-lived RS256 proof binds the authenticated owner, selection, pricing instant and quote digest to `checkout_preview` / `codex2api-checkout` under the user signing key. It cannot authenticate a web session or Codex client. No supplier configuration is in the proof or response.
+`POST /user/api/checkout/preview` computes an unpersisted, five-minute quote with plan, effective period, current-subscription credit, coupon discount and payable amount. It never creates an order, reserves a coupon or debits the wallet. A short-lived RS256 proof binds the authenticated owner, selection, exact optional target subscription ID, pricing instant and quote digest to `checkout_preview` / `codex2api-checkout` under the user signing key. It cannot authenticate a web session or Codex client. No supplier configuration is in the proof or response.
 
 Only explicit confirmation calls `POST /user/api/orders` with that proof. Inside `BEGIN IMMEDIATE`, it recomputes the signed quote at its original pricing instant, validates current plan/subscription/coupon revisions and capacity, and creates the order. The proof ID is the owner-scoped idempotency key. Coupon eligibility and remaining-subscription expiry can shorten the original deadline; confirmation never extends it. Client amounts and owner selectors are not accepted. Order views explicitly select business fields.
 
-Payment is a separate `/orders/{id}/pay` operation. It checks ownership, enabled state, deadline, plan publication/revision and subscription revision. The debit, entitlement update, price-period snapshot, unique order-linked wallet entry and paid state commit together. Replaying a paid order returns its existing result. Competing orders cannot both settle from one subscription revision. Plan changes, closed sales, changed/disabled subscriptions and expiry have distinct messages; cancelled orders retain their reason. Insufficient balance leaves the order pending, with no debit or entitlement mutation. Infrastructure failures are logged privately and return a generic retry message without database or supplier detail. Paid orders are immutable.
+Payment is a separate `/orders/{id}/pay` operation. It checks ownership, enabled state, deadline, configured price, plan publication/revision and subscription revision. The debit, entitlement update, price-period snapshot, unique order-linked wallet entry and paid state commit together. Replaying a paid order returns its existing result. Competing changes to the same subscription cannot both settle from one revision. Independent new-purchase orders create different subscriptions and may both settle. Plan changes, closed sales, changed/disabled subscriptions and expiry have distinct messages; cancelled orders retain their reason. Insufficient balance leaves the order pending, with no debit or entitlement mutation. Infrastructure failures are logged privately and return a generic retry message without database or supplier detail. Paid orders are immutable.
 
 Coupons are administrator-owned fixed-cent discounts with optional plan scope, minimum subtotal after subscription credit, validity dates, global capacity and a per-user limit. Previews do not reserve capacity. Confirmation reserves by creating a live pending order under the same write lock; cancellation/expiry release it, and payment consumes it. Confirmed orders keep the coupon code and discount snapshot despite later coupon edits or disabling. Coupon records cannot be deleted through the API. Discount is capped at the nonnegative subtotal; zero-price orders still require both confirmation and explicit payment. `amount_cents` is generated from the stored subtotal minus discount.
 
@@ -533,33 +537,30 @@ User interfaces are `/checkout/preview`, `/orders` (list/confirm), `/orders/{id}
 pending-cancellation endpoints under `/admin/api/orders`; no shared authentication
 or user-supplied owner selector is used. Order lists are paginated and filtered by order number, plan ID, and status; administrator routes additionally accept an exact user ID. User routes reject owner selectors. `/orders/plans` returns only distinct plans present in that caller's order scope, retaining historical names after sales close or catalog removal. The retired direct-purchase endpoint is not mounted. Coupon management has its own administrator-only `/admin/api/coupons` endpoints. There is no user coupon-list or coupon-management interface.
 
-User `/usage` statistics, daily aggregation and paginated records each restrict `subject_kind` and join subscription ownership to the authenticated user; query parameters cannot select a different owner or supplier. Explicit record fields exclude supplier IDs/names, upstream request IDs, raw errors, routing and credentials. The user dashboard shows current subscriptions, local spending windows and real usage trends. The usage detail page contains filters, numeric summaries and paginated records, without duplicate charts. Date bucketing groups the signed timezone offset as an SQL expression, including negative offsets; an empty ledger returns zero request counts and empty rows without errors. Empty dates are zero-filled only after a successful query; missing token/cost measurements stay unknown with missing counts. Model-priced USD costs consume subscription budgets, not the wallet. Codex client usage response schemas remain unchanged.
+User `/usage` statistics, daily aggregation and paginated records each restrict `subject_kind` and join subscription ownership to the authenticated user; query parameters cannot select a different owner or supplier. Explicit record fields exclude supplier IDs/names, upstream request IDs, raw error messages, routing and credentials. Persisted `error_code` is included for the user's own failed requests, without returning administrator diagnostics or mapped failure categories. The user dashboard shows current subscriptions, local spending windows and real usage trends. The usage detail page contains filters, numeric summaries and paginated records, without duplicate charts. Date bucketing groups the signed timezone offset as an SQL expression, including negative offsets; an empty ledger returns zero request counts and empty rows without errors. Empty dates are zero-filled only after a successful query; missing token/cost measurements stay unknown with missing counts. Model-priced USD costs consume subscription budgets, not the wallet. Codex client usage response schemas remain unchanged.
 
-User subscription administration hides expired entries by default and offers an explicit include-expired filter. Configuration/records links expose the existing client-data administration tools. Identity and subscription edits belong in user/subscription management; direct standalone-account writes cannot alter managed user accounts. The existing standalone virtual-account module remains independent.
+Subscription administration uses a User column, account/expiry/status filters, quota summaries, batch operations and a Manage action. The detail page contains subscription settings, usage, reset cards, records and devices. Identity credentials are edited only in user management; subscription forms select the owner without creating another login.
 
 ### Request admission and subscription names
 
-RPM is a consumer-wide sliding sixty-second window across devices and HTTP/WS,
-admitted atomically in Redis or the single-process runtime. Gateway settings default to 20;
-missing account configuration inherits it, an account override wins, and zero
-means unlimited. Each actual generation consumes one admission; internal supplier
-attempts, warmups, reads and WS handshakes do not. Handshakes check the current limit
-without consuming it. Rejections use HTTP/WS 429 `virtual_rpm_exceeded` with retry
-information and are distinct from the consumer's spending quota.
+RPM is a per-subscription sliding sixty-second window across devices and HTTP/WS,
+admitted atomically in Redis or the single-process runtime. Plans default to 40
+RPM and 10 concurrent generations. Subscription overrides inherit the plan when
+unset; zero explicitly means unlimited. Gateway settings have no RPM/concurrency
+defaults. Plan edits invalidate policy caches and user-facing catalogs show plan
+limits while subscription views show effective limits.
 
-Consumer concurrency is shared across that platform identity's devices and HTTP/WS
-generations. Gateway default is five, an empty account override inherits it and
-zero is unlimited. Each supplier independently defaults to five concurrent
-requests, also accepting zero. Slots span the upstream generation and its stream,
-including draining after a client disconnect; internal retries transfer only the
-supplier slot, retaining one consumer slot and one RPM admission. Rejections use
-429 `virtual_concurrency_exceeded` or `supplier_concurrency_exceeded` and retry
-information. WS handshakes and warmups do not reserve a consumer generation slot.
+Each actual generation consumes one admission. Internal supplier attempts,
+warmups, reads and WebSocket handshakes do not. Slots span the complete generation,
+including draining after disconnect; retries retain the subscription slot.
+Rejections preserve structured 429 and retry information. Supplier capacity is
+independent and retains its own configured limit. Subscriptions belonging to the
+same user/provider do not share their RPM or concurrency counters.
 
 Plan management selects the official client subscription tier independently of the
 business plan name. Updating that tier atomically updates assigned accounts while
-preserving subscription dates and historical records. Choosing Free applies that plan's own model and spending-window configuration. Public tier names include
-Free, Go, Plus, Pro 100, Pro 200, Pro 500, Business, Enterprise and Edu. Protocol
+preserving subscription dates and historical records. Local plan choices exclude Free;
+official supplier metadata may still report it. Other public tier names include Go, Plus, Pro 100, Pro 200, Pro 500, Business, Enterprise and Edu. Protocol
 values remain canonical (`prolite`, `pro`, `promax`, etc.). Supplier display also
 maps workspace/education variants to their official family name and does not expose
 unknown internal values as product names. Numbered Pro labels follow the installed
@@ -568,11 +569,18 @@ Desktop's `plan-names` resource; accepted protocol variants follow the pinned
 
 ### OAuth and devices
 
-The AI API authorization entry redirects to the configured public user origin. Browser consent and device-code approval run only on the user listener. An authenticated user browser session selects that user's platform identity. Otherwise, a single username/password form verifies either kind of user for the current cookie-bound, CSRF-protected authorization flow only. The identity is displayed before a separate confirmation request. No code or device session is created by password verification alone.
+The AI API authorization entry redirects to the configured public user origin.
+Browser consent and device-code approval run on the user listener. A live browser
+session or temporary username/password verification proves the owning user's
+identity, then the page lists that user's enabled, unexpired subscriptions for
+the requested platform. A dropdown selects the exact target. No subscription
+means no client login; the page links to the user center. `oauth_browser_users`
+keeps the flow-scoped proof, and confirmation binds the selected subscription in
+`oauth_browser_identities`. Verification alone never creates a code or device.
 
 Administrator Settings / Public addresses stores the OAuth/client API, metered API, user and administrator HTTP(S) origins together in SQLite with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website and metered API public addresses to the user HTTP module. Existing settings without a metered API origin use the configured startup default until the administrator saves it. Listener bindings and router isolation are unchanged.
 
-Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Virtual users cannot log into the user website, and administrators authenticate only on the administrator listener. Expiration does not itself disable login.
+Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Administrators authenticate only on the administrator listener. Subscription ownership, platform, enabled state and expiration are checked again when confirming a selection.
 
 Administrator and user **web sessions** use JWTs, with independent RSA keys in
 `jwt_signing_keys`. Their endpoint selects the expected role/purpose and key domain.
@@ -597,10 +605,10 @@ client credential formats. It does not gain web account_type/token_use fields or
 web JWT rules. Client grants remain bound to the local platform account/device and
 cannot authorize administration or user-management APIs. Only the browser consent
 page uses the website's current user identity; it issues the ordinary PKCE-bound
-OAuth authorization code after explicit confirmation. User type is resolved from
-persisted identity, never a browser-selected account-type field. Virtual users
-cannot obtain a user web JWT; both session issuance and session reads enforce
-ordinary-user membership independently of OAuth confirmation.
+OAuth authorization code after the user selects an available subscription on the
+requested platform and confirms. Both web-session issuance and reads enforce
+ordinary-user membership independently of OAuth confirmation. A subscription is
+an entitlement and client identity, not a separate website login.
 
 Access-token audience is an API audience array with granted scp values;
 ID-token audience is the CLI client ID array and at_hash binds the actual access
@@ -837,7 +845,7 @@ compatibility boundaries and is maintained separately.
 
 Order and subscription filters use exact plan/user IDs. `/admin/api/users/options` searches usernames, names and emails and returns at most five minimal choices; it is never mounted on the user listener. Subscription filters retain the default exclusion of expired records. Administrative usage filtering applies the chosen user to every count and record query through stable subscription ownership, including all of that user's platforms.
 
-Overview virtual counts include only standalone virtual accounts; normal means enabled with no expiry or a future expiry. User totals include only regular-user profiles. Daily active users are distinct regular users with any actual ledger record in the administrator browser's local day, including failed/in-progress requests, never device/session counts. The browser supplies its UTC offset; server-generated day boundaries exclude future records. Changing filters never calls a supplier.
+Overview subscription counts include all user-owned subscriptions; normal means enabled with no expiry or a future expiry. User totals include only regular-user profiles. Daily active users are distinct regular users with any actual ledger record in the administrator browser's local day, including failed/in-progress requests, never device/session counts. The browser supplies its UTC offset; server-generated day boundaries exclude future records. Changing filters never calls a supplier.
 
 ## Provider module boundaries
 

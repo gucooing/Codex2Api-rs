@@ -34,13 +34,17 @@ impl<'r> FromRow<'r, SqliteRow> for VirtualPlan {
 }
 
 pub fn plan_owned_config(key: &str) -> bool {
-    matches!(
-        key,
-        "quota" | "subscription_entitlements" | "subscription_policy"
-    )
+    matches!(key, "quota" | "subscription_entitlements")
 }
 
 impl VirtualPlan {
+    pub fn rpm_limit(&self) -> u32 {
+        self.config["rpm_limit"].as_u64().unwrap_or(40) as u32
+    }
+    pub fn concurrency_limit(&self) -> u32 {
+        self.config["concurrency_limit"].as_u64().unwrap_or(10) as u32
+    }
+
     pub fn description(&self) -> &str {
         self.config["description"].as_str().unwrap_or("")
     }
@@ -72,11 +76,6 @@ impl VirtualPlan {
                 "套餐描述须为文本，长度不能超过 20000 字符".into(),
             ));
         }
-        if self.plan_type == "free" && self.allow_purchase {
-            return Err(StorageError::InvalidAdminUpdate(
-                "Free 套餐自动提供，无需开放购买",
-            ));
-        }
         if self.name.trim().is_empty() || self.name.len() > 128 {
             return Err(StorageError::Constraint(
                 "请填写套餐名称，长度不能超过 128 字节".into(),
@@ -84,7 +83,7 @@ impl VirtualPlan {
         }
         let valid_tier =
             codex2api_core::valid_subscription_tier(&self.provider_id, &self.plan_type);
-        if !valid_tier {
+        if !valid_tier || self.plan_type == "free" {
             return Err(StorageError::InvalidAdminUpdate(
                 "Invalid client subscription compatibility value",
             ));
@@ -116,6 +115,17 @@ impl VirtualPlan {
             {
                 return Err(StorageError::Constraint(
                     "套餐只能授权同一提供商的模型".into(),
+                ));
+            }
+        }
+        for key in ["rpm_limit", "concurrency_limit"] {
+            if self
+                .config
+                .get(key)
+                .is_some_and(|v| v.as_u64().is_none_or(|n| n > 1_000_000))
+            {
+                return Err(StorageError::InvalidAdminUpdate(
+                    "RPM 与并发限制须为 0 到 1000000 的整数",
                 ));
             }
         }
@@ -170,17 +180,6 @@ impl Storage {
             }
         }
         let now = chrono::Utc::now().timestamp_millis();
-        let free: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type='free')",
-        )
-        .bind(&plan.id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if free && plan.plan_type != "free" {
-            return Err(StorageError::InvalidAdminUpdate(
-                "Free 套餐的订阅档位不能修改",
-            ));
-        }
         let changed = if let Some(revision) = expected {
             sqlx::query("UPDATE virtual_plans SET name=?,config=?,allow_purchase=?,revision=revision+1,updated_at_ms=?,plan_type=? WHERE id=? AND revision=? AND provider_id=?")
                 .bind(plan.name.trim()).bind(plan.config.to_string()).bind(plan.allow_purchase).bind(now).bind(&plan.plan_type).bind(&plan.id).bind(revision).bind(&plan.provider_id).execute(&mut *tx).await?.rows_affected()
@@ -207,15 +206,6 @@ impl Storage {
 
     pub async fn delete_virtual_plan(&self, id: &str, revision: i64) -> Result<bool> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let free: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=? AND plan_type='free')",
-        )
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if free {
-            return Err(StorageError::InvalidAdminUpdate("Free 套餐不能删除"));
-        }
         // Acquire the write lock before checking references, including concurrent assignments.
         let changed = sqlx::query("DELETE FROM virtual_plans WHERE id=? AND revision=? AND NOT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=?)")
             .bind(id).bind(revision).bind(id).execute(&mut *tx).await?.rows_affected();
@@ -242,7 +232,7 @@ impl Storage {
         key: &str,
     ) -> Result<VirtualClientState> {
         let account = self
-            .effective_platform_account(owner)
+            .platform_account(owner)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let plan = self
@@ -253,10 +243,6 @@ impl Storage {
         let windows = crate::plan_spending_windows(config)?;
         let value = match key {
             "quota" => json!({"spending_windows":windows}),
-            "subscription_policy" => {
-                let free = self.platform_free_plan(&account.provider_id).await?;
-                json!({"plan_id":free.id,"model_access":free.config["model_access"],"models":free.config["models"],"spending_windows":crate::plan_spending_windows(&free.config)?})
-            }
             "subscription_entitlements" => {
                 json!({plan.plan_type:{"models":config["models"],"spending_windows":windows}})
             }

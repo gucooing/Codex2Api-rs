@@ -1,14 +1,5 @@
-#[cfg(test)]
-mod account_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../codex2api-storage/test-support/accounts.rs"
-    ));
-}
-#[cfg(test)]
-use account_fixture::AccountFixture;
 use chrono::{Duration, Utc};
-use codex2api_storage::{PlatformAccount, Storage, SubscriptionChange, User, hash_token};
+use codex2api_storage::{Storage, SubscriptionChange, User, hash_token};
 use serde_json::json;
 
 async fn setup() -> (tempfile::TempDir, Storage, User) {
@@ -85,28 +76,51 @@ async fn administrator_wallet_adjustments_are_atomic_idempotent_and_auditable() 
     );
     assert!(
         storage
-            .adjust_user_wallet(&user.id, admin.id, input("excess", -2501, 2))
-            .await
-            .is_err()
-    );
-    assert!(
-        storage
-            .adjust_user_wallet(&user.id, admin.id, input("stale", -500, 1))
+            .adjust_user_wallet(&user.id, admin.id, input("excess", -2501, 1))
             .await
             .is_err()
     );
     let (a, b) = tokio::join!(
-        storage.adjust_user_wallet(&user.id, admin.id, input("decrease-a", -500, 2)),
-        storage.adjust_user_wallet(&user.id, admin.id, input("decrease-b", -500, 2))
+        storage.adjust_user_wallet(&user.id, admin.id, input("decrease", -500, 1)),
+        storage.adjust_user_wallet(&user.id, admin.id, input("increase-b", 250, 1))
     );
-    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    assert_eq!(a.unwrap().amount_cents, -500);
+    assert_eq!(b.unwrap().amount_cents, 250);
     assert_eq!(
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
-        2000
+        2250
     );
+    // Both withdrawals use the same identity revision, but only the first can
+    // spend the current funds. The rejected transaction must not append a row.
+    let (a, b) = tokio::join!(
+        storage.adjust_user_wallet(&user.id, admin.id, input("withdraw-a", -1500, 1)),
+        storage.adjust_user_wallet(&user.id, admin.id, input("withdraw-b", -1500, 1))
+    );
+    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    let mut current = storage.user(&user.id).await.unwrap().unwrap();
+    assert_eq!(current.wallet_cents, 750);
+    assert_eq!(current.revision, user.revision);
     let entries = storage.wallet_entries(&user.id).await.unwrap();
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries.iter().map(|e| e.amount_cents).sum::<i64>(), 2000);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries.iter().map(|e| e.amount_cents).sum::<i64>(), 750);
+    current.name = "Updated identity".into();
+    assert!(
+        storage
+            .save_user(&current, Some(current.revision))
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        storage
+            .adjust_user_wallet(&user.id, admin.id, input("stale-identity", 100, 1))
+            .await,
+        Err(codex2api_storage::StorageError::ProxyChanged)
+    ));
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        750
+    );
+    assert_eq!(storage.wallet_entries(&user.id).await.unwrap().len(), 4);
     let visible = storage
         .user_store()
         .wallet_entries(&user.id, &Default::default())
@@ -141,7 +155,7 @@ async fn wallet_adjustment_reason_can_be_missing_null_or_blank() {
     .into_iter()
     .enumerate()
     {
-        let mut body = json!({"request_id":format!("optional-reason-{index}"),"amount_cents":50,"expected_revision":index as i64+1});
+        let mut body = json!({"request_id":format!("optional-reason-{index}"),"amount_cents":50,"expected_revision":user.revision});
         if let Some(reason) = reason {
             body["reason"] = reason;
         }
@@ -167,116 +181,23 @@ async fn wallet_adjustment_reason_can_be_missing_null_or_blank() {
     storage.close().await;
 }
 #[tokio::test]
-async fn virtual_users_share_identity_storage_but_not_user_business() {
-    let (_dir, storage, user) = setup().await;
-    let account = PlatformAccount {
-        id: "standalone".into(),
-        provider_id: "chatgpt".into(),
-        username: "virtual-alice".into(),
-        password_hash: user.password_hash.clone(),
-        name: "Independent".into(),
-        email: "independent@virtual.test".into(),
-        plan_id: "plus".into(),
-        plan_type: "plus".into(),
-        subscription_expires_at: None,
-        enabled: true,
-        created_at: Utc::now().to_rfc3339(),
-    };
-    storage.save_account_fixture(&account).await.unwrap();
-    assert_eq!(storage.users().await.unwrap().len(), 1);
-    assert_eq!(
-        storage.user_subscriptions(None, true).await.unwrap()[0].plan_type,
-        "free"
-    );
-    assert_eq!(
-        storage
-            .user_platform_account(&user.id, "chatgpt")
-            .await
-            .unwrap()
-            .unwrap()
-            .plan_type,
-        "free"
-    );
-    let expires = (Utc::now() + Duration::days(30)).to_rfc3339();
-    storage
-        .save_user_subscription(SubscriptionChange {
-            reissue: false,
-            user_id: &user.id,
-            plan_id: "plus",
-            expires_at: Some(&expires),
-            enabled: true,
-            revision: Some(1),
-        })
-        .await
-        .unwrap();
-    let platform = storage
-        .user_platform_account(&user.id, "chatgpt")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_ne!(platform.id, account.id);
-    assert_eq!(storage.platform_accounts().await.unwrap().len(), 1);
-    let internal = storage
-        .platform_account(&platform.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(internal.username, user.username);
-    let virtual_user = storage
-        .user_by_username("virtual-alice")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(virtual_user.kind, codex2api_storage::UserKind::Virtual);
-    assert!(
-        storage
-            .create_user_session(&virtual_user, "csrf")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        storage
-            .user_store()
-            .user(&virtual_user.id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(storage.save_account_fixture(&platform).await.is_err());
-    assert!(storage.delete_virtual_user(&platform.id).await.is_err());
-    assert!(
-        storage
-            .save_user_subscription(SubscriptionChange {
-                reissue: false,
-                user_id: &user.id,
-                plan_id: "plus",
-                expires_at: Some(&expires),
-                enabled: true,
-                revision: None
-            })
-            .await
-            .is_err()
-    );
-    storage.close().await;
-}
-#[tokio::test]
-async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_standalone_accounts() {
+async fn expiration_blocks_execution_and_credential_changes_revoke_user_devices() {
     let (_dir, storage, mut user) = setup().await;
     let expiry = (Utc::now() + Duration::days(1)).to_rfc3339();
-    storage
+    let subscription_id = storage
         .save_user_subscription(SubscriptionChange {
+            subscription_id: None,
             reissue: false,
             user_id: &user.id,
             plan_id: "plus",
             expires_at: Some(&expiry),
             enabled: true,
-            revision: Some(1),
+            revision: None,
         })
         .await
         .unwrap();
     let account = storage
-        .user_platform_account(&user.id, "chatgpt")
+        .platform_account(&subscription_id)
         .await
         .unwrap()
         .unwrap();
@@ -304,6 +225,7 @@ async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_sta
     let expired = (Utc::now() - Duration::hours(1)).to_rfc3339();
     storage
         .save_user_subscription(SubscriptionChange {
+            subscription_id: Some(&sub.virtual_account_id),
             reissue: false,
             user_id: &user.id,
             plan_id: "plus",
@@ -327,8 +249,16 @@ async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_sta
             .await
             .unwrap()
             .unwrap()
-            .effective_plan(),
-        "free"
+            .plan_type
+            .as_str(),
+        "plus"
+    );
+    assert!(
+        !storage
+            .effective_entitlements(&account.id)
+            .await
+            .unwrap()
+            .execution_enabled
     );
     assert!(storage.user_session(&browser).await.unwrap().is_some());
     assert!(
@@ -356,11 +286,12 @@ async fn expiration_and_credential_changes_apply_to_all_user_devices_but_not_sta
             .is_none()
     );
     assert!(
-        storage
-            .user_platform_account(&user.id, "chatgpt")
+        !storage
+            .platform_account(&subscription_id)
             .await
             .unwrap()
-            .is_none()
+            .unwrap()
+            .enabled
     );
     storage.close().await;
 }
