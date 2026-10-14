@@ -12,6 +12,7 @@ export type ApiGroup = {
   description: string;
   provider_id: string;
   multiplier: string;
+  search_price_usd: string | null;
   concurrency_limit: number;
   rpm_limit: number;
   models_count: number;
@@ -42,6 +43,7 @@ export type ApiCatalogModel = {
   rpm_limit: number;
   prices: ApiTokenPrice[];
   image_prices: ApiImagePrice[];
+  search_price: string | null;
 };
 export type ApiModelMarket = ListPage<ApiCatalogModel> & { group: ApiGroup | null };
 export type ApiKey = {
@@ -64,43 +66,6 @@ export type ApiKey = {
   active_requests: number;
 };
 export type CreatedApiKey = { key: ApiKey; secret: string };
-export type ApiUsage = {
-  id: string;
-  key_id: string;
-  key_name: string;
-  key_prefix: string;
-  group_id: string;
-  group_name: string;
-  provider_id: string;
-  endpoint: string;
-  model: string;
-  actual_model: string | null;
-  multiplier: string;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  cached_tokens: number | null;
-  cache_write_tokens: number | null;
-  reasoning_tokens: number | null;
-  image_count: number | null;
-  image_size: string | null;
-  requested_at_ms: number;
-  completed_at_ms: number | null;
-  status: string;
-  http_status: number | null;
-  cost_nano_usd: number | null;
-  billing_status: string;
-  wallet_debit_cents: number | null;
-};
-export type ApiUsagePage = ListPage<ApiUsage> & {
-  summary: {
-    requests: number;
-    input_tokens: number | null;
-    output_tokens: number | null;
-    cost_nano_usd: number | null;
-    unknown_cost_requests: number;
-  };
-  wallet_pending_nano_usd: number;
-};
 export const apiPlatform = (provider: string) =>
   provider === "chatgpt" ? "ChatGPT" : provider === "grok" ? "Grok" : provider;
 export const apiLimit = (limit: number) => (limit === 0 ? "无限" : String(limit));

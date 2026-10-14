@@ -215,6 +215,7 @@ impl ExecutionContext {
             subject_name: self.owner_name.clone(),
             endpoint: self.endpoint.clone(),
             transport: self.transport.into(),
+            stream: Some(self.transport == "websocket" || metadata.stream.unwrap_or(false)),
             model: metadata.model,
             reasoning_effort: metadata.reasoning_effort,
             service_tier: metadata.service_tier,

@@ -137,6 +137,31 @@ export function ModelPriceDialog({
                 </TableBody>
               </Table>
             )}
+            {model?.provider_id === "chatgpt" && model.kind === "text" && (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>操作</TableHead>
+                    <TableHead>计费单位</TableHead>
+                    <TableHead>计费价格</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow>
+                    <TableCell>搜索</TableCell>
+                    <TableCell>每次</TableCell>
+                    <TableCell>
+                      {grouped ? apiPrice(model.search_price) : "按 API 组定价"}
+                    </TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell>输入 Token 计数</TableCell>
+                    <TableCell>每次</TableCell>
+                    <TableCell>不收费</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>

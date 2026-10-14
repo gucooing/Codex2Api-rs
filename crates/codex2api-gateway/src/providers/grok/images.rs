@@ -2,7 +2,11 @@
 use crate::{GatewayError, PreparedRequest, Result, images};
 use serde_json::{Value, json};
 
-pub(crate) fn prepare(mut body: Value, edit: bool) -> Result<PreparedRequest> {
+pub(crate) fn prepare(
+    mut body: Value,
+    edit: bool,
+    inbound: &http::HeaderMap,
+) -> Result<PreparedRequest> {
     images::validate(
         &body,
         &[
@@ -74,16 +78,25 @@ pub(crate) fn prepare(mut body: Value, edit: bool) -> Result<PreparedRequest> {
         ],
     )?;
     let refs = images::references(&mut body, edit, 5)?;
+    if refs.iter().any(|image| image.get("file_id").is_some()) {
+        return Err(GatewayError::bad_request(
+            "Grok image edits require image URLs or base64 data, not OpenAI file IDs",
+        ));
+    }
     if refs.len() == 1 {
-        body["image"] = json!({"url":refs[0],"type":"image_url"});
+        body["image"] = json!({"url":refs[0]["image_url"],"type":"image_url"});
     } else if edit {
         body["images"] = Value::Array(
             refs.into_iter()
-                .map(|url| json!({"url":url,"type":"image_url"}))
+                .map(|image| json!({"url":image["image_url"],"type":"image_url"}))
                 .collect(),
         );
     }
-    Ok(images::prepared(body, edit))
+    Ok(images::prepared(
+        body,
+        edit,
+        super::outbound_headers(inbound),
+    ))
 }
 
 #[cfg(test)]
@@ -91,7 +104,7 @@ mod tests {
     use super::*;
     #[test]
     fn grok_image_json_and_size_are_provider_owned() {
-        let request = prepare(json!({"model":"custom-image","prompt":"edit","images":[{"image_url":"https://example.test/a.png"},{"image_url":"https://example.test/b.png"}],"size":"1024x1024"}),true).unwrap();
+        let request = prepare(json!({"model":"custom-image","prompt":"edit","images":[{"image_url":"https://example.test/a.png"},{"image_url":"https://example.test/b.png"}],"size":"1024x1024"}),true, &http::HeaderMap::new()).unwrap();
         assert_eq!(request.body["resolution"], "1k");
         assert_eq!(request.body["aspect_ratio"], "1:1");
         assert_eq!(
@@ -102,14 +115,16 @@ mod tests {
         assert!(
             prepare(
                 json!({"model":"custom-image","prompt":"draw","deferred":true}),
-                false
+                false,
+                &http::HeaderMap::new()
             )
             .is_err()
         );
         assert!(
             prepare(
                 json!({"model":"custom-image","prompt":"draw","background":"transparent"}),
-                false
+                false,
+                &http::HeaderMap::new()
             )
             .is_err()
         );

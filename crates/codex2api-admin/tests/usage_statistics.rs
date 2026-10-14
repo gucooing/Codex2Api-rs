@@ -109,7 +109,7 @@ async fn overview_aggregates_full_ledger_with_weighted_cache_and_exact_account_f
     assert_eq!(stats["model_usage"][1]["total_tokens"], 2520);
     let by_account = f
         .get(&format!(
-            "/admin/api/overview/usage?{range}&group_by=virtual_account"
+            "/admin/api/overview/usage?{range}&group_by=subject"
         ))
         .await;
     assert_eq!(by_account["rows"].as_array().unwrap().len(), 2); // Same label, different identity.
@@ -142,13 +142,15 @@ async fn overview_preserves_unknowns_empty_results_and_persisted_costs() {
     let start = chrono::DateTime::parse_from_rfc3339("2026-09-21T00:00:00Z")
         .unwrap()
         .timestamp_millis();
-    record(&f, "known", "a", start, Some(100), Some(80), "completed").await;
+    record(&f, "known", "a", start, Some(100), Some(80), "in_progress").await;
     record(&f, "unknown", "a", start, None, None, "failed").await;
     // Persisted settlement is authoritative even if the current price differs.
-    sqlx::query("UPDATE usage_records SET cost_nano_usd=123456789 WHERE id='known'")
-        .execute(f.storage.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE usage_records SET status='completed',cost_nano_usd=123456789 WHERE id='known'",
+    )
+    .execute(f.storage.pool())
+    .await
+    .unwrap();
     let range = "from=2026-09-21T00:00&until=2026-09-22T00:00";
     let stats = f.get(&format!("/admin/api/overview/usage?{range}")).await;
     assert_eq!(stats["summary"]["total_tokens"], 120);

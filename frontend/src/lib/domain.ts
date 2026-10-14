@@ -92,24 +92,6 @@ export function localDate(value: string | null) {
   const date = new Date(value);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
-export function billingLabel(status: string) {
-  return (
-    (
-      {
-        priced: "已计费",
-        legacy: "历史未计费",
-        pending: "待结算",
-        unpriced: "模型未定价",
-        missing_usage: "未上报完整用量",
-        missing_resolution: "分辨率未知",
-        not_charged: "未生成图片",
-        invalid_usage: "用量异常",
-        unsupported: "未定价",
-        overflow: "金额超出范围",
-      } as Record<string, string>
-    )[status] ?? status
-  );
-}
 export const scopes: Record<string, string> = {
   openid: "本人登录身份",
   profile: "本人资料",

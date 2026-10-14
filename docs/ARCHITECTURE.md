@@ -35,7 +35,7 @@ One Rust process runs four listeners: OAuth/client protocols (8080), administrat
 | codex2api-service | Shared execution authorization and effective entitlement policy |
 | codex2api-scheduler | Provider-neutral supplier selection, affinity, capacity, pre-output inspection and classified failover primitives |
 | codex2api-api | Consumer OAuth and independently scoped client protocol adapters |
-| codex2api-gateway | API-key inference, Responses/Chat Completions/image adapters, per-user API group/model admission and metered request settlement |
+| codex2api-gateway | Public API parsing, provider-owned official request construction, API-key admission, response conversion and wallet settlement |
 | codex2api-admin | Administrator session, CSRF, typed REST contracts and operations |
 | codex2api-user | User browser sessions, own API keys/catalog/usage, wallet purchases, subscriptions/devices and OAuth consent |
 | codex2api-web | Embedded static assets and source freshness validation |
@@ -61,8 +61,84 @@ platform-account operations share one module instead of duplicating their handle
 The root routers assemble these resources and apply session and account-scope
 middleware. Virtual users and regular subscriptions have separate namespace routers;
 only identical platform-resource operations share handlers. Handlers adapt requests to services; they do not
-derive routes from outbound endpoint enums. HTTP fingerprint and wire rules stay
-in auth/upstream. SQLite code neither calls providers nor registers HTTP routes.
+derive routes from outbound endpoint enums. Gateway provider adapters own the
+conversion from public API semantics to official client bodies and request-scoped
+headers. Auth/upstream own supplier credentials, frozen fingerprints, account-bound
+normalization and network transport. SQLite code neither calls providers nor
+registers HTTP routes.
+
+## API gateway and OAuth client surfaces
+
+The two inference listeners have different contracts. The OAuth/client listener
+accepts the corresponding client's protocol, checks its account and subscription,
+and preserves conversation contents, protocol events and client request IDs while
+normalizing supplier identity. The API-key listener accepts public Responses,
+Chat Completions and image APIs and constructs a new official-client request.
+OAuth identifies a consumer on one listener and supplies upstream credentials;
+it is not the API gateway's request-adaptation strategy.
+
+```mermaid
+flowchart LR
+    A[Public API request] --> B[API key and group]
+    B --> C[Public API parsing]
+    C --> D[Provider request builder]
+    D --> E[Price snapshot and API admission]
+    E --> F[Supplier selection]
+    F --> G[Account-bound official transport]
+    G --> H[Provider events and actual usage]
+    H --> I[Wallet settlement]
+    I --> J[Public JSON or stream completion]
+    K[OAuth client request] --> L[Client protocol and subscription admission]
+    L --> F
+```
+
+`gateway/request.rs` separates caller response preferences from inference input,
+validates public controls and separates local metadata from upstream input. It
+neither selects a supplier nor supplies credentials. Provider adapters convert
+protocol semantics without dropping opaque tool or multimodal payloads.
+`PreparedRequest` carries the provider body, validated dynamic headers, local
+response metadata, upstream operation and downstream output mode.
+
+ChatGPT converts Chat messages, tools and results to the pinned Codex Responses
+shape. Its upstream request uses `stream=true` and `store=false`; API callers may
+still choose JSON or SSE. The adapter preserves supplied session/thread/window metadata and headers
+without deriving new caller identities from suppliers or API keys. Grok independently builds its Responses or Chat request,
+including its own parameter names, reasoning replay shape and stream options.
+Image JSON and multipart inputs go through the corresponding provider builder.
+Protocol conversion preserves the native tool, multimodal and replay payloads;
+provider validation remains authoritative for unsupported extensions. Search,
+compaction and input counting use their own real upstream wire contracts.
+[Metered API](API.md) documents these operations and their actual boundaries.
+
+The selected supplier contributes credentials, installation ID, frozen HTTP
+fingerprint and outbound proxy only in the official transport. Caller API keys,
+cookies, account selectors, `client_metadata` and privileged client flags cannot
+select or impersonate that identity. Request IDs remain fixed across retries of one API execution. Header values used to derive local affinity are not
+thereby authorized for upstream forwarding.
+
+All OAuth and API-key requests use `usage_records`, the same insert/finalization
+functions, failure fields, queries and statistics. Gateway admission snapshots
+model prices and group multipliers before execution. ChatGPT search uses the API
+group's independently configured final per-call USD price, without a multiplier or
+fallback to subscription search pricing; Grok groups cannot configure it. Wallet settlement is atomic
+with shared ledger finalization; wallet-funded requests do not consume OAuth
+subscription windows. Regular-user reads bind the persisted `user_id` and use an
+explicit public field allowlist. Usage lists filter Api/subscription by the persisted
+subject kind and display the API key name or subscription username. Wallet record
+lists show order payments and system adjustments; usage charges are inspected in
+usage records while the internal immutable balance ledger retains all debits.
+There is no separate API usage table or endpoint. The ledger records the caller's
+streaming mode independently of supplier framing. The shared HTTP response
+reader identifies SSE framing across byte chunks before JSON/stream dispatch,
+including absent or inaccurate Content-Type, and preserves structured failures. Group/model
+limits belong to the ordinary user, not each key. The shared scheduler only
+reserves provider-scoped supplier capacity. Live revalidation protects revoked
+keys, disabled users/groups and changed group policy during waits and retries.
+Actual upstream usage drives the idempotent wallet settlement; API response
+conversion never invents usage or substitutes a successful completion for an
+upstream failure. HTTP and native ChatGPT WebSocket generations share admission and ledger
+finalization; terminal output is released after settlement. Accepted work
+continues to account for usage when the downstream disconnects.
 
 ## Storage and supplier isolation
 
@@ -210,10 +286,12 @@ available work into durable transactions. Acknowledgements and cache updates
 follow commit. Request prices remain immutable and duplicate completions do not
 charge twice.
 
-Request metadata and forwarding reuse the decoded HTTP body. Grok serializes
-its normalized body once and shares the encoded bytes across supplier attempts;
-ChatGPT normalizes the parsed body for the chosen account and preserves official
-compression. WebSocket accounting, error classification and output sanitization
+OAuth/client request metadata and forwarding reuse the decoded HTTP body. Its
+Grok execution path serializes the normalized body once and shares encoded bytes
+across supplier attempts. The API gateway separately builds `PreparedRequest`;
+its encoding and preparation costs must be assessed on that path rather than
+inferred from the OAuth implementation. ChatGPT normalizes the parsed body for
+the chosen account and preserves official compression. WebSocket accounting, error classification and output sanitization
 share parsed events. Queued WebSocket requests retain the parsed value and byte count;
 dequeue and ledger validation do not decode the frame again. SSE framing scans newly received bytes and splits buffers
 without moving the remaining stream. Complete lines feed the shared SSE parser,
@@ -240,9 +318,10 @@ timezone and unknown fingerprint fields, and leaves other providers unchanged.
 OAuth uses `https://auth.openai.com`, client ID
 `app_EMoamEEZ73f0CkXaXp7hrann`, and the pinned official scopes.
 Responses uses `https://chatgpt.com/backend-api/codex/responses`.
-Request normalization changes supplier identity metadata while preserving input,
-tools, opaque Guardian messages and dynamic IDs. This is application-layer identity,
-not forged TLS/JA3.
+The OAuth/client path normalizes supplier identity while preserving input, tools,
+opaque Guardian messages and client dynamic IDs. The API gateway first constructs
+the official request from public API semantics, then applies the same supplier
+identity binding. Both use application-layer identity, not forged TLS/JA3.
 
 Responses serialization places `model`, `stream` and an explicitly supplied
 `service_tier` before large input fields. WebSocket `response.create` places its
@@ -753,7 +832,7 @@ Overview virtual counts include only standalone virtual accounts; normal means e
 ## Provider module boundaries
 
 Channel-specific code belongs in `src/providers/chatgpt/` or `src/providers/grok/`
-in the identity, auth, version, core, upstream, API and admin crates. Root modules
+in the identity, auth, version, core, upstream, API, gateway and admin crates. Root modules
 compose adapters and retain compatibility exports. One adapter must not import or
 patch the other. Generic storage rows retain their historic column names without
 sharing channel credentials or protocols. Frontend channel forms and official

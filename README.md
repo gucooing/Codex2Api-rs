@@ -138,7 +138,9 @@ bash scripts/build.sh --release
 | `CODEX2API_DB` | `data/codex2api.sqlite` | SQLite 数据库文件路径；相对路径以程序启动目录为基准。 |
 | `CODEX_CA_CERTIFICATE` | 未设置 | 可选的 PEM 格式自定义 CA 证书文件路径。 |
 | `SSL_CERT_FILE` | 未设置 | 未配置 `CODEX_CA_CERTIFICATE` 时使用的自定义 CA 证书文件路径。 |
-| `RUST_LOG` | `codex2api=info` | 日志过滤规则。 |
+| `RUST_LOG` | `codex2api=info` | 日志过滤规则；`codex2api=debug` 启用完整 AI 请求输入输出日志。 |
+
+使用 `codex2api --debug` 启动也可启用 debug 模式。AI 请求与响应正文按请求 ID、方向和序号完整打印到控制台，覆盖 HTTP、SSE 和 WebSocket，不截断流式内容；二进制或跨块 UTF-8 字节以 Base64 保留。默认启动不打印正文，正文不写入 SQLite。
 
 通过 HTTPS 反向代理提供管理端时，将 `CODEX2API_PUBLIC_ADMIN_URL` 设置为浏览器访问的 HTTPS origin。该配置不启动 TLS 监听器。
 

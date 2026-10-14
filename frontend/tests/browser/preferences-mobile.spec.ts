@@ -237,7 +237,7 @@ test("mobile tables keep compact aligned rows and open full fields on demand", a
       .toBe(true);
     await page.setViewportSize({ width: 390, height: 844 });
   }
-  await page.getByRole("button", { name: "查看请求详情：200", exact: true }).first().click();
+  await page.getByRole("button", { name: "查看请求详情：成功", exact: true }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await page.goto("/admin/consumers/detail/?id=review-consumer");

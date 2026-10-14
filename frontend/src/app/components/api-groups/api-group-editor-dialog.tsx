@@ -1,6 +1,7 @@
 "use client";
 import { ApiGroupModelRules } from "@/app/components/api-groups/api-group-model-rules";
 import { useApiGroupEditor } from "@/app/data/api-groups";
+import { ApiGroupSearchPrice } from "@/components/providers/chatgpt/billing";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -154,6 +155,13 @@ export function ApiGroupEditorDialog({
                         <FieldDescription>该平台暂无标签。</FieldDescription>
                       )}
                     </FieldSet>
+                    {value.provider_id === "chatgpt" && (
+                      <ApiGroupSearchPrice
+                        id={id + "-search-price"}
+                        value={value.search_price_usd}
+                        onChange={(price) => update("search_price_usd", price)}
+                      />
+                    )}
                     <div className="grid gap-3 sm:grid-cols-3">
                       <Field>
                         <FieldLabel htmlFor={id + "-multiplier"}>组计费倍率</FieldLabel>

@@ -48,8 +48,7 @@ impl Storage {
         filter: &WalletEntryFilter,
     ) -> Result<serde_json::Value> {
         if filter.user_id.len() > 128
-            || !["", "order_payment", "system_adjustment", "api_usage"]
-                .contains(&filter.kind.as_str())
+            || !["", "order_payment", "system_adjustment"].contains(&filter.kind.as_str())
             || filter.page < 1
             || ![10, 20, 30, 50].contains(&filter.limit)
             || matches!((filter.from_ms,filter.until_ms),(Some(from),Some(until)) if from>=until)
@@ -65,7 +64,7 @@ impl Storage {
         let offset = (filter.page - 1)
             .checked_mul(filter.limit)
             .ok_or(StorageError::InvalidAdminUpdate("流水页码超出范围"))?;
-        let condition = " WHERE (?='' OR w.user_id=?) AND (?='' OR w.kind=?) AND (? IS NULL OR julianday(w.created_at)>=julianday(?/1000.0,'unixepoch')) AND (? IS NULL OR julianday(w.created_at)<julianday(?/1000.0,'unixepoch'))";
+        let condition = " WHERE w.kind IN ('order_payment','system_adjustment') AND (?='' OR w.user_id=?) AND (?='' OR w.kind=?) AND (? IS NULL OR julianday(w.created_at)>=julianday(?/1000.0,'unixepoch')) AND (? IS NULL OR julianday(w.created_at)<julianday(?/1000.0,'unixepoch'))";
         let mut tx = self.pool().begin().await?;
         let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM wallet_entries w JOIN regular_users u ON u.id=w.user_id{condition}"))
             .bind(&filter.user_id).bind(&filter.user_id).bind(&filter.kind).bind(&filter.kind).bind(filter.from_ms).bind(filter.from_ms).bind(filter.until_ms).bind(filter.until_ms).fetch_one(&mut *tx).await?;
@@ -146,7 +145,7 @@ impl Storage {
                 "减少金额不能超过当前余额，增加后余额不能超出金额范围",
             ))?;
         let api_pending: i64 = sqlx::query_scalar(
-            "SELECT COALESCE((SELECT pending_nano_usd FROM api_wallet_state WHERE user_id=?),0)",
+            "SELECT COALESCE((SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id=?),0)",
         )
         .bind(owner)
         .fetch_one(&mut *tx)
@@ -172,7 +171,7 @@ impl Storage {
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
-        crate::api_billing::settle_api_debt_on(&mut tx, owner).await?;
+        crate::usage_wallet::settle_usage_debt_on(&mut tx, owner).await?;
         tx.commit().await?;
         Ok(entry)
     }

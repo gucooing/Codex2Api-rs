@@ -1,4 +1,4 @@
-export type UsageGroup = "hour" | "day" | "model" | "virtual_account";
+export type UsageGroup = "hour" | "day" | "model" | "subject";
 export type UsageTotals = {
   request_count: number;
   completed_requests: number;
@@ -34,7 +34,7 @@ export const usageGroups: Record<UsageGroup, string> = {
   hour: "按小时",
   day: "按天",
   model: "按模型",
-  virtual_account: "按虚拟账户",
+  subject: "按消费账户",
 };
 export const percent = (value: number | null | undefined) =>
   value == null ? "-" : `${Number(value.toFixed(1))}%`;
@@ -56,7 +56,7 @@ export function statisticsRange(preset: string, now = new Date()) {
 
 export function statisticsRows(data: UsageStatistics | undefined) {
   if (!data) return [];
-  if (data.group_by === "model" || data.group_by === "virtual_account") {
+  if (data.group_by === "model" || data.group_by === "subject") {
     return data.rows
       .map((row) => ({ ...row, label: row.label || "未记录模型" }))
       .sort(
@@ -103,7 +103,7 @@ export function statisticsRows(data: UsageStatistics | undefined) {
 export function overviewChart(data: UsageStatistics | undefined) {
   const groupedRows = statisticsRows(data);
   const rows =
-    data?.group_by === "model" || data?.group_by === "virtual_account"
+    data?.group_by === "model" || data?.group_by === "subject"
       ? groupedRows.slice(0, 20)
       : groupedRows;
   const visibleKeys = new Set(rows.map((row) => row.key));

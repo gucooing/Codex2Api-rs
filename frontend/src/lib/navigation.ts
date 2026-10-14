@@ -103,14 +103,6 @@ export const navigation = [
     description: "用户 API 密钥、用量与当前并发",
   },
   {
-    href: "/api-usage/",
-    label: "API 用量",
-    group: "API 服务",
-    icon: BarChart3,
-    keywords: "api 用量 钱包 计费 请求",
-    description: "API 调用记录与钱包计费",
-  },
-  {
     href: "/suppliers/",
     label: "供应账户",
     group: "供应资源",

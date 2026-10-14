@@ -109,6 +109,8 @@ fn retry_headers(value: &Value) -> Option<Value> {
         .collect();
     (!mapped.is_empty()).then_some(Value::Object(mapped))
 }
+/// Sanitize protocol envelopes, never model output or opaque tool/search data.
+/// Callers restore their own request metadata after this supplier boundary.
 /// Returns whether sanitization changed the event, avoiding a full comparison copy.
 pub fn metadata(value: &mut Value) -> bool {
     let mut changed = false;
@@ -119,6 +121,10 @@ pub fn metadata(value: &mut Value) -> bool {
             }
         }
         Value::Object(object) => {
+            let response_output = object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_none_or(|kind| kind.starts_with("response."));
             if matches!(
                 object.get("type").and_then(Value::as_str),
                 Some("error" | "response.failed")
@@ -216,6 +222,35 @@ pub fn metadata(value: &mut Value) -> bool {
                         *item = safe;
                         changed = true;
                     }
+                } else if matches!(
+                    key.as_str(),
+                    "content"
+                        | "text"
+                        | "arguments"
+                        | "input"
+                        | "tools"
+                        | "tool_choice"
+                        | "results"
+                        | "data"
+                        | "annotations"
+                        | "logprobs"
+                        | "audio"
+                        | "refusal"
+                        | "summary"
+                ) {
+                    // These are application payloads. A JSON field called `user`
+                    // in a tool result is not the supplier's account identity.
+                    continue;
+                } else if key == "output" {
+                    // Responses output is a list of protocol items. A tool item's
+                    // own `output` is opaque content, including structured JSON.
+                    if response_output && let Value::Array(items) = item {
+                        for output in items {
+                            if output.get("type").and_then(Value::as_str).is_some() {
+                                changed |= metadata(output);
+                            }
+                        }
+                    }
                 } else {
                     changed |= metadata(item);
                 }
@@ -236,6 +271,21 @@ pub fn metadata(value: &mut Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn api_rewrite_protocol_envelopes_do_not_rewrite_application_payloads() {
+        let payload = json!({"user":"customer","account":{"email":"shown@example.test"},"metadata":{"api_key":"example"},"error":{"message":"quoted"}});
+        let mut value = json!({"account_id":"supplier-secret","response":{"user":"supplier-secret","output":[{"type":"message","content":[{"type":"output_text","text":"text","annotations":[payload.clone()]}]},{"type":"function_call_output","output":payload.clone()}]},"results":[payload.clone()],"data":[payload.clone()]});
+        metadata(&mut value);
+        assert!(value.get("account_id").is_none());
+        assert!(value["response"].get("user").is_none());
+        assert_eq!(
+            value["response"]["output"][0]["content"][0]["annotations"][0],
+            payload
+        );
+        assert_eq!(value["response"]["output"][1]["output"], payload);
+        assert_eq!(value["results"][0], payload);
+        assert_eq!(value["data"][0], payload);
+    }
     #[test]
     fn errors_and_metadata_do_not_expose_supplier_fields_or_raw_messages() {
         let mut value = json!({"type":"response.failed","response":{"id":"request-owned","error":{"type":"rate_limit_exceeded","code":"slow_down","message":"secret@example.test supplier-account","retry_after_ms":1200,"debug":{"refresh_token":"supplier-secret"}},"metadata":{"account_id":"supplier-account","installation_id":"supplier-installation"}}});

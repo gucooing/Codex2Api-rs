@@ -66,11 +66,7 @@ export function UserRecords({ id, close }: { id: string; close: () => void }) {
                   <TableRow key={e.id}>
                     <TableCell>{date(e.created_at)}</TableCell>
                     <TableCell>
-                      {e.kind === "api_usage"
-                        ? "API 调用"
-                        : e.kind === "system_adjustment"
-                          ? "系统操作"
-                          : e.plan_name}
+                      {e.kind === "system_adjustment" ? "系统操作" : e.plan_name}
                     </TableCell>
                     <TableCell>{money(e.balance_before_cents / 100)}</TableCell>
                     <TableCell>

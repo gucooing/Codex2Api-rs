@@ -837,14 +837,8 @@ impl BodyParser {
                 self.data.extend_from_slice(bytes);
                 // Some official Responses replies omit Content-Type. Detect the SSE
                 // framing across chunk boundaries instead of parsing the entire stream as JSON.
-                let prefix = self
-                    .data
-                    .strip_prefix(b"\xef\xbb\xbf")
-                    .unwrap_or(&self.data);
-                let prefix = prefix.trim_ascii_start();
-                if [b"data:".as_slice(), b"event:", b"id:", b"retry:", b":"]
-                    .iter()
-                    .any(|field| prefix.starts_with(field))
+                if codex2api_upstream::ResponseFormat::from_prefix(&self.data)
+                    == Some(codex2api_upstream::ResponseFormat::EventStream)
                 {
                     self.detected_sse = true;
                     let buffered = std::mem::take(&mut self.data);
@@ -946,13 +940,17 @@ impl ObservedStream {
         }
         self.log.finish("completed");
     }
-    fn terminate_stream(&mut self, code: &str, message: &str) -> Bytes {
+    fn terminate_stream(&mut self, status: u16, code: &str, message: &str) -> Bytes {
         self.ended = true;
-        self.log.failure(code, message);
+        self.log.lifecycle.fail(ResponseFailure::new(
+            Some(status),
+            Some(code),
+            Some(message),
+        ));
+        self.log.apply_outcome();
         self.log.finish("failed");
         // This event describes the broken generation. It cannot change the
         // already-established HTTP status or reject the supplier's credentials.
-        let status = ResponseFailure::new(None, Some(code), None).status;
         let value = serde_json::json!({"type":"response.failed","status":status,
             "response":{"status":"failed","error":{"code":code,"message":message}}});
         Bytes::from(format!("\n\nevent: response.failed\ndata: {value}\n\n"))
@@ -1002,7 +1000,11 @@ impl Stream for ObservedStream {
                 }
                 let message = error_text(&detail, 512);
                 if this.sse {
-                    Poll::Ready(Some(Ok(this.terminate_stream(code, &message))))
+                    Poll::Ready(Some(Ok(this.terminate_stream(
+                        if error.is_timeout() { 504 } else { 502 },
+                        code,
+                        &message,
+                    ))))
                 } else {
                     this.ended = true;
                     this.log.failure(code, &message);
@@ -1014,6 +1016,7 @@ impl Stream for ObservedStream {
                 this.parser.end(this.sse, &mut this.log);
                 if this.sse && this.success && this.log.lifecycle.outcome().is_none() {
                     return Poll::Ready(Some(Ok(this.terminate_stream(
+                        502,
                         "upstream_incomplete",
                         "上游连接在生成终止事件之前结束",
                     ))));
@@ -1027,9 +1030,11 @@ impl Stream for ObservedStream {
                     this.ended = true;
                     return Poll::Ready(None);
                 }
-                Poll::Ready(Some(Ok(
-                    this.terminate_stream("upstream_timeout", "等待上游响应流超时")
-                )))
+                Poll::Ready(Some(Ok(this.terminate_stream(
+                    504,
+                    "upstream_timeout",
+                    "等待上游响应流超时",
+                ))))
             }
             Poll::Pending => Poll::Pending,
         }

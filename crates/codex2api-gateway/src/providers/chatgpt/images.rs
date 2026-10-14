@@ -1,8 +1,12 @@
 //! The pinned Codex ImagesClient sends JSON image references and receives base64 data.
 use crate::{GatewayError, PreparedRequest, Result, images};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-pub(crate) fn prepare(mut body: Value, edit: bool) -> Result<PreparedRequest> {
+pub(crate) fn prepare(
+    mut body: Value,
+    edit: bool,
+    inbound: &http::HeaderMap,
+) -> Result<PreparedRequest> {
     images::validate(
         &body,
         &[
@@ -33,22 +37,21 @@ pub(crate) fn prepare(mut body: Value, edit: bool) -> Result<PreparedRequest> {
     }
     let refs = images::references(&mut body, edit, 16)?;
     if edit {
-        body["images"] = Value::Array(
-            refs.into_iter()
-                .map(|image_url| json!({"image_url":image_url}))
-                .collect(),
-        );
+        body["images"] = refs.into();
     }
-    body.as_object_mut().unwrap().remove("response_format");
-    Ok(images::prepared(body, edit))
+    body.as_object_mut()
+        .expect("validated image body")
+        .remove("response_format");
+    Ok(images::prepared(body, edit, super::image_headers(inbound)?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn edit_uses_pinned_codex_image_references() {
-        let request = prepare(json!({"model":"custom-image","prompt":"edit","image":{"url":"https://example.test/image.png"},"n":2,"response_format":"b64_json"}),true).unwrap();
+        let request = prepare(json!({"model":"custom-image","prompt":"edit","image":{"url":"https://example.test/image.png"},"n":2,"response_format":"b64_json"}),true, &http::HeaderMap::new()).unwrap();
         assert_eq!(
             request.body["images"],
             json!([{"image_url":"https://example.test/image.png"}])
@@ -56,11 +59,12 @@ mod tests {
         assert!(request.body.get("image").is_none());
         assert!(request.body.get("response_format").is_none());
         assert_eq!(request.upstream_path, "images/edits");
-        assert!(prepare(json!({"model":"custom-image","prompt":"edit","image":"https://example.test/image.png","mask":"https://example.test/mask.png"}),true).is_err());
+        assert!(prepare(json!({"model":"custom-image","prompt":"edit","image":"https://example.test/image.png","mask":"https://example.test/mask.png"}),true, &http::HeaderMap::new()).is_err());
         assert!(
             prepare(
                 json!({"model":"custom-image","prompt":"draw","response_format":"url"}),
-                false
+                false,
+                &http::HeaderMap::new()
             )
             .is_err()
         );

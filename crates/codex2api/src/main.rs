@@ -6,9 +6,13 @@ use codex2api_version::{CODEX_PACKAGE_VERSION, CODEX_REF_COMMIT, CODEX_REF_COMMI
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("codex2api=info".parse()?))
-        .init();
+    let debug = std::env::args().skip(1).any(|arg| arg == "--debug");
+    let mut filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("codex2api=info"));
+    if debug {
+        filter = filter.add_directive("codex2api=debug".parse()?);
+    }
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let api_bind = std::env::var("CODEX2API_API_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let admin_bind =
@@ -37,7 +41,6 @@ async fn main() -> Result<()> {
         .await?;
     storage.ensure_default_admin().await?;
     storage.recover_interrupted_usage().await?;
-    storage.recover_interrupted_api_usage().await?;
 
     let api_origin = std::env::var("CODEX2API_PUBLIC_API_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8080".into());

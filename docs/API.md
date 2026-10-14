@@ -16,87 +16,88 @@ API 组，组的平台决定上游提供商；调用者不能用请求头切换�
 | 路径 | 行为 |
 | --- | --- |
 | `GET /healthz` | 无凭据的进程健康检查 |
-| `GET /v1/models` | OpenAI `object: list` / `data` 模型列表，按 Key 所属组的真实模型范围返回 |
-| `POST /v1/responses` | Responses JSON 或 SSE |
-| `POST /v1/chat/completions` | Chat Completions JSON 或 SSE，包括函数工具调用和用量 |
-| `POST /v1/images/generations` | 图像生成，JSON 请求和响应 |
-| `POST /v1/images/edits` | 图像编辑，JSON 图像引用或 multipart 图片上传，JSON 响应 |
+| `GET /v1/models` | 当前 API 组可用的模型列表 |
+| `POST /v1/responses` | Responses JSON / SSE，保留完整输出项、工具结果和实际用量 |
+| `GET /v1/responses` | ChatGPT 原生 Responses WebSocket，使用同一个 Bearer API Key |
+| `POST /v1/chat/completions` | Chat JSON / SSE，包含 function/custom 工具、结构化输出、推理、拒绝、引用和音频字段 |
+| `POST /v1/responses/compact` | ChatGPT 上下文压缩，JSON 请求和响应，按真实 Token 结算 |
+| `POST /v1/responses/input_tokens` | ChatGPT 输入计数，返回实际计数结果，不作为生成 Token 扣费 |
+| `POST /v1/alpha/search` | ChatGPT 官方独立搜索协议，按管理员配置的每次价格结算 |
+| `POST /v1/images/generations` | 对应渠道原生图像生成 |
+| `POST /v1/images/edits` | JSON 图像引用 / file_id，或 multipart 图片上传 |
 
-ChatGPT 文本请求使用锁定版本的 Codex Responses 上游；Chat Completions 的
-消息、函数定义、工具结果与流式增量在 ChatGPT 适配器中转换。Grok 文本调用
-使用自身原生接口。流式 Chat Completions 仅在客户端请求
-`stream_options.include_usage=true` 时发布最终用量 chunk；其 `choices` 为空。
-失败、截断与正常结束保持可区分，完成事件在账本结算后发送。
+## 请求转换
 
-供应端复用各平台登录后的官方 transport。ChatGPT 的 originator、UA 版本、
-OAuth 凭据和冻结的账户指纹来自固定 Codex 基线；Grok 使用独立的官方头和
-凭据。请求级标识由适配器生成，用户的 API Key、Cookie、UA、账户选择头与
-API 组信息不转发给供应商。公开 API 的兼容转换不能替换供应端登录协议。
+请求验证、渠道转换和执行各有一个入口。ChatGPT 使用固定官方 Codex 协议，
+Grok 使用自己的原生协议；模型目录和供应账户配置决定真实可用模型，不使用
+官方目录作硬编码白名单。SDK 扩展字段交由对应供应协议验证，不通过一份不完整的
+通用字段名单丢弃工具、输入或输出。
 
-ChatGPT 适配采用固定 Codex 请求结构，不支持 `temperature`、`top_p`、
-`max_tokens`、`max_completion_tokens`、`max_output_tokens`、`stop`、
-`logprobs` 或多候选 `n`；显式指定不支持的参数返回 400，不静默忽略。
-Chat Completions 的 `n=1`、函数工具、文本／图像输入、结构化文本格式与
-`reasoning_effort` 可转换；当前适配层不接受 Responses 的 `stream_options`。
-Grok 使用自己的原生契约，不套用 ChatGPT 的参数和恢复规则。
+Responses 的顶层 `instructions` 转为 `input` 中的 developer 消息，system 消息
+保持相同的指令语义。Chat messages、旧式 functions/function_call、function/custom
+工具和 namespace 统一转换到 Responses；函数参数、结构化工具输出、多模态内容和
+工具调用 ID 保留。reasoning 回放保留 encrypted_content、summary/content，并处理
+store=false 下无法检索的 reasoning ID；已有 include 数组也补齐加密推理内容。
 
-ChatGPT 图像请求遵循仓库 `reference/codex/codex-rs/codex-api/src/images.rs`
-的固定契约：`model`、`prompt`、可选 `n`、`background`、`quality`、`size`，
-编辑时发送 `images: [{image_url: ...}]`，结果为 base64。Grok 图像发送独立的
-`image: {url, type: "image_url"}` 或多图 `images`，支持 `resolution`、
-`aspect_ratio`、平台允许的 `quality` 和 `response_format`。仍使用原有
-Grok 订阅 transport 与官方 CLI proxy 地址，账户是否获准使用图像模型取决于
-实际供应权限；不切换到开发者付费 API 来掩盖订阅拒绝。
+客户端提供的 session/thread、request ID 和 `prompt_cache_key` 保留其语义，不按
+供应账户或 API Key 重新派生。`client_metadata` 仅接受合法动态协议上下文；供应
+凭据、安装 ID、冻结指纹和版本始终由对应渠道的 transport 提供。调用者的 Cookie、
+API Key、UA、组织/账户选择头和 access_programs 不用于选择供应身份。
+普通 `metadata` 留在本次请求内，并在相应响应中回显，不写入用量表或请求正文存储。
+`x-codex-turn-state` 可回传及再次携带，转发前核对调用者和选中供应账户的归属。
 
-multipart 编辑支持 `image` / `image[]` / `images` / `images[]` 的 PNG、JPEG、
-WebP 图片，在内存中转成 data URL；单文件不超过 15 MiB，请求总量不超过
-64 MiB。ChatGPT 最多 16 张输入图，Grok 最多 5 张。不下载用户提供的远程图像
-URL；URL 由对应供应商处理。图片生成只接受 JSON。
+ChatGPT 生成请求使用 `store=false`、上游 `stream=true`；客户端选择同步时，
+从实际终态及已收到的 output_item 构造 JSON。采样、最大输出 Token 等订阅上游
+没有提供的控制字段不会被伪装成已生效；其实际用量仍按供应报告结算。Grok 保留其
+原生采样、输出限制和搜索工具字段，不套用 ChatGPT 的参数处理规则。
 
-图像流式、异步作业、供应商文件 ID、蒙版，以及当前平台适配器不支持的参数
-返回明确的请求错误。不会静默丢弃这些参数或伪造完成响应。Grok 的 `size`
-可转换为支持的分辨率和宽高比；省略时显式发送官方默认的 `resolution: "1k"`。
-模型名来自管理员目录，代码不建立官方模型白名单。
+后台持久化作业、生成 `n>1`、查询/删除已存储响应不是 Codex 订阅协议提供的能力。
+固定 Images 协议不提供 mask、流式输出或托管图片 URL；对应请求明确返回不支持，
+不会伪造异步任务、下载地址或成功结果。Grok 目前没有该渠道可用的 Codex 搜索、
+压缩、计数和原生 Responses WebSocket 传输，这些路径明确拒绝。
 
-例如，先获取该 Key 可用的模型，再将返回的模型名放入标准请求。以下命令中的
-`API_KEY` 与 `MODEL` 由调用者设置：
+## 搜索与计数
 
-```bash
-curl http://127.0.0.1:8083/v1/models \
-  -H "Authorization: Bearer $API_KEY"
+独立搜索直接发送官方 `SearchRequest`，字段为 `id`、`model`、`reasoning`、`input`、
+`commands`、`settings`、`max_output_tokens`。id 缺省时生成本次请求标识；model 必须
+属于 API 组的可用模型。commands 保留搜索、图片搜索、open、click、find、截图、
+金融、天气、体育和时间等原生操作。不会把搜索替换成一次模型文本回答。
 
-curl http://127.0.0.1:8083/v1/chat/completions \
-  -H "Authorization: Bearer $API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
+```json
+{
+  "model": "管理员启用的模型",
+  "commands": {
+    "search_query": [{"q": "Rust async runtime"}],
+    "response_length": "short"
+  }
+}
 ```
 
-公开协议参考：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、
-[xAI 图像接口](https://docs.x.ai/developers/rest-api-reference/inference/images)、
-[xAI 图像分辨率](https://docs.x.ai/developers/model-capabilities/images/generation)。
-公开 API 文档不能替代 ChatGPT 固定供应端版本，接口适配不升级 Codex 基线。
+搜索 JSON 返回实际 `output`，以及可选的 `encrypted_output`、`results`。搜索按次
+价格由管理员在每个 ChatGPT API 组的 `search_price_usd` 中独立配置，单位为 USD / 次。
+该金额直接作为最终单价，不再乘组或模型倍率，也不回退到订阅搜索价格。Grok 不提供
+该设置。请求开始时冻结单价，后续改价不影响历史。缺价明确拒绝；明确零价允许零余额。
+用户模型价格详情展示所选 API 组的搜索单价。输入计数继续检查凭据、模型范围和调用限制，但不要求钱包余额、不触发偿债，
+返回的预估 Token 数不写成已消费 Token。
 
-## API 组、倍率和限流
+## 响应与连接
 
-管理员在 **API 组** 维护名称、介绍、平台、供应标签、模型范围与计费倍率。
-一个组可关联同平台多个标签；供应商按 ID 去重后复用共享调度器。
-组的平台创建后不可更换。删除组为软删除，既有 Key 与账单保留，调用立即失效。
-标签范围、模型范围和价格调整分别使用持久化配置，不修改 OAuth 套餐。
+HTTP JSON、SSE 和原生 WebSocket 共用请求准入、供应调度和 usage_records。
+共用响应识别器按实际帧识别 SSE，支持缺失或错误 Content-Type，以及 SSE event
+字段提供事件类型的响应。正常完成、未完成、流中错误和传输中断分别处理；HTTP 200
+只是连接状态。没有已生成输出或用量时才允许因确定的授权失效、额度耗尽或 402
+切换供应；普通限流交给客户端退避，并保留结构化错误和 Retry-After。
 
-组模型范围为：该平台已启用的计费目录 ∩ 关联标签供应账户的可用模型 ∩
-组显式模型列表。组模型列表为空时，最后一项不限制。供应账户模型列表的
-官方发现与自定义模型均参与这一计算；`/v1/models`、模型广场与执行准入读取
-同一模型来源。临时供应商繁忙或额度状态由调度处理，不把它当作永久目录删除。
+同步和流式 Chat 均保留真实工具调用、reasoning、refusal、annotations、logprobs、
+音频以及 usage。旧式 function_call 请求保持其对应响应格式。仅当调用者要求
+`stream_options.include_usage=true` 时发送最终 Chat 用量 chunk。响应清理只处理
+供应协议信封；正文、JSON schema、工具结果和搜索 results 中同名业务字段不会被删除。
 
-组倍率默认作用于组内所有模型，模型单独倍率覆盖组倍率，不再次相乘。
-倍率使用最多六位小数的十进制定点数，`0` 表示明确免收；缺少基价仍不可
-按免费模型执行。已开始请求保留当时的模型价格、服务档位与倍率快照。
-
-并发和 RPM 分别设置在组与模型层，两层同时约束 **用户**。同一用户在同组
-创建多个 Key 不能增加额度，不同用户分别计数；`0` 表示该项无限。
-RPM 是滚动 60 秒窗口，超过限额返回 429、具体限制代码和 `Retry-After`。
-流式任务保留并发占用至实际执行结束，客户端断开后继续收集已产生的用量
-并完成结算。当前并发来自进程运行态，进程重启不恢复已结束的执行占用。
+WebSocket 使用真实上游连接，支持固定协议的 `response.create`、`generate=false`
+预热及 `response.interrupt`；其余事件明确拒绝。每次生成重新检查 Key、组策略、模型、
+余额、RPM 和并发。同连接可复用多轮；空闲连接不占生成并发。终态发送给客户端之前
+提交用量和钱包结算；客户端离开后收尾已开始的生成，错误响应包含 CloseFrame。
+预热不虚构消费记录或费用。
 
 ## 钱包与记录
 
@@ -105,7 +106,8 @@ API 仅供普通用户创建 Key，虚拟用户不能通过用户网站或 UserS
 创建成功时返回一次。停用、撤销、用户停用、组停用或删除均阻止后续准入。
 请求在等待供应商或重试时重新核对 Key 与组版本。
 
-API 用量独立保存在 `api_usage_records`，不消耗 OAuth 订阅的 5 小时、7 天、
+所有 API 和 OAuth 请求统一写入 `usage_records`，使用相同的用量字段、错误记录、
+写入与结束处理、查询和统计。API 钱包扣费不消耗 OAuth 订阅的 5 小时、7 天、
 30 天额度。使用量只保存账单元数据，不持久化请求提示、工具输入或图片内容。
 模型基价与倍率在开始时快照；完成时以实际普通输入、缓存读取、缓存写入与
 输出结算，推理 Token 已包含在输出中，不重复收费。图像根据成功返回数量
@@ -113,7 +115,7 @@ API 用量独立保存在 `api_usage_records`，不消耗 OAuth 订阅的 5 小�
 未定价、缺失数值或分辨率保持未知。
 
 费用以整数 nano USD 计算，用户钱包仍为整数美分。小于一美分的费用保存于
-`api_wallet_state`，累计达到一美分才原子扣减余额并写不可变 `api_usage`
+`usage_wallet_state`，累计达到一美分才原子扣减余额并写不可变 `usage`
 钱包流水，不对每个微小请求单独向上取整。已执行的并发请求可能超过剩余
 余额，超出部分保留待扣，后续收费调用受余额检查约束，不丢失真实已消费费用。
 管理员增加余额或下一次 API 准入时，先以原账单来源清偿已知的整美分待扣款。
@@ -121,8 +123,18 @@ API 用量独立保存在 `api_usage_records`，不消耗 OAuth 订阅的 5 小�
 请求恢复为中断，缺失的用量保持未知，不能按零费用补出成功记录。
 结算通过请求 ID 幂等，修改价格或倍率不会重算历史。
 
-管理员 **API 密钥 / API 用量** 查看普通用户的 Key、真实请求、费用与当前
-并发。用户 **API 密钥 / API 用量** 只读取本人记录；查询参数无法扩大所有权。
+用量列表返回 `billing_calculation`，只包含本次结算使用的用量、单价、倍率和金额；
+原始价格目录快照不向浏览器发送。管理端另有 `cost_calculation`，按同一请求的
+模型计费快照与实际用量计算，不含 API 组或模型倍率；按次搜索分别快照基础操作价和
+API 组售价。缺少历史价格或用量时不补造公式。用户 API 不返回成本字段。
+
+请求失败数字状态读取上游错误对象或事件中的 `status_code` / `status`，接受整数与
+整数字符串；普通上游拒绝保留其实际响应状态。成功连接的 200/101 不作为失败码，
+不从 `error.code`、错误类型或原因文字推断数字。错误原因仍单独保存和展示。
+
+**API 密钥** 查看 Key 和当前并发，所有请求统一在管理员 **用量记录**、用户
+**使用信息** 查看真实用量、费用与失败状态。用户查询始终绑定本人所有权。
+钱包流水通过 `usage_record_id` 关联同一条用量记录；没有独立 API 用量接口。
 用户 DTO 显式排除供应身份、路由标签、秘密、指纹与供应商额度。
 **模型广场** 默认展示管理员模型计费目录，横向切换 API 组后展示模型有效倍率、
 倍率后的价格、服务档位、输入范围、图像分辨率以及组和模型的两层限额。

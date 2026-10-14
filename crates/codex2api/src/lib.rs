@@ -1,4 +1,5 @@
 //! One process, independent OAuth, metered API and browser listeners.
+mod request_debug;
 use anyhow::Result;
 use axum::Router;
 use codex2api_accounts::SupplierAccountStore;
@@ -70,8 +71,9 @@ pub fn routers_with_metered_api_origin(
         api_concurrency: admin.api_concurrency.clone(),
     };
     Ok(ApplicationRouters {
-        api: codex2api_api::router(api),
-        metered_api: codex2api_gateway::router(gateway),
+        api: codex2api_api::router(api).layer(axum::middleware::from_fn(request_debug::trace)),
+        metered_api: codex2api_gateway::router(gateway)
+            .layer(axum::middleware::from_fn(request_debug::trace)),
         admin: codex2api_admin::router(admin.clone()).merge(codex2api_web::admin_router()),
         user: codex2api_user::router(user).merge(codex2api_web::user_router()),
         quota_monitor: admin,

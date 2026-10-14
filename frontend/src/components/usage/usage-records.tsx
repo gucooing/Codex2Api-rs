@@ -325,6 +325,22 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     </SelectContent>
                   </Select>
                 </Field>
+                <Field className="w-40">
+                  <FieldLabel htmlFor={fieldId + "-source"}>来源</FieldLabel>
+                  <Select
+                    value={filters.source || "all"}
+                    onValueChange={(next) => update("source", next === "all" ? "" : next)}
+                  >
+                    <SelectTrigger id={fieldId + "-source"} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectItem value="all">全部来源</SelectItem>
+                      <SelectItem value="api">Api</SelectItem>
+                      <SelectItem value="subscription">订阅</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
                 <div className="flex flex-wrap items-center gap-2 self-end">
                   <Button type="submit">
                     <Search />

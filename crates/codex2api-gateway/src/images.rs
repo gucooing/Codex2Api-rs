@@ -30,22 +30,26 @@ async fn handle(
     request: Request,
     edit: bool,
 ) -> Result<Response> {
-    let mut headers = request.headers().clone();
-    let body = decode(request, edit).await?;
-    let prepared = match credential.principal.group.provider_id.as_str() {
+    let headers = request.headers().clone();
+    let mut body = decode(request, edit).await?;
+    let metadata = body
+        .as_object_mut()
+        .and_then(|body| body.remove("metadata"));
+    if metadata.as_ref().is_some_and(|value| !value.is_object()) {
+        return Err(GatewayError::bad_request("metadata must be an object"));
+    }
+    crate::request::strip_client_fields(&mut body);
+    if let Some(body) = body.as_object_mut() {
+        body.remove("client_metadata");
+    }
+    let mut prepared = match credential.principal.group.provider_id.as_str() {
         codex2api_core::CHATGPT => {
-            headers.insert(
-                "x-codex-image-turn-id",
-                uuid::Uuid::new_v4()
-                    .to_string()
-                    .parse()
-                    .expect("UUID header"),
-            );
-            crate::providers::chatgpt::images::prepare(body, edit)?
+            crate::providers::chatgpt::images::prepare(body, edit, &headers)?
         }
-        codex2api_core::GROK => crate::providers::grok::images::prepare(body, edit)?,
+        codex2api_core::GROK => crate::providers::grok::images::prepare(body, edit, &headers)?,
         _ => return Err(GatewayError::bad_request("Unsupported image provider")),
     };
+    prepared.metadata = metadata;
     crate::execute_prepared(
         state,
         credential.principal,
@@ -216,7 +220,7 @@ pub(crate) fn choice(body: &Value, name: &str, choices: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn references(body: &mut Value, edit: bool, maximum: usize) -> Result<Vec<String>> {
+pub(crate) fn references(body: &mut Value, edit: bool, maximum: usize) -> Result<Vec<Value>> {
     let object = body.as_object_mut().expect("validated image object");
     let images = object.remove("images");
     let image = object.remove("image");
@@ -246,6 +250,20 @@ pub(crate) fn references(body: &mut Value, edit: bool, maximum: usize) -> Result
     }
     refs.into_iter()
         .map(|value| {
+            if let Some(file_id) = value.get("file_id") {
+                let file_id = file_id
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        GatewayError::bad_request("file_id must be a nonempty string")
+                    })?;
+                if value.get("image_url").is_some() || value.get("url").is_some() {
+                    return Err(GatewayError::bad_request(
+                        "Use file_id or image_url for each image",
+                    ));
+                }
+                return Ok(json!({"file_id":file_id}));
+            }
             let image = value
                 .as_str()
                 .or_else(|| value["image_url"].as_str())
@@ -283,16 +301,17 @@ pub(crate) fn references(body: &mut Value, edit: bool, maximum: usize) -> Result
                     ));
                 }
             }
-            Ok(image.to_owned())
+            Ok(json!({"image_url":image}))
         })
         .collect()
 }
 
-pub(crate) fn prepared(mut body: Value, edit: bool) -> PreparedRequest {
+pub(crate) fn prepared(mut body: Value, edit: bool, headers: http::HeaderMap) -> PreparedRequest {
     body.as_object_mut()
         .expect("validated image object")
         .retain(|key, value| !value.is_null() && key != "stream" && key != "deferred");
     PreparedRequest {
+        headers,
         body,
         endpoint: if edit {
             "/v1/images/edits"
@@ -307,6 +326,8 @@ pub(crate) fn prepared(mut body: Value, edit: bool) -> PreparedRequest {
         output: OutputMode::Images,
         stream: false,
         include_usage: false,
+        metadata: None,
+        legacy_functions: false,
     }
 }
 
@@ -405,7 +426,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(body["n"], 2);
-        let chatgpt = crate::providers::chatgpt::images::prepare(body.clone(), true).unwrap();
+        let chatgpt =
+            crate::providers::chatgpt::images::prepare(body.clone(), true, &http::HeaderMap::new())
+                .unwrap();
         assert_eq!(chatgpt.upstream_path, "images/edits");
         assert!(
             chatgpt.body["images"][0]["image_url"]
@@ -414,7 +437,8 @@ mod tests {
                 .starts_with("data:image/png;base64,")
         );
         assert!(chatgpt.body.get("stream").is_none());
-        let grok = crate::providers::grok::images::prepare(body, true).unwrap();
+        let grok =
+            crate::providers::grok::images::prepare(body, true, &http::HeaderMap::new()).unwrap();
         assert_eq!(grok.body["image"]["type"], "image_url");
         assert_eq!(
             grok.body["image"]["url"],
@@ -439,7 +463,7 @@ mod tests {
         let mut body = json!({"images":null,"image":"https://example.test/input.png"});
         assert_eq!(
             references(&mut body, true, 5).unwrap(),
-            vec!["https://example.test/input.png"]
+            vec![json!({"image_url":"https://example.test/input.png"})]
         );
     }
 

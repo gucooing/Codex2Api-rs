@@ -7,10 +7,10 @@
 mod account_scope;
 pub use account_scope::AccountScope;
 mod api_access;
-mod api_billing;
+mod api_admission;
 mod api_groups;
+mod usage_wallet;
 pub use api_access::{ApiKeyView, ApiPrincipal, CreatedApiKey};
-pub use api_billing::{ApiRequestStart, ApiSettlement};
 pub use api_groups::{
     ApiCatalogModel, ApiGroup, ApiImagePrice, ApiListQuery, ApiModelRule, ApiPublicGroup,
     ApiTokenPrice,
@@ -112,7 +112,9 @@ mod virtual_client_state;
 mod virtual_management;
 pub use family_notices::{FamilyGraduationNotice, FamilyNoticeRecipient};
 
-pub use billing::{ModelPrice, PriceRequirement, decimal_units, format_units, price_tier};
+pub use billing::{
+    ModelPrice, PriceRequirement, UsageCalculation, decimal_units, format_units, price_tier,
+};
 pub use client_fields::{
     ClientField, client_fields, prepare_client_config, statsig_hash, validate_client_fields,
 };
@@ -138,7 +140,7 @@ pub use types::{
 };
 pub use usage::{
     AccountDailyUsage, AccountUsageSummary, SupplierCycleUsage, USAGE_PAGE_SIZE, UsageFilter,
-    UsagePage, UsageRecord, VirtualDailyModelTokens, table_page_size,
+    UsagePage, UsageRecord, UsageSource, VirtualDailyModelTokens, table_page_size,
 };
 pub use virtual_client_state::VirtualClientState;
 pub use virtual_management::{VirtualConfigSpec, validate_virtual_config, virtual_config_specs};

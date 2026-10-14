@@ -636,7 +636,7 @@ impl Storage {
             return Err(checkout_error(code, message));
         }
         let plan = plan.ok_or_else(|| checkout_error("plan_not_for_sale", "套餐不存在"))?;
-        let balance:i64=sqlx::query_scalar("UPDATE users SET wallet_cents=wallet_cents-?,revision=revision+1 WHERE id=? AND wallet_cents-?>=COALESCE((SELECT pending_nano_usd/10000000+(pending_nano_usd%10000000!=0) FROM api_wallet_state WHERE user_id=users.id),0) RETURNING wallet_cents")
+        let balance:i64=sqlx::query_scalar("UPDATE users SET wallet_cents=wallet_cents-?,revision=revision+1 WHERE id=? AND wallet_cents-?>=COALESCE((SELECT pending_nano_usd/10000000+(pending_nano_usd%10000000!=0) FROM usage_wallet_state WHERE user_id=users.id),0) RETURNING wallet_cents")
             .bind(order.amount_cents).bind(owner).bind(order.amount_cents).fetch_optional(&mut *tx).await?.ok_or_else(||checkout_error("insufficient_balance", "钱包余额不足，订单保留待支付状态"))?;
         let (start, end) = if order.kind == "purchase" {
             (

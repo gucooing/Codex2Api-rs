@@ -135,17 +135,19 @@ async fn main() -> anyhow::Result<()> {
         status: "in_progress".into(),
         ..Default::default()
     };
-    sqlx::query("DELETE FROM usage_records WHERE id=?")
+    if !sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM usage_records WHERE id=?)")
         .bind(&cycle_record.id)
-        .execute(storage.pool())
-        .await?;
-    storage.insert_usage(&cycle_record).await?;
-    cycle_record.status = "completed".into();
-    cycle_record.input_tokens = Some(3_000_000);
-    cycle_record.cached_tokens = Some(1_000_000);
-    cycle_record.output_tokens = Some(800_000);
-    cycle_record.reasoning_tokens = Some(200_000);
-    storage.finish_usage(&cycle_record).await?;
+        .fetch_one(storage.pool())
+        .await?
+    {
+        storage.insert_usage(&cycle_record).await?;
+        cycle_record.status = "completed".into();
+        cycle_record.input_tokens = Some(3_000_000);
+        cycle_record.cached_tokens = Some(1_000_000);
+        cycle_record.output_tokens = Some(800_000);
+        cycle_record.reasoning_tokens = Some(200_000);
+        storage.finish_usage(&cycle_record).await?;
+    }
     for (key, value) in [
         (
             "cloud_preferences",
@@ -201,10 +203,13 @@ async fn main() -> anyhow::Result<()> {
             status: "in_progress".into(),
             ..Default::default()
         };
-        sqlx::query("DELETE FROM usage_records WHERE id=?")
+        if sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM usage_records WHERE id=?)")
             .bind(id)
-            .execute(storage.pool())
-            .await?;
+            .fetch_one(storage.pool())
+            .await?
+        {
+            continue;
+        }
         storage.insert_usage(&record).await?;
         record.status = status.into();
         record.http_status = Some(http_status);
@@ -242,10 +247,13 @@ async fn main() -> anyhow::Result<()> {
         let id = format!("pagination-fixture-{index:03}");
         sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind,enabled) VALUES('chatgpt',?,'text',0)")
             .bind(&id).execute(storage.pool()).await?;
-        sqlx::query("DELETE FROM usage_records WHERE id=?")
+        if sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM usage_records WHERE id=?)")
             .bind(&id)
-            .execute(storage.pool())
-            .await?;
+            .fetch_one(storage.pool())
+            .await?
+        {
+            continue;
+        }
         let mut record = codex2api_storage::UsageRecord {
             id: id.clone(),
             subject_id: account.id.clone(),

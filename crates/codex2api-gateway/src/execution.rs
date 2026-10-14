@@ -40,6 +40,27 @@ async fn run(
     headers: HeaderMap,
     prepared: PreparedRequest,
 ) -> Result<Response> {
+    let (mut log, permit) = admit(&state, &principal, &prepared, "http").await?;
+    let result = forward(&state, &principal, &token, &headers, &prepared, &mut log).await;
+    match result {
+        Ok((response, context, route)) => {
+            response_body(state, log, permit, context, route, response, prepared).await
+        }
+        Err(error) => {
+            log.fail(&error);
+            log.settle().await?;
+            Err(error)
+        }
+    }
+}
+
+/// HTTP requests and each WebSocket generation share one admission and ledger.
+pub(crate) async fn admit(
+    state: &GatewayState,
+    principal: &ApiPrincipal,
+    prepared: &PreparedRequest,
+    transport: &str,
+) -> Result<(ApiLog, ApiPermit)> {
     let metadata = codex2api_upstream::request_metadata_value(&prepared.body);
     let model = metadata
         .model
@@ -62,10 +83,11 @@ async fn run(
     let record = UsageRecord {
         id: uuid::Uuid::new_v4().to_string(),
         provider_id: principal.group.provider_id.clone(),
-        subject_id: principal.user_id.clone(),
+        subject_id: principal.key_id.clone(),
         subject_kind: "api_key".into(),
         endpoint: prepared.endpoint.into(),
-        transport: "http".into(),
+        transport: transport.into(),
+        stream: Some(prepared.stream),
         model: metadata.model,
         reasoning_effort: metadata.reasoning_effort,
         service_tier: metadata.service_tier,
@@ -86,7 +108,7 @@ async fn run(
         status: "in_progress".into(),
         ..Default::default()
     };
-    state.storage.start_api_request(&principal, &record).await?;
+    state.storage.admit_api_request(principal, &record).await?;
     let mut log = ApiLog::new(state.storage.clone(), record, started);
     let permit = match state.runtime.acquire(
         &principal.user_id,
@@ -103,20 +125,10 @@ async fn run(
             return Err(error);
         }
     };
-    let result = forward(&state, &principal, &token, &headers, &prepared, &mut log).await;
-    match result {
-        Ok((response, context, route)) => {
-            response_body(state, log, permit, context, route, response, prepared).await
-        }
-        Err(error) => {
-            log.fail(&error);
-            log.settle().await?;
-            Err(error)
-        }
-    }
+    Ok((log, permit))
 }
 
-async fn validate(
+pub(crate) async fn validate(
     state: &GatewayState,
     principal: &ApiPrincipal,
     token: &str,
@@ -136,6 +148,84 @@ async fn validate(
     Ok(())
 }
 
+pub(crate) fn route(principal: &ApiPrincipal) -> SupplierRoute {
+    SupplierRoute {
+        owner_id: format!(
+            "api:{}:{}:{}",
+            principal.user_id, principal.key_id, principal.group.id
+        ),
+        provider_id: principal.group.provider_id.clone(),
+        tag_ids: principal.group.tag_ids.clone(),
+    }
+}
+
+/// Turn state is an opaque supplier capability. Only replay a state that this
+/// caller received from the selected supplier; never derive new conversation IDs.
+pub(crate) async fn owned_headers(
+    state: &GatewayState,
+    route: &SupplierRoute,
+    context: &SupplierContext,
+    inbound: &HeaderMap,
+) -> codex2api_upstream::Result<HeaderMap> {
+    let mut headers = inbound.clone();
+    if let Some(turn) = headers.get("x-codex-turn-state") {
+        let key = format!(
+            "api_turn_state:{}",
+            codex2api_scheduler::hash(
+                &serde_json::json!([
+                    route.owner_id,
+                    route.provider_id,
+                    turn.to_str().unwrap_or("")
+                ])
+                .to_string()
+            )
+        );
+        if state.storage.routing_affinity(&key).await?.as_deref()
+            != Some(context.account.id.as_str())
+        {
+            headers.remove("x-codex-turn-state");
+        }
+    }
+    Ok(headers)
+}
+
+pub(crate) async fn remember_affinity(
+    state: &GatewayState,
+    route: &SupplierRoute,
+    account: &str,
+    response_id: Option<&str>,
+    headers: Option<&HeaderMap>,
+) -> Result<()> {
+    let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
+    if let Some(id) = response_id.filter(|id| !id.is_empty() && id.len() <= 256) {
+        state
+            .storage
+            .save_routing_affinity(
+                &codex2api_scheduler::previous_key(&route.owner_id, &route.provider_id, id),
+                account,
+                ttl,
+            )
+            .await?;
+    }
+    if let Some(turn) = headers
+        .and_then(|h| h.get("x-codex-turn-state"))
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty() && v.len() <= 16384)
+    {
+        let key = format!(
+            "api_turn_state:{}",
+            codex2api_scheduler::hash(
+                &serde_json::json!([route.owner_id, route.provider_id, turn]).to_string()
+            )
+        );
+        state
+            .storage
+            .save_routing_affinity(&key, account, ttl)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn forward(
     state: &GatewayState,
     principal: &ApiPrincipal,
@@ -144,22 +234,11 @@ async fn forward(
     prepared: &PreparedRequest,
     log: &mut ApiLog,
 ) -> Result<(reqwest::Response, SupplierContext, SupplierRoute)> {
-    let route = SupplierRoute {
-        owner_id: format!("api:{}:{}", principal.user_id, principal.group.id),
-        provider_id: principal.group.provider_id.clone(),
-        tag_ids: principal.group.tag_ids.clone(),
-    };
+    let route = route(principal);
     let schedule = match route.provider_id.as_str() {
         codex2api_core::CHATGPT => providers::chatgpt::scheduling(headers, &prepared.body),
         codex2api_core::GROK => providers::grok::scheduling(headers, &prepared.body),
         _ => return Err(GatewayError::bad_request("Unsupported API platform")),
-    };
-    let outbound = match route.provider_id.as_str() {
-        codex2api_core::CHATGPT => {
-            providers::chatgpt::outbound_headers(headers, prepared.output == OutputMode::Images)
-        }
-        codex2api_core::GROK => providers::grok::outbound_headers(),
-        _ => HeaderMap::new(),
     };
     let mut excluded = vec![];
     let mut refreshed = std::collections::HashSet::new();
@@ -171,7 +250,11 @@ async fn forward(
             })
             .await?;
         log.record.account_id = context.account.id.clone();
-        log.record.account_name = context.account.display_name.clone().unwrap_or_default();
+        log.record.account_name = context
+            .account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| context.account.email.clone().unwrap_or_default());
         // A refresh retries this supplier once without releasing its reserved slot.
         loop {
             let mut revision = state
@@ -180,7 +263,8 @@ async fn forward(
                 .await?;
             log.record.http_status = None;
             let result = async {
-                let response = send(state, &context, &outbound, prepared).await?;
+                let inbound = owned_headers(state, &route, &context, &prepared.headers).await?;
+                let response = send(state, &context, &inbound, prepared).await?;
                 revision = response
                     .extensions()
                     .get::<codex2api_upstream::SupplierAuthRevision>()
@@ -195,7 +279,10 @@ async fn forward(
             }
             .await;
             match result {
-                Ok(response) => return Ok((response, context, route)),
+                Ok(response) => {
+                    log.auth_revision = revision;
+                    return Ok((response, context, route));
+                }
                 Err(error) => {
                     if let UpstreamError::Status {
                         status,
@@ -227,6 +314,7 @@ async fn forward(
                                 }
                                 // Output or usage proves this attempt ran. Never duplicate it on
                                 // another supplier or refresh and execute the request again.
+                                log.fail_upstream(&error);
                                 return Err(error.into());
                             }
                         }
@@ -235,6 +323,7 @@ async fn forward(
                     let Some(mut failure) = error
                         .supplier_failure_for(&route.provider_id, chrono::Utc::now().timestamp())
                     else {
+                        log.fail_upstream(&error);
                         return Err(error.into());
                     };
                     if failure == SupplierFailure::Authentication
@@ -280,6 +369,9 @@ async fn send(
         codex2api_core::CHATGPT => {
             let endpoint = match prepared.upstream_path {
                 "responses" => codex2api_upstream::Endpoint::Responses,
+                "responses/compact" => codex2api_upstream::Endpoint::Compact,
+                "responses/input_tokens" => codex2api_upstream::Endpoint::InputTokens,
+                "alpha/search" => codex2api_upstream::Endpoint::Search,
                 "images/generations" => codex2api_upstream::Endpoint::ImageGeneration,
                 "images/edits" => codex2api_upstream::Endpoint::ImageEdit,
                 _ => {
@@ -288,15 +380,11 @@ async fn send(
                     ));
                 }
             };
-            let mut inbound = headers.clone();
-            if !context.reused_affinity {
-                inbound.remove("x-codex-turn-state");
-            }
             state
                 .upstream
                 .get(&context.account.id)
                 .await?
-                .forward_decoded_endpoint(endpoint, None, prepared.body.clone(), inbound)
+                .forward_decoded_endpoint(endpoint, None, prepared.body.clone(), headers.clone())
                 .await
         }
         codex2api_core::GROK => {
@@ -320,13 +408,14 @@ async fn send(
     }
 }
 
-fn public_headers(original: &HeaderMap, stream: bool) -> HeaderMap {
+pub(crate) fn public_headers(original: &HeaderMap, stream: bool) -> HeaderMap {
     let mut headers = HeaderMap::new();
     for name in [
         "x-request-id",
         "x-oai-request-id",
         "retry-after",
         "retry-after-ms",
+        "x-codex-turn-state",
     ] {
         if let Some(value) = original.get(name) {
             headers.insert(name, value.clone());
@@ -358,18 +447,24 @@ async fn response_body(
     let status = response.status();
     let headers = public_headers(response.headers(), prepared.stream);
     log.headers(status, response.headers());
+    remember_affinity(
+        &state,
+        &route,
+        &log.record.account_id,
+        None,
+        Some(response.headers()),
+    )
+    .await?;
     log.auth_revision = response
         .extensions()
         .get::<codex2api_upstream::SupplierAuthRevision>()
-        .map(|revision| revision.0);
-    let is_sse = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|value| value.starts_with("text/event-stream"));
+        .map(|revision| revision.0)
+        .or(log.auth_revision);
+    let is_sse = codex2api_upstream::ResponseFormat::from_headers(response.headers())
+        == codex2api_upstream::ResponseFormat::EventStream;
     if !is_sse {
         let result = read_json(response).await;
-        let mut value = match result {
+        let value = match result {
             Ok(value) => value,
             Err(error) => {
                 log.fail(&error);
@@ -377,43 +472,68 @@ async fn response_body(
                 return Err(error);
             }
         };
+        log.measure(&value, prepared.output);
+        if matches!(
+            ResponseOutcome::from_value(&value, None),
+            Some(ResponseOutcome::Failed(_) | ResponseOutcome::Cancelled)
+        ) {
+            log.observe(&value, prepared.output);
+            observe_terminal_failure(&state, &log, &value).await?;
+            log.settle().await?;
+            let mut error = GatewayError::upstream_value(&value);
+            error.headers.extend(headers);
+            return Err(error);
+        }
+        // Validate the requested transport before accepting a success-shaped body.
+        if prepared.stream {
+            let error = GatewayError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_protocol_error",
+                "The upstream service did not return the requested stream.",
+            );
+            log.fail(&error);
+            log.settle().await?;
+            return Err(error);
+        }
         log.observe(&value, prepared.output);
         observe_terminal_failure(&state, &log, &value).await?;
         if log.lifecycle.outcome().is_none() {
             log.fail(&GatewayError::upstream_incomplete());
         }
-        log.settle().await?;
         let success = log.successful();
         if !success {
-            return Err(GatewayError::upstream_value(&value));
+            log.settle().await?;
+            let mut error = GatewayError::upstream_value(&value);
+            error.headers.extend(headers);
+            return Err(error);
         }
         if prepared.output == OutputMode::Responses {
-            if let Some(id) = value["id"]
-                .as_str()
-                .filter(|id| !id.is_empty() && id.len() <= 256)
-            {
-                let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
-                state
-                    .storage
-                    .save_routing_affinity(
-                        &codex2api_scheduler::previous_key(&route.owner_id, &route.provider_id, id),
-                        &log.record.account_id,
-                        ttl,
-                    )
-                    .await?;
+            remember_affinity(
+                &state,
+                &route,
+                &log.record.account_id,
+                value["id"].as_str(),
+                None,
+            )
+            .await?;
+        }
+        let mut value = if prepared.output == OutputMode::ChatFromResponses {
+            match providers::chatgpt::chat_response(&value, prepared.legacy_functions) {
+                Ok(value) => value,
+                Err(error) => {
+                    log.fail(&error);
+                    log.settle().await?;
+                    return Err(error);
+                }
             }
-        }
-        if prepared.stream {
-            return Err(GatewayError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_protocol_error",
-                "The upstream service did not return the requested stream.",
-            ));
-        }
-        if prepared.output == OutputMode::ChatFromResponses {
-            value = providers::chatgpt::chat_response(&value)?;
-        }
+        } else {
+            value
+        };
         codex2api_upstream::public_output::metadata(&mut value);
+        if let Some(metadata) = &prepared.metadata {
+            value["metadata"] = metadata.clone();
+        }
+        log.settle().await?;
         let mut result = Json(value).into_response();
         *result.headers_mut() = headers;
         drop(context);
@@ -434,7 +554,7 @@ async fn response_body(
                 }
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_secs(1),
-                    sender.send(Ok(sse(None, &error.body))),
+                    sender.send(Ok(sse(Some("error"), &error_event(&error)))),
                 )
                 .await;
             }
@@ -462,6 +582,28 @@ async fn response_body(
 }
 
 async fn read_json(response: reqwest::Response) -> Result<Value> {
+    let media_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .unwrap_or("missing");
+    let media_type = match media_type {
+        "application/json" | "text/html" | "text/plain" | "missing" => media_type,
+        _ => "other",
+    }
+    .to_owned();
+    let encoding = response
+        .headers()
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("identity");
+    let encoding = match encoding {
+        "identity" | "gzip" | "br" | "deflate" | "zstd" => encoding,
+        _ => "other",
+    }
+    .to_owned();
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3600);
@@ -483,11 +625,12 @@ async fn read_json(response: reqwest::Response) -> Result<Value> {
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| {
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    serde_json::from_slice(bytes).map_err(|error| {
         GatewayError::new(
             StatusCode::BAD_GATEWAY,
             "upstream_protocol_error",
-            "The upstream response was not valid JSON.",
+            format!("The upstream response was not valid JSON (content-type: {media_type}; encoding: {encoding}; bytes: {}; line: {}; column: {}).", bytes.len(), error.line(), error.column()),
         )
     })
 }
@@ -498,6 +641,83 @@ fn sse(event: Option<&str>, value: &Value) -> Bytes {
         None => format!("data: {value}\n\n"),
     })
 }
+
+pub(crate) fn error_event(error: &GatewayError) -> Value {
+    let mut value = error.body.clone();
+    value["type"] = "error".into();
+    value["status"] = error.status.as_u16().into();
+    for name in ["retry-after", "retry-after-ms"] {
+        if let Some(retry) = error.headers.get(name).and_then(|v| v.to_str().ok()) {
+            value["headers"][name] = retry.into();
+        }
+    }
+    value
+}
+
+/// Hold complete output items only when assembling a synchronous response, or to
+/// complete a terminal envelope that omits its already-streamed output.
+#[derive(Default)]
+pub(crate) struct ResponsesOutput {
+    response: serde_json::Map<String, Value>,
+    items: std::collections::BTreeMap<u64, (Value, usize)>,
+    bytes: usize,
+}
+impl ResponsesOutput {
+    pub(crate) fn observe(&mut self, value: &mut Value) -> Result<()> {
+        if value["type"] == "response.output_item.done"
+            && let (Some(index), Some(item)) = (value["output_index"].as_u64(), value.get("item"))
+        {
+            let bytes = serde_json::to_vec(item)
+                .map_err(|_| GatewayError::internal())?
+                .len();
+            self.bytes = self
+                .bytes
+                .saturating_sub(self.items.get(&index).map_or(0, |(_, n)| *n))
+                .saturating_add(bytes);
+            if self.bytes > codex2api_upstream::MAX_REQUEST_BYTES {
+                return Err(GatewayError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_response_too_large",
+                    "The upstream response exceeded the size limit.",
+                ));
+            }
+            self.items.insert(index, (item.clone(), bytes));
+        }
+        let terminal = ResponseOutcome::from_value(value, None).is_some();
+        if let Some(response) = value.get_mut("response").and_then(Value::as_object_mut) {
+            if terminal {
+                for (key, item) in std::mem::take(&mut self.response) {
+                    response.entry(key).or_insert(item);
+                }
+                if !self.items.is_empty() {
+                    let mut items: std::collections::BTreeMap<u64, Value> = response
+                        .remove("output")
+                        .and_then(|value| value.as_array().cloned())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| (index as u64, value))
+                        .collect();
+                    items.extend(
+                        std::mem::take(&mut self.items)
+                            .into_iter()
+                            .map(|(index, (value, _))| (index, value)),
+                    );
+                    response.insert("output".into(), Value::Array(items.into_values().collect()));
+                }
+            } else {
+                self.response.extend(
+                    response
+                        .iter()
+                        .filter(|(key, _)| !matches!(key.as_str(), "output" | "status"))
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 struct Downstream<'a> {
     sender: Option<&'a tokio::sync::mpsc::Sender<std::io::Result<Bytes>>>,
 }
@@ -526,9 +746,12 @@ async fn consume_stream(
 ) -> Result<Value> {
     let events = codex2api_upstream::buffered_sse_lines(response.bytes_stream()).eventsource();
     futures::pin_mut!(events);
-    let mut chat = providers::chatgpt::ChatStream::new(prepared.include_usage);
+    let mut chat =
+        providers::chatgpt::ChatStream::new(prepared.include_usage, prepared.legacy_functions);
+    let mut output = ResponsesOutput::default();
     let mut final_value = None;
-    let mut held_chat = vec![];
+    let mut held_chat = Vec::new();
+    let mut held_bytes = 0usize;
     let mut seen_response = std::collections::HashSet::new();
     let mut downstream = Downstream { sender };
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3600);
@@ -542,16 +765,18 @@ async fn consume_stream(
         let Some(event) = next else { break };
         let event = event.map_err(|_| GatewayError::upstream_incomplete())?;
         if event.data.trim() == "[DONE]" {
+            if sender.is_none() && prepared.output == OutputMode::ChatCompletions {
+                return Err(GatewayError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_protocol_error",
+                    "The upstream service returned a stream for a synchronous Chat request.",
+                ));
+            }
             log.done(prepared.output);
             if log.lifecycle.outcome().is_none() {
                 return Err(GatewayError::upstream_incomplete());
             }
             log.settle().await?;
-            if !log.successful() {
-                return Err(GatewayError::upstream_value(
-                    final_value.as_ref().unwrap_or(&Value::Null),
-                ));
-            }
             for chunk in held_chat.drain(..) {
                 downstream.emit(chunk).await;
             }
@@ -562,78 +787,108 @@ async fn consume_stream(
             }
             break;
         }
-        let mut value: Value =
-            serde_json::from_str(&event.data).map_err(|_| GatewayError::upstream_incomplete())?;
-        if value["type"]
-            .as_str()
-            .is_some_and(|kind| kind.contains("rate_limit") || kind.contains("billing"))
-        {
+        if event.data.len() > codex2api_upstream::MAX_REQUEST_BYTES {
+            return Err(GatewayError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_response_too_large",
+                "The upstream event exceeded the size limit.",
+            ));
+        }
+        let mut value: Value = serde_json::from_str(&event.data).map_err(|_| {
+            GatewayError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_protocol_error",
+                "The upstream SSE event was not valid JSON.",
+            )
+        })?;
+        if !value.is_object() {
+            return Err(GatewayError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_protocol_error",
+                "The upstream SSE event was not an object.",
+            ));
+        }
+        if value.get("type").is_none() && !event.event.is_empty() && event.event != "message" {
+            value["type"] = event.event.into();
+        }
+        if matches!(
+            value["type"].as_str(),
+            Some("codex.rate_limits" | "rate_limits.updated")
+        ) {
             continue;
         }
-        let terminal = log.observe(&value, prepared.output);
+        if matches!(
+            prepared.output,
+            OutputMode::Responses | OutputMode::ChatFromResponses
+        ) {
+            output.observe(&mut value)?;
+        }
         if let Some(id) = value
             .pointer("/response/id")
             .and_then(Value::as_str)
-            .filter(|id| id.len() <= 256)
+            .filter(|id| !id.is_empty() && id.len() <= 256)
+            && seen_response.insert(id.to_owned())
         {
-            if seen_response.insert(id.to_owned()) {
-                let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
-                state
-                    .storage
-                    .save_routing_affinity(
-                        &codex2api_scheduler::previous_key(&route.owner_id, &route.provider_id, id),
-                        &log.record.account_id,
-                        ttl,
-                    )
-                    .await?;
-            }
+            remember_affinity(state, route, &log.record.account_id, Some(id), None).await?;
         }
+        let terminal = log.observe(&value, prepared.output);
         if terminal {
-            final_value = Some(value.get("response").unwrap_or(&value).clone());
-            observe_terminal_failure(state, log, &value).await?;
-            log.settle().await?;
-        }
-        codex2api_upstream::public_output::metadata(&mut value);
-        match prepared.output {
-            OutputMode::ChatFromResponses => {
-                for chunk in chat.event(&value)? {
-                    downstream.emit(sse(None, &chunk)).await;
-                }
-                if terminal {
-                    downstream
-                        .emit(Bytes::from_static(b"data: [DONE]\n\n"))
-                        .await;
-                    break;
-                }
+            if sender.is_none() {
+                final_value = Some(value.get("response").unwrap_or(&value).clone());
             }
+            observe_terminal_failure(state, log, &value).await?;
+        }
+        // Prepare every terminal payload before committing success. Conversion
+        // failures remain failed requests; persistence always precedes delivery.
+        let failure = matches!(
+            log.lifecycle.outcome(),
+            Some(ResponseOutcome::Failed(_) | ResponseOutcome::Cancelled)
+        );
+        codex2api_upstream::public_output::metadata(&mut value);
+        if let Some(metadata) = &prepared.metadata {
+            if let Some(response) = value.get_mut("response").filter(|v| v.is_object()) {
+                response["metadata"] = metadata.clone();
+            }
+        }
+        let chunks = match prepared.output {
+            OutputMode::ChatFromResponses if failure => {
+                vec![sse(
+                    None,
+                    &error_event(&GatewayError::upstream_value(&value)),
+                )]
+            }
+            OutputMode::ChatFromResponses if downstream.sender.is_some() => chat
+                .event(&value)?
+                .iter()
+                .map(|value| sse(None, value))
+                .collect(),
+            OutputMode::ChatFromResponses => Vec::new(),
             OutputMode::ChatCompletions => {
-                if terminal {
-                    return Err(GatewayError::upstream_value(&value));
-                }
-                let trailer = value["choices"].as_array().is_some_and(Vec::is_empty)
-                    && value["usage"].is_object();
-                if !prepared.include_usage {
-                    if trailer {
-                        continue;
-                    }
-                    if let Some(object) = value.as_object_mut() {
-                        object.remove("usage");
-                    }
-                }
-                let chunk = sse(None, &value);
-                if log.chat_finished {
-                    if held_chat
-                        .iter()
-                        .map(Bytes::len)
-                        .sum::<usize>()
-                        .saturating_add(chunk.len())
-                        > codex2api_upstream::MAX_REQUEST_BYTES
-                    {
-                        return Err(GatewayError::upstream_incomplete());
-                    }
-                    held_chat.push(chunk);
+                if failure {
+                    vec![sse(
+                        None,
+                        &error_event(&GatewayError::upstream_value(&value)),
+                    )]
                 } else {
-                    downstream.emit(chunk).await;
+                    let trailer = value["choices"].as_array().is_some_and(Vec::is_empty)
+                        && value["usage"].is_object();
+                    if !prepared.include_usage {
+                        if trailer {
+                            continue;
+                        }
+                        value.as_object_mut().unwrap().remove("usage");
+                    }
+                    let chunk = sse(None, &value);
+                    if log.chat_finished {
+                        held_bytes = held_bytes.saturating_add(chunk.len());
+                        if held_bytes > codex2api_upstream::MAX_REQUEST_BYTES {
+                            return Err(GatewayError::upstream_incomplete());
+                        }
+                        held_chat.push(chunk);
+                        Vec::new()
+                    } else {
+                        vec![chunk]
+                    }
                 }
             }
             OutputMode::Responses => {
@@ -641,44 +896,63 @@ async fn consume_stream(
                     kind.bytes()
                         .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'_')
                 });
-                downstream.emit(sse(kind, &value)).await;
-                if terminal {
-                    break;
-                }
+                vec![sse(kind, &value)]
             }
-            OutputMode::Images => {
-                return Err(GatewayError::new(
-                    StatusCode::BAD_GATEWAY,
-                    "upstream_protocol_error",
-                    "Image generation returned an unsupported stream.",
-                ));
+            OutputMode::Images
+            | OutputMode::Compact
+            | OutputMode::InputTokens
+            | OutputMode::Search => {
+                return Err(if failure {
+                    GatewayError::upstream_value(&value)
+                } else {
+                    GatewayError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_protocol_error",
+                        "The upstream operation returned a stream instead of a JSON response.",
+                    )
+                });
             }
+        };
+        if terminal {
+            // A synchronous Chat response is also validated before settlement.
+            if sender.is_none() && prepared.output == OutputMode::ChatFromResponses && !failure {
+                final_value = Some(providers::chatgpt::chat_response(
+                    final_value.as_ref().unwrap(),
+                    prepared.legacy_functions,
+                )?);
+            }
+            log.settle().await?;
+        }
+        for chunk in chunks {
+            downstream.emit(chunk).await;
+        }
+        if terminal {
+            if prepared.output == OutputMode::ChatFromResponses && !failure {
+                downstream
+                    .emit(Bytes::from_static(b"data: [DONE]\n\n"))
+                    .await;
+            }
+            break;
         }
     }
     if log.lifecycle.outcome().is_none() {
         return Err(GatewayError::upstream_incomplete());
     }
     log.settle().await?;
-    if let Some(ResponseOutcome::Failed(_) | ResponseOutcome::Cancelled) = log.lifecycle.outcome() {
-        if sender.is_none() {
-            return Err(GatewayError::upstream_value(
-                final_value.as_ref().unwrap_or(&Value::Null),
-            ));
-        }
-    }
-    let value = final_value.unwrap_or(Value::Null);
     if sender.is_some() {
         return Ok(Value::Null);
     }
-    let mut value = if prepared.output == OutputMode::ChatFromResponses {
-        providers::chatgpt::chat_response(&value)?
-    } else {
-        value
-    };
+    let value = final_value.unwrap_or(Value::Null);
+    if !log.successful() {
+        return Err(GatewayError::upstream_value(&value));
+    }
+    let mut value = value;
     codex2api_upstream::public_output::metadata(&mut value);
+    if let Some(metadata) = &prepared.metadata {
+        value["metadata"] = metadata.clone();
+    }
     Ok(value)
 }
-
 async fn observe_terminal_failure(state: &GatewayState, log: &ApiLog, value: &Value) -> Result<()> {
     if let Some(failure) = codex2api_upstream::classify_provider_failure(
         &log.record.provider_id,

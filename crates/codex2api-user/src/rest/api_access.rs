@@ -130,13 +130,3 @@ pub(crate) async fn revoke_key(
     }
     Ok(Json(json!({"ok":true})))
 }
-
-pub(crate) async fn usage(
-    State(state): State<UserState>,
-    Extension(session): Extension<UserSession>,
-    Query(query): Query<ApiListQuery>,
-) -> Result<Json<Value>> {
-    Ok(Json(
-        state.storage.api_usage(&session.user_id, &query).await?,
-    ))
-}

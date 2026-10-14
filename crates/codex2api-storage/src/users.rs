@@ -83,7 +83,7 @@ impl Storage {
         let now = Utc::now().timestamp_millis();
         let zone = i64::from(tz_offset) * 60_000;
         let start = (now - zone).div_euclid(86_400_000) * 86_400_000 + zone;
-        let (suppliers,consumers,normal,users,active,models):(i64,i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM supplier_accounts),(SELECT COUNT(*) FROM virtual_users),(SELECT COUNT(*) FROM virtual_platforms v WHERE v.enabled=1 AND (v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>?)),(SELECT COUNT(*) FROM regular_users),(SELECT COUNT(DISTINCT s.user_id) FROM regular_platforms s JOIN usage_records r ON r.subject_id=s.id AND r.subject_kind='virtual_account' WHERE r.requested_at_ms>=? AND r.requested_at_ms<?),(SELECT COUNT(*) FROM model_catalog WHERE deleted=0)")
+        let (suppliers,consumers,normal,users,active,models):(i64,i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM supplier_accounts),(SELECT COUNT(*) FROM virtual_users),(SELECT COUNT(*) FROM virtual_platforms v WHERE v.enabled=1 AND (v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>?)),(SELECT COUNT(*) FROM regular_users),(SELECT COUNT(DISTINCT r.user_id) FROM usage_records r JOIN regular_users u ON u.id=r.user_id WHERE r.requested_at_ms>=? AND r.requested_at_ms<?),(SELECT COUNT(*) FROM model_catalog WHERE deleted=0)")
             .bind(now/1000).bind(start).bind(now+1).fetch_one(self.pool()).await?;
         Ok(
             serde_json::json!({"supplier_count":suppliers,"consumer_count":consumers,"normal_consumer_count":normal,"user_count":users,"active_user_count":active,"models_count":models,"activity_from_ms":start,"activity_until_ms":now+1}),

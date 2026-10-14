@@ -18,6 +18,7 @@ export const emptyGroup = (): ApiGroup => ({
   tag_ids: [],
   allowed_models: [],
   multiplier: "1",
+  search_price_usd: null,
   concurrency_limit: 0,
   rpm_limit: 0,
   model_rules: [],
@@ -116,7 +117,13 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
   const update = <K extends keyof ApiGroup>(key: K, next: ApiGroup[K]) =>
     setValue((current) => ({ ...current, [key]: next }));
   const setProvider = (provider_id: string) => {
-    setValue((current) => ({ ...current, provider_id, tag_ids: [], allowed_models: [] }));
+    setValue((current) => ({
+      ...current,
+      provider_id,
+      tag_ids: [],
+      allowed_models: [],
+      search_price_usd: null,
+    }));
     setRules([]);
     setModelMode("all");
     setModelSearch("");
@@ -171,6 +178,17 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
       async () => {
         if (!ready || !models.ready || !tags.ready) throw new Error("请先加载 API 组资料与候选项");
         if (!value.name.trim()) throw new Error("请填写 API 组名称");
+        const searchPrice = value.search_price_usd?.trim() || null;
+        if (searchPrice !== null) {
+          const amount = /^(\d+)(?:\.(\d{1,9}))?$/.exec(searchPrice);
+          if (
+            value.provider_id !== "chatgpt" ||
+            !amount ||
+            BigInt(amount[1]) * 1_000_000_000n + BigInt((amount[2] ?? "").padEnd(9, "0")) >
+              9_223_372_036_854_775_807n
+          )
+            throw new Error("搜索单价须为有效的非负美元金额，最多九位小数");
+        }
         if (modelMode === "selected" && !value.allowed_models.length)
           throw new Error("请选择可用模型或切换为标签支持的全部模型");
         const model_rules: ApiModelRule[] = rules
@@ -194,6 +212,7 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
             name: value.name.trim(),
             allowed_models: modelMode === "all" ? [] : value.allowed_models,
             multiplier: multiplier(value.multiplier, "组倍率"),
+            search_price_usd: searchPrice,
             concurrency_limit: numericLimit(limits.concurrency_limit, "组并发"),
             rpm_limit: numericLimit(limits.rpm_limit, "组 RPM"),
             model_rules,

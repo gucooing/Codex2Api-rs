@@ -220,6 +220,10 @@ async fn bridge(
     endpoint: Endpoint,
     headers: HeaderMap,
 ) {
+    let trace = codex2api_upstream::request_debug::RequestTrace::new(
+        "websocket",
+        &format!("/v1/{}", endpoint.codex_path()),
+    );
     let mut ledger = WsLedger::new(context(&state, &oauth, &mut conn, endpoint));
     ledger.response_headers(&conn.headers);
     let ledger = tokio::sync::Mutex::new(ledger);
@@ -332,6 +336,8 @@ async fn bridge(
                         connected = false;
                         continue;
                     };
+                    if let Message::Text(value) = &message { trace.input(value.as_bytes()); }
+                    if let Message::Binary(value) = &message { trace.input(value); }
                     match message {
                         Message::Text(_) | Message::Binary(_) => {
                             state
@@ -385,6 +391,7 @@ async fn bridge(
                         }
                         _ => continue,
                     };
+                    trace.output(text.as_bytes());
                     if !state
                         .storage
                         .virtual_access_valid(&oauth.token_hash)
@@ -574,6 +581,7 @@ async fn bridge(
     .await;
     if let Err(error) = result {
         let (status, message) = super::websocket::error_message(error).await;
+        trace.output(message.as_bytes());
         close_code = if status < 500 { 1008 } else { 1011 };
         let value: Value = serde_json::from_str(&message).unwrap_or_default();
         let failure = codex2api_upstream::ResponseFailure::from_error(Some(status), &value);

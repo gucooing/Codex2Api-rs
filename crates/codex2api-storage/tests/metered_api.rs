@@ -106,6 +106,7 @@ async fn setup() -> (tempfile::TempDir, Storage, User, ApiGroup, String) {
         tag_ids: vec!["pool".into()],
         allowed_models: vec![],
         multiplier: "1.5".into(),
+        search_price_usd: None,
         concurrency_limit: 5,
         rpm_limit: 60,
         model_rules: vec![],
@@ -135,7 +136,7 @@ fn request(id: &str) -> UsageRecord {
         endpoint: "/v1/chat/completions".into(),
         provider_id: "chatgpt".into(),
         requested_at_ms: Utc::now().timestamp_millis(),
-        status: "started".into(),
+        status: "in_progress".into(),
         ..Default::default()
     }
 }
@@ -290,7 +291,7 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
     let (_dir, storage, user, group, supplier) = setup().await;
     let (_, principal) = credential(&storage, &user, &group).await;
     let mut first = request("first");
-    storage.start_api_request(&principal, &first).await.unwrap();
+    storage.admit_api_request(&principal, &first).await.unwrap();
     // Changing both policy and catalog cannot reprice a request already admitted.
     let mut changed = group.clone();
     changed.multiplier = "10".into();
@@ -314,30 +315,58 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
     first.cache_write_tokens = Some(1000);
     first.output_tokens = Some(1000);
     first.reasoning_tokens = Some(500);
-    let settlement = storage.finish_api_request(&first).await.unwrap();
+    let settlement = storage.settle(&first).await.unwrap();
     assert_eq!(settlement.cost_nano_usd, Some(9_675_000));
     assert_eq!(settlement.wallet_debit_cents, 0);
+    let records = storage
+        .query_usage(&Default::default())
+        .await
+        .unwrap()
+        .records;
+    let record = records.iter().find(|record| record.id == "first").unwrap();
+    assert_eq!(record.source_name.as_deref(), Some("API group"));
+    let calculation = serde_json::to_value(record.billing_calculation.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        calculation["terms"],
+        json!([
+            {"kind":"cache_write","quantity":1000,"unit_price_usd":"1.25"},
+            {"kind":"cache_read","quantity":2000,"unit_price_usd":"0.1"},
+            {"kind":"output","quantity":1000,"unit_price_usd":"2"},
+            {"kind":"input","quantity":3000,"unit_price_usd":"1"}
+        ])
+    );
+    assert_eq!(calculation["total_nano_usd"], 9_675_000);
+    assert_eq!(calculation["multiplier_micros"], 1_500_000);
+    let cost = record.cost_calculation.as_ref().unwrap();
+    assert_eq!(cost.total_nano_usd, 6_450_000);
+    assert_eq!(cost.multiplier_micros, 1_000_000);
+    let public = storage
+        .user_store()
+        .usage(&user.id, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(public["items"][0]["billing_calculation"], calculation);
+    for forbidden in [
+        "cost_calculation",
+        "base_cost_nano_usd",
+        "pricing_snapshot_json",
+    ] {
+        assert!(public["items"][0].get(forbidden).is_none(), "{forbidden}");
+    }
     let supplier_usage = storage
         .supplier_cycle_usage(&supplier, 0, Utc::now().timestamp_millis() + 1)
         .await
         .unwrap();
     assert_eq!(supplier_usage.request_count, 1);
     assert_eq!(supplier_usage.cost_nano_usd, Some(6_450_000));
-    assert_eq!(
-        storage
-            .finish_api_request(&first)
-            .await
-            .unwrap()
-            .wallet_debit_cents,
-        0
-    );
+    assert_eq!(storage.settle(&first).await.unwrap().wallet_debit_cents, 0);
     assert_eq!(
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
         100
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT pending_nano_usd FROM api_wallet_state WHERE user_id='regular'"
+            "SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id='regular'"
         )
         .fetch_one(storage.pool())
         .await
@@ -346,7 +375,7 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
     );
     let mut stale = request("stale");
     assert!(matches!(
-        storage.start_api_request(&principal, &stale).await,
+        storage.admit_api_request(&principal, &stale).await,
         Err(StorageError::Api {
             code: "api_group_changed",
             ..
@@ -358,40 +387,33 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
         ..principal
     };
     stale.id = "second".into();
-    storage.start_api_request(&principal, &stale).await.unwrap();
+    storage.admit_api_request(&principal, &stale).await.unwrap();
     stale.input_tokens = Some(100);
     stale.output_tokens = Some(0);
     stale.status = "completed".into();
-    let result = storage.finish_api_request(&stale).await.unwrap();
+    let result = storage.settle(&stale).await.unwrap();
     assert_eq!(result.cost_nano_usd, Some(10_000_000));
     assert_eq!(result.wallet_debit_cents, 1);
     assert_eq!(
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
         99
     );
+    assert_eq!(storage.settle(&stale).await.unwrap().wallet_debit_cents, 1);
     assert_eq!(
-        storage
-            .finish_api_request(&stale)
-            .await
-            .unwrap()
-            .wallet_debit_cents,
-        1
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM wallet_entries WHERE kind='api_usage'")
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM wallet_entries WHERE kind='usage'")
             .fetch_one(storage.pool())
             .await
             .unwrap(),
         1
     );
     assert!(
-        sqlx::query("UPDATE api_usage_records SET cost_nano_usd=0 WHERE id='second'")
+        sqlx::query("UPDATE usage_records SET cost_nano_usd=0 WHERE id='second'")
             .execute(storage.pool())
             .await
             .is_err()
     );
     assert!(
-        sqlx::query("DELETE FROM api_usage_records WHERE id='second'")
+        sqlx::query("DELETE FROM usage_records WHERE id='second'")
             .execute(storage.pool())
             .await
             .is_err()
@@ -401,11 +423,11 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
             .fetch_one(storage.pool())
             .await
             .unwrap(),
-        0
+        2
     );
     let usage = storage
         .user_store()
-        .api_usage(&user.id, &Default::default())
+        .usage(&user.id, &Default::default())
         .await
         .unwrap();
     assert_eq!(usage["total"], 2);
@@ -414,7 +436,7 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
     let mut missing = request("missing-price");
     missing.model = Some("api-unpriced".into());
     assert!(matches!(
-        storage.start_api_request(&principal, &missing).await,
+        storage.admit_api_request(&principal, &missing).await,
         Err(StorageError::Api {
             code: "model_price_unavailable",
             ..
@@ -520,17 +542,14 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
     assert_eq!(catalog[0].group_concurrency_limit, 5);
     let mut a = request("over-a");
     let mut b = request("over-b");
-    storage.start_api_request(&principal, &a).await.unwrap();
-    storage.start_api_request(&principal, &b).await.unwrap();
+    storage.admit_api_request(&principal, &a).await.unwrap();
+    storage.admit_api_request(&principal, &b).await.unwrap();
     for r in [&mut a, &mut b] {
         r.input_tokens = Some(400_000);
         r.output_tokens = Some(0);
         r.status = "completed".into();
     }
-    let (a, b) = tokio::join!(
-        storage.finish_api_request(&a),
-        storage.finish_api_request(&b)
-    );
+    let (a, b) = tokio::join!(storage.settle(&a), storage.settle(&b));
     assert_eq!(
         a.unwrap().wallet_debit_cents + b.unwrap().wallet_debit_cents,
         100
@@ -541,7 +560,7 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT pending_nano_usd FROM api_wallet_state WHERE user_id='regular'"
+            "SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id='regular'"
         )
         .fetch_one(storage.pool())
         .await
@@ -550,7 +569,7 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
     );
     assert!(matches!(
         storage
-            .start_api_request(&principal, &request("after"))
+            .admit_api_request(&principal, &request("after"))
             .await,
         Err(StorageError::Api {
             code: "insufficient_balance",
@@ -559,9 +578,9 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
     ));
     let unmatched = storage
         .user_store()
-        .api_usage(
+        .usage(
             &user.id,
-            &ApiListQuery {
+            &codex2api_storage::UserUsageFilter {
                 key_id: "other-key".into(),
                 ..Default::default()
             },
@@ -594,7 +613,7 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT pending_nano_usd FROM api_wallet_state WHERE user_id='regular'"
+                "SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id='regular'"
             )
             .fetch_one(storage.pool())
             .await
@@ -602,21 +621,231 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
             pending
         );
     }
-    let debt_entries:i64=sqlx::query_scalar("SELECT COUNT(*) FROM wallet_entries w JOIN api_usage_records r ON r.id=w.api_usage_record_id AND r.user_id=w.user_id WHERE w.request_id LIKE 'api-debt:%' AND r.cost_nano_usd>0").fetch_one(storage.pool()).await.unwrap();
+    let debt_entries:i64=sqlx::query_scalar("SELECT COUNT(*) FROM wallet_entries w JOIN usage_records r ON r.id=w.usage_record_id AND r.user_id=w.user_id WHERE w.request_id LIKE 'usage-debt:%' AND r.cost_nano_usd>0").fetch_one(storage.pool()).await.unwrap();
     assert_eq!(debt_entries, 2);
     storage
-        .start_api_request(&principal, &request("interrupted"))
+        .admit_api_request(&principal, &request("interrupted"))
         .await
         .unwrap();
-    assert_eq!(storage.recover_interrupted_api_usage().await.unwrap(), 1);
-    assert_eq!(storage.recover_interrupted_api_usage().await.unwrap(), 0);
+    assert_eq!(storage.recover_interrupted_usage().await.unwrap(), 1);
+    assert_eq!(storage.recover_interrupted_usage().await.unwrap(), 0);
     let interruption: (String, Option<i64>) = sqlx::query_as(
-        "SELECT billing_status,cost_nano_usd FROM api_usage_records WHERE id='interrupted'",
+        "SELECT billing_status,cost_nano_usd FROM usage_records WHERE id='interrupted'",
     )
     .fetch_one(storage.pool())
     .await
     .unwrap();
-    assert_eq!(interruption, ("interrupted".into(), None));
+    assert_eq!(interruption, ("missing_usage".into(), None));
+}
+
+#[tokio::test]
+async fn search_compact_and_input_count_share_usage_with_operation_specific_billing() {
+    let (_dir, storage, user, mut group, _) = setup().await;
+    group.model_rules = vec![ApiModelRule {
+        model: "api-unpriced".into(),
+        multiplier: Some("7".into()),
+        concurrency_limit: 0,
+        rpm_limit: 0,
+    }];
+    storage
+        .save_api_group(&group, Some(group.revision))
+        .await
+        .unwrap();
+    let mut group = storage.api_group(&group.id).await.unwrap().unwrap();
+    let (_, mut principal) = credential(&storage, &user, &group).await;
+    let mut search = request("search");
+    search.endpoint = "/v1/alpha/search".into();
+    search.model = Some("api-unpriced".into());
+    assert!(matches!(
+        storage.admit_api_request(&principal, &search).await,
+        Err(StorageError::Api {
+            code: "operation_price_unavailable",
+            ..
+        })
+    ));
+    let price = codex2api_storage::OperationPrice {
+        provider_id: "chatgpt".into(),
+        operation: "search".into(),
+        price_nano_usd: Some(20_000_000),
+        revision: 0,
+    };
+    assert!(storage.save_operation_price(&price, None).await.unwrap());
+    // Global subscription prices never enable an API group without its own price.
+    assert!(matches!(
+        storage.admit_api_request(&principal, &search).await,
+        Err(StorageError::Api {
+            code: "operation_price_unavailable",
+            ..
+        })
+    ));
+    group.search_price_usd = Some("0.03".into());
+    assert!(
+        storage
+            .save_api_group(&group, Some(group.revision))
+            .await
+            .unwrap()
+    );
+    group = storage.api_group(&group.id).await.unwrap().unwrap();
+    principal.group = group.clone();
+    let mut second = group.clone();
+    second.id = "second-group".into();
+    second.name = "Second group".into();
+    second.search_price_usd = Some("0.07".into());
+    assert!(storage.save_api_group(&second, None).await.unwrap());
+    assert_eq!(
+        storage.api_group_models(&second.id).await.unwrap()[0]
+            .search_price
+            .as_deref(),
+        Some("0.07")
+    );
+    let mut grok = second.clone();
+    grok.id = "grok-group".into();
+    grok.provider_id = "grok".into();
+    grok.tag_ids.clear();
+    grok.model_rules.clear();
+    assert!(storage.save_api_group(&grok, None).await.is_err());
+    assert!(sqlx::query("INSERT INTO api_groups(id,name,provider_id,created_at,search_price_nano_usd) VALUES('invalid-grok','Grok','grok','2026-01-01',1)")
+        .execute(storage.pool()).await.is_err());
+    grok.search_price_usd = None;
+    assert!(storage.save_api_group(&grok, None).await.unwrap());
+
+    let catalog = storage.api_group_models(&group.id).await.unwrap();
+    let unpriced = catalog.iter().find(|m| m.model == "api-unpriced").unwrap();
+    assert!(unpriced.prices.is_empty());
+    assert_eq!(unpriced.multiplier, "7");
+    assert_eq!(unpriced.search_price.as_deref(), Some("0.03"));
+    storage
+        .admit_api_request(&principal, &search)
+        .await
+        .unwrap();
+    group.search_price_usd = Some("0.5".into());
+    assert!(
+        storage
+            .save_api_group(&group, Some(group.revision))
+            .await
+            .unwrap()
+    );
+    group = storage.api_group(&group.id).await.unwrap().unwrap();
+    principal.group = group.clone();
+    search.status = "completed".into();
+    let settled = storage.settle(&search).await.unwrap();
+    assert_eq!(settled.cost_nano_usd, Some(30_000_000));
+    let records = storage
+        .query_usage(&Default::default())
+        .await
+        .unwrap()
+        .records;
+    let saved = records.iter().find(|record| record.id == "search").unwrap();
+    assert_eq!(saved.base_cost_nano_usd, Some(20_000_000));
+    assert_eq!(
+        saved.cost_calculation.as_ref().unwrap().total_nano_usd,
+        20_000_000
+    );
+    assert_eq!(
+        saved.billing_calculation.as_ref().unwrap().total_nano_usd,
+        30_000_000
+    );
+    assert_eq!(settled.wallet_debit_cents, 3);
+    assert_eq!(storage.settle(&search).await.unwrap().wallet_debit_cents, 3);
+
+    let mut compact = request("compact");
+    compact.endpoint = "/v1/responses/compact".into();
+    storage
+        .admit_api_request(&principal, &compact)
+        .await
+        .unwrap();
+    compact.input_tokens = Some(1_000_000);
+    compact.output_tokens = Some(0);
+    compact.status = "completed".into();
+    let settled = storage.settle(&compact).await.unwrap();
+    assert_eq!(settled.cost_nano_usd, Some(1_500_000_000));
+    assert_eq!(settled.wallet_debit_cents, 97);
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        0
+    );
+
+    let mut count = request("count");
+    count.endpoint = "/v1/responses/input_tokens".into();
+    count.model = Some("api-unpriced".into());
+    storage.admit_api_request(&principal, &count).await.unwrap();
+    count.status = "completed".into();
+    let settled = storage.settle(&count).await.unwrap();
+    assert_eq!(settled.cost_nano_usd, Some(0));
+    assert_eq!(settled.wallet_debit_cents, 0);
+    let count_row: (String, Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT billing_status,input_tokens,output_tokens FROM usage_records WHERE id='count'",
+    )
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(count_row, ("not_charged".into(), None, None));
+    search.id = "search-after-debt".into();
+    assert!(matches!(
+        storage.admit_api_request(&principal, &search).await,
+        Err(StorageError::Api {
+            code: "insufficient_balance",
+            ..
+        })
+    ));
+    group.search_price_usd = Some("0".into());
+    assert!(
+        storage
+            .save_api_group(&group, Some(group.revision))
+            .await
+            .unwrap()
+    );
+    principal.group = storage.api_group(&group.id).await.unwrap().unwrap();
+    search.id = "free-search".into();
+    storage
+        .admit_api_request(&principal, &search)
+        .await
+        .unwrap();
+    let settled = storage.settle(&search).await.unwrap();
+    assert_eq!(settled.cost_nano_usd, Some(0));
+    assert_eq!(settled.wallet_debit_cents, 0);
+    count.id = "count-outside-group".into();
+    count.model = Some("api-other".into());
+    assert!(matches!(
+        storage.admit_api_request(&principal, &count).await,
+        Err(StorageError::Api {
+            code: "model_not_available",
+            ..
+        })
+    ));
+    let totals: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*),SUM(cost_nano_usd) FROM usage_records WHERE wallet_user_id=?",
+    )
+    .bind(&user.id)
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(totals, (4, 1_530_000_000));
+    let entries = storage.wallet_entries(&user.id).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, "system_adjustment");
+    let wallet = storage
+        .user_store()
+        .wallet_entries(&user.id, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(wallet.total, 1);
+    assert_eq!(wallet.items[0]["kind"], "system_adjustment");
+    let wallet = storage
+        .admin_wallet_entries(&Default::default())
+        .await
+        .unwrap();
+    assert_eq!(wallet["total"], 1);
+    assert_eq!(wallet["items"][0]["kind"], "system_adjustment");
+    assert!(
+        storage
+            .admin_wallet_entries(&codex2api_storage::WalletEntryFilter {
+                kind: "usage".into(),
+                ..Default::default()
+            })
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -681,12 +910,13 @@ async fn api_model_membership_pagination_and_provider_boundaries_follow_current_
     );
     assert_eq!(
         storage
-            .admin_api_usage(&ApiListQuery {
+            .query_usage(&codex2api_storage::UsageFilter {
                 page: 99,
                 ..Default::default()
             })
             .await
-            .unwrap()["page"],
+            .unwrap()
+            .page,
         1
     );
     storage
@@ -761,7 +991,7 @@ async fn metered_api_migration_preserves_existing_wallet_entries_and_guards() {
     assert_eq!(entries[0].id, "old-entry");
     assert_eq!(entries[0].amount_cents, -5);
     assert_eq!(entries[0].balance_before_cents, 128);
-    assert_eq!(entries[0].api_usage_record_id, None);
+    assert_eq!(entries[0].usage_record_id, None);
     assert_eq!(
         storage.user("kept").await.unwrap().unwrap().wallet_cents,
         123
@@ -785,7 +1015,7 @@ async fn metered_api_migration_preserves_existing_wallet_entries_and_guards() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(storage.recover_interrupted_api_usage().await.unwrap(), 0);
+    assert_eq!(storage.recover_interrupted_usage().await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -822,50 +1052,43 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
     image.model = Some("api-image".into());
     image.image_size = Some("unpriced-dimensions".into());
     assert!(matches!(
-        storage.start_api_request(&principal, &image).await,
+        storage.admit_api_request(&principal, &image).await,
         Err(StorageError::Api {
             code: "model_price_unavailable",
             ..
         })
     ));
     image.image_size = Some("1024x1024".into());
-    storage.start_api_request(&principal, &image).await.unwrap();
+    storage.admit_api_request(&principal, &image).await.unwrap();
     image.status = "completed".into();
     image.image_count = Some(2);
     image.image_usage_json = Some(json!([{"resolution":"1024x1024","count":2}]).to_string());
-    let settled = storage.finish_api_request(&image).await.unwrap();
+    let settled = storage.settle(&image).await.unwrap();
     assert_eq!(settled.cost_nano_usd, Some(60_000_000));
     assert_eq!(settled.wallet_debit_cents, 6);
     let mut unknown = request("unknown");
     storage
-        .start_api_request(&principal, &unknown)
+        .admit_api_request(&principal, &unknown)
         .await
         .unwrap();
     unknown.status = "completed".into();
-    assert_eq!(
-        storage
-            .finish_api_request(&unknown)
-            .await
-            .unwrap()
-            .cost_nano_usd,
-        None
-    );
+    assert_eq!(storage.settle(&unknown).await.unwrap().cost_nano_usd, None);
     let mut failed = request("failed");
     storage
-        .start_api_request(&principal, &failed)
+        .admit_api_request(&principal, &failed)
         .await
         .unwrap();
     failed.status = "failed".into();
-    let failed = storage.finish_api_request(&failed).await.unwrap();
+    let failed = storage.settle(&failed).await.unwrap();
     assert_eq!(failed.cost_nano_usd, Some(0));
     assert_eq!(failed.billing_status, "not_charged");
     let usage = storage
         .user_store()
-        .api_usage(&user.id, &Default::default())
+        .usage(&user.id, &Default::default())
         .await
         .unwrap();
-    assert!(usage["summary"]["cost_nano_usd"].is_null());
-    assert_eq!(usage["summary"]["unknown_cost_requests"], 1);
+    assert_eq!(usage["summary"]["cost_nano_usd"], 60_000_000);
+    assert_eq!(usage["summary"]["unpriced_requests"], 1);
     assert_eq!(
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
         94
@@ -877,31 +1100,27 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
     ] {
         let mut truncated = request(id);
         storage
-            .start_api_request(&principal, &truncated)
+            .admit_api_request(&principal, &truncated)
             .await
             .unwrap();
         truncated.account_id = supplier.clone();
         truncated.http_status = status;
         truncated.first_byte_ms = first_byte;
         truncated.status = "failed".into();
-        let settled = storage.finish_api_request(&truncated).await.unwrap();
+        let settled = storage.settle(&truncated).await.unwrap();
         assert_eq!(settled.cost_nano_usd, None, "{id}");
         assert_eq!(settled.billing_status, "missing_usage", "{id}");
     }
     let mut rejected = request("rejected");
     storage
-        .start_api_request(&principal, &rejected)
+        .admit_api_request(&principal, &rejected)
         .await
         .unwrap();
     rejected.account_id = supplier;
     rejected.http_status = Some(429);
     rejected.status = "failed".into();
     assert_eq!(
-        storage
-            .finish_api_request(&rejected)
-            .await
-            .unwrap()
-            .billing_status,
+        storage.settle(&rejected).await.unwrap().billing_status,
         "not_charged"
     );
     let mut price = storage
@@ -924,16 +1143,237 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
         ..principal
     };
     let mut tiny = request("sub-nano-base");
-    storage.start_api_request(&principal, &tiny).await.unwrap();
+    storage.admit_api_request(&principal, &tiny).await.unwrap();
     tiny.input_tokens = Some(1);
     tiny.output_tokens = Some(0);
     tiny.status = "completed".into();
+    assert_eq!(storage.settle(&tiny).await.unwrap().cost_nano_usd, Some(1));
+}
+
+// Assert the persisted shared ledger after its normal finalization path.
+trait SettleUsage {
+    async fn settle(&self, record: &UsageRecord) -> codex2api_storage::Result<UsageRecord>;
+}
+
+#[tokio::test]
+async fn all_request_sources_share_history_statistics_and_failure_details() {
+    use codex2api_storage::{UsageFilter, UsageGroup};
+    let (_dir, storage, user, group, supplier) = setup().await;
+    let (_, principal) = credential(&storage, &user, &group).await;
+    let subscription: String = sqlx::query_scalar(
+        "SELECT id FROM regular_platforms WHERE user_id=? AND provider_id='chatgpt'",
+    )
+    .bind(&user.id)
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    let mut oauth = request("oauth-shared");
+    let original_plan: (String, String) = sqlx::query_as("SELECT p.id,p.name FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id WHERE a.id=?")
+        .bind(&subscription).fetch_one(storage.pool()).await.unwrap();
+    oauth.subject_id = subscription;
+    oauth.subject_name = "Subscription".into();
+    oauth.account_id = supplier.clone();
+    storage.insert_usage(&oauth).await.unwrap();
+    sqlx::query("UPDATE virtual_plans SET name='Renamed after request' WHERE id=?")
+        .bind(&original_plan.0)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    oauth.input_tokens = Some(1000);
+    oauth.output_tokens = Some(0);
+    oauth.status = "completed".into();
+    storage.finish_usage(&oauth).await.unwrap();
+    let saved = storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(
+        saved.records[0].source_name.as_deref(),
+        Some(original_plan.1.as_str())
+    );
+    assert!(
+        sqlx::query("UPDATE usage_records SET source_name='changed' WHERE id='oauth-shared'")
+            .execute(storage.pool())
+            .await
+            .is_err()
+    );
+
+    let mut failed = request("api-shared");
+    storage
+        .admit_api_request(&principal, &failed)
+        .await
+        .unwrap();
+    failed.account_id = supplier.clone();
+    failed.account_name = "private-supplier-name".into();
+    failed.status = "failed".into();
+    failed.http_status = Some(200);
+    failed.first_byte_ms = Some(35);
+    failed.total_ms = Some(1200);
+    failed.failure_kind = Some("transport".into());
+    failed.failure_status = Some(502);
+    failed.error_code = Some("upstream_incomplete".into());
+    failed.error_message = Some("private diagnostic for administrators".into());
+    failed.upstream_request_id = Some("private-upstream-request".into());
+    storage.finish_usage(&failed).await.unwrap();
+    storage.finish_usage(&failed).await.unwrap();
+    let filter = UsageFilter {
+        user_id: Some(user.id.clone()),
+        from_ms: Some(0),
+        until_ms: Some(Utc::now().timestamp_millis() + 1),
+        ..Default::default()
+    };
+    let page = storage.query_usage(&filter).await.unwrap();
+    assert_eq!(page.total, 2);
+    let row = page.records.iter().find(|r| r.id == failed.id).unwrap();
+    assert_eq!(row.error_message, failed.error_message);
+    assert_eq!(row.failure_status, Some(502));
+    assert_eq!(row.http_status, Some(200));
+    assert_eq!(row.first_byte_ms, Some(35));
+    assert_eq!(row.total_ms, Some(1200));
+    assert_eq!(row.key_id.as_deref(), Some(principal.key_id.as_str()));
+    assert_eq!(row.billing_status, "missing_usage");
+    for (source, expected_id, expected_name) in [
+        (
+            codex2api_storage::UsageSource::Api,
+            failed.id.as_str(),
+            "Primary key",
+        ),
+        (
+            codex2api_storage::UsageSource::Subscription,
+            oauth.id.as_str(),
+            user.username.as_str(),
+        ),
+    ] {
+        let page = storage
+            .query_usage(&UsageFilter {
+                source: Some(source),
+                ..filter.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0].id, expected_id);
+        assert_eq!(page.records[0].consumer_name, expected_name);
+        let page = storage
+            .user_store()
+            .usage(
+                &user.id,
+                &codex2api_storage::UserUsageFilter {
+                    source: Some(source),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["items"][0]["id"], expected_id);
+        assert_eq!(page["items"][0]["consumer_name"], expected_name);
+    }
+    let stats = storage
+        .usage_statistics(
+            &UsageFilter {
+                from_ms: Some(Utc::now().timestamp_millis() - 86400000),
+                ..filter
+            },
+            UsageGroup::Subject,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(stats.summary.request_count, 2);
+    assert_eq!(stats.summary.failed_requests, 1);
+    assert_eq!(stats.rows.len(), 2);
     assert_eq!(
         storage
-            .finish_api_request(&tiny)
+            .supplier_cycle_usage(&supplier, 0, Utc::now().timestamp_millis() + 1)
             .await
             .unwrap()
-            .cost_nano_usd,
-        Some(1)
+            .request_count,
+        2
     );
+    let public = storage
+        .user_store()
+        .usage(&user.id, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(public["total"], 2);
+    assert_eq!(public["summary"]["request_count"], 2);
+    for private in [
+        "account_id",
+        "account_name",
+        "error_message",
+        "upstream_request_id",
+        "private-supplier-name",
+        "private diagnostic",
+        "private-upstream-request",
+    ] {
+        assert!(!public.to_string().contains(private), "{private}");
+    }
+    let mut other = user.clone();
+    other.id = "other-owner".into();
+    other.username = "other-owner".into();
+    storage.save_user(&other, None).await.unwrap();
+    assert_eq!(
+        storage
+            .user_store()
+            .usage(&other.id, &Default::default())
+            .await
+            .unwrap()["total"],
+        0
+    );
+    let tables: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name='api_usage_records'")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(tables, 0);
+}
+
+#[tokio::test]
+async fn shared_finalization_rolls_back_wallet_when_record_cannot_be_saved() {
+    let (_dir, storage, user, group, _) = setup().await;
+    let (_, principal) = credential(&storage, &user, &group).await;
+    let mut request = request("rollback");
+    storage
+        .admit_api_request(&principal, &request)
+        .await
+        .unwrap();
+    request.input_tokens = Some(100_000);
+    request.output_tokens = Some(0);
+    request.status = "completed".into();
+    sqlx::raw_sql("CREATE TRIGGER reject_settlement BEFORE UPDATE ON usage_records WHEN NEW.id='rollback' AND NEW.status='completed' BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;").execute(storage.pool()).await.unwrap();
+    assert!(storage.finish_usage(&request).await.is_err());
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        100
+    );
+    let state: (String, Option<i64>) =
+        sqlx::query_as("SELECT status,cost_nano_usd FROM usage_records WHERE id='rollback'")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(state, ("in_progress".into(), None));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM wallet_entries WHERE kind='usage'")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("DROP TRIGGER reject_settlement")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    storage.finish_usage(&request).await.unwrap();
+    storage.finish_usage(&request).await.unwrap();
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        85
+    );
+}
+impl SettleUsage for Storage {
+    async fn settle(&self, record: &UsageRecord) -> codex2api_storage::Result<UsageRecord> {
+        self.finish_usage(record).await?;
+        Ok(sqlx::query_as("SELECT * FROM usage_records WHERE id=?")
+            .bind(&record.id)
+            .fetch_one(self.pool())
+            .await?)
+    }
 }

@@ -9,7 +9,7 @@ pub enum UsageGroup {
     #[default]
     Day,
     Model,
-    VirtualAccount,
+    Subject,
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -108,10 +108,10 @@ impl Storage {
             UsageGroup::Hour => format!("strftime('%Y-%m-%dT%H:00', {local_time}, 'unixepoch')"),
             UsageGroup::Day => format!("strftime('%Y-%m-%d', {local_time}, 'unixepoch')"),
             UsageGroup::Model => "COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'')".into(),
-            UsageGroup::VirtualAccount => "subject_id".into(),
+            UsageGroup::Subject => "subject_id".into(),
         };
         let label = match group_by {
-            UsageGroup::VirtualAccount => {
+            UsageGroup::Subject => {
                 "COALESCE((SELECT username FROM platform_principals WHERE id=subject_id),NULLIF(MAX(subject_name),''),subject_id)"
             }
             _ => &key,
@@ -119,7 +119,6 @@ impl Storage {
         let mut tx = self.pool().begin().await?;
         let mut summary = QueryBuilder::new(format!("SELECT {TOTALS} FROM usage_records"));
         conditions(&mut summary, filter);
-        summary.push(" AND subject_kind='virtual_account'");
         let summary = summary
             .build_query_as::<UsageTotals>()
             .fetch_one(&mut *tx)
@@ -128,9 +127,7 @@ impl Storage {
             "SELECT {key} AS key, {label} AS label, {TOTALS} FROM usage_records"
         ));
         conditions(&mut rows, filter);
-        rows.push(" AND subject_kind='virtual_account' GROUP BY ")
-            .push(&key)
-            .push(" ORDER BY key");
+        rows.push(" GROUP BY ").push(&key).push(" ORDER BY key");
         let rows = rows
             .build_query_as::<UsageStatisticsRow>()
             .fetch_all(&mut *tx)
@@ -146,7 +143,7 @@ impl Storage {
         ));
         conditions(&mut model_usage, filter);
         model_usage
-            .push(" AND subject_kind='virtual_account' GROUP BY bucket, ")
+            .push(" GROUP BY bucket, ")
             .push(model_key)
             .push(" ORDER BY bucket, model");
         let model_usage = model_usage

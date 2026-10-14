@@ -51,6 +51,7 @@ struct GroupInput {
     #[serde(default)]
     allowed_models: Vec<String>,
     multiplier: String,
+    search_price_usd: Option<String>,
     concurrency_limit: u32,
     rpm_limit: u32,
     #[serde(default)]
@@ -69,6 +70,7 @@ impl GroupInput {
             tag_ids: self.tag_ids,
             allowed_models: self.allowed_models,
             multiplier: self.multiplier,
+            search_price_usd: self.search_price_usd,
             concurrency_limit: self.concurrency_limit,
             rpm_limit: self.rpm_limit,
             model_rules: self.model_rules,

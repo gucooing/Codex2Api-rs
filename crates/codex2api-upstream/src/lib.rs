@@ -29,6 +29,7 @@ mod body;
 mod error;
 mod outcome;
 pub mod public_output;
+pub mod request_debug;
 pub use availability::{
     SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_available,
     quota_unavailable_until,
@@ -74,3 +75,6 @@ pub use routing::{WorkspaceConnection, WorkspaceRoute};
 pub use stream::{SseEvent, SseForwardStream, format_sse_event, spawn_sse_forward};
 pub use timezone::apply_response_timezone;
 pub use websocket::UpstreamWebSocket;
+
+mod response;
+pub use response::ResponseFormat;

@@ -26,6 +26,7 @@ pub struct ApiGroup {
     pub tag_ids: Vec<String>,
     pub allowed_models: Vec<String>,
     pub multiplier: String,
+    pub search_price_usd: Option<String>,
     pub concurrency_limit: u32,
     pub rpm_limit: u32,
     pub model_rules: Vec<ApiModelRule>,
@@ -39,6 +40,7 @@ pub struct ApiPublicGroup {
     pub description: String,
     pub provider_id: String,
     pub multiplier: String,
+    pub search_price_usd: Option<String>,
     pub concurrency_limit: u32,
     pub rpm_limit: u32,
     pub models_count: i64,
@@ -118,6 +120,7 @@ struct GroupRow {
     tag_ids: String,
     allowed_models: String,
     multiplier_micros: i64,
+    search_price_nano_usd: Option<i64>,
     concurrency_limit: u32,
     rpm_limit: u32,
     model_rules: String,
@@ -135,6 +138,9 @@ impl TryFrom<GroupRow> for ApiGroup {
             tag_ids: serde_json::from_str(&row.tag_ids)?,
             allowed_models: serde_json::from_str(&row.allowed_models)?,
             multiplier: crate::format_units(row.multiplier_micros, 6),
+            search_price_usd: row
+                .search_price_nano_usd
+                .map(|price| crate::format_units(price, 9)),
             concurrency_limit: row.concurrency_limit,
             rpm_limit: row.rpm_limit,
             model_rules: serde_json::from_str(&row.model_rules)?,
@@ -167,6 +173,7 @@ impl ApiGroup {
             description: self.description.clone(),
             provider_id: self.provider_id.clone(),
             multiplier: self.multiplier.clone(),
+            search_price_usd: self.search_price_usd.clone(),
             concurrency_limit: self.concurrency_limit,
             rpm_limit: self.rpm_limit,
             models_count,
@@ -228,6 +235,20 @@ impl Storage {
     }
     pub async fn save_api_group(&self, group: &ApiGroup, expected: Option<i64>) -> Result<bool> {
         let multiplier = multiplier_micros(&group.multiplier)?;
+        if group.provider_id != codex2api_core::CHATGPT && group.search_price_usd.is_some() {
+            return Err(StorageError::InvalidAdminUpdate(
+                "只有 ChatGPT 平台可以配置搜索单价",
+            ));
+        }
+        let search_price = group
+            .search_price_usd
+            .as_deref()
+            .map(|price| {
+                crate::decimal_units(price, 9).ok_or(StorageError::InvalidAdminUpdate(
+                    "搜索单价须为非负美元金额，最多九位小数",
+                ))
+            })
+            .transpose()?;
         if group.id.is_empty()
             || group.id.len() > 128
             || group.name.trim().is_empty()
@@ -315,9 +336,9 @@ impl Storage {
                 ));
             }
         }
-        sqlx::query("INSERT INTO api_groups(id,name,description,provider_id,enabled,allowed_models,multiplier_micros,concurrency_limit,rpm_limit,model_rules,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,enabled=excluded.enabled,allowed_models=excluded.allowed_models,multiplier_micros=excluded.multiplier_micros,concurrency_limit=excluded.concurrency_limit,rpm_limit=excluded.rpm_limit,model_rules=excluded.model_rules,revision=api_groups.revision+1")
+        sqlx::query("INSERT INTO api_groups(id,name,description,provider_id,enabled,allowed_models,multiplier_micros,search_price_nano_usd,concurrency_limit,rpm_limit,model_rules,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,enabled=excluded.enabled,allowed_models=excluded.allowed_models,multiplier_micros=excluded.multiplier_micros,search_price_nano_usd=excluded.search_price_nano_usd,concurrency_limit=excluded.concurrency_limit,rpm_limit=excluded.rpm_limit,model_rules=excluded.model_rules,revision=api_groups.revision+1")
             .bind(&group.id).bind(group.name.trim()).bind(group.description.trim()).bind(&group.provider_id).bind(group.enabled)
-            .bind(serde_json::to_string(&group.allowed_models)?).bind(multiplier).bind(group.concurrency_limit).bind(group.rpm_limit)
+            .bind(serde_json::to_string(&group.allowed_models)?).bind(multiplier).bind(search_price).bind(group.concurrency_limit).bind(group.rpm_limit)
             .bind(serde_json::to_string(&group.model_rules)?).bind(chrono::Utc::now().to_rfc3339()).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM api_group_tags WHERE group_id=?")
             .bind(&group.id)
@@ -395,6 +416,7 @@ pub struct ApiCatalogModel {
     pub rpm_limit: u32,
     pub prices: Vec<ApiTokenPrice>,
     pub image_prices: Vec<ApiImagePrice>,
+    pub search_price: Option<String>,
 }
 fn scaled(value: i128, places: u32) -> String {
     let scale = 10_i128.pow(places);
@@ -478,6 +500,9 @@ pub(crate) async fn catalog_on(
                 price_usd: scaled(i128::from(p.price_nano_usd) * factor, 15),
             })
             .collect();
+        let search_price = (config.provider_id == codex2api_core::CHATGPT && config.kind == "text")
+            .then(|| group.and_then(|g| g.search_price_usd.clone()))
+            .flatten();
         items.push(ApiCatalogModel {
             provider_id: config.provider_id,
             model: config.model.clone(),
@@ -489,6 +514,7 @@ pub(crate) async fn catalog_on(
             rpm_limit: rule.map_or(0, |r| r.rpm_limit),
             prices: token_prices,
             image_prices,
+            search_price,
         });
     }
     Ok((total, items))

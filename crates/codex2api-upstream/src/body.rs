@@ -8,6 +8,7 @@ pub const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 /// Read only non-content metadata for the incoming usage ledger (including zstd bodies).
 #[derive(Default)]
 pub struct RequestMetadata {
+    pub stream: Option<bool>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
@@ -38,6 +39,7 @@ pub fn request_metadata_value(value: &Value) -> RequestMetadata {
         })
         .filter(|items| !items.is_empty());
     RequestMetadata {
+        stream: value.get("stream").and_then(Value::as_bool),
         model: value
             .get("model")
             .and_then(Value::as_str)

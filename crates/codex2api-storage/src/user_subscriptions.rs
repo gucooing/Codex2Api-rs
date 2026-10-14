@@ -53,13 +53,13 @@ pub struct WalletEntry {
     pub operator_name: Option<String>,
     pub reason: Option<String>,
     pub order_id: Option<String>,
-    pub api_usage_record_id: Option<String>,
+    pub usage_record_id: Option<String>,
 }
 impl WalletEntry {
     pub fn user_view(&self) -> serde_json::Value {
         json!({"id":self.id,"kind":self.kind,"plan_name":self.plan_name,"amount_cents":self.amount_cents,
             "balance_before_cents":self.balance_before_cents,"balance_cents":self.balance_cents,"duration_days":self.duration_days,
-            "created_at":self.created_at,"expires_at":self.expires_at,"api_usage_record_id":self.api_usage_record_id})
+            "created_at":self.created_at,"expires_at":self.expires_at,"usage_record_id":self.usage_record_id})
     }
 }
 pub struct SubscriptionChange<'a> {
@@ -118,7 +118,7 @@ impl Storage {
     }
     pub async fn wallet_entries(&self, user: &str) -> Result<Vec<WalletEntry>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM wallet_entries WHERE user_id=? ORDER BY created_at DESC,id",
+            "SELECT * FROM wallet_entries WHERE user_id=? AND kind IN ('order_payment','system_adjustment') ORDER BY created_at DESC,id",
         )
         .bind(user)
         .fetch_all(self.pool())

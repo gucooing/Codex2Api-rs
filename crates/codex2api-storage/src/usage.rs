@@ -17,10 +17,24 @@ pub struct UsageRecord {
     pub account_name: String,
     pub subject_id: String,
     pub subject_name: String,
+    #[sqlx(default)]
+    pub consumer_name: String,
     pub subject_kind: String,
+    pub source_name: Option<String>,
     pub provider_id: String,
+    pub user_id: Option<String>,
+    pub key_id: Option<String>,
+    pub group_id: Option<String>,
+    pub group_name: Option<String>,
+    #[serde(skip_serializing)]
+    pub wallet_user_id: Option<String>,
+    pub multiplier_micros: i64,
+    pub base_cost_nano_usd: Option<i64>,
+    pub wallet_debit_cents: i64,
+    pub completed_at_ms: Option<i64>,
     pub endpoint: String,
     pub transport: String,
+    pub stream: Option<bool>,
     pub model: Option<String>,
     pub actual_model: Option<String>,
     pub upstream_request_id: Option<String>,
@@ -48,6 +62,13 @@ pub struct UsageRecord {
     pub billing_status: String,
     pub billing_model: Option<String>,
     pub billing_tier: Option<String>,
+    #[serde(skip_serializing)]
+    #[sqlx(default)]
+    pub pricing_snapshot_json: Option<String>,
+    #[sqlx(skip)]
+    pub billing_calculation: Option<crate::billing::UsageCalculation>,
+    #[sqlx(skip)]
+    pub cost_calculation: Option<crate::billing::UsageCalculation>,
 }
 impl Default for UsageRecord {
     fn default() -> Self {
@@ -57,10 +78,22 @@ impl Default for UsageRecord {
             account_name: Default::default(),
             subject_id: Default::default(),
             subject_name: Default::default(),
+            consumer_name: Default::default(),
             subject_kind: "virtual_account".into(),
+            source_name: None,
             provider_id: codex2api_core::default_provider(),
+            user_id: None,
+            key_id: None,
+            group_id: None,
+            group_name: None,
+            wallet_user_id: None,
+            multiplier_micros: 1_000_000,
+            base_cost_nano_usd: None,
+            wallet_debit_cents: 0,
+            completed_at_ms: None,
             endpoint: Default::default(),
             transport: Default::default(),
+            stream: None,
             model: Default::default(),
             actual_model: Default::default(),
             upstream_request_id: None,
@@ -88,12 +121,16 @@ impl Default for UsageRecord {
             billing_status: Default::default(),
             billing_model: Default::default(),
             billing_tier: Default::default(),
+            pricing_snapshot_json: None,
+            billing_calculation: None,
+            cost_calculation: None,
         }
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct UsageFilter {
+    pub source: Option<UsageSource>,
     pub user_id: Option<String>,
     pub account: Option<String>,
     pub account_id: Option<String>,
@@ -105,6 +142,15 @@ pub struct UsageFilter {
     pub page: u32,
     pub page_size: Option<u32>,
 }
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSource {
+    Api,
+    Subscription,
+}
+
+pub(crate) const CONSUMER_NAME: &str = "CASE WHEN subject_kind IN ('api_key','retired_api_key') THEN COALESCE((SELECT name FROM api_keys WHERE id=usage_records.subject_id),'') ELSE COALESCE((SELECT username FROM platform_principals WHERE id=usage_records.subject_id),'') END";
 
 pub const USAGE_PAGE_SIZE: i64 = 20;
 
@@ -165,9 +211,17 @@ pub struct VirtualDailyModelTokens {
 
 pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFilter) {
     query.push(" WHERE 1=1");
+    match filter.source {
+        Some(UsageSource::Api) => {
+            query.push(" AND subject_kind IN ('api_key','retired_api_key')");
+        }
+        Some(UsageSource::Subscription) => {
+            query.push(" AND subject_kind='virtual_account'");
+        }
+        None => {}
+    }
     if let Some(user) = filter.user_id.as_deref().filter(|s| !s.is_empty()) {
-        query.push(" AND subject_kind='virtual_account' AND subject_id IN (SELECT id FROM regular_platforms WHERE user_id=")
-            .push_bind(user.to_owned()).push(")");
+        query.push(" AND user_id=").push_bind(user.to_owned());
     }
     if let Some(id) = filter.account_id.as_deref().filter(|s| !s.is_empty()) {
         query.push(" AND account_id = ").push_bind(id.to_string());
@@ -276,23 +330,14 @@ impl Storage {
     ) -> Result<SupplierCycleUsage> {
         Ok(sqlx::query_as(
             "SELECT ? AS from_ms, ? AS until_ms, COUNT(*) AS request_count,
-             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cost_nano_usd) END AS cost_nano_usd,
+             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(base_cost_nano_usd) END AS cost_nano_usd,
              CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(
                  CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
                  THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) END AS tokens,
-             COALESCE(SUM(cost_nano_usd IS NULL),0) AS unpriced_requests,
+             COALESCE(SUM(base_cost_nano_usd IS NULL),0) AS unpriced_requests,
              COALESCE(SUM(input_tokens IS NULL OR output_tokens IS NULL),0) AS missing_token_requests
-             FROM (
-                 SELECT input_tokens,output_tokens,cost_nano_usd
-                 FROM usage_records WHERE account_id=? AND requested_at_ms>=? AND requested_at_ms<?
-                 UNION ALL
-                 SELECT input_tokens,output_tokens,base_cost_nano_usd AS cost_nano_usd
-                 FROM api_usage_records WHERE supplier_account_id=? AND requested_at_ms>=? AND requested_at_ms<?
-             )",
+             FROM usage_records WHERE account_id=? AND requested_at_ms>=? AND requested_at_ms<?",
         )
-        .bind(from_ms)
-        .bind(until_ms)
-        .bind(account_id)
         .bind(from_ms)
         .bind(until_ms)
         .bind(account_id)
@@ -356,11 +401,10 @@ impl Storage {
         Ok(account_usage_summary(days, chrono::Utc::now().date_naive()))
     }
     /// Called once by the process at startup; a prior process cannot still own these requests.
-    pub async fn recover_interrupted_usage(&self) -> Result<()> {
-        sqlx::query("UPDATE usage_records SET status='interrupted',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
+    pub async fn recover_interrupted_usage(&self) -> Result<u64> {
+        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(unixepoch('subsec')*1000 AS INTEGER),status='interrupted',failure_kind='transport',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
             .execute(self.pool())
-            .await?;
-        Ok(())
+            .await?.rows_affected())
     }
     pub async fn insert_usage(&self, record: &UsageRecord) -> Result<()> {
         let prices = self.billing_snapshot(&record.provider_id).await?;
@@ -387,18 +431,35 @@ impl Storage {
         let total: i64 = count.build_query_scalar().fetch_one(&mut *tx).await?;
         let max_page = ((total.saturating_sub(1) / page_size) + 1).max(1) as u32;
         let page = filter.page.max(1).min(max_page);
-        let mut query = QueryBuilder::new("SELECT * FROM usage_records");
+        let mut query = QueryBuilder::new(format!(
+            "SELECT *,{CONSUMER_NAME} AS consumer_name FROM usage_records"
+        ));
         conditions(&mut query, filter);
         query
             .push(" ORDER BY requested_at_ms DESC, id DESC LIMIT ")
             .push_bind(page_size)
             .push(" OFFSET ")
             .push_bind(i64::from(page - 1) * page_size);
-        let records = query
+        let mut records = query
             .build_query_as::<UsageRecord>()
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;
+        for record in &mut records {
+            if record.source_name.is_none()
+                && matches!(record.subject_kind.as_str(), "api_key" | "retired_api_key")
+            {
+                record.source_name = record.group_name.clone();
+            }
+            if let Some(snapshot) = record
+                .pricing_snapshot_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<crate::billing::BillingSnapshot>(json).ok())
+            {
+                record.billing_calculation = snapshot.calculation(record, false);
+                record.cost_calculation = snapshot.calculation(record, true);
+            }
+        }
         Ok(UsagePage {
             records,
             total,

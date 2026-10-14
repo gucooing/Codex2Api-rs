@@ -169,11 +169,67 @@ test("device polling preserves pending authorization context", () => {
   assert.throws(() => mergeOAuth(undefined, { status: "pending" }));
 });
 
-test("generation failures do not display a successful handshake as their result", async () => {
+test("generation failures display numeric statuses and keep connection statuses separate", async () => {
   const { usageResultCode, usageFailureKind } = await import("../src/lib/usage-display.ts");
-  assert.equal(usageResultCode({ status: "failed", http_status: 200, failure_status: 429 }), 429);
-  assert.equal(usageResultCode({ status: "failed", http_status: 200, failure_status: null }), "-");
-  assert.equal(usageResultCode({ status: "failed", http_status: null, failure_status: 502 }), 502);
+  assert.equal(
+    usageResultCode({
+      status: "failed",
+      http_status: 200,
+      failure_status: 503,
+      error_code: "server_is_overloaded",
+    }),
+    503,
+  );
+  assert.equal(usageResultCode({ status: "failed", http_status: 429, failure_status: null }), null);
+  assert.equal(
+    usageResultCode({ status: "completed", http_status: 200, failure_status: 503 }),
+    null,
+  );
   assert.equal(usageFailureKind("quota_exhausted"), "额度耗尽");
   assert.equal(usageFailureKind("rate_limit"), "临时限流");
+});
+
+test("usage fee formulas preserve token buckets and omit a unit multiplier", async () => {
+  const { usageFormula } = await import("../src/lib/usage-calculation.ts");
+  assert.equal(
+    usageFormula({
+      terms: [
+        { kind: "cache_write", quantity: 1600, unit_price_usd: "10" },
+        { kind: "cache_read", quantity: 300, unit_price_usd: "1" },
+        { kind: "output", quantity: 145600, unit_price_usd: "45" },
+        { kind: "input", quantity: 2400, unit_price_usd: "10" },
+      ],
+      multiplier_micros: 200000,
+      total_nano_usd: 1318460000,
+    }),
+    "(缓写:1.6k*10 + 缓读:300*1 + 输出:145.6k*45 + 输入:2.4k*10)*0.2x = $1.31846",
+  );
+  assert.equal(
+    usageFormula({
+      terms: [{ kind: "input", quantity: 1000, unit_price_usd: "1" }],
+      multiplier_micros: 1000000,
+      total_nano_usd: 1000000,
+    }),
+    "输入:1k*1 = $0.001",
+  );
+});
+
+test("usage source and consumption distinguish API debits from subscription spending", async () => {
+  const { usageSource, usageSourceDetail, usageConsumption, usageResult, isTextUsage } =
+    await import("../src/lib/usage-display.ts");
+  assert.equal(usageSource("api_key"), "Api");
+  assert.equal(usageSource("virtual_account"), "订阅");
+  assert.equal(usageSourceDetail({ subject_kind: "api_key", source_name: "Pro" }), "Api:Pro");
+  assert.equal(
+    usageSourceDetail({ subject_kind: "virtual_account", source_name: "Plus" }),
+    "订阅:Plus",
+  );
+  assert.equal(usageSourceDetail({ subject_kind: "virtual_account", source_name: null }), "订阅:—");
+  const record = { status: "completed", wallet_debit_cents: 2, cost_nano_usd: 15_000_000 };
+  assert.equal(usageConsumption({ ...record, subject_kind: "api_key" }), 0.02);
+  assert.equal(usageConsumption({ ...record, subject_kind: "virtual_account" }), 0.015);
+  assert.equal(usageResult({ status: "failed", failure_status: 503 }), "503");
+  assert.equal(usageResult({ status: "failed", failure_status: null }), "-");
+  assert.equal(isTextUsage({ endpoint: "/v1/responses", image_count: null }), true);
+  assert.equal(isTextUsage({ endpoint: "/v1/images/generations", image_count: null }), false);
 });

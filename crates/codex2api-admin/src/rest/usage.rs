@@ -16,6 +16,7 @@ pub(super) fn router() -> Router<AdminState> {
 
 #[derive(Default, Deserialize)]
 pub(crate) struct Filters {
+    pub source: Option<codex2api_storage::UsageSource>,
     #[serde(default)]
     pub user_id: String,
     #[serde(default)]
@@ -74,6 +75,7 @@ impl Filters {
             return Err("状态无效".into());
         }
         Ok(UsageFilter {
+            source: self.source,
             user_id: Some(self.user_id.clone()),
             account: Some(self.account.trim().into()),
             account_id: Some(self.supplier_id.clone()),

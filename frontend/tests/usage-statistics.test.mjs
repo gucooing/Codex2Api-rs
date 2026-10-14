@@ -76,7 +76,7 @@ test("model stacks use tokens rather than request counts and keep unknown model 
 
 test("dimension ranking keeps all rows and separates identities with the same label", () => {
   const rows = statisticsRows({
-    group_by: "virtual_account",
+    group_by: "subject",
     rows: [
       { key: "a", label: "same", total_tokens: null },
       { key: "b", label: "same", total_tokens: 0 },
@@ -91,7 +91,7 @@ test("dimension ranking keeps all rows and separates identities with the same la
 
 test("account model stacks join on account identity alongside the four metrics", () => {
   const result = overviewChart({
-    group_by: "virtual_account",
+    group_by: "subject",
     rows: [
       {
         key: "a",

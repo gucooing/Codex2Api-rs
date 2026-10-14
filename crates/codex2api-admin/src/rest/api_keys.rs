@@ -1,4 +1,4 @@
-//! Administrative inspection of regular users' API credentials and metered usage.
+//! Administrative inspection of regular users' API credentials.
 use crate::{AdminState, rest::error::ApiResult};
 use axum::{
     Json, Router,
@@ -9,9 +9,7 @@ use codex2api_storage::ApiListQuery;
 use serde_json::json;
 
 pub(super) fn router() -> Router<AdminState> {
-    Router::new()
-        .route("/api-keys", get(keys))
-        .route("/api-usage", get(usage))
+    Router::new().route("/api-keys", get(keys))
 }
 
 async fn keys(State(state): State<AdminState>, Query(query): Query<ApiListQuery>) -> ApiResult {
@@ -22,8 +20,4 @@ async fn keys(State(state): State<AdminState>, Query(query): Query<ApiListQuery>
         value
     });
     Ok(Json(json!(page)))
-}
-
-async fn usage(State(state): State<AdminState>, Query(query): Query<ApiListQuery>) -> ApiResult {
-    Ok(Json(state.storage.admin_api_usage(&query).await?))
 }

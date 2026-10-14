@@ -37,7 +37,7 @@ impl FailureKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseFailure {
     pub kind: FailureKind,
-    /// Error status reported by the peer or defined by a known error code.
+    /// Numeric status actually reported by the peer or emitted by this service.
     /// Never copy HTTP 200/101 into this field. Unknown failures stay unknown.
     pub status: Option<u16>,
     pub code: Option<String>,
@@ -48,9 +48,7 @@ impl ResponseFailure {
     pub fn new(status: Option<u16>, code: Option<&str>, message: Option<&str>) -> Self {
         use FailureKind as K;
         let known = match code {
-            Some("rate_limit_exceeded" | "slow_down" | "rate_limit_error") => {
-                Some((K::RateLimit, 429))
-            }
+            Some("rate_limit_exceeded" | "slow_down" | "rate_limit_error") => Some(K::RateLimit),
             Some(
                 "insufficient_quota"
                 | "usage_limit_reached"
@@ -59,12 +57,12 @@ impl ResponseFailure {
                 | "project_spend_limit_exceeded"
                 | "organization_usage_limit_exceeded"
                 | "virtual_quota_exceeded",
-            ) => Some((K::QuotaExhausted, 429)),
+            ) => Some(K::QuotaExhausted),
             Some("context_length_exceeded" | "invalid_prompt" | "invalid_request_error") => {
-                Some((K::InvalidRequest, 400))
+                Some(K::InvalidRequest)
             }
-            Some("usage_not_included" | "permission_error") => Some((K::Permission, 403)),
-            Some("upstream_timeout" | "stream_idle_timeout") => Some((K::Timeout, 504)),
+            Some("usage_not_included" | "permission_error") => Some(K::Permission),
+            Some("upstream_timeout" | "stream_idle_timeout") => Some(K::Timeout),
             Some(
                 "upstream_connection_failed"
                 | "upstream_transport_error"
@@ -74,8 +72,8 @@ impl ResponseFailure {
                 | "upstream_websocket_write_error"
                 | "upstream_websocket_closed"
                 | "upstream_incomplete",
-            ) => Some((K::Transport, 502)),
-            Some("server_error" | "internal_error") => Some((K::Upstream, 500)),
+            ) => Some(K::Transport),
+            Some("server_error" | "internal_error") => Some(K::Upstream),
             _ => None,
         };
         let reported = status.filter(|s| (400..=599).contains(s));
@@ -85,20 +83,20 @@ impl ResponseFailure {
             Some(403) => K::Permission,
             Some(408 | 504) => K::Timeout,
             Some(429) => match known {
-                Some((K::RateLimit, _)) => K::RateLimit,
-                Some((K::QuotaExhausted, _)) => K::QuotaExhausted,
+                Some(K::RateLimit) => K::RateLimit,
+                Some(K::QuotaExhausted) => K::QuotaExhausted,
                 _ => K::LimitUnknown,
             },
             Some(400..=499) => K::InvalidRequest,
             Some(_) => match known {
-                Some((K::Transport, _)) => K::Transport,
+                Some(K::Transport) => K::Transport,
                 _ => K::Upstream,
             },
-            None => known.map_or(K::Upstream, |(kind, _)| kind),
+            None => known.unwrap_or(K::Upstream),
         };
         Self {
             kind,
-            status: reported.or_else(|| known.map(|(_, status)| status)),
+            status: reported,
             code: code.filter(|s| !s.is_empty()).map(str::to_owned),
             message: message
                 .filter(|s| !s.is_empty())
@@ -119,14 +117,20 @@ impl ResponseFailure {
             })
             .unwrap_or(value);
         let status = [
-            value.get("status"),
-            value.get("status_code"),
-            error.get("status"),
             error.get("status_code"),
+            error.get("status"),
+            value.get("status_code"),
+            value.get("status"),
+            value.pointer("/response/status_code"),
+            value.pointer("/response/status"),
         ]
         .into_iter()
         .flatten()
-        .filter_map(Value::as_u64)
+        .filter_map(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str()?.trim().parse().ok())
+        })
         .filter_map(|s| u16::try_from(s).ok())
         .find(|s| (400..=599).contains(s))
         .or(http_status);
@@ -259,10 +263,7 @@ mod tests {
             state.outcome().unwrap().failure().unwrap().kind,
             FailureKind::QuotaExhausted
         );
-        assert_eq!(
-            state.outcome().unwrap().failure().unwrap().status,
-            Some(429)
-        );
+        assert_eq!(state.outcome().unwrap().failure().unwrap().status, None);
         assert!(!state.observe(&json!({"type":"response.completed"}), Some(200)));
         state.fail(ResponseFailure::new(None, Some("stream_error"), None));
         assert_eq!(
@@ -270,6 +271,39 @@ mod tests {
             FailureKind::QuotaExhausted
         );
     }
+    #[test]
+    fn numeric_failure_status_comes_from_the_response_not_error_names() {
+        for value in [
+            json!({"type":"response.failed","response":{"error":{"status_code":503,"code":"server_is_overloaded","message":"Keep this reason"}}}),
+            json!({"type":"response.failed","response":{"error":{"status":"503","code":"server_is_overloaded","message":"Keep this reason"}}}),
+            json!({"type":"error","status_code":"503","error":{"code":"server_is_overloaded","message":"Keep this reason"}}),
+        ] {
+            let failure = ResponseFailure::from_error(Some(200), &value);
+            assert_eq!(failure.status, Some(503));
+            assert_eq!(failure.message.as_deref(), Some("Keep this reason"));
+        }
+        let conflicting =
+            json!({"status":502,"error":{"status_code":418,"code":"server_is_overloaded"}});
+        assert_eq!(
+            ResponseFailure::from_error(Some(503), &conflicting).status,
+            Some(418)
+        );
+        for code in [
+            "server_is_overloaded",
+            "server_error",
+            "internal_error",
+            "rate_limit_exceeded",
+        ] {
+            let value = json!({"type":"response.failed","response":{"error":{"code":code,"message":"503 in text is not a status"}}});
+            assert_eq!(ResponseFailure::from_error(Some(200), &value).status, None);
+        }
+        assert_eq!(
+            ResponseFailure::from_error(Some(503), &json!({"error":{"message":"unavailable"}}))
+                .status,
+            Some(503)
+        );
+    }
+
     #[test]
     fn classification_requires_structured_evidence() {
         for (status, code, kind) in [

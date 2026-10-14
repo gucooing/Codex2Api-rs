@@ -10,11 +10,12 @@ use crate::{Result, Storage, StorageError, UsageRecord};
 use account_fixture::AccountFixture;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum PriceRequirement<'a> {
     Tokens(Option<&'a str>),
     Image(Option<&'a str>),
     Operation(&'a str),
+    ReadOnly,
 }
 
 /// Integer micro-USD per million tokens; snapshot with each request.
@@ -35,6 +36,22 @@ pub struct ModelPrice {
     pub revision: i64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct UsageChargeTerm {
+    pub kind: &'static str,
+    pub quantity: i64,
+    pub unit_price_usd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UsageCalculation {
+    pub terms: Vec<UsageChargeTerm>,
+    pub multiplier_micros: i64,
+    pub total_nano_usd: i64,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum BillingSnapshot {
@@ -44,6 +61,8 @@ pub(crate) enum BillingSnapshot {
         images: Vec<crate::ImagePrice>,
         #[serde(default)]
         operations: Vec<crate::OperationPrice>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_operations: Option<Vec<crate::OperationPrice>>,
     },
 }
 
@@ -53,15 +72,24 @@ impl BillingSnapshot {
         record: &UsageRecord,
         multiplier_micros: i64,
     ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
+        self.charge_scaled_with_terms(record, multiplier_micros, &mut Vec::new())
+    }
+
+    fn charge_scaled_with_terms(
+        &self,
+        record: &UsageRecord,
+        multiplier_micros: i64,
+        terms: &mut Vec<UsageChargeTerm>,
+    ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
         if !record.endpoint.contains("/images/")
             && codex2api_core::billing_operation(&record.provider_id, &record.endpoint).is_none()
         {
             let tokens = match self {
                 Self::Legacy(tokens) | Self::Current { tokens, .. } => tokens,
             };
-            return charge_scaled(record, tokens, multiplier_micros);
+            return charge_scaled(record, tokens, multiplier_micros, terms);
         }
-        let (cost, status, model, tier) = self.charge(record);
+        let (cost, status, model, tier) = self.charge_with_terms(record, terms, false);
         match cost.map(|cost| {
             i64::try_from((i128::from(cost) * i128::from(multiplier_micros) + 500_000) / 1_000_000)
         }) {
@@ -71,9 +99,47 @@ impl BillingSnapshot {
         }
     }
 
-    pub(crate) fn charge(
+    pub(crate) fn base_charge(
         &self,
         record: &UsageRecord,
+    ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
+        self.charge_with_terms(record, &mut Vec::new(), true)
+    }
+
+    pub(crate) fn calculation(&self, record: &UsageRecord, base: bool) -> Option<UsageCalculation> {
+        let expected = if base {
+            record.base_cost_nano_usd
+        } else {
+            record.cost_nano_usd
+        }?;
+        let multiplier_micros = if base {
+            1_000_000
+        } else {
+            record.multiplier_micros
+        };
+        let mut terms = Vec::new();
+        let amount = if record.billing_status == "not_charged" && expected == 0 {
+            Some(0)
+        } else if base {
+            self.charge_with_terms(record, &mut terms, true).0
+        } else {
+            self.charge_scaled_with_terms(record, multiplier_micros, &mut terms)
+                .0
+        };
+        // Describe only the saved settlement. Never reprice old records or
+        // manufacture a formula when their original price/usage is unavailable.
+        (amount == Some(expected)).then_some(UsageCalculation {
+            terms,
+            multiplier_micros,
+            total_nano_usd: expected,
+        })
+    }
+
+    fn charge_with_terms(
+        &self,
+        record: &UsageRecord,
+        terms: &mut Vec<UsageChargeTerm>,
+        base: bool,
     ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
         if let Some(operation) =
             codex2api_core::billing_operation(&record.provider_id, &record.endpoint)
@@ -86,12 +152,33 @@ impl BillingSnapshot {
                 return (None, "missing_usage", model, Some("request".into()));
             }
             let price = match self {
-                Self::Current { operations, .. } => operations
-                    .iter()
-                    .find(|p| p.provider_id == record.provider_id && p.operation == operation)
-                    .and_then(|p| p.price_nano_usd),
+                Self::Current {
+                    operations,
+                    cost_operations,
+                    ..
+                } => {
+                    let prices = if base
+                        && matches!(record.subject_kind.as_str(), "api_key" | "retired_api_key")
+                    {
+                        cost_operations.as_deref().unwrap_or_default()
+                    } else {
+                        operations.as_slice()
+                    };
+                    prices
+                        .iter()
+                        .find(|p| p.provider_id == record.provider_id && p.operation == operation)
+                        .and_then(|p| p.price_nano_usd)
+                }
                 Self::Legacy(_) => None,
             };
+            if let Some(price) = price {
+                terms.push(UsageChargeTerm {
+                    kind: "request",
+                    quantity: 1,
+                    unit_price_usd: format_units(price, 9),
+                    resolution: None,
+                });
+            }
             return (
                 price,
                 if price.is_some() {
@@ -108,7 +195,7 @@ impl BillingSnapshot {
             Self::Current { tokens, images, .. } => (tokens.as_slice(), Some(images)),
         };
         if !record.endpoint.contains("/images/") {
-            return charge(record, tokens);
+            return charge_scaled(record, tokens, 1_000_000, terms);
         }
         let model = record.actual_model.clone().or(record.model.clone());
         let Some(images) = images else {
@@ -163,6 +250,12 @@ impl BillingSnapshot {
             let Some(price) = price else {
                 return (None, "unpriced", model, None);
             };
+            terms.push(UsageChargeTerm {
+                kind: "image",
+                quantity: item.count,
+                unit_price_usd: format_units(price.price_nano_usd, 9),
+                resolution: Some(size),
+            });
             if let Some(hit_tier) = crate::image_resolution_tier(&price.resolution) {
                 billing_tiers.insert(hit_tier);
             }
@@ -274,24 +367,33 @@ pub fn price_tier(tier: Option<&str>) -> Option<&'static str> {
 }
 
 /// No estimates for missing counters, unknown models, or unsupported modalities.
-pub(crate) fn charge(
+#[cfg(test)]
+fn charge(
     record: &UsageRecord,
     prices: &[ModelPrice],
 ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
-    charge_scaled(record, prices, 1_000_000)
+    charge_scaled(record, prices, 1_000_000, &mut Vec::new())
 }
 
 fn charge_scaled(
     record: &UsageRecord,
     prices: &[ModelPrice],
     multiplier_micros: i64,
+    terms: &mut Vec<UsageChargeTerm>,
 ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
     let model = record
         .actual_model
         .as_ref()
         .or(record.model.as_ref())
         .cloned();
-    if !record.endpoint.ends_with("/responses") && !record.endpoint.ends_with("/responses/compact")
+    if record.provider_id == codex2api_core::CHATGPT
+        && record.endpoint.ends_with("/responses/input_tokens")
+    {
+        return (Some(0), "not_charged", model, None);
+    }
+    if !record.endpoint.ends_with("/responses")
+        && !record.endpoint.ends_with("/responses/compact")
+        && !record.endpoint.ends_with("/chat/completions")
     {
         return (None, "unsupported", model, None);
     }
@@ -326,6 +428,21 @@ fn charge_scaled(
         + i128::from(cached) * i128::from(price.cached_rate)
         + i128::from(writes) * i128::from(price.cache_write_rate)
         + i128::from(output) * i128::from(price.output_rate);
+    for (kind, quantity, rate) in [
+        ("cache_write", writes, price.cache_write_rate),
+        ("cache_read", cached, price.cached_rate),
+        ("output", output, price.output_rate),
+        ("input", input - cached - writes, price.input_rate),
+    ] {
+        if quantity > 0 {
+            terms.push(UsageChargeTerm {
+                kind,
+                quantity,
+                unit_price_usd: format_units(rate, 6),
+                resolution: None,
+            });
+        }
+    }
     // Round once to nano-USD; reasoning tokens are already included in output.
     match units
         .checked_mul(i128::from(multiplier_micros))
@@ -376,6 +493,7 @@ impl Storage {
             }
             PriceRequirement::Operation(operation) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operation_prices WHERE provider_id=? AND operation=? AND price_nano_usd IS NOT NULL)")
                 .bind(provider).bind(operation).fetch_one(self.pool()).await?,
+            PriceRequirement::ReadOnly => true,
         };
         self.runtime
             .cache(key, &value, epoch, std::time::Duration::from_secs(30));
@@ -415,6 +533,7 @@ impl Storage {
             tokens,
             images,
             operations,
+            cost_operations: None,
         })?);
         self.runtime
             .cache(key, &value, epoch, std::time::Duration::from_secs(30));
@@ -500,6 +619,7 @@ mod tests {
             ..Default::default()
         };
         let snapshot = BillingSnapshot::Current {
+            cost_operations: None,
             tokens: vec![],
             operations: vec![],
             images: vec![crate::ImagePrice {
@@ -509,7 +629,7 @@ mod tests {
                 price_nano_usd: 42,
             }],
         };
-        let charged = snapshot.charge(&record);
+        let charged = snapshot.base_charge(&record);
         assert_eq!(charged.0, Some(42));
         assert_eq!(charged.1, "priced");
         assert_eq!(charged.3.as_deref(), Some("1K"));

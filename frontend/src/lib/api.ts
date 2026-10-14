@@ -219,14 +219,25 @@ export type Device = {
 };
 export type UsageRecord = {
   id: string;
+  user_id: string | null;
+  key_id: string | null;
+  group_id: string | null;
+  group_name: string | null;
+  source_name: string | null;
+  multiplier_micros: number;
+  base_cost_nano_usd: number | null;
+  wallet_debit_cents: number;
+  completed_at_ms: number | null;
   account_id: string;
   account_name: string;
   subject_id: string;
   subject_name: string;
+  consumer_name: string;
   subject_kind: string;
   provider_id: string;
   endpoint: string;
   transport: string;
+  stream: boolean | null;
   model: string | null;
   actual_model: string | null;
   upstream_request_id: string | null;
@@ -245,14 +256,14 @@ export type UsageRecord = {
   total_ms: number | null;
   requested_at_ms: number;
   status: string;
-  http_status: number | null;
   failure_kind: string | null;
   failure_status: number | null;
   error_code: string | null;
   error_message: string | null;
   cost_nano_usd: number | null;
   billing_status: string;
-  billing_tier: string | null;
+  billing_calculation: import("./usage-calculation").UsageCalculation | null;
+  cost_calculation: import("./usage-calculation").UsageCalculation | null;
 };
 export type UsagePage = {
   records: UsageRecord[];

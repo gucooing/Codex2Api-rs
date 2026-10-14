@@ -892,14 +892,14 @@ async fn user_usage_filters_every_query_by_owner_and_never_serializes_supplier_d
             actual_model: Some("gpt-5".into()),
             endpoint: "/responses".into(),
             transport: "http".into(),
-            status: "completed".into(),
+            status: "in_progress".into(),
             requested_at_ms: now,
             error_message: Some("supplier-secret-error".into()),
             upstream_request_id: Some("supplier-secret-request".into()),
             ..Default::default()
         };
         storage.insert_usage(&record).await.unwrap();
-        sqlx::query("UPDATE usage_records SET input_tokens=?,output_tokens=?,cached_tokens=20,cost_nano_usd=1000000,billing_status='priced' WHERE id=?")
+        sqlx::query("UPDATE usage_records SET status='completed',input_tokens=?,output_tokens=?,cached_tokens=20,cost_nano_usd=1000000,billing_status='priced' WHERE id=?")
             .bind(input).bind(output).bind(id).execute(storage.pool()).await.unwrap();
     }
     let response = request(

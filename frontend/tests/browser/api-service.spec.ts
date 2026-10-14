@@ -167,7 +167,7 @@ test("API policy, precise model prices and user-owned keys work across independe
     const userNavigation = userPage.getByRole("navigation", { name: "用户导航", exact: true });
     await expect(userNavigation.getByRole("link", { name: "模型广场", exact: true })).toBeVisible();
     await expect(userNavigation.getByRole("link", { name: "API 密钥", exact: true })).toBeVisible();
-    await expect(userNavigation.getByRole("link", { name: "API 用量", exact: true })).toBeVisible();
+    await expect(userNavigation.getByRole("link", { name: "使用信息", exact: true })).toBeVisible();
     await expect(userPage.getByRole("tabpanel")).toBeVisible();
     await userPage.getByLabel("模型", { exact: true }).fill(suffix);
     await userPage.getByRole("button", { name: "查询", exact: true }).click();
@@ -279,10 +279,10 @@ test("API policy, precise model prices and user-owned keys work across independe
       fullPage: true,
       animations: "disabled",
     });
-    await userNavigation.getByRole("link", { name: "API 用量", exact: true }).click();
+    await userNavigation.getByRole("link", { name: "使用信息", exact: true }).click();
     await expect(userPage.getByRole("table")).toBeVisible();
     await expect(
-      userPage.getByRole("columnheader", { name: "倍率 / 费用", exact: true }),
+      userPage.getByRole("columnheader", { name: "模型 / 接口", exact: true }),
     ).toBeVisible();
   } finally {
     await userContext.close();
@@ -293,7 +293,7 @@ test("API policy, precise model prices and user-owned keys work across independe
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect(page.getByRole("table")).toContainText("更新后的密钥");
   await expect(page.getByRole("columnheader", { name: "当前并发", exact: true })).toBeVisible();
-  await page.goto("/admin/api-usage/");
+  await page.goto("/admin/usage/");
   await expect(page.getByRole("table")).toBeVisible();
   expect(errors).toEqual([]);
 });

@@ -115,7 +115,8 @@ impl Storage {
             "wallet_entries w JOIN regular_users u ON u.id=w.user_id",
             "julianday(w.created_at) DESC,w.rowid DESC",
             |q| {
-                q.push(" AND w.user_id=").push_bind(owner.to_owned());
+                q.push(" AND w.kind IN ('order_payment','system_adjustment') AND w.user_id=")
+                    .push_bind(owner.to_owned());
             },
         )
         .await

@@ -39,10 +39,12 @@ impl Gate {
 struct Mock {
     requests: Mutex<Vec<(String, http::HeaderMap, Value)>>,
     status: Mutex<Option<u16>>,
+    ai_status: Mutex<Option<u16>>,
     gate: Arc<Gate>,
     truncate: AtomicBool,
     failed_usage: AtomicBool,
     partial_output: AtomicBool,
+    response_content_type: Mutex<Option<Option<String>>>,
 }
 fn response_value() -> Value {
     json!({"object":"response","id":"resp_fixture","created_at":100,"model":"custom-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":10000,"output_tokens":5000,"input_tokens_details":{"cached_tokens":2000},"output_tokens_details":{"reasoning_tokens":1000}},"supplier_account_id":"private-supplier"})
@@ -55,9 +57,11 @@ impl codex2api_upstream::HttpTransport for Mock {
         let built = request.build();
         let gate = self.gate.clone();
         let status = *self.status.lock().unwrap();
+        let ai_status = *self.ai_status.lock().unwrap();
         let truncate = self.truncate.load(Ordering::Relaxed);
         let failed_usage = self.failed_usage.load(Ordering::Relaxed);
         let partial_output = self.partial_output.load(Ordering::Relaxed);
+        let response_content_type = self.response_content_type.lock().unwrap().clone();
         let decoded = built.as_ref().ok().and_then(|request| {
             request
                 .body()
@@ -83,7 +87,12 @@ impl codex2api_upstream::HttpTransport for Mock {
                 assert!(request.url().path().starts_with("/v1/"));
                 assert_eq!(request.headers()["x-xai-token-auth"], "xai-grok-cli");
             } else {
-                assert_eq!(request.url().host_str(), Some("chatgpt.com"));
+                let host = if request.url().path().ends_with("/responses/input_tokens") {
+                    "api.openai.com"
+                } else {
+                    "chatgpt.com"
+                };
+                assert_eq!(request.url().host_str(), Some(host));
             }
             if request.method() == http::Method::GET {
                 let id = request.headers()["chatgpt-account-id"].to_str().unwrap();
@@ -96,6 +105,9 @@ impl codex2api_upstream::HttpTransport for Mock {
                     "rate_limit_exceeded"
                 };
                 let mut value = json!({"error":{"code":code,"message":"private-supplier","retry_after_seconds":7}});
+                if let Some(ai_status) = ai_status {
+                    value["error"]["status_code"] = ai_status.into();
+                }
                 if failed_usage {
                     let response = if request.url().path().ends_with("/chat/completions") {
                         chat_value()
@@ -121,6 +133,24 @@ impl codex2api_upstream::HttpTransport for Mock {
                     .into());
             }
             let body = decoded.unwrap();
+            if request.url().path().ends_with("/alpha/search") {
+                return Ok(http::Response::builder().header("content-type", "application/json")
+                    .body(reqwest::Body::from(json!({"output":"Found a real fixture result", "encrypted_output":"search-context", "results":[{"title":"Fixture", "url":"https://example.test/", "metadata":{"account":"public result"}}]}).to_string())).unwrap().into());
+            }
+            if request.url().path().ends_with("/responses/input_tokens") {
+                return Ok(http::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(reqwest::Body::from(
+                        json!({"object":"response.input_tokens","input_tokens":123}).to_string(),
+                    ))
+                    .unwrap()
+                    .into());
+            }
+            if request.url().path().ends_with("/responses/compact") {
+                return Ok(http::Response::builder().header("content-type", "application/json")
+                    .body(reqwest::Body::from(json!({"id":"cmp_fixture","object":"response.compaction","output":[{"type":"compaction","encrypted_content":"compacted-context"}],"usage":{"input_tokens":10000,"output_tokens":5000,"input_tokens_details":{"cached_tokens":2000}}}).to_string())).unwrap().into());
+            }
+
             if request.url().path().contains("/images/") {
                 return Ok(http::Response::builder().header("content-type","application/json").body(reqwest::Body::from(json!({"created":100,"data":[{"url":"https://example.test/one.png","width":1024,"height":1024},{"url":"https://example.test/two.png","width":1024,"height":1024}]}).to_string())).unwrap().into());
             }
@@ -130,6 +160,9 @@ impl codex2api_upstream::HttpTransport for Mock {
                 value["status"] = "failed".into();
                 value["output"] = json!([]);
                 value["error"] = json!({"code":"usage_limit_reached","resets_at":2000000000,"message":"private-supplier"});
+                if let Some(ai_status) = ai_status {
+                    value["error"]["status_code"] = ai_status.into();
+                }
                 let (content_type, body) = if body["stream"] == true {
                     (
                         "text/event-stream",
@@ -191,9 +224,13 @@ impl codex2api_upstream::HttpTransport for Mock {
                         gate.wait().await;
                         Ok(Bytes::from(if truncate { String::new() } else { last }))
                     }));
-            Ok(http::Response::builder()
-                .header("content-type", "text/event-stream")
-                .header("set-cookie", "private-supplier")
+            let mut response = http::Response::builder().header("set-cookie", "private-supplier");
+            if let Some(content_type) =
+                response_content_type.unwrap_or_else(|| Some("text/event-stream".into()))
+            {
+                response = response.header("content-type", content_type);
+            }
+            Ok(response
                 .body(reqwest::Body::wrap_stream(bytes))
                 .unwrap()
                 .into())
@@ -289,6 +326,7 @@ async fn fixture(provider: &str) -> Fixture {
                 tag_ids: vec!["tag".into()],
                 allowed_models: vec![],
                 multiplier: "1.5".into(),
+                search_price_usd: (provider == "chatgpt").then(|| "0.02".into()),
                 concurrency_limit: 1,
                 rpm_limit: 0,
                 model_rules: vec![],
@@ -424,6 +462,16 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                     json!({"model":"custom-model","input":"Hello"})
                 };
                 body["stream"] = stream.into();
+                body["store"] = true.into();
+                body["client_metadata"] = json!({"session_id":"consumer-session","x-codex-installation-id":"consumer-installation","supplier":"private-caller"});
+                body["metadata"] = json!({"local":"caller-metadata"});
+                body["user"] = "private-caller".into();
+                body["temperature"] = json!(0.4);
+                body[if chat {
+                    "max_completion_tokens"
+                } else {
+                    "max_output_tokens"
+                }] = json!(123);
                 if chat && stream {
                     body["stream_options"] = json!({"include_usage":true});
                 }
@@ -465,7 +513,7 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                         .wallet_cents,
                     98
                 );
-                let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,reasoning_tokens,cost_nano_usd FROM api_usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
+                let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,reasoning_tokens,cost_nano_usd FROM usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
                 assert_eq!(
                     record,
                     (
@@ -481,7 +529,7 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                         .fetch_one(fixture.storage.pool())
                         .await
                         .unwrap(),
-                    0
+                    1
                 );
                 let calls = fixture.mock.requests.lock().unwrap();
                 let (path, headers, body) = &calls[0];
@@ -498,14 +546,22 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                     assert!(!headers.contains_key(name), "{name}");
                 }
                 assert_ne!(headers["user-agent"], "consumer-application");
+                assert!(body.get("metadata").is_none());
+                assert!(body.get("user").is_none());
+                assert!(body.get("max_completion_tokens").is_none());
                 if provider == "chatgpt" {
                     assert_eq!(path, "/backend-api/codex/responses");
                     assert_eq!(body["store"], false);
                     assert_eq!(body["stream"], true);
                     assert_eq!(headers["originator"], "codex_cli_rs");
                     assert_eq!(headers["chatgpt-account-id"], "workspace");
-                    assert!(uuid::Uuid::parse_str(headers["session-id"].to_str().unwrap()).is_ok());
-                    assert_eq!(headers["session-id"], headers["thread-id"]);
+                    assert_eq!(headers["session-id"], "consumer-session");
+                    assert!(!headers.contains_key("thread-id"));
+                    assert_eq!(body["client_metadata"]["session_id"], "consumer-session");
+                    assert!(body["client_metadata"].get("thread_id").is_none());
+                    assert!(body["client_metadata"].get("supplier").is_none());
+                    assert!(body.get("temperature").is_none());
+                    assert!(body.get("max_output_tokens").is_none());
                     assert!(
                         uuid::Uuid::parse_str(
                             body["client_metadata"]["x-codex-installation-id"]
@@ -516,6 +572,19 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                     );
                     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
                 } else {
+                    assert!(body.get("client_metadata").is_none());
+                    assert_eq!(body["temperature"], 0.4);
+                    assert_eq!(
+                        body[if chat {
+                            "max_tokens"
+                        } else {
+                            "max_output_tokens"
+                        }],
+                        123
+                    );
+                    if !chat {
+                        assert_eq!(body["store"], false);
+                    }
                     assert!(!headers.contains_key("chatgpt-account-id"));
                     assert!(!headers.contains_key("x-codex-installation-id"));
                     assert!(!headers.contains_key("originator"));
@@ -587,12 +656,10 @@ async fn disconnection_keeps_generation_lease_and_settles_without_oauth() {
         98
     );
     assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM api_usage_records WHERE status='completed'"
-        )
-        .fetch_one(fixture.storage.pool())
-        .await
-        .unwrap(),
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM usage_records WHERE status='completed'")
+            .fetch_one(fixture.storage.pool())
+            .await
+            .unwrap(),
         1
     );
 }
@@ -687,7 +754,7 @@ async fn truncated_stream_is_not_reported_as_success_or_free_usage() {
     assert!(!text.contains("\"finish_reason\":\"stop\""));
     assert!(!text.contains("[DONE]"));
     let (status, tokens, cost): (String, Option<i64>, Option<i64>) =
-        sqlx::query_as("SELECT status,input_tokens,cost_nano_usd FROM api_usage_records")
+        sqlx::query_as("SELECT status,input_tokens,cost_nano_usd FROM usage_records")
             .fetch_one(fixture.storage.pool())
             .await
             .unwrap();
@@ -700,72 +767,84 @@ async fn truncated_stream_is_not_reported_as_success_or_free_usage() {
 async fn failed_response_with_reported_usage_is_charged_without_replay() {
     for provider in ["chatgpt", "grok"] {
         for stream in [false, true] {
-            let fixture = fixture(provider).await;
-            add_supplier(&fixture.storage, provider, "supplier-two").await;
-            fixture
-                .storage
-                .edit_supplier_tags(&["supplier-two".into()], &["tag".into()], false)
-                .await
-                .unwrap();
-            fixture.mock.failed_usage.store(true, Ordering::Release);
-            let (path, body) = if provider == "chatgpt" {
-                (
-                    "/v1/chat/completions",
-                    json!({"model":"custom-model","messages":[{"role":"user","content":"Hello"}],"stream":stream}),
-                )
-            } else {
-                (
-                    "/v1/responses",
-                    json!({"model":"custom-model","input":"Hello","stream":stream}),
-                )
-            };
-            let response = fixture
-                .router
-                .clone()
-                .oneshot(request(path, &fixture.token, body))
-                .await
-                .unwrap();
-            assert_eq!(
-                response.status(),
-                if stream {
-                    StatusCode::OK
-                } else {
-                    StatusCode::TOO_MANY_REQUESTS
-                }
-            );
-            let text = String::from_utf8(
-                to_bytes(response.into_body(), 1024 * 1024)
-                    .await
-                    .unwrap()
-                    .to_vec(),
-            )
-            .unwrap();
-            assert!(text.contains("usage_limit_reached"));
-            assert!(!text.contains("private-supplier"));
-            assert!(!text.contains("[DONE]"));
-            assert!(!text.contains("\"finish_reason\":\"stop\""));
-            let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,http_status,cost_nano_usd FROM api_usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
-            assert_eq!(
-                record,
-                (
-                    "failed".into(),
-                    Some(10000),
-                    Some(5000),
-                    Some(200),
-                    Some(27_300_000)
-                )
-            );
-            assert_eq!(
+            for ai_status in [Some(429), None] {
+                let fixture = fixture(provider).await;
+                *fixture.mock.ai_status.lock().unwrap() = ai_status;
+                add_supplier(&fixture.storage, provider, "supplier-two").await;
                 fixture
                     .storage
-                    .user("user")
+                    .edit_supplier_tags(&["supplier-two".into()], &["tag".into()], false)
                     .await
-                    .unwrap()
-                    .unwrap()
-                    .wallet_cents,
-                98
-            );
-            assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
+                    .unwrap();
+                fixture.mock.failed_usage.store(true, Ordering::Release);
+                let (path, body) = if provider == "chatgpt" {
+                    (
+                        "/v1/chat/completions",
+                        json!({"model":"custom-model","messages":[{"role":"user","content":"Hello"}],"stream":stream}),
+                    )
+                } else {
+                    (
+                        "/v1/responses",
+                        json!({"model":"custom-model","input":"Hello","stream":stream}),
+                    )
+                };
+                let response = fixture
+                    .router
+                    .clone()
+                    .oneshot(request(path, &fixture.token, body))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    if stream {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::from_u16(ai_status.unwrap_or(502)).unwrap()
+                    }
+                );
+                let text = String::from_utf8(
+                    to_bytes(response.into_body(), 1024 * 1024)
+                        .await
+                        .unwrap()
+                        .to_vec(),
+                )
+                .unwrap();
+                assert!(text.contains("usage_limit_reached"));
+                assert!(!text.contains("private-supplier"));
+                assert!(!text.contains("[DONE]"));
+                assert!(!text.contains("\"finish_reason\":\"stop\""));
+                assert_eq!(
+                    sqlx::query_scalar::<_, Option<i64>>(
+                        "SELECT failure_status FROM usage_records"
+                    )
+                    .fetch_one(fixture.storage.pool())
+                    .await
+                    .unwrap(),
+                    ai_status.map(i64::from)
+                );
+                let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,http_status,cost_nano_usd FROM usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
+                assert_eq!(
+                    record,
+                    (
+                        "failed".into(),
+                        Some(10000),
+                        Some(5000),
+                        Some(200),
+                        Some(27_300_000)
+                    )
+                );
+                assert_eq!(
+                    fixture
+                        .storage
+                        .user("user")
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .wallet_cents,
+                    98
+                );
+                assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
+            }
         }
     }
 }
@@ -806,7 +885,7 @@ async fn physical_http_failure_preserves_reported_usage_and_does_not_replay() {
                 let value = json_body(response).await;
                 assert!(value.get("error").is_some());
                 assert!(!value.to_string().contains("private-supplier"));
-                let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,http_status,cost_nano_usd FROM api_usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
+                let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,http_status,cost_nano_usd FROM usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
                 assert_eq!(
                     record,
                     (
@@ -851,7 +930,7 @@ async fn physical_rejection_with_partial_output_preserves_unknown_cost() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let (status, cost, billing): (String, Option<i64>, String) =
-        sqlx::query_as("SELECT status,cost_nano_usd,billing_status FROM api_usage_records")
+        sqlx::query_as("SELECT status,cost_nano_usd,billing_status FROM usage_records")
             .fetch_one(fixture.storage.pool())
             .await
             .unwrap();
@@ -913,7 +992,7 @@ async fn images_use_each_platform_transport_and_bill_actual_count() {
             let result = json_body(response).await;
             assert_eq!(result["data"].as_array().unwrap().len(), 2);
             let (count, cost): (Option<i64>, Option<i64>) =
-                sqlx::query_as("SELECT image_count,cost_nano_usd FROM api_usage_records")
+                sqlx::query_as("SELECT image_count,cost_nano_usd FROM usage_records")
                     .fetch_one(fixture.storage.pool())
                     .await
                     .unwrap();
@@ -1066,4 +1145,167 @@ async fn previous_responses_keep_supplier_and_consumer_ownership_for_native_grok
         .unwrap();
     assert_eq!(unavailable.status(), StatusCode::CONFLICT);
     assert_eq!(fixture.mock.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn upstream_sse_framing_preserves_the_callers_response_mode_and_usage() {
+    for media_type in [None, Some("application/json")] {
+        for stream in [false, true] {
+            let fixture = fixture("chatgpt").await;
+            *fixture.mock.response_content_type.lock().unwrap() =
+                Some(media_type.map(str::to_owned));
+            let response = fixture
+                .router
+                .clone()
+                .oneshot(request(
+                    "/v1/responses",
+                    &fixture.token,
+                    json!({"model":"custom-model","input":"Hello","stream":stream}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            if stream {
+                let body = std::str::from_utf8(&bytes).unwrap();
+                assert!(body.contains("response.completed"));
+                assert!(!body.contains("upstream_protocol_error"));
+            } else {
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["status"], "completed");
+                assert_eq!(body["output"][0]["content"][0]["text"], "Hello");
+            }
+            let row: (Option<bool>, String, Option<i64>) =
+                sqlx::query_as("SELECT stream,status,input_tokens FROM usage_records")
+                    .fetch_one(fixture.storage.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(row, (Some(stream), "completed".into(), Some(10000)));
+            assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn api_rewrite_public_contracts() {
+    let f = fixture("chatgpt").await;
+    f.storage
+        .save_operation_price(
+            &codex2api_storage::OperationPrice {
+                provider_id: "chatgpt".into(),
+                operation: "search".into(),
+                price_nano_usd: Some(5_000_000),
+                revision: 0,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let response=f.router.clone().oneshot(request("/v1/alpha/search",&f.token,json!({
+        "id":"search-caller","model":"custom-model","commands":{"search_query":[{"q":"fixture"}]}
+    }))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["output"], "Found a real fixture result");
+    assert_eq!(body["results"][0]["metadata"]["account"], "public result");
+    for path in ["/v1/responses/compact", "/v1/responses/input_tokens"] {
+        let response = f
+            .router
+            .clone()
+            .oneshot(request(
+                path,
+                &f.token,
+                json!({"model":"custom-model","input":"Hello"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let body = json_body(response).await;
+        assert!(body.get("error").is_none(), "{path}: {body}");
+    }
+    let mut call = request(
+        "/v1/chat/completions",
+        &f.token,
+        json!({
+            "model":"custom-model","messages":[{"role":"system","content":"Be exact"},{"role":"user","content":"Hello"}],
+            "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"account":{"type":"string"}}},"strict":true}}],
+            "tool_choice":{"type":"function","function":{"name":"lookup"}},
+            "reasoning_effort":"high","metadata":{"account":"caller-data"},"prompt_cache_key":"caller-cache"
+        }),
+    );
+    call.headers_mut()
+        .insert("session-id", "caller-session".parse().unwrap());
+    call.headers_mut()
+        .insert("thread-id", "caller-thread".parse().unwrap());
+    let response = f.router.clone().oneshot(call).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["choices"][0]["message"]["content"], "Hello");
+    assert_eq!(value["metadata"]["account"], "caller-data");
+    let calls = f.mock.requests.lock().unwrap();
+    let (_, headers, wire) = calls.last().unwrap();
+    assert_eq!(headers["session-id"], "caller-session");
+    assert_eq!(headers["thread-id"], "caller-thread");
+    assert_eq!(wire["prompt_cache_key"], "caller-cache");
+    assert!(wire.get("instructions").is_none());
+    assert_eq!(wire["input"][0]["role"], "developer");
+    assert_eq!(wire["tools"][0]["name"], "lookup");
+    assert_eq!(
+        wire["tools"][0]["parameters"]["properties"]["account"]["type"],
+        "string"
+    );
+    assert!(
+        wire["include"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "reasoning.encrypted_content")
+    );
+    drop(calls);
+    *f.mock.status.lock().unwrap() = Some(200);
+    *f.mock.ai_status.lock().unwrap() = Some(429);
+    let response = f
+        .router
+        .clone()
+        .oneshot(request(
+            "/v1/responses",
+            &f.token,
+            json!({"model":"custom-model","input":"Hello","stream":true}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "7");
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json")
+    );
+    let failure = json_body(response).await;
+    assert_eq!(failure["error"]["code"], "rate_limit_exceeded");
+    let records = f.storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(records.total, 5);
+    assert_eq!(
+        records
+            .records
+            .iter()
+            .filter(|r| r.status == "completed")
+            .count(),
+        4
+    );
+    let search = records
+        .records
+        .iter()
+        .find(|r| r.endpoint == "/v1/alpha/search")
+        .unwrap();
+    assert_eq!(search.cost_nano_usd, Some(20_000_000));
+    let count = records
+        .records
+        .iter()
+        .find(|r| r.endpoint == "/v1/responses/input_tokens")
+        .unwrap();
+    assert_eq!(count.input_tokens, None);
+    assert_eq!(count.cost_nano_usd, Some(0));
+    assert_eq!(count.billing_status, "not_charged");
 }

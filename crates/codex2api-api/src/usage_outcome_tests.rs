@@ -5,7 +5,10 @@ async fn rows(storage: &Storage, count: usize) -> Vec<UsageRecord> {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let rows = storage
-                .query_usage(&Default::default())
+                .query_usage(&codex2api_storage::UsageFilter {
+                    page_size: Some(50),
+                    ..Default::default()
+                })
                 .await
                 .unwrap()
                 .records;
@@ -36,13 +39,13 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
             "rate",
             json!({"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"retry later"}}}),
             "rate_limit",
-            Some(429),
+            None,
         ),
         (
             "quota",
             json!({"type":"response.failed","response":{"error":{"code":"insufficient_quota","message":"exhausted"}}}),
             "quota_exhausted",
-            Some(429),
+            None,
         ),
         (
             "usage",
@@ -67,6 +70,18 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
             json!({"type":"error","status":403,"error":{"code":"policy_denied"}}),
             "permission",
             Some(403),
+        ),
+        (
+            "overloaded",
+            json!({"type":"response.failed","response":{"error":{"status_code":"503","code":"server_is_overloaded","message":"Keep the original reason"}}}),
+            "upstream",
+            Some(503),
+        ),
+        (
+            "overloaded-without-status",
+            json!({"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Keep the original reason"}}}),
+            "upstream",
+            None,
         ),
         (
             "unknown",

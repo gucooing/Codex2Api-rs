@@ -81,7 +81,7 @@ test("usage text, returned models, unit conversion and failure details use persi
     fullPage: true,
     animations: "disabled",
   });
-  await complete.getByRole("button", { name: "查看请求详情：200", exact: true }).click();
+  await complete.getByRole("button", { name: "查看请求详情：成功", exact: true }).click();
   const detail = page.getByRole("dialog");
   await expect(detail.locator("[data-slot=dialog-description]")).toContainText(
     "请求 ID：req-review-usage-model",
@@ -96,7 +96,7 @@ test("usage text, returned models, unit conversion and failure details use persi
   await expect(stopped.getByText("成功", { exact: true })).toHaveClass(/text-green/);
   await expect(stopped.getByRole("cell").nth(4)).toContainText("24.8K");
   await expect(stopped.getByRole("cell").nth(5)).not.toHaveText("-");
-  await stopped.getByRole("button", { name: "查看请求详情：200", exact: true }).click();
+  await stopped.getByRole("button", { name: "查看请求详情：成功", exact: true }).click();
   await expect(detail.getByText("成功（客户端停止）", { exact: true })).toBeVisible();
   await expect(detail.getByText("失败原因", { exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
@@ -110,10 +110,11 @@ test("usage text, returned models, unit conversion and failure details use persi
     await expect(row.getByRole("cell").nth(4)).toHaveText("-");
     await expect(row.getByRole("cell").nth(5)).toHaveText("-");
     await expect(row).not.toContainText(reason);
-    await expect(row.getByText("失败", { exact: true })).toHaveClass(/text-red/);
+    await expect(row.getByText(code, { exact: true })).toHaveClass(/text-destructive/);
     await row.getByRole("button", { name: `查看请求详情：${code}`, exact: true }).click();
     await expect(detail.getByText(reason, { exact: true })).toBeVisible();
-    await expect(detail.getByText("HTTP 状态（连接）", { exact: true })).toBeVisible();
+    await expect(detail.getByText("HTTP 状态（连接）", { exact: true })).toHaveCount(0);
+    await expect(detail.getByText(code, { exact: true })).toHaveClass(/text-destructive/);
     await expect(
       detail.getByText(id === "review-usage-stream-failure" ? "请求错误" : "额度耗尽", {
         exact: true,

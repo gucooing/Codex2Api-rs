@@ -1,7 +1,7 @@
 //! Inspect uncommitted output and apply supplier-side recovery policy.
 use crate::{Result, SupplierContext};
 use bytes::Bytes;
-use codex2api_upstream::{SupplierFailure, UpstreamError};
+use codex2api_upstream::{ResponseFormat, SupplierFailure, UpstreamError};
 use futures::StreamExt;
 #[derive(Clone, Copy, Debug)]
 pub struct FirstEventAt(pub std::time::Instant);
@@ -117,27 +117,26 @@ pub async fn inspect_response(
     mut response: reqwest::Response,
 ) -> std::result::Result<reqwest::Response, UpstreamError> {
     let status = response.status();
-    let headers = response.headers().clone();
+    let mut headers = response.headers().clone();
     if !status.is_success() {
         let body = response.text().await?;
         return Err(UpstreamError::status_with_headers(status, body, headers));
     }
-    if !headers
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|v| v.starts_with("text/event-stream"))
-    {
-        return Ok(response);
-    }
+    let version = response.version();
+    let mut framing = None;
     let revision = response
         .extensions()
         .get::<codex2api_upstream::SupplierAuthRevision>()
         .copied();
+    let extensions = std::mem::take(response.extensions_mut());
     let mut prefix = Vec::new();
     let mut parsed = 0;
     let mut scanned = 0;
     let mut first_event = None;
-    'read: while prefix.len() < 256 * 1024 {
+    'read: while prefix.len() < codex2api_upstream::MAX_REQUEST_BYTES {
+        if framing == Some(ResponseFormat::EventStream) && prefix.len() >= 256 * 1024 {
+            break;
+        }
         let chunk = tokio::time::timeout(
             codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
             response.chunk(),
@@ -145,9 +144,43 @@ pub async fn inspect_response(
         .await
         .map_err(|_| UpstreamError::StreamIdleTimeout)??;
         let Some(chunk) = chunk else {
+            if framing == Some(ResponseFormat::Json)
+                && let Ok(value) = serde_json::from_slice::<serde_json::Value>(
+                    prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&prefix),
+                )
+            {
+                reject_recoverable(provider, &value, &headers, revision)?;
+            }
             break;
         };
+        if prefix.len().saturating_add(chunk.len()) > codex2api_upstream::MAX_REQUEST_BYTES {
+            return Err(UpstreamError::Stream(
+                "Upstream response exceeded the size limit".into(),
+            ));
+        }
         prefix.extend_from_slice(&chunk);
+        if framing.is_none() {
+            framing = ResponseFormat::from_prefix(&prefix);
+            match framing {
+                Some(ResponseFormat::EventStream) => {
+                    headers.insert(
+                        http::header::CONTENT_TYPE,
+                        http::HeaderValue::from_static("text/event-stream"),
+                    );
+                }
+                Some(ResponseFormat::Json) => {
+                    headers.insert(
+                        http::header::CONTENT_TYPE,
+                        http::HeaderValue::from_static("application/json"),
+                    );
+                }
+                Some(_) => break,
+                None => continue,
+            }
+        }
+        if framing == Some(ResponseFormat::Json) {
+            continue;
+        }
         loop {
             let remaining = &prefix[parsed..];
             let mut boundary = None;
@@ -168,14 +201,27 @@ pub async fn inspect_response(
                 break;
             };
             let frame = String::from_utf8_lossy(&remaining[..end]);
-            let data = codex2api_upstream::sse_data(&frame);
+            let data =
+                codex2api_upstream::sse_data(frame.strip_prefix('\u{feff}').unwrap_or(&frame));
             parsed += end + separator;
             if data.is_empty() {
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
+            let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&data) else {
                 break 'read;
             };
+            if value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_none()
+                && let Some(event) = frame
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("event:"))
+                    .next_back()
+                && let Some(object) = value.as_object_mut()
+            {
+                object.insert("type".into(), event.trim().into());
+            }
             if value
                 .get("type")
                 .and_then(serde_json::Value::as_str)
@@ -186,24 +232,7 @@ pub async fn inspect_response(
             if generation_observed(&value) {
                 break 'read;
             }
-            if codex2api_upstream::classify_provider_failure(
-                provider,
-                None,
-                &value,
-                &headers,
-                chrono::Utc::now().timestamp(),
-            )
-            .is_some()
-            {
-                let body = value.get("response").unwrap_or(&value).to_string();
-                let failure = codex2api_upstream::ResponseFailure::from_error(None, &value);
-                return Err(UpstreamError::Status {
-                    status: failure.status.unwrap_or(429),
-                    body,
-                    headers,
-                    auth_revision: revision.map(|revision| revision.0),
-                });
-            }
+            reject_recoverable(provider, &value, &headers, revision)?;
             if !is_prelude(&value) {
                 break 'read;
             }
@@ -213,6 +242,8 @@ pub async fn inspect_response(
         .chain(response.bytes_stream());
     let mut rebuilt = http::Response::new(reqwest::Body::wrap_stream(stream));
     *rebuilt.status_mut() = status;
+    *rebuilt.version_mut() = version;
+    *rebuilt.extensions_mut() = extensions;
     *rebuilt.headers_mut() = headers;
     if let Some(at) = first_event {
         rebuilt.extensions_mut().insert(FirstEventAt(at));
@@ -221,6 +252,38 @@ pub async fn inspect_response(
         rebuilt.extensions_mut().insert(revision);
     }
     Ok(reqwest::Response::from(rebuilt))
+}
+
+// The same output/usage guard and supplier classification apply to JSON and SSE.
+fn reject_recoverable(
+    provider: &str,
+    value: &serde_json::Value,
+    headers: &http::HeaderMap,
+    revision: Option<codex2api_upstream::SupplierAuthRevision>,
+) -> std::result::Result<(), UpstreamError> {
+    if !generation_observed(value)
+        && let Some(classified) = codex2api_upstream::classify_provider_failure(
+            provider,
+            None,
+            value,
+            headers,
+            chrono::Utc::now().timestamp(),
+        )
+    {
+        let failure = codex2api_upstream::ResponseFailure::from_error(None, value);
+        let status = match classified {
+            SupplierFailure::Authentication => 401,
+            SupplierFailure::PaymentRequired { .. } => 402,
+            SupplierFailure::QuotaExhausted { .. } => 429,
+        };
+        return Err(UpstreamError::Status {
+            status: failure.status.unwrap_or(status),
+            body: value.get("response").unwrap_or(value).to_string(),
+            headers: headers.clone(),
+            auth_revision: revision.map(|r| r.0),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

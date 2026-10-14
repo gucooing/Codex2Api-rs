@@ -11,6 +11,7 @@ pub(crate) struct ApiLog {
     pub(crate) lifecycle: ResponseLifecycle,
     pub(crate) chat_finished: bool,
     pub(crate) auth_revision: Option<i64>,
+    chat_choices: std::collections::BTreeMap<u64, bool>,
     started: Instant,
     settled: bool,
     authoritative_model: bool,
@@ -23,6 +24,7 @@ impl ApiLog {
             lifecycle: ResponseLifecycle::default(),
             chat_finished: false,
             auth_revision: None,
+            chat_choices: Default::default(),
             started,
             settled: false,
             authoritative_model: false,
@@ -30,6 +32,8 @@ impl ApiLog {
     }
     pub(crate) fn headers(&mut self, status: http::StatusCode, headers: &http::HeaderMap) {
         self.record.http_status = Some(i64::from(status.as_u16()));
+        self.record.actual_model = None;
+        self.authoritative_model = false;
         for name in ["openai-model", "x-openai-model"] {
             if let Some(model) = headers
                 .get(name)
@@ -56,29 +60,41 @@ impl ApiLog {
             return false;
         }
         self.measure(value, mode);
-        if mode == OutputMode::ChatCompletions {
-            self.chat_finished |= value["choices"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| !row["finish_reason"].is_null()));
-            if value["object"] == "chat.completion"
-                && self.chat_finished
-                && value.get("error").is_none_or(Value::is_null)
-            {
-                return self
-                    .lifecycle
-                    .observe(&json!({"type":"response.completed"}), None);
-            }
-        } else if mode == OutputMode::Images {
-            if value.get("error").is_none_or(Value::is_null)
-                && value["data"].is_array()
-                && self.record.image_count.is_some_and(|count| count > 0)
-            {
-                return self
-                    .lifecycle
-                    .observe(&json!({"type":"response.completed"}), None);
-            }
+        if self.lifecycle.observe(value, None) {
+            return true;
         }
-        self.lifecycle.observe(value, None)
+        let completed = match mode {
+            OutputMode::ChatCompletions => {
+                for choice in value["choices"].as_array().into_iter().flatten() {
+                    let finished = !choice["finish_reason"].is_null();
+                    self.chat_finished |= finished;
+                    let index = choice["index"].as_u64().unwrap_or(0);
+                    *self.chat_choices.entry(index).or_default() |= finished;
+                }
+                value["object"] == "chat.completion"
+                    && !self.chat_choices.is_empty()
+                    && self.chat_choices.values().all(|finished| *finished)
+            }
+            OutputMode::Images => {
+                value["data"].is_array() && self.record.image_count.is_some_and(|count| count > 0)
+            }
+            OutputMode::Compact => value["output"].is_array(),
+            OutputMode::InputTokens => value["input_tokens"].as_u64().is_some(),
+            OutputMode::Search => {
+                value["output"].is_string()
+                    && value
+                        .get("encrypted_output")
+                        .is_none_or(|v| v.is_null() || v.is_string())
+                    && value
+                        .get("results")
+                        .is_none_or(|v| v.is_null() || v.is_array())
+            }
+            OutputMode::Responses | OutputMode::ChatFromResponses => false,
+        };
+        completed
+            && self
+                .lifecycle
+                .observe(&json!({"type":"response.completed"}), None)
     }
     /// Preserve measurements in physical HTTP failures without trusting a success-shaped body.
     pub(crate) fn measure(&mut self, value: &Value, mode: OutputMode) {
@@ -141,16 +157,27 @@ impl ApiLog {
         }
     }
     pub(crate) fn done(&mut self, mode: OutputMode) {
-        if mode == OutputMode::ChatCompletions && self.chat_finished {
+        if mode == OutputMode::ChatCompletions
+            && !self.chat_choices.is_empty()
+            && self.chat_choices.values().all(|finished| *finished)
+        {
             self.lifecycle
                 .observe(&json!({"type":"response.completed"}), None);
         }
     }
     pub(crate) fn fail(&mut self, error: &GatewayError) {
+        // A malformed/unsupported response must fail before it is released, even
+        // if its body claimed completion. A settled generation is immutable.
+        if !self.settled && self.successful() {
+            self.lifecycle = ResponseLifecycle::default();
+        }
         self.lifecycle.fail(ResponseFailure::from_error(
             Some(error.status.as_u16()),
             &error.body,
         ));
+    }
+    pub(crate) fn fail_upstream(&mut self, error: &codex2api_upstream::UpstreamError) {
+        self.lifecycle.fail(error.failure());
     }
     pub(crate) async fn settle(&mut self) -> Result<()> {
         if self.settled {
@@ -159,19 +186,9 @@ impl ApiLog {
         if self.lifecycle.outcome().is_none() {
             self.fail(&GatewayError::upstream_incomplete());
         }
+        self.finalize_record();
         let outcome = self.lifecycle.outcome().expect("terminal outcome");
-        self.record.status = outcome.record_status().into();
-        self.record.total_ms =
-            Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
-        if let Some(failure) = outcome.failure() {
-            self.record.failure_kind = Some(failure.kind.as_str().into());
-            self.record.failure_status = failure.status.map(i64::from);
-            self.record.error_code = failure.code.clone();
-            // Never persist provider prose; it can include identities or content.
-            self.record.error_message =
-                Some("The upstream service could not complete this request.".into());
-        }
-        self.storage.finish_api_request(&self.record).await?;
+        self.storage.finish_usage(&self.record).await?;
         self.settled = true;
         let client_backoff = outcome.failure().is_some_and(|failure| {
             matches!(
@@ -189,6 +206,27 @@ impl ApiLog {
         }
         Ok(())
     }
+    fn finalize_record(&mut self) {
+        let outcome = self.lifecycle.outcome();
+        self.record.status = outcome
+            .map_or("interrupted", ResponseOutcome::record_status)
+            .into();
+        self.record.total_ms =
+            Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+        if let Some(failure) = outcome.and_then(ResponseOutcome::failure) {
+            self.record.failure_kind = Some(failure.kind.as_str().into());
+            self.record.failure_status = failure.status.map(i64::from);
+            self.record.error_code = failure.code.clone();
+            self.record.error_message = failure
+                .message
+                .as_deref()
+                .map(|message| message.chars().take(512).collect());
+        } else if outcome.is_none() {
+            self.record.failure_kind = Some("transport".into());
+            self.record.error_code = Some("request_interrupted".into());
+            self.record.error_message = Some("请求处理已中断".into());
+        }
+    }
     pub(crate) fn successful(&self) -> bool {
         matches!(
             self.lifecycle.outcome(),
@@ -201,20 +239,12 @@ impl Drop for ApiLog {
         if self.settled {
             return;
         }
-        let mut record = self.record.clone();
-        record.status = self
-            .lifecycle
-            .outcome()
-            .map_or("failed", ResponseOutcome::record_status)
-            .into();
-        if self.lifecycle.outcome().is_none() {
-            record.failure_kind = Some("interrupted".into());
-        }
-        record.total_ms = Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+        self.finalize_record();
+        let record = self.record.clone();
         let storage = self.storage.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-            if let Err(error)=storage.finish_api_request(&record).await {tracing::error!(%error,request_id=%record.id,"Could not settle interrupted API request");}
+            if let Err(error)=storage.finish_usage(&record).await {tracing::error!(%error,request_id=%record.id,"Could not settle interrupted API request");}
         });
         }
     }

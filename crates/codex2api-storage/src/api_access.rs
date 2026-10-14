@@ -87,11 +87,11 @@ impl KeyRow {
     }
 }
 const KEY_COLUMNS:&str="k.id,k.name,k.group_id,g.name AS group_name,g.provider_id,k.key_prefix,k.enabled,k.revoked_at,k.created_at,k.last_used_at,k.revision,k.user_id,u.username,
- (SELECT COUNT(*) FROM api_usage_records r WHERE r.key_id=k.id) AS total_requests,
- (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(input_tokens)=COUNT(*) THEN SUM(input_tokens) END FROM api_usage_records r WHERE r.key_id=k.id) AS input_tokens,
- (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(output_tokens)=COUNT(*) THEN SUM(output_tokens) END FROM api_usage_records r WHERE r.key_id=k.id) AS output_tokens,
- (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(cost_nano_usd)=COUNT(*) THEN SUM(cost_nano_usd) END FROM api_usage_records r WHERE r.key_id=k.id) AS cost_nano_usd,
- (SELECT COUNT(*) FROM api_usage_records r WHERE r.key_id=k.id AND r.cost_nano_usd IS NULL) AS unknown_cost_requests";
+ (SELECT COUNT(*) FROM usage_records r WHERE r.key_id=k.id) AS total_requests,
+ (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(input_tokens)=COUNT(*) THEN SUM(input_tokens) END FROM usage_records r WHERE r.key_id=k.id) AS input_tokens,
+ (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(output_tokens)=COUNT(*) THEN SUM(output_tokens) END FROM usage_records r WHERE r.key_id=k.id) AS output_tokens,
+ (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(cost_nano_usd)=COUNT(*) THEN SUM(cost_nano_usd) END FROM usage_records r WHERE r.key_id=k.id) AS cost_nano_usd,
+ (SELECT COUNT(*) FROM usage_records r WHERE r.key_id=k.id AND r.cost_nano_usd IS NULL) AS unknown_cost_requests";
 
 pub(crate) async fn principal_on(
     connection: &mut SqliteConnection,
@@ -152,36 +152,6 @@ impl Storage {
             page: query.page_for(total),
             page_size: i64::from(query.page_size),
         })
-    }
-    pub async fn admin_api_usage(&self, query: &ApiListQuery) -> Result<Value> {
-        self.api_usage_page(None, query).await
-    }
-    async fn api_usage_page(&self, owner: Option<&str>, query: &ApiListQuery) -> Result<Value> {
-        query.validate()?;
-        let selected_owner = owner.unwrap_or(&query.user_id);
-        let status = if query.status == "in_progress" {
-            "started"
-        } else {
-            query.status.as_str()
-        };
-        let condition = "(?='' OR r.user_id=?) AND (?='' OR r.group_id=?) AND (?='' OR r.key_id=?) AND (?='' OR r.provider_id=?) AND (?='' OR r.status=?) AND (?='' OR instr(lower(r.model||' '||k.name||' '||u.username),lower(?))>0) AND (? IS NULL OR r.requested_at_ms>=?) AND (? IS NULL OR r.requested_at_ms<?)";
-        let from = "api_usage_records r JOIN regular_users u ON u.id=r.user_id JOIN api_keys k ON k.id=r.key_id";
-        let mut tx = self.pool().begin().await?;
-        if let Some(owner) = owner {
-            crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
-        }
-        let summary:ApiUsageSummary=sqlx::query_as(&format!("SELECT COUNT(*) AS requests,CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(input_tokens)=COUNT(*) THEN SUM(input_tokens) END AS input_tokens,CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(output_tokens)=COUNT(*) THEN SUM(output_tokens) END AS output_tokens,CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(cost_nano_usd)=COUNT(*) THEN SUM(cost_nano_usd) END AS cost_nano_usd,COALESCE(SUM(cost_nano_usd IS NULL),0) AS unknown_cost_requests FROM {from} WHERE {condition}"))
-            .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id).bind(&query.provider_id).bind(&query.provider_id)
-            .bind(status).bind(status).bind(&query.search).bind(&query.search).bind(query.from_ms).bind(query.from_ms).bind(query.until_ms).bind(query.until_ms).fetch_one(&mut *tx).await?;
-        let rows:Vec<ApiUsageRow>=sqlx::query_as(&format!("SELECT r.*,k.name AS key_name,k.key_prefix,u.username FROM {from} WHERE {condition} ORDER BY r.requested_at_ms DESC,r.id LIMIT ? OFFSET ?"))
-            .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id).bind(&query.provider_id).bind(&query.provider_id)
-            .bind(status).bind(status).bind(&query.search).bind(&query.search).bind(query.from_ms).bind(query.from_ms).bind(query.until_ms).bind(query.until_ms)
-            .bind(i64::from(query.page_size)).bind(query.offset_for(summary.requests)).fetch_all(&mut *tx).await?;
-        let pending:i64=sqlx::query_scalar("SELECT COALESCE(SUM(s.pending_nano_usd),0) FROM api_wallet_state s JOIN regular_users u ON u.id=s.user_id WHERE ?='' OR s.user_id=?").bind(selected_owner).bind(selected_owner).fetch_one(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(
-            json!({"items":rows.into_iter().map(|r|r.view(owner.is_none())).collect::<Vec<_>>(),"total":summary.requests,"page":query.page_for(summary.requests),"page_size":query.page_size,"summary":summary,"wallet_pending_nano_usd":pending}),
-        )
     }
 }
 
@@ -284,10 +254,8 @@ impl UserStore {
         Ok(sqlx::query("UPDATE api_keys SET enabled=0,revoked_at=?,revision=revision+1 WHERE id=? AND user_id=? AND revision=? AND revoked_at IS NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(id).bind(owner).bind(revision).execute(self.storage.pool()).await?.rows_affected()==1)
     }
-    pub async fn api_usage(&self, owner: &str, query: &ApiListQuery) -> Result<Value> {
-        self.storage.api_usage_page(Some(owner), query).await
-    }
 }
+
 fn valid_key_name(name: &str) -> Result<()> {
     if name.trim().is_empty() || name.len() > 160 {
         Err(StorageError::InvalidAdminUpdate(
@@ -295,59 +263,5 @@ fn valid_key_name(name: &str) -> Result<()> {
         ))
     } else {
         Ok(())
-    }
-}
-
-#[derive(FromRow, Serialize)]
-struct ApiUsageSummary {
-    requests: i64,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cost_nano_usd: Option<i64>,
-    unknown_cost_requests: i64,
-}
-#[derive(FromRow)]
-struct ApiUsageRow {
-    id: String,
-    user_id: String,
-    username: String,
-    key_id: String,
-    key_name: String,
-    key_prefix: String,
-    group_id: String,
-    group_name: String,
-    provider_id: String,
-    endpoint: String,
-    model: String,
-    actual_model: Option<String>,
-    multiplier_micros: i64,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cached_tokens: Option<i64>,
-    cache_write_tokens: Option<i64>,
-    reasoning_tokens: Option<i64>,
-    image_size: Option<String>,
-    image_count: Option<i64>,
-    requested_at_ms: i64,
-    completed_at_ms: Option<i64>,
-    status: String,
-    http_status: Option<i64>,
-    cost_nano_usd: Option<i64>,
-    billing_status: String,
-    wallet_debit_cents: i64,
-}
-impl ApiUsageRow {
-    fn view(self, admin: bool) -> Value {
-        let status = if self.status == "started" {
-            "in_progress"
-        } else {
-            &self.status
-        };
-        let mut value = json!({"id":self.id,"key_id":self.key_id,"key_name":self.key_name,"key_prefix":self.key_prefix,"group_id":self.group_id,"group_name":self.group_name,"provider_id":self.provider_id,"endpoint":self.endpoint,"model":self.model,"actual_model":self.actual_model,"multiplier":crate::format_units(self.multiplier_micros,6),"input_tokens":self.input_tokens,"output_tokens":self.output_tokens,"cached_tokens":self.cached_tokens,"cache_write_tokens":self.cache_write_tokens,"reasoning_tokens":self.reasoning_tokens,"image_size":self.image_size,"image_count":self.image_count,"requested_at_ms":self.requested_at_ms,"completed_at_ms":self.completed_at_ms,"status":status,"http_status":self.http_status,"cost_nano_usd":self.cost_nano_usd,"billing_status":self.billing_status,"wallet_debit_cents":self.wallet_debit_cents});
-        if admin {
-            value["user_id"] = json!(self.user_id);
-            value["username"] = json!(self.username);
-        }
-        value
     }
 }

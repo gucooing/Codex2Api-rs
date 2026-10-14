@@ -17,6 +17,23 @@ export type UsageTotals = {
 export type UsageRow = UsageTotals & { key: string; label: string };
 export type UsageRecord = {
   id: string;
+  consumer_name: string;
+  subject_kind: string;
+  reasoning_effort: string | null;
+  service_tier: string | null;
+  image_usage_json: string | null;
+  image_input_usage_json: string | null;
+  key_id: string | null;
+  source_name: string | null;
+  endpoint: string;
+  transport: string;
+  stream: boolean | null;
+  failure_kind: string | null;
+  failure_status: number | null;
+  multiplier_micros: number;
+  wallet_debit_cents: number;
+  image_count: number | null;
+  image_size: string | null;
   provider_id: string;
   model: string | null;
   actual_model: string | null;
@@ -31,8 +48,10 @@ export type UsageRecord = {
   first_byte_ms: number | null;
   cost_nano_usd: number | null;
   billing_status: string;
+  billing_calculation: import("./usage-calculation").UsageCalculation | null;
 };
 export type UserUsage = {
+  wallet_pending_nano_usd: number;
   from_ms: number;
   until_ms: number;
   tz_offset: number;
@@ -51,28 +70,6 @@ export const tokens = (value: number | null | undefined) =>
       );
 export const usageCost = (nano: number | null | undefined) =>
   nano == null ? "—" : `$${(nano / 1e9).toFixed(6)}`;
-const statusLabels: Record<string, string> = {
-  started: "进行中",
-  completed: "已完成",
-  client_stopped: "用户停止",
-  failed: "失败",
-  incomplete: "未完成",
-  interrupted: "已中断",
-  in_progress: "进行中",
-};
-const billingLabels: Record<string, string> = {
-  settled: "已结算",
-  priced: "已计费",
-  unpriced: "未定价",
-  pending: "待结算",
-  missing_usage: "用量缺失",
-  missing_price: "未定价",
-  unknown: "未知",
-  legacy: "历史记录",
-  not_charged: "未计费",
-};
-export const usageStatus = (status: string) => statusLabels[status] ?? "未记录";
-export const billingStatus = (status: string) => billingLabels[status] ?? "未知";
 export function usageSeries(data: UserUsage | undefined) {
   if (!data) return [];
   const rows = new Map(data.rows.map((row) => [row.key, row]));

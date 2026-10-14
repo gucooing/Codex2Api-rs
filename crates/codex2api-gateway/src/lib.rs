@@ -4,13 +4,14 @@ mod error;
 mod execution;
 mod images;
 mod providers;
+mod request;
 mod runtime;
 mod usage;
 
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Extension, Request, State},
+    extract::{DefaultBodyLimit, Extension, Request, State, WebSocketUpgrade},
     http::HeaderMap,
     middleware::Next,
     response::Response,
@@ -52,12 +53,18 @@ pub(crate) struct ApiCredential {
 pub(crate) enum Protocol {
     Responses,
     ChatCompletions,
+    Compact,
+    InputTokens,
+    Search,
 }
 impl Protocol {
     fn endpoint(self) -> &'static str {
         match self {
             Self::Responses => "/v1/responses",
             Self::ChatCompletions => "/v1/chat/completions",
+            Self::Compact => "/v1/responses/compact",
+            Self::InputTokens => "/v1/responses/input_tokens",
+            Self::Search => "/v1/alpha/search",
         }
     }
 }
@@ -67,23 +74,43 @@ pub(crate) enum OutputMode {
     ChatFromResponses,
     ChatCompletions,
     Images,
+    Compact,
+    InputTokens,
+    Search,
 }
 pub(crate) struct PreparedRequest {
     pub(crate) body: Value,
+    pub(crate) headers: HeaderMap,
     pub(crate) endpoint: &'static str,
     pub(crate) upstream_path: &'static str,
     pub(crate) output: OutputMode,
     pub(crate) stream: bool,
     pub(crate) include_usage: bool,
+    pub(crate) legacy_functions: bool,
+    pub(crate) metadata: Option<Value>,
 }
 
 pub fn router(state: GatewayState) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/v1/models", get(models))
-        .route("/v1/responses", post(responses))
-        .route("/v1/chat/completions", post(chat))
         .route("/v1/images/generations", post(images::generations))
-        .route("/v1/images/edits", post(images::edits))
+        .route("/v1/images/edits", post(images::edits));
+    for protocol in [
+        Protocol::Responses,
+        Protocol::ChatCompletions,
+        Protocol::Compact,
+        Protocol::InputTokens,
+        Protocol::Search,
+    ] {
+        let route = post(handle).layer(Extension(protocol));
+        let route = if protocol == Protocol::Responses {
+            route.get(websocket)
+        } else {
+            route
+        };
+        router = router.route(protocol.endpoint(), route);
+    }
+    router
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_key,
@@ -92,6 +119,25 @@ pub fn router(state: GatewayState) -> Router {
         .layer(DefaultBodyLimit::max(codex2api_upstream::MAX_REQUEST_BYTES))
         .with_state(state)
 }
+
+async fn websocket(
+    State(state): State<GatewayState>,
+    Extension(credential): Extension<ApiCredential>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response> {
+    match credential.principal.group.provider_id.as_str() {
+        codex2api_core::CHATGPT => {
+            providers::chatgpt::websocket::connect(state, credential, headers, upgrade).await
+        }
+        _ => Err(GatewayError::new(
+            http::StatusCode::NOT_IMPLEMENTED,
+            "unsupported_transport",
+            "This platform does not support Responses WebSocket transport.",
+        )),
+    }
+}
+
 async fn require_key(
     State(state): State<GatewayState>,
     mut request: Request,
@@ -138,26 +184,10 @@ async fn models(
     let values=models.into_iter().map(|model|json!({"id":model.model,"object":"model","created":0,"owned_by":model.provider_id})).collect::<Vec<_>>();
     Ok(Json(json!({"object":"list","data":values})))
 }
-async fn responses(
-    State(state): State<GatewayState>,
-    Extension(credential): Extension<ApiCredential>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response> {
-    handle(state, credential, Protocol::Responses, headers, body).await
-}
-async fn chat(
-    State(state): State<GatewayState>,
-    Extension(credential): Extension<ApiCredential>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response> {
-    handle(state, credential, Protocol::ChatCompletions, headers, body).await
-}
 async fn handle(
-    state: GatewayState,
-    credential: ApiCredential,
-    protocol: Protocol,
+    State(state): State<GatewayState>,
+    Extension(credential): Extension<ApiCredential>,
+    Extension(protocol): Extension<Protocol>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response> {
@@ -167,8 +197,8 @@ async fn handle(
             .await
             .map_err(|_| GatewayError::internal())??;
     let prepared = match credential.principal.group.provider_id.as_str() {
-        codex2api_core::CHATGPT => providers::chatgpt::prepare(protocol, value)?,
-        codex2api_core::GROK => providers::grok::prepare(protocol, value)?,
+        codex2api_core::CHATGPT => providers::chatgpt::prepare(protocol, value, &headers)?,
+        codex2api_core::GROK => providers::grok::prepare(protocol, value, &headers)?,
         _ => return Err(GatewayError::bad_request("Unsupported API group platform")),
     };
     execute_prepared(
@@ -188,25 +218,4 @@ pub(crate) fn boolean(value: &Value, key: &str, default: bool) -> Result<bool> {
             "{key} must be a boolean"
         ))),
     }
-}
-pub(crate) fn include_usage(value: &Value, stream: bool) -> Result<bool> {
-    let Some(options) = value.get("stream_options").filter(|v| !v.is_null()) else {
-        return Ok(false);
-    };
-    if !stream || !options.is_object() {
-        return Err(GatewayError::bad_request(
-            "stream_options requires stream=true and an object",
-        ));
-    }
-    if options
-        .as_object()
-        .unwrap()
-        .keys()
-        .any(|key| key != "include_usage")
-    {
-        return Err(GatewayError::bad_request(
-            "Unsupported stream_options parameter",
-        ));
-    }
-    boolean(options, "include_usage", false)
 }

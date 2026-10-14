@@ -29,6 +29,7 @@ export const emptyFilters = {
   virtual_account: "",
   model: "",
   status: "",
+  source: "",
   from: "",
   until: "",
 };
@@ -80,7 +81,7 @@ export function useUsagePageView({ consumerId }: { consumerId?: string }) {
   useErrorToast(consumers.error);
   const resource = useResource<UsagePage>(
     preferencesReady
-      ? `/usage${query({ user_id: consumerId ? "" : applied.user_id, supplier_id: applied.supplier_id, virtual_account: consumerId ?? applied.virtual_account, model: applied.model, status: applied.status, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
+      ? `/usage${query({ user_id: consumerId ? "" : applied.user_id, supplier_id: applied.supplier_id, virtual_account: consumerId ?? applied.virtual_account, model: applied.model, status: applied.status, source: applied.source, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
       : null,
   );
   const pagination = usePageControls(
@@ -125,6 +126,8 @@ export function useUsageTable() {
     [
       "消费账户",
       "供应账户",
+      "来源",
+      "类型",
       "模型 / 接口",
       "推理强度 / 速度",
       "用量",
@@ -132,7 +135,7 @@ export function useUsageTable() {
       "耗时",
       "时间 / 状态",
     ],
-    ["模型 / 接口", "用量", "时间 / 状态"],
+    ["模型 / 接口", "来源", "类型", "用量", "时间 / 状态"],
   );
   const mobile = useIsMobile();
   const [selected, setSelected] = useState<UsageRecord>();

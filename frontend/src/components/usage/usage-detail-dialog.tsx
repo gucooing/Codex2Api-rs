@@ -8,18 +8,22 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { type UsageRecord } from "@/lib/api";
-import { billingLabel } from "@/lib/domain";
 import { date, money } from "@/lib/format";
+import { usageFormula } from "@/lib/usage-calculation";
 import {
   cacheRate,
   duration,
   failedUsage,
   imageUsageLabel,
+  isTextUsage,
   requestSpeed,
   tokenCount,
   usageFailure,
   usageFailureKind,
-  usageStatus,
+  usageResult,
+  usageType,
+  usageSourceDetail,
+  usageConsumption,
 } from "@/lib/usage-display";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -49,28 +53,36 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
         </DialogHeader>
         <FieldGroup className="grid gap-3 sm:grid-cols-2">
           {[
-            ["消费账户", selected?.subject_name || selected?.subject_id],
+            ["消费账户", selected?.consumer_name],
             ["供应账户", selected?.account_name],
+            ["计费倍率", selected ? `${selected.multiplier_micros / 1e6}×` : null],
+            ["消费", selected ? money(usageConsumption(selected)) : null],
             ["请求模型", selected?.model],
             ["实际模型", selected?.actual_model],
-            ["HTTP 状态（连接）", selected?.http_status],
-            ["生成错误状态", selected?.failure_status],
-            ["失败类别", usageFailureKind(selected?.failure_kind)],
+            ...(selected && failedUsage(selected)
+              ? [["失败类别", usageFailureKind(selected.failure_kind)]]
+              : []),
             [
               "请求状态",
               selected
-                ? usageStatus(selected.status).label +
+                ? usageResult(selected) +
                   (selected.status === "client_stopped" ? "（客户端停止）" : "")
                 : "-",
             ],
             ["接口", selected?.endpoint],
             ["传输方式", selected?.transport],
+            ["来源", usageSourceDetail(selected)],
+            ["类型", usageType(selected?.stream)],
             ["首字节耗时", duration(selected?.first_byte_ms)],
             ["总耗时", duration(selected?.total_ms)],
           ].map(([label, value]) => (
             <Field key={String(label)}>
               <FieldTitle>{label}</FieldTitle>
-              <FieldDescription className="break-words">{value ?? "-"}</FieldDescription>
+              <FieldDescription
+                className={`break-words${label === "请求状态" && selected && failedUsage(selected) ? " text-destructive" : ""}`}
+              >
+                {value ?? "-"}
+              </FieldDescription>
             </Field>
           ))}
         </FieldGroup>
@@ -82,12 +94,6 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
                 {usageFailure(selected)}
               </FieldDescription>
             </Field>
-            {selected.error_code && (
-              <Field>
-                <FieldTitle>错误码</FieldTitle>
-                <FieldDescription>{selected.error_code}</FieldDescription>
-              </Field>
-            )}
           </FieldGroup>
         )}
         {selected && (
@@ -104,13 +110,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
               ["缓存写入", selected.cache_write_tokens],
               ["缓存率", cacheRate(selected)],
               ["费用", selected.cost_nano_usd == null ? "-" : money(selected.cost_nano_usd / 1e9)],
-              ["计费状态", billingLabel(selected.billing_status)],
-
-              ["请求速度", requestSpeed(selected)],
-              [
-                "命中计费挡位",
-                selected.billing_tier === "request" ? "按次" : (selected.billing_tier ?? "-"),
-              ],
+              ...(isTextUsage(selected) ? [["请求速度", requestSpeed(selected)] as const] : []),
             ].map(([label, value]) => (
               <Field key={String(label)}>
                 <FieldTitle>{label}</FieldTitle>
@@ -121,6 +121,12 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
                 </FieldDescription>
               </Field>
             ))}
+            <Field className="sm:col-span-3">
+              <FieldTitle>成本</FieldTitle>
+              <FieldDescription className="break-words">
+                {usageFormula(selected.cost_calculation)}
+              </FieldDescription>
+            </Field>
           </FieldGroup>
         )}
       </DialogContent>

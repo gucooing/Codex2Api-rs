@@ -49,6 +49,115 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn unified_usage_migration_keeps_both_sources_and_wallet_links_without_rebilling() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("unified-usage.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version < 77)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES('owner','user','owner','hash',1,'now','now');
+        INSERT INTO users(id,name,email,wallet_cents) VALUES('owner','Owner','owner@example.test',75);
+        INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,created_at)
+          SELECT 'subscription','owner',provider_id,id,plan_type,'now' FROM virtual_plans WHERE provider_id='chatgpt' AND plan_type='free' LIMIT 1;
+        INSERT INTO api_groups(id,name,provider_id,created_at) VALUES('group','Group','chatgpt','now');
+        INSERT INTO api_keys(id,user_id,group_id,name,token_hash,key_prefix,created_at) VALUES('key','owner','group','Primary','hash','prefix','now');
+        INSERT INTO usage_records(id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,requested_at_ms,status,http_status,input_tokens,output_tokens,error_code,error_message)
+          VALUES('oauth','','','subscription','Subscription','/v1/responses','websocket','model',1000,'failed',101,2,3,'saved-code','saved diagnostic');
+        INSERT INTO api_usage_records(id,user_id,key_id,group_id,group_name,provider_id,endpoint,model,multiplier_micros,pricing_snapshot_json,requested_at_ms,completed_at_ms,status,http_status,input_tokens,output_tokens,base_cost_nano_usd,cost_nano_usd,billing_status,wallet_debit_cents)
+          VALUES('paid','owner','key','group','Original group','chatgpt','/v1/responses','model',300000,'[]',2000,2400,'completed',200,40,12,33333333,10000000,'priced',1);
+        INSERT INTO api_usage_records(id,user_id,key_id,group_id,group_name,provider_id,endpoint,model,multiplier_micros,pricing_snapshot_json,requested_at_ms)
+          VALUES('pending','owner','key','group','Group','chatgpt','/v1/responses','model',1000000,'[]',3000);
+        INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,provider_id,api_usage_record_id,amount_cents,balance_cents,created_at)
+          VALUES('wallet-entry','owner','api:paid','original-signature','api_usage','chatgpt','paid',-1,75,'now');
+        INSERT INTO api_wallet_state(user_id,pending_nano_usd,last_usage_id) VALUES('owner',1234,'paid');")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    let rows = storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(rows.total, 3);
+    let paid = rows.records.iter().find(|r| r.id == "paid").unwrap();
+    assert_eq!(paid.group_name.as_deref(), Some("Original group"));
+    assert_eq!(paid.cost_nano_usd, Some(10_000_000));
+    assert_eq!(paid.base_cost_nano_usd, Some(33_333_333));
+    assert_eq!(paid.multiplier_micros, 300_000);
+    assert_eq!(paid.wallet_debit_cents, 1);
+    assert_eq!(paid.total_ms, Some(400));
+    assert_eq!(paid.input_tokens, Some(40));
+    assert_eq!(paid.first_byte_ms, None);
+    let oauth = rows.records.iter().find(|r| r.id == "oauth").unwrap();
+    assert_eq!(oauth.error_message.as_deref(), Some("saved diagnostic"));
+    assert_eq!(oauth.user_id.as_deref(), Some("owner"));
+    assert_eq!(
+        rows.records
+            .iter()
+            .find(|r| r.id == "pending")
+            .unwrap()
+            .status,
+        "in_progress"
+    );
+    assert_eq!(
+        storage.user("owner").await.unwrap().unwrap().wallet_cents,
+        75
+    );
+    let entries = storage.wallet_entries("owner").await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].usage_record_id.as_deref(), Some("paid"));
+    assert_eq!(entries[0].kind, "usage");
+    let debt: (i64, String) = sqlx::query_as(
+        "SELECT pending_nano_usd,last_usage_id FROM usage_wallet_state WHERE user_id='owner'",
+    )
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(debt, (1234, "paid".into()));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pragma_foreign_key_check")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('api_usage_records','api_wallet_state')").fetch_one(storage.pool()).await.unwrap(),0);
+    storage.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    assert_eq!(
+        storage
+            .query_usage(&Default::default())
+            .await
+            .unwrap()
+            .total,
+        3
+    );
+    assert_eq!(storage.recover_interrupted_usage().await.unwrap(), 1);
+    assert_eq!(storage.recover_interrupted_usage().await.unwrap(), 0);
+    assert_eq!(
+        storage.user("owner").await.unwrap().unwrap().wallet_cents,
+        75
+    );
+    assert_eq!(storage.wallet_entries("owner").await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn subscription_pool_migration_removes_overrides_but_preserves_virtual_bindings() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("subscription-pools.sqlite");

@@ -1,5 +1,4 @@
 "use client";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CardDescription } from "@/components/ui/card";
 import {
@@ -23,17 +22,20 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UsageDetailDialog } from "@/components/usage/usage-detail-dialog";
 import { type UsageRecord } from "@/lib/api";
-import { date, money } from "@/lib/format";
+import { date } from "@/lib/format";
+import { UsageFee } from "./usage-fee";
 import { useUsageTable } from "@/lib/usage";
 import {
   cacheRate,
   duration,
-  failedUsage,
   imageUsageLabel,
+  isTextUsage,
   requestSpeed,
   tokenCount,
-  usageResultCode,
+  usageResult,
   usageStatus,
+  usageType,
+  usageSource,
 } from "@/lib/usage-display";
 import { ChevronRight, Columns3, Info } from "lucide-react";
 
@@ -84,6 +86,8 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
               {[
                 "消费账户",
                 "供应账户",
+                "来源",
+                "类型",
                 "模型 / 接口",
                 "推理强度 / 速度",
                 "用量",
@@ -110,7 +114,6 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
           <TableBody>
             {records.length ? (
               records.map((record) => {
-                const failed = failedUsage(record);
                 const mismatch = Boolean(
                   record.actual_model && record.model && record.actual_model !== record.model,
                 );
@@ -156,7 +159,7 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       data-label="消费账户"
                       role="cell"
                     >
-                      {record.subject_name || record.subject_id}
+                      {record.consumer_name || "—"}
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("供应账户")}
@@ -166,6 +169,22 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                     >
                       {record.account_name}
                       <CardDescription>{record.provider_id}</CardDescription>
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("来源")}
+                      data-label="来源"
+                      role="cell"
+                      className="whitespace-nowrap text-xs"
+                    >
+                      {usageSource(record.subject_kind)}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("类型")}
+                      data-label="类型"
+                      role="cell"
+                      className="whitespace-nowrap text-xs"
+                    >
+                      {usageType(record.stream)}
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("模型 / 接口")}
@@ -194,18 +213,14 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                                 minute: "2-digit",
                               }) +
                                 " · " +
-                                (record.subject_name || record.subject_id)}
+                                (record.consumer_name || "—")}
                             </span>
                           </span>
                           <ChevronRight className="size-3 shrink-0" />
                         </Button>
                       ) : (
                         <div className="max-md:hidden">
-                          <strong
-                            className={
-                              mismatch ? "text-yellow-700 dark:text-yellow-400" : undefined
-                            }
-                          >
+                          <strong className={mismatch ? "text-foreground" : undefined}>
                             {mismatch
                               ? `${record.model} → ${record.actual_model}`
                               : (record.actual_model ?? record.model ?? "-")}
@@ -223,7 +238,8 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       role="cell"
                       className="text-xs "
                     >
-                      {record.reasoning_effort ?? "默认"} / {requestSpeed(record)}
+                      {record.reasoning_effort ?? "默认"}
+                      {isTextUsage(record) ? ` / ${requestSpeed(record)}` : ""}
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("用量")}
@@ -234,27 +250,21 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       {mobile ? (
                         <div className="space-y-0.5 text-xs tabular-nums md:hidden">
                           <div>
-                            {failed
-                              ? "-"
-                              : record.image_count !== null
-                                ? record.image_count + " 张"
-                                : (record.input_tokens == null && record.output_tokens == null
-                                    ? "-"
-                                    : tokenCount(
-                                        (record.input_tokens ?? 0) + (record.output_tokens ?? 0),
-                                      )) + " Token"}
+                            {record.image_count !== null
+                              ? record.image_count + " 张"
+                              : (record.input_tokens == null && record.output_tokens == null
+                                  ? "-"
+                                  : tokenCount(
+                                      (record.input_tokens ?? 0) + (record.output_tokens ?? 0),
+                                    )) + " Token"}
                           </div>
                           <div className="text-muted-foreground">
-                            {failed || record.cost_nano_usd == null
-                              ? "-"
-                              : money(record.cost_nano_usd / 1e9)}
+                            <UsageFee record={record} />
                           </div>
                         </div>
                       ) : (
                         <div className="max-md:hidden">
-                          {failed ? (
-                            "-"
-                          ) : record.image_count !== null ? (
+                          {record.image_count !== null ? (
                             <span>{imageUsageLabel(record)}</span>
                           ) : (
                             <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs tabular-nums md:grid-cols-[repeat(3,max-content)]">
@@ -288,9 +298,7 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       role="cell"
                       className="tabular-nums "
                     >
-                      {failed || record.cost_nano_usd === null
-                        ? "-"
-                        : money(record.cost_nano_usd / 1e9)}
+                      <UsageFee record={record} />
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("耗时")}
@@ -319,14 +327,13 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-6 px-1 tabular-nums"
-                          aria-label={`查看请求详情：${usageResultCode(record)}`}
+                          className="h-auto min-h-6 max-w-full flex-wrap justify-start px-1 text-left tabular-nums"
+                          aria-label={`查看请求详情：${usageResult(record)}`}
                           onClick={() => setSelected(record)}
                         >
-                          <Badge variant="outline" className={usageStatus(record.status).className}>
-                            {usageStatus(record.status).label}
-                          </Badge>
-                          <span className="max-md:hidden">{usageResultCode(record)}</span>
+                          <span className={usageStatus(record.status).className}>
+                            {usageResult(record)}
+                          </span>
                           <Info className="size-3" />
                         </Button>
                       </div>

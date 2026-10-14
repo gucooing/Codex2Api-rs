@@ -324,8 +324,26 @@ mod tests {
                 .timestamp_millis();
         // Both requests have identical millisecond timestamps; insertion relative
         // to the reset transaction determines which quota generation they use.
+        // Only this fixture adjusts the clock after observing the generated reset time.
+        // Restore the production immutability guard before executing either request.
+        sqlx::query("DROP TRIGGER usage_identity_immutable")
+            .execute(storage.pool())
+            .await
+            .unwrap();
         sqlx::query("UPDATE usage_records SET requested_at_ms=? WHERE id='in-flight'")
             .bind(reset_at)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        let migration = include_str!("../migrations/0077_unified_usage.sql");
+        let start = migration
+            .find("CREATE TRIGGER usage_identity_immutable")
+            .unwrap();
+        let end = migration[start..]
+            .find("CREATE TRIGGER usage_no_delete")
+            .unwrap()
+            + start;
+        sqlx::raw_sql(&migration[start..end])
             .execute(storage.pool())
             .await
             .unwrap();

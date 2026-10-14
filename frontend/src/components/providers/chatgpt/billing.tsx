@@ -7,6 +7,29 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RefreshCw } from "lucide-react";
 
+export function ApiGroupSearchPrice({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string | null;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Field className="sm:w-64">
+      <FieldLabel htmlFor={id}>搜索单价（USD / 次）</FieldLabel>
+      <Input
+        id={id}
+        inputMode="decimal"
+        value={value ?? ""}
+        placeholder="未配置"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
 export function SearchBilling() {
   const { id, resource, draft, setDraft, busy, price, handleSubmit } = useSearchBilling();
   return (

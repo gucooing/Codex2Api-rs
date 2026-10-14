@@ -3,6 +3,15 @@ import type { UsageRecord } from "./api";
 export const failedUsage = (record: Pick<UsageRecord, "status">) =>
   ["failed", "incomplete", "interrupted"].includes(record.status);
 
+export function isTextUsage(record: Pick<UsageRecord, "endpoint" | "image_count">) {
+  return (
+    record.image_count == null &&
+    ["/responses", "/responses/compact", "/chat/completions"].some((path) =>
+      record.endpoint.endsWith(path),
+    )
+  );
+}
+
 export function requestSpeed(record: Pick<UsageRecord, "service_tier">) {
   const tier = record.service_tier;
   if (tier == null || tier === "default") return "standard";
@@ -68,30 +77,24 @@ export function duration(value: number | null | undefined) {
   return `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分` : ""}`;
 }
 export function usageFailure(record: UsageRecord) {
-  return (
-    record.error_message ||
-    record.error_code ||
-    (record.http_status != null && record.http_status >= 400
-      ? `上游返回 HTTP ${record.http_status}`
-      : "此历史记录未保存失败原因")
-  );
+  return record.error_message || record.error_code || "此历史记录未保存失败原因";
 }
 
 export const usageStatuses = [
   {
     value: "in_progress",
     label: "进行中",
-    className: "border-blue-600/20 bg-blue-600/10 text-blue-700 dark:text-blue-400",
+    className: "text-muted-foreground",
   },
   {
     value: "completed",
     label: "成功",
-    className: "border-green-600/20 bg-green-600/10 text-green-700 dark:text-green-400",
+    className: "text-foreground",
   },
   {
     value: "failed",
     label: "失败",
-    className: "border-red-600/20 bg-red-600/10 text-red-700 dark:text-red-400",
+    className: "text-destructive",
   },
 ] as const;
 
@@ -109,14 +112,20 @@ export function usageStatus(status: string) {
   );
 }
 
-/** A successful stream handshake is never the failed generation's result code. */
-export function usageResultCode(
-  record: Pick<UsageRecord, "status" | "http_status" | "failure_status">,
-) {
+export function usageResultCode(record: Pick<UsageRecord, "status" | "failure_status">) {
+  const code = record.failure_status;
+  return failedUsage(record) && code != null && Number.isInteger(code) && code >= 400 && code <= 599
+    ? code
+    : null;
+}
+
+export function usageResult(record: Pick<UsageRecord, "status" | "failure_status">) {
+  const code = usageResultCode(record);
   return failedUsage(record)
-    ? (record.failure_status ??
-        (record.http_status != null && record.http_status >= 400 ? record.http_status : "-"))
-    : (record.http_status ?? "-");
+    ? code == null
+      ? "-"
+      : String(code)
+    : usageStatus(record.status).label;
 }
 export function usageFailureKind(kind: string | null | undefined) {
   const labels: Record<string, string> = {
@@ -133,4 +142,29 @@ export function usageFailureKind(kind: string | null | undefined) {
     incomplete: "生成未完成",
   };
   return kind ? (labels[kind] ?? kind) : "未记录";
+}
+
+export const usageType = (stream: boolean | null | undefined) =>
+  stream == null ? "—" : stream ? "流式" : "同步";
+
+export function usageSource(kind: string | undefined) {
+  if (kind === "api_key" || kind === "retired_api_key") return "Api";
+  if (kind === "virtual_account") return "订阅";
+  return "—";
+}
+
+export function usageSourceDetail(
+  record: Pick<UsageRecord, "subject_kind" | "source_name"> | undefined,
+) {
+  const source = usageSource(record?.subject_kind);
+  return source === "—" ? source : `${source}:${record?.source_name || "—"}`;
+}
+
+export function usageConsumption(
+  record: Pick<UsageRecord, "status" | "subject_kind" | "wallet_debit_cents" | "cost_nano_usd">,
+) {
+  if (record.status === "in_progress") return null;
+  if (record.subject_kind === "api_key" || record.subject_kind === "retired_api_key")
+    return record.wallet_debit_cents / 100;
+  return record.cost_nano_usd == null ? null : record.cost_nano_usd / 1e9;
 }
