@@ -1,6 +1,31 @@
 use crate::{ListPage, ListQuery, Result, Storage, StorageError};
 use serde_json::Value;
 
+pub(crate) async fn catalog_operation_prices(
+    connection: &mut sqlx::SqliteConnection,
+    group: Option<&crate::ApiGroup>,
+) -> Result<Vec<crate::api_groups::ApiOperationPrice>> {
+    use codex2api_core::{CHATGPT, providers::chatgpt::SEARCH_OPERATION};
+    let price_usd = if let Some(group) = group {
+        group.search_price_usd.clone()
+    } else {
+        let price: Option<i64> = sqlx::query_scalar(
+            "SELECT price_nano_usd FROM operation_prices WHERE provider_id=? AND operation=?",
+        )
+        .bind(CHATGPT)
+        .bind(SEARCH_OPERATION)
+        .fetch_optional(connection)
+        .await?
+        .flatten();
+        price.map(|price| crate::format_units(price, 9))
+    };
+    Ok(vec![crate::api_groups::ApiOperationPrice {
+        provider_id: CHATGPT.into(),
+        operation: SEARCH_OPERATION.into(),
+        price_usd,
+    }])
+}
+
 impl Storage {
     pub async fn chatgpt_official_page(
         &self,

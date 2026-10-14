@@ -106,7 +106,9 @@ pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
             let (source, version) = codex2api_core::model_preset_source(&model.provider_id);
             dto::ModelPreset {
                 source_url: prices.as_ref().map(|_| source.to_owned()),
-                verified_at: prices.as_ref().map(|_| version),
+                verified_at: prices
+                    .as_ref()
+                    .map(|_| codex2api_core::model_preset_verified_at(&model.provider_id)),
                 token_prices: prices.unwrap_or_default().iter().map(token_dto).collect(),
                 provider_id: model.provider_id,
                 model: model.model,

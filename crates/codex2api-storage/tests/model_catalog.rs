@@ -333,6 +333,11 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         };
         storage.insert_usage(&r).await.unwrap();
         r.status = status.into();
+        // This failure occurred after an upstream response; it is not a request
+        // rejected before dispatch (which is correctly charged as zero).
+        if id == "transport-failure" {
+            r.http_status = Some(200);
+        }
         r.image_count = count;
         r.image_usage_json = usage.map(str::to_owned);
         storage.finish_usage(&r).await.unwrap();
@@ -363,5 +368,134 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
             .save_model_config(&model, &[], &duplicate, Some(1))
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
+    use codex2api_storage::{IMAGE_UNIFORM_RESOLUTION, PriceRequirement};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("uniform-images.sqlite");
+    let storage = Storage::open(&path).await.unwrap();
+    let model = ModelConfig {
+        provider_id: "chatgpt".into(),
+        model: "uniform-image-test".into(),
+        kind: "image".into(),
+        enabled: true,
+        deleted: false,
+        revision: 0,
+    };
+    let price = ImagePrice {
+        provider_id: model.provider_id.clone(),
+        model: model.model.clone(),
+        resolution: IMAGE_UNIFORM_RESOLUTION.into(),
+        price_nano_usd: 30_000_000,
+    };
+    assert!(
+        storage
+            .save_model_config(&model, &[], &[price.clone()], None)
+            .await
+            .unwrap()
+    );
+    for size in [None, Some("auto"), Some("1024x1024"), Some("16384x8192")] {
+        assert!(
+            storage
+                .price_available("chatgpt", &model.model, PriceRequirement::Image(size))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !storage
+                .price_available("grok", &model.model, PriceRequirement::Image(size))
+                .await
+                .unwrap()
+        );
+    }
+    let band = ImagePrice {
+        resolution: "1K".into(),
+        price_nano_usd: 200_000_000,
+        ..price.clone()
+    };
+    assert!(
+        storage
+            .save_model_config(&model, &[], &[price.clone(), band.clone()], Some(1))
+            .await
+            .is_err()
+    );
+    let mut records = Vec::new();
+    for (id, resolution) in [
+        ("small", Some("512x512")),
+        ("large", Some("16384x8192")),
+        ("no-dimensions", None),
+    ] {
+        let record = UsageRecord {
+            id: id.into(),
+            subject_id: "uniform-owner".into(),
+            model: Some(model.model.clone()),
+            endpoint: "/v1/images/generations".into(),
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        storage.insert_usage(&record).await.unwrap();
+        records.push((record, resolution));
+    }
+    assert!(
+        storage
+            .save_model_config(&model, &[], &[band], Some(1))
+            .await
+            .unwrap()
+    );
+    for (mut record, resolution) in records {
+        record.status = "completed".into();
+        record.image_count = Some(2);
+        record.image_usage_json =
+            Some(serde_json::json!([{"resolution":resolution,"count":2}]).to_string());
+        storage.finish_usage(&record).await.unwrap();
+        storage.finish_usage(&record).await.unwrap();
+    }
+    let rows = storage
+        .query_usage(&UsageFilter::default())
+        .await
+        .unwrap()
+        .records;
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(
+        |record| record.cost_nano_usd == Some(60_000_000) && record.billing_status == "priced"
+    ));
+    let mut unknown_count = UsageRecord {
+        id: "unknown-count".into(),
+        subject_id: "uniform-owner".into(),
+        model: Some(model.model.clone()),
+        endpoint: "/v1/images/generations".into(),
+        status: "in_progress".into(),
+        ..Default::default()
+    };
+    assert!(
+        storage
+            .save_model_config(&model, &[], &[price], Some(2))
+            .await
+            .unwrap()
+    );
+    storage.insert_usage(&unknown_count).await.unwrap();
+    unknown_count.status = "completed".into();
+    storage.finish_usage(&unknown_count).await.unwrap();
+    let rows = storage
+        .query_usage(&UsageFilter::default())
+        .await
+        .unwrap()
+        .records;
+    let saved = rows
+        .iter()
+        .find(|record| record.id == "unknown-count")
+        .unwrap();
+    assert_eq!(saved.billing_status, "missing_usage");
+    assert_eq!(saved.cost_nano_usd, None);
+    storage.close().await;
+    let reopened = Storage::open(&path).await.unwrap();
+    let prices = reopened.image_prices("chatgpt").await.unwrap();
+    assert!(
+        prices.iter().any(|p| p.model == model.model
+            && p.resolution == "*"
+            && p.price_nano_usd == 30_000_000)
     );
 }

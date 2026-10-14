@@ -119,10 +119,19 @@ async fn unified_usage_migration_keeps_both_sources_and_wallet_links_without_reb
         storage.user("owner").await.unwrap().unwrap().wallet_cents,
         75
     );
-    let entries = storage.wallet_entries("owner").await.unwrap();
+    // Wallet pages intentionally hide usage charges. Check the immutable ledger
+    // directly to verify that migration preserved the debit and its usage link.
+    let entries: Vec<codex2api_storage::WalletEntry> =
+        sqlx::query_as("SELECT * FROM wallet_entries WHERE user_id='owner' ORDER BY id")
+            .fetch_all(storage.pool())
+            .await
+            .unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].usage_record_id.as_deref(), Some("paid"));
     assert_eq!(entries[0].kind, "usage");
+    assert_eq!(entries[0].amount_cents, -1);
+    assert_eq!(entries[0].balance_cents, 75);
+    assert!(storage.wallet_entries("owner").await.unwrap().is_empty());
     let debt: (i64, String) = sqlx::query_as(
         "SELECT pending_nano_usd,last_usage_id FROM usage_wallet_state WHERE user_id='owner'",
     )
@@ -154,7 +163,10 @@ async fn unified_usage_migration_keeps_both_sources_and_wallet_links_without_reb
         storage.user("owner").await.unwrap().unwrap().wallet_cents,
         75
     );
-    assert_eq!(storage.wallet_entries("owner").await.unwrap().len(), 1);
+    let saved: (i64, i64, String) = sqlx::query_as(
+        "SELECT amount_cents,balance_cents,usage_record_id FROM wallet_entries WHERE id='wallet-entry' AND user_id='owner'",
+    ).fetch_one(storage.pool()).await.unwrap();
+    assert_eq!(saved, (-1, 75, "paid".into()));
 }
 
 #[tokio::test]

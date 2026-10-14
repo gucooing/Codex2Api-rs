@@ -1,7 +1,7 @@
 //! Initial service prices, shared by administration and catalog registration.
 //! Existing prices and request snapshots are never updated from these presets.
 
-pub const MODEL_PRESET_VERSION: &str = "2026-10-09";
+pub const MODEL_PRESET_VERSION: &str = "2026-10-14";
 
 #[derive(Clone, Debug)]
 pub struct SupportedModel {
@@ -39,5 +39,12 @@ pub fn model_preset_source(provider: &str) -> (&'static str, &'static str) {
             "https://developers.openai.com/api/docs/pricing",
             MODEL_PRESET_VERSION,
         ),
+    }
+}
+
+pub fn model_preset_verified_at(provider: &str) -> &'static str {
+    match provider {
+        crate::GROK => crate::providers::grok::PRESET_VERSION,
+        _ => "2026-10-09",
     }
 }

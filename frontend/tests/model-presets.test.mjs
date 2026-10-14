@@ -35,11 +35,18 @@ const preset = {
     {
       tier: "fast",
       min_input_tokens: 0,
-      max_input_tokens: 272000,
       input_rate: "12.5",
       cached_rate: "1.25",
       cache_write_rate: "12.5",
       output_rate: "75",
+    },
+    {
+      tier: "fast",
+      min_input_tokens: 272001,
+      input_rate: "25",
+      cached_rate: "2.5",
+      cache_write_rate: "25",
+      output_rate: "112.5",
     },
   ],
 };
@@ -79,10 +86,13 @@ test("preset writes identify the version while manual edits remain explicit pric
   assert.deepEqual(manual.token_prices, preset.token_prices);
 });
 
-test("bounded Fast pricing survives editor round trips and rejects inverted bounds", () => {
+test("default Fast multiplier covers every standard interval and follows base-price edits", () => {
   const draft = pricingDraft(preset.token_prices);
-  assert.equal(draft.fast.mode, "custom");
-  assert.deepEqual(pricingRows(draft), preset.token_prices);
-  draft.fast.rows[0].max_input_tokens = -1;
-  assert.throws(() => pricingRows(draft));
+  assert.equal(draft.fast.mode, "multiplier");
+  assert.equal(draft.fast.multiplier, "2.5");
+  draft.ranges[1].input_rate = "12";
+  const fast = pricingRows(draft).filter((price) => price.tier === "fast");
+  assert.equal(fast.length, 2);
+  assert.equal(fast[1].input_rate, "30");
+  assert.ok(fast.every((price) => price.max_input_tokens == null));
 });

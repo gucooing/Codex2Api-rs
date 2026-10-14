@@ -1,4 +1,4 @@
-import type { Model, ModelPreset, TokenPrice } from "./api";
+import type { ImagePrice, Model, ModelPreset, TokenPrice } from "./api";
 
 export function findModelPreset(
   presets: ModelPreset[] | undefined,
@@ -53,6 +53,60 @@ export const emptyBasePrice = (start = 0): BasePrice => ({
   cached_rate: "",
   cache_write_rate: "",
 });
+
+export function priceRangeLabel(row: BasePrice, ranges: BasePrice[]) {
+  const next = ranges
+    .filter((other) => other.min_input_tokens > row.min_input_tokens)
+    .reduce<number | undefined>(
+      (min, other) => Math.min(min ?? Infinity, other.min_input_tokens - 1),
+      undefined,
+    );
+  const end =
+    row.max_input_tokens == null ? next : Math.min(row.max_input_tokens, next ?? Infinity);
+  if (end != null) return `${row.min_input_tokens.toLocaleString()}–${end.toLocaleString()}`;
+  return row.min_input_tokens === 0 ? "不限" : `≥ ${row.min_input_tokens.toLocaleString()}`;
+}
+
+export const imageResolutionTiers = [
+  { value: "0.5K", label: "0.5K · 长边 ≤ 512px" },
+  { value: "1K", label: "1K · 长边 ≤ 1024px" },
+  { value: "2K", label: "2K · 长边 ≤ 2560px" },
+  { value: "4K", label: "4K · 长边 ≤ 4096px" },
+  { value: "8K", label: "8K · 长边 ≤ 8192px" },
+];
+export const imagePriceLabel = (resolution: string) =>
+  resolution === "*" ? "全部分辨率" : resolution;
+export type ImagePricingDraft = {
+  mode: "uniform" | "resolution";
+  uniformPrice: string;
+  prices: ImagePrice[];
+};
+export function imagePricingDraft(prices: ImagePrice[]): ImagePricingDraft {
+  const uniform = prices.find((price) => price.resolution === "*");
+  return {
+    mode: uniform || prices.length === 0 ? "uniform" : "resolution",
+    uniformPrice: uniform?.price ?? "",
+    prices: prices.filter((price) => price.resolution !== "*").map((price) => ({ ...price })),
+  };
+}
+export function imagePricingRows(draft: ImagePricingDraft): ImagePrice[] {
+  const prices =
+    draft.mode === "uniform" ? [{ resolution: "*", price: draft.uniformPrice }] : draft.prices;
+  if (!prices.length) throw new Error("请配置图像价格。");
+  const seen = new Set<string>();
+  for (const price of prices) {
+    if (!/^\d+(\.\d{1,9})?$/.test(price.price.trim()))
+      throw new Error("图像价格须为非负美元金额，最多九位小数。");
+    if (
+      draft.mode === "resolution" &&
+      !imageResolutionTiers.some((tier) => tier.value === price.resolution)
+    )
+      throw new Error("请选择分辨率档位。");
+    if (seen.has(price.resolution)) throw new Error("分辨率档位不能重复。");
+    seen.add(price.resolution);
+  }
+  return prices.map((price) => ({ ...price, price: price.price.trim() }));
+}
 const unit = 1_000_000n;
 function decimal(value: string): bigint {
   if (!/^\d+(\.\d{1,6})?$/.test(value.trim()))

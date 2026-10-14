@@ -1,6 +1,7 @@
 "use client";
+import { modelMarketPricing, type ModelMarketItem } from "./pricing";
 import { useErrorToast } from "@/lib/actions";
-import type { ApiCatalogModel, ApiGroups, ApiModelMarket } from "@/lib/metered-api";
+import type { ApiGroups, ApiModelMarket } from "@/lib/metered-api";
 import { usePageControls } from "@/lib/pagination";
 import { useResource } from "@/lib/resource";
 import { useId, useState, type FormEvent } from "react";
@@ -12,7 +13,7 @@ export function useModelMarketPage() {
   const [applied, setApplied] = useState(filters);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
-  const [selected, setSelected] = useState<ApiCatalogModel>();
+  const [selected, setSelected] = useState<ModelMarketItem>();
   const groups = useResource<ApiGroups>("/api-groups", 0);
   const params = new URLSearchParams({
     ...applied,
@@ -53,14 +54,29 @@ export function useModelMarketPage() {
     groups.reload();
     resource.reload();
   };
+  const items: ModelMarketItem[] = (resource.data?.items ?? []).map((model) => ({
+    model,
+    pricing: modelMarketPricing(model, !!groupId),
+  }));
   return {
     id,
     groups,
     groupId,
+    currentGroup: resource.data?.group,
+    showOtherBilling:
+      (!applied.search.trim() ||
+        "chatgpt openai 搜索 search".includes(applied.search.trim().toLowerCase())) &&
+      (!applied.provider_id || applied.provider_id === "chatgpt") &&
+      (!groupId ||
+        groups.data?.items.find((group) => group.id === groupId)?.provider_id === "chatgpt"),
+    searchPrice: resource.data?.operations.find(
+      (price) => price.provider_id === "chatgpt" && price.operation === "search",
+    ),
     selectGroup,
     filters,
     setFilters,
     resource,
+    items,
     pagination,
     selected,
     setSelected,

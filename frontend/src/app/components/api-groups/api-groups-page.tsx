@@ -180,7 +180,7 @@ export default function ApiGroupsPage() {
                   <TableCell hidden={!columns.isVisible("模型范围")}>
                     {group.allowed_models.length
                       ? group.allowed_models.length + " 个指定模型"
-                      : "标签支持的全部模型"}
+                      : "该平台的全部模型"}
                     <p className="text-xs text-muted-foreground">
                       {group.tag_ids.length} 个关联标签
                     </p>

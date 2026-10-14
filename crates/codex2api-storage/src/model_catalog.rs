@@ -29,6 +29,9 @@ pub struct ImageUsage {
     pub count: i64,
 }
 
+/// A single per-image price independent of dimensions, snapshotted like band prices.
+pub const IMAGE_UNIFORM_RESOLUTION: &str = "*";
+
 pub fn image_resolution(value: &str) -> Option<String> {
     let (width, height) = value.trim().split_once('x')?;
     let width = width.parse::<u32>().ok()?;
@@ -184,11 +187,21 @@ impl Storage {
                 ));
             }
             let mut sizes = BTreeSet::new();
+            if images
+                .iter()
+                .any(|p| p.resolution == IMAGE_UNIFORM_RESOLUTION)
+                && images.len() != 1
+            {
+                return Err(StorageError::InvalidAdminUpdate(
+                    "统一图像价格不能与分辨率价格同时配置",
+                ));
+            }
             for price in images {
                 if price.provider_id != model.provider_id
                     || price.model != model.model
-                    || image_resolution_tier(&price.resolution).as_deref()
-                        != Some(&price.resolution)
+                    || (price.resolution != IMAGE_UNIFORM_RESOLUTION
+                        && image_resolution_tier(&price.resolution).as_deref()
+                            != Some(&price.resolution))
                     || price.price_nano_usd < 0
                     || !sizes.insert(&price.resolution)
                 {

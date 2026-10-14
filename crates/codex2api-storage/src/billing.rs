@@ -36,6 +36,27 @@ pub struct ModelPrice {
     pub revision: i64,
 }
 
+impl ModelPrice {
+    /// The next start supersedes this rule, even when its stored upper bound is absent.
+    /// This is the same interval selected by `charge_scaled`; it does not rewrite prices.
+    pub fn effective_max_input_tokens(&self, prices: &[Self]) -> Option<i64> {
+        let next = prices
+            .iter()
+            .filter(|p| {
+                p.provider_id == self.provider_id
+                    && p.model == self.model
+                    && p.tier == self.tier
+                    && p.min_input_tokens > self.min_input_tokens
+            })
+            .map(|p| p.min_input_tokens - 1)
+            .min();
+        match (self.max_input_tokens, next) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (explicit, next) => explicit.or(next),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct UsageChargeTerm {
     pub kind: &'static str,
@@ -219,17 +240,22 @@ impl BillingSnapshot {
                 return (None, "overflow", model, None);
             };
             count = next;
-            let Some(size) = item.resolution else {
-                return (None, "missing_resolution", model, None);
-            };
-            let tier = crate::image_resolution_tier(&size);
-            // Existing fixed-size snapshots keep their original exact prices.
             let same_model = |p: &&crate::ImagePrice| {
                 p.provider_id == record.provider_id && Some(&p.model) == model.as_ref()
             };
+            let uniform = images
+                .iter()
+                .find(|p| same_model(p) && p.resolution == crate::IMAGE_UNIFORM_RESOLUTION);
+            if uniform.is_none() && item.resolution.is_none() {
+                return (None, "missing_resolution", model, None);
+            }
+            let size = item.resolution.as_deref();
+            let tier = size.and_then(crate::image_resolution_tier);
+            // Existing fixed-size snapshots keep their original exact prices.
             let price = images
                 .iter()
-                .find(|p| same_model(p) && p.resolution == size)
+                .find(|p| same_model(p) && Some(p.resolution.as_str()) == size)
+                .or(uniform)
                 .or_else(|| {
                     images
                         .iter()
@@ -254,8 +280,11 @@ impl BillingSnapshot {
                 kind: "image",
                 quantity: item.count,
                 unit_price_usd: format_units(price.price_nano_usd, 9),
-                resolution: Some(size),
+                resolution: item.resolution,
             });
+            if price.resolution == crate::IMAGE_UNIFORM_RESOLUTION {
+                billing_tiers.insert(crate::IMAGE_UNIFORM_RESOLUTION.to_owned());
+            }
             if let Some(hit_tier) = crate::image_resolution_tier(&price.resolution) {
                 billing_tiers.insert(hit_tier);
             }
@@ -488,8 +517,8 @@ impl Storage {
             PriceRequirement::Image(size) => {
                 let size = size.filter(|size| *size != "auto");
                 let tier = size.and_then(crate::image_resolution_tier);
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_image_prices WHERE provider_id=? AND model=? AND (? IS NULL OR resolution=? OR resolution=?))")
-                    .bind(provider).bind(model).bind(size).bind(size).bind(tier).fetch_one(self.pool()).await?
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_image_prices WHERE provider_id=? AND model=? AND (resolution=? OR ? IS NULL OR resolution=? OR resolution=?))")
+                    .bind(provider).bind(model).bind(crate::IMAGE_UNIFORM_RESOLUTION).bind(size).bind(size).bind(tier).fetch_one(self.pool()).await?
             }
             PriceRequirement::Operation(operation) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operation_prices WHERE provider_id=? AND operation=? AND price_nano_usd IS NOT NULL)")
                 .bind(provider).bind(operation).fetch_one(self.pool()).await?,

@@ -59,7 +59,7 @@ Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p
 
 用户端页面为 `/user/`（总览）、`/user/usage/`（使用信息）、`/user/subscriptions/`、`/user/plans/`、`/user/orders/`、`/user/wallet/`、`/user/devices/`、`/user/profile/`（用户信息）。检查桌面侧栏折叠和手机抽屉、面包屑及头像入口；直接进入或刷新子页先恢复会话，确认未登录后才显示登录表单。总览数值应与本人对应明细一致，资料页只展示本人的信息，修改密码仍要求当前密码。
 
-用量记录统一在 `/admin/usage/` 和 `/user/usage/`，API 与 OAuth 请求共用列表、详情和统计。按量 API 页面为管理端 `/admin/api-groups/`、`/admin/api-keys/`，用户端 `/user/model-market/`、`/user/api-keys/`。配置同平台标签与模型后，核对空模型列表按标签解析、模型倍率覆盖组倍率、组与模型的每用户并发和 RPM 同时生效，多把 Key 不能增加同一用户的限额。模型广场默认展示基础目录，横向切换组后展示精确计费价格和两层限制。密钥只在创建时返回一次，撤销后调用立即失效；钱包 API 扣款不能改变 OAuth 订阅额度。
+用量记录统一在 `/admin/usage/` 和 `/user/usage/`，API 与 OAuth 请求共用列表、详情和统计。按量 API 页面为管理端 `/admin/api-groups/`、`/admin/api-keys/`，用户端 `/user/model-market/`、`/user/api-keys/`。配置同平台标签与模型后，核对空模型列表表示该平台全部已启用模型、模型列表不随标签支持范围变化、执行仍限定在所选标签号池、模型倍率覆盖组倍率、组与模型的每用户并发和 RPM 同时生效，多把 Key 不能增加同一用户的限额。模型广场默认展示基础目录，横向切换组后展示精确计费价格和两层限制。密钥只在创建时返回一次，撤销后调用立即失效；钱包 API 扣款不能改变 OAuth 订阅额度。
 
 管理前端的 `tests/browser/api-service.spec.ts` 在含 `review_fixture` 的独立测试库上验收组编辑、模型价格、手机布局、密钥和读取失败后的状态保留。设置 `CODEX2API_TEST_BASE_URL` 为本地管理入口、`CODEX2API_TEST_USER_BASE_URL` 为本地用户入口、`CODEX2API_TEST_OUTPUT_DIR` 为测试输出目录，然后在 `frontend/` 执行 `npx playwright test api-service.spec.ts public-urls.spec.ts`。测试只准备本地假供应账户，不调用真实上游；真实平台授权、订阅权限及生成行为仍需使用获准的供应账户单独验证。
 

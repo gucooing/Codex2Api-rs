@@ -1,7 +1,7 @@
 //! API product policy and public prices. Supplier routing never enters user DTOs.
 use crate::{ImagePrice, ListPage, ModelConfig, ModelPrice, Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{FromRow, QueryBuilder, Sqlite, SqliteConnection};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -389,6 +389,7 @@ pub struct ApiTokenPrice {
     pub tier: String,
     pub min_input_tokens: i64,
     pub max_input_tokens: Option<i64>,
+    pub standard_multiplier: Option<String>,
     pub input_usd_per_million: String,
     pub cached_usd_per_million: String,
     pub cache_write_usd_per_million: String,
@@ -403,6 +404,59 @@ pub struct ApiImagePrice {
     pub resolution: String,
     pub base_price_usd: String,
     pub price_usd: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ApiOperationPrice {
+    pub provider_id: String,
+    pub operation: String,
+    pub price_usd: Option<String>,
+}
+
+fn standard_price_multiplier(price: &ModelPrice, prices: &[ModelPrice]) -> Option<String> {
+    if price.tier == "standard" {
+        return None;
+    }
+    let base = prices
+        .iter()
+        .filter(|p| {
+            p.provider_id == price.provider_id
+                && p.model == price.model
+                && p.tier == "standard"
+                && p.min_input_tokens <= price.min_input_tokens
+        })
+        .max_by_key(|p| p.min_input_tokens)?;
+    if let Some(end) = base.effective_max_input_tokens(prices)
+        && price
+            .effective_max_input_tokens(prices)
+            .is_none_or(|max| max > end)
+    {
+        return None;
+    }
+    let mut ratio = None;
+    for (base, value) in [
+        (base.input_rate, price.input_rate),
+        (base.cached_rate, price.cached_rate),
+        (base.cache_write_rate, price.cache_write_rate),
+        (base.output_rate, price.output_rate),
+    ] {
+        if base == 0 {
+            if value != 0 {
+                return None;
+            }
+            continue;
+        }
+        let scaled = i128::from(value) * 1_000_000;
+        if scaled % i128::from(base) != 0 {
+            return None;
+        }
+        let next = scaled / i128::from(base);
+        if ratio.is_some_and(|previous| previous != next) {
+            return None;
+        }
+        ratio = Some(next);
+    }
+    ratio.map(|value| scaled(value, 6))
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ApiCatalogModel {
@@ -431,36 +485,60 @@ fn scaled(value: i128, places: u32) -> String {
     .to_owned()
 }
 
-const CATALOG_CONDITION:&str="m.enabled=1 AND m.deleted=0 AND (?='' OR m.provider_id=?) AND (?='' OR instr(lower(m.model),lower(?))>0)
- AND (? IS NULL OR (m.provider_id=? AND EXISTS(SELECT 1 FROM api_group_tags gt JOIN supplier_tag_members tm ON tm.tag_id=gt.tag_id JOIN supplier_accounts s ON s.id=tm.account_id JOIN supplier_models sm ON sm.account_id=s.id WHERE gt.group_id=? AND s.provider_id=m.provider_id AND sm.model=m.model)
- AND (json_array_length(?)=0 OR m.model IN(SELECT value FROM json_each(?)))))";
+/// One model policy for catalogs and admission. Tags select execution suppliers;
+/// only the platform catalog and the group's optional allowlist grant model access.
+pub(crate) fn model_catalog_query<'a>(
+    projection: &'static str,
+    group: Option<&'a ApiGroup>,
+    filters: Option<&'a ApiListQuery>,
+) -> Result<QueryBuilder<'a, Sqlite>> {
+    let mut query = QueryBuilder::new(format!(
+        "SELECT {projection} FROM model_catalog m WHERE m.enabled=1 AND m.deleted=0"
+    ));
+    if let Some(group) = group {
+        query
+            .push(" AND m.provider_id=")
+            .push_bind(&group.provider_id);
+        if !group.allowed_models.is_empty() {
+            query
+                .push(" AND m.model IN (SELECT value FROM json_each(")
+                .push_bind(serde_json::to_string(&group.allowed_models)?)
+                .push("))");
+        }
+    }
+    if let Some(filters) = filters {
+        if !filters.provider_id.is_empty() {
+            query
+                .push(" AND m.provider_id=")
+                .push_bind(&filters.provider_id);
+        }
+        if !filters.search.is_empty() {
+            query
+                .push(" AND instr(lower(m.model),lower(")
+                .push_bind(&filters.search)
+                .push("))>0");
+        }
+    }
+    Ok(query)
+}
 
 pub(crate) async fn catalog_on(
     connection: &mut SqliteConnection,
     group: Option<&ApiGroup>,
     query: Option<&ApiListQuery>,
 ) -> Result<(i64, Vec<ApiCatalogModel>)> {
-    let provider = query.map_or("", |q| q.provider_id.as_str());
-    let search = query.map_or("", |q| q.search.as_str());
-    let allowed =
-        serde_json::to_string(&group.map(|g| g.allowed_models.as_slice()).unwrap_or(&[]))?;
-    let total: i64 = sqlx::query_scalar(&format!(
-        "SELECT COUNT(*) FROM model_catalog m WHERE {CATALOG_CONDITION}"
-    ))
-    .bind(provider)
-    .bind(provider)
-    .bind(search)
-    .bind(search)
-    .bind(group.map(|g| &g.id))
-    .bind(group.map(|g| &g.provider_id))
-    .bind(group.map(|g| &g.id))
-    .bind(&allowed)
-    .bind(&allowed)
-    .fetch_one(&mut *connection)
-    .await?;
-    let configs:Vec<ModelConfig>=sqlx::query_as(&format!("SELECT m.* FROM model_catalog m WHERE {CATALOG_CONDITION} ORDER BY m.provider_id,m.model LIMIT ? OFFSET ?"))
-        .bind(provider).bind(provider).bind(search).bind(search).bind(group.map(|g|&g.id)).bind(group.map(|g|&g.provider_id)).bind(group.map(|g|&g.id)).bind(&allowed).bind(&allowed)
-        .bind(query.map_or(-1,|q|i64::from(q.page_size))).bind(query.map_or(0,|q|q.offset_for(total))).fetch_all(&mut *connection).await?;
+    let total: i64 = model_catalog_query("COUNT(*)", group, query)?
+        .build_query_scalar()
+        .fetch_one(&mut *connection)
+        .await?;
+    let configs: Vec<ModelConfig> = model_catalog_query("m.*", group, query)?
+        .push(" ORDER BY m.provider_id,m.model LIMIT ")
+        .push_bind(query.map_or(-1, |q| i64::from(q.page_size)))
+        .push(" OFFSET ")
+        .push_bind(query.map_or(0, |q| q.offset_for(total)))
+        .build_query_as()
+        .fetch_all(&mut *connection)
+        .await?;
     let selected = serde_json::to_string(
         &configs
             .iter()
@@ -480,7 +558,8 @@ pub(crate) async fn catalog_on(
             .map(|p| ApiTokenPrice {
                 tier: p.tier.clone(),
                 min_input_tokens: p.min_input_tokens,
-                max_input_tokens: p.max_input_tokens,
+                max_input_tokens: p.effective_max_input_tokens(&prices),
+                standard_multiplier: standard_price_multiplier(p, &prices),
                 input_usd_per_million: scaled(i128::from(p.input_rate) * factor, 12),
                 cached_usd_per_million: scaled(i128::from(p.cached_rate) * factor, 12),
                 cache_write_usd_per_million: scaled(i128::from(p.cache_write_rate) * factor, 12),

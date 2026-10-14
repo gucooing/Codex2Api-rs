@@ -194,9 +194,21 @@ impl UserStore {
         };
         let (total, items) =
             crate::api_groups::catalog_on(&mut tx, group.as_ref(), Some(query)).await?;
+        let provider = group
+            .as_ref()
+            .map(|g| g.provider_id.as_str())
+            .unwrap_or(query.provider_id.as_str());
+        let operations = match provider {
+            "" | codex2api_core::CHATGPT
+                if query.provider_id.is_empty() || query.provider_id == codex2api_core::CHATGPT =>
+            {
+                crate::providers::chatgpt::catalog_operation_prices(&mut tx, group.as_ref()).await?
+            }
+            _ => Vec::new(),
+        };
         tx.commit().await?;
         Ok(
-            json!({"group":group.map(|g|g.public(total)),"items":items,"total":total,"page":query.page_for(total),"page_size":query.page_size}),
+            json!({"group":group.map(|g|g.public(total)),"items":items,"operations":operations,"total":total,"page":query.page_for(total),"page_size":query.page_size}),
         )
     }
     pub async fn api_keys(

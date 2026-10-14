@@ -219,7 +219,7 @@ async fn invalid_seed_rolls_back_the_entire_registration() {
 }
 
 #[tokio::test]
-async fn gpt55_bounds_and_ordinary_cache_writes_are_snapshotted_without_repricing() {
+async fn gpt55_global_tier_multipliers_and_cache_writes_keep_request_snapshots() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Storage::open(dir.path().join("gpt55.sqlite"))
         .await
@@ -245,7 +245,14 @@ async fn gpt55_bounds_and_ordinary_cache_writes_are_snapshotted_without_repricin
             Some(3_400_000_000),
             "priced",
         ),
-        ("fast-outside", "fast", 272_001, 0, None, "unpriced"),
+        (
+            "fast-long",
+            "fast",
+            272_001,
+            0,
+            Some(6_800_025_000),
+            "priced",
+        ),
         (
             "standard-long",
             "standard",
@@ -273,9 +280,9 @@ async fn gpt55_bounds_and_ordinary_cache_writes_are_snapshotted_without_repricin
             ..Default::default()
         };
         storage.insert_usage(&usage).await.unwrap();
-        // Editing today's cap after request start must not change its snapshot.
+        // Editing today's multiplier after request start must not change its snapshot.
         sqlx::query(
-            "UPDATE model_prices SET max_input_tokens=999999 WHERE model='gpt-5.5' AND tier='fast'",
+            "UPDATE model_prices SET input_rate=input_rate*2,cache_write_rate=cache_write_rate*2 WHERE model='gpt-5.5' AND tier='fast'",
         )
         .execute(storage.pool())
         .await
@@ -298,10 +305,107 @@ async fn gpt55_bounds_and_ordinary_cache_writes_are_snapshotted_without_repricin
             "{id}"
         );
         sqlx::query(
-            "UPDATE model_prices SET max_input_tokens=272000 WHERE model='gpt-5.5' AND tier='fast'",
+            "UPDATE model_prices SET input_rate=input_rate/2,cache_write_rate=cache_write_rate/2 WHERE model='gpt-5.5' AND tier='fast'",
         )
         .execute(storage.pool())
         .await
         .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn global_fast_migration_repairs_only_unchanged_defaults_and_preserves_history() {
+    use sqlx::{
+        migrate::Migrator,
+        sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    };
+    use std::borrow::Cow;
+    static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
+    for custom in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("before-global-fast.sqlite");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        Migrator {
+            migrations: Cow::Owned(
+                MIGRATIONS
+                    .iter()
+                    .filter(|m| m.version <= 80)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        }
+        .run(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled,revision) VALUES('chatgpt','gpt-5.5','text',0,7)").execute(&pool).await.unwrap();
+        let mut old_prices = preset_model_prices("chatgpt", "gpt-5.5").unwrap();
+        old_prices.retain(|p| p.tier != "fast" || p.min_input_tokens == 0);
+        for price in &mut old_prices {
+            price.source = if custom {
+                "custom"
+            } else {
+                "preset:2026-10-09"
+            }
+            .into();
+            if price.tier == "fast" {
+                price.max_input_tokens = Some(272000);
+            }
+            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,max_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+                .bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.max_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.source).bind(4_i64).execute(&pool).await.unwrap();
+        }
+        let snapshot = serde_json::to_string(&old_prices).unwrap();
+        sqlx::query("INSERT INTO usage_records(id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,requested_at_ms,status,pricing_snapshot_json,cost_nano_usd,billing_status) VALUES('history','','','owner','','/v1/responses','http','gpt-5.5',0,'completed',?,3400000000,'priced')")
+            .bind(&snapshot).execute(&pool).await.unwrap();
+        pool.close().await;
+        let storage = Storage::open(&path).await.unwrap();
+        let rows = storage.model_prices("chatgpt").await.unwrap();
+        let fast: Vec<_> = rows
+            .iter()
+            .filter(|p| p.model == "gpt-5.5" && p.tier == "fast")
+            .collect();
+        assert_eq!(fast.len(), if custom { 1 } else { 2 });
+        assert_eq!(
+            fast[0].max_input_tokens,
+            if custom { Some(272000) } else { None }
+        );
+        if !custom {
+            assert_eq!(fast[1].input_rate, 25_000_000);
+            assert_eq!(fast[1].output_rate, 112_500_000);
+        }
+        let config = storage
+            .model_config("chatgpt", "gpt-5.5")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!config.enabled);
+        assert_eq!(config.revision, if custom { 7 } else { 8 });
+        let history: (String, i64) = sqlx::query_as(
+            "SELECT pricing_snapshot_json,cost_nano_usd FROM usage_records WHERE id='history'",
+        )
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+        assert_eq!(history, (snapshot, 3_400_000_000));
+        storage.close().await;
+        let reopened = Storage::open(&path).await.unwrap();
+        assert_eq!(
+            reopened
+                .model_config("chatgpt", "gpt-5.5")
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            config.revision
+        );
     }
 }

@@ -6,11 +6,14 @@ import { modelWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
 import {
   findModelPreset,
+  imagePricingDraft,
+  imagePricingRows,
   pricingDraft,
   pricingRows,
   withModelPreset,
   type BasePrice,
   type PricingDraft,
+  type ImagePricingDraft,
 } from "@/lib/model-pricing";
 import { useListResource } from "@/lib/pagination";
 import { useSavedFilters } from "@/lib/preferences";
@@ -32,7 +35,7 @@ export const emptyModel = (): Model => ({
   enabled: true,
   revision: null,
   token_prices: [tokenRule()],
-  image_prices: [{ resolution: "", price: "" }],
+  image_prices: [],
 });
 
 export function useModelEditor({
@@ -49,6 +52,7 @@ export function useModelEditor({
   const actions = useActions();
   const [value, setValue] = useState(model);
   const [pricing, setPricing] = useState(() => pricingDraft(model.token_prices));
+  const [imagePricing, setImagePricing] = useState(() => imagePricingDraft(model.image_prices));
   const [pricingChanged, setPricingChanged] = useState(false);
   const [customPricing, setCustomPricing] = useState(model.revision !== null);
   const [presetVersion, setPresetVersion] = useState<string>();
@@ -57,6 +61,7 @@ export function useModelEditor({
     const next = withModelPreset(current, preset);
     setValue(next);
     setPricing(pricingDraft(next.token_prices));
+    setImagePricing(imagePricingDraft(next.image_prices));
     setPricingChanged(true);
     setCustomPricing(false);
     setPresetVersion(preset.version);
@@ -86,6 +91,11 @@ export function useModelEditor({
     setCustomPricing(true);
     setPresetVersion(undefined);
   };
+  const changeImagePricing = (next: ImagePricingDraft) => {
+    setImagePricing(next);
+    setCustomPricing(true);
+    setPresetVersion(undefined);
+  };
   const updateRange = (index: number, patch: Partial<BasePrice>) =>
     changePricing({
       ...pricing,
@@ -102,6 +112,7 @@ export function useModelEditor({
           body: modelWrite(
             {
               ...value,
+              image_prices: value.kind === "image" ? imagePricingRows(imagePricing) : [],
               token_prices:
                 value.kind === "text" && pricingChanged ? pricingRows(pricing) : value.token_prices,
             },
@@ -118,6 +129,8 @@ export function useModelEditor({
     actions,
     value,
     pricing,
+    imagePricing,
+    changeImagePricing,
     presetVersion,
     matchedPreset,
     applyPreset,

@@ -79,3 +79,40 @@ test("prices use exact decimals and reject lost precision or ambiguous intervals
   draft.ranges[1].min_input_tokens = 0;
   assert.throws(() => pricingRows(draft));
 });
+
+// Price labels use the effective intervals; draft rows retain the exact saved rules.
+test("range labels respect the next threshold and explicit caps", async () => {
+  const { priceRangeLabel } = await import("../src/lib/model-pricing.ts");
+  const first = base(),
+    second = base(272001);
+  assert.equal(priceRangeLabel(first, [first, second]), "0–272,000");
+  assert.equal(priceRangeLabel(second, [first, second]), "≥ 272,001");
+  assert.equal(priceRangeLabel({ ...first, max_input_tokens: 100 }, [first, second]), "0–100");
+  assert.equal(priceRangeLabel(first, [first]), "不限");
+  assert.equal(first.max_input_tokens, undefined);
+});
+
+test("image uniform and resolution modes round trip without guessing prices", async () => {
+  const { imagePricingDraft, imagePricingRows } = await import("../src/lib/model-pricing.ts");
+  const uniform = [{ resolution: "*", price: "0.000000001" }];
+  const draft = imagePricingDraft(uniform);
+  assert.equal(draft.mode, "uniform");
+  assert.deepEqual(imagePricingRows(draft), uniform);
+  const bands = [
+    { resolution: "1K", price: "0.03" },
+    { resolution: "2K", price: "0.03" },
+  ];
+  const existing = imagePricingDraft(bands);
+  assert.equal(existing.mode, "resolution");
+  assert.deepEqual(imagePricingRows(existing), bands);
+  assert.throws(() => imagePricingRows({ ...existing, mode: "uniform" }));
+  assert.deepEqual(imagePricingRows({ ...existing, mode: "uniform", uniformPrice: "0" }), [
+    { resolution: "*", price: "0" },
+  ]);
+  assert.deepEqual(imagePricingRows(existing), bands);
+  assert.throws(() => imagePricingRows({ ...draft, uniformPrice: "0.0000000001" }));
+  assert.throws(() => imagePricingRows({ ...existing, prices: [bands[0], bands[0]] }));
+  assert.throws(() =>
+    imagePricingRows({ ...existing, prices: [{ resolution: "*", price: "0.03" }] }),
+  );
+});

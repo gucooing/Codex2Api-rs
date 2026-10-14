@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 mod model_presets;
 pub mod providers;
 pub use model_presets::{
-    MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset, model_preset_source, model_price_preset,
+    MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset, model_preset_source,
+    model_preset_verified_at, model_price_preset,
 };
 
 pub const CHATGPT: &str = "chatgpt";

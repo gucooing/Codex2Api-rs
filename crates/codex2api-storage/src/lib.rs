@@ -30,8 +30,8 @@ mod model_presets;
 pub use model_presets::preset_model_prices;
 mod token;
 pub use model_catalog::{
-    IMAGE_RESOLUTION_TIERS, ImagePrice, ImageUsage, ModelConfig, image_resolution,
-    image_resolution_tier,
+    IMAGE_RESOLUTION_TIERS, IMAGE_UNIFORM_RESOLUTION, ImagePrice, ImageUsage, ModelConfig,
+    image_resolution, image_resolution_tier,
 };
 mod entitlements;
 mod error;

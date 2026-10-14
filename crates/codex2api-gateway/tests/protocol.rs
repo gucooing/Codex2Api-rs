@@ -703,8 +703,36 @@ async fn supplier_throttle_is_forwarded_without_failover_or_persistent_ban() {
 }
 
 #[tokio::test]
-async fn model_list_requires_api_key_and_does_not_admit_oauth_or_web_credentials() {
+async fn api_model_catalog_uses_platform_policy_and_execution_stays_in_the_group_pool() {
     let fixture = fixture("chatgpt").await;
+    let config = ModelConfig {
+        provider_id: "chatgpt".into(),
+        model: "catalog-only".into(),
+        kind: "text".into(),
+        enabled: true,
+        deleted: false,
+        revision: 0,
+    };
+    let mut price = fixture
+        .storage
+        .model_prices("chatgpt")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|price| price.model == "custom-model")
+        .unwrap();
+    price.model = config.model.clone();
+    fixture
+        .storage
+        .save_model_config(&config, &[price], &[], None)
+        .await
+        .unwrap();
+    add_supplier(&fixture.storage, "chatgpt", "outside-group").await;
+    fixture
+        .storage
+        .add_supplier_model("outside-group", &config.model)
+        .await
+        .unwrap();
     for token in ["oauth-access", "eyJhbGciOiJSUzI1NiJ9.web-session"] {
         let response = fixture
             .router
@@ -733,9 +761,38 @@ async fn model_list_requires_api_key_and_does_not_admit_oauth_or_web_credentials
         .await
         .unwrap();
     let value = json_body(response).await;
-    assert_eq!(value["data"][0]["id"], "custom-model");
+    let models = value["data"].as_array().unwrap();
+    assert!(models.iter().any(|model| model["id"] == "custom-model"));
+    assert!(models.iter().any(|model| model["id"] == "catalog-only"));
+    assert!(models.iter().all(|model| model["owned_by"] == "chatgpt"));
     assert!(!value.to_string().contains("supplier"));
     assert!(fixture.mock.requests.lock().unwrap().is_empty());
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "/v1/responses",
+            &fixture.token,
+            json!({"model":"catalog-only","input":"Hello","stream":false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        json_body(response).await["error"]["code"],
+        "supplier_model_unavailable"
+    );
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+    assert_eq!(
+        fixture
+            .storage
+            .user("user")
+            .await
+            .unwrap()
+            .unwrap()
+            .wallet_cents,
+        100
+    );
 }
 
 #[tokio::test]

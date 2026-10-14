@@ -13,7 +13,7 @@ import {
 import { Field, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { type Model } from "@/lib/api";
 import { money } from "@/lib/format";
-import { priceTierLabels } from "@/lib/model-pricing";
+import { imagePriceLabel, priceTierLabels } from "@/lib/model-pricing";
 import { ChevronRight } from "lucide-react";
 
 type Props = {
@@ -77,8 +77,8 @@ export function ModelRecordDialog({ model }: Props) {
                 </>
               ) : (
                 model.image_prices.map((rule) => (
-                  <div key={rule.resolution}>
-                    {rule.resolution}：{money(rule.price)} / 张
+                  <div key={imagePriceLabel(rule.resolution)}>
+                    {imagePriceLabel(rule.resolution)}：{money(rule.price)} / 张
                   </div>
                 ))
               )}

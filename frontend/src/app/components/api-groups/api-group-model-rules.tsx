@@ -45,7 +45,7 @@ export function ApiGroupModelRules({ editor }: { editor: ReturnType<typeof useAp
               <SelectValue />
             </SelectTrigger>
             <SelectContent position="popper">
-              <SelectItem value="all">标签支持的全部模型</SelectItem>
+              <SelectItem value="all">该平台的全部模型</SelectItem>
               <SelectItem value="selected">指定模型</SelectItem>
             </SelectContent>
           </Select>

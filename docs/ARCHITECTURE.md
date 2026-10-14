@@ -638,7 +638,12 @@ server-supplied field descriptions. Preset loading never calls the supplier.
 Token rates use integer micro-USD per million tokens. Rules include Standard,
 Fast/Flex, an input-token start and an optional inclusive upper bound. Migration
 0049 adds the nullable upper bound without changing existing prices. Historical
-snapshots without this field remain unbounded.
+snapshots without this field retain their original matching semantics. Displayed
+intervals end at the lower of the explicit cap and the next start minus one, matching
+settlement. Standard prices are displayed once; proportional Fast/Flex/Ultrafast
+rules covering the same intervals are presented as multipliers, while independently
+configured prices stay explicit. The one-time default Fast correction only updates
+unchanged generated GPT-5.5 prices; custom rules and historical snapshots are preserved.
 
 The shared presets include GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol/Luna, GPT-5.6
 Sol/Terra/Luna and GPT-5.5. Prices have official source links and a verification
@@ -648,9 +653,10 @@ during startup or administration.
 GPT-5.5 Standard short-context rates are $5 input, $0.50 cached input and $30 output
 per million tokens. It has no cache-creation surcharge; the ledger's effective
 write rate equals ordinary input. Standard/Flex have their documented long-context
-rules. Fast short-context rates are $12.50/$1.25/$75 and carry a 272,000 input-token
-upper bound; a longer request is explicitly unpriced instead of inheriting that
-short-context rate. See [pricing](https://developers.openai.com/api/docs/pricing)
+rules. Service-tier multipliers apply to every standard input interval: GPT-5.5
+Fast is 2.5x Standard and Flex is 0.5x Standard. The same multiplier applies
+to the four token buckets in both short and long contexts; Fast has no separate
+context cap. The public base-rate reference is distinct from this service policy. See [pricing](https://developers.openai.com/api/docs/pricing)
 and [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 Ultrafast is an independent service tier. The administrator model price configuration publishes it to Codex Desktop through both model `service_tiers` and Desktop version `service_tier_options`; only models with an explicit Ultrafast price expose the option. Requests preserve `service_tier: "ultrafast"` through HTTP, SSE and WebSocket, and settlement uses the snapshotted Ultrafast prices. Missing Ultrafast prices remain explicitly unpriced and are never charged as Fast or Standard. Unsupported modalities are not silently mapped to another billing tier.
 
@@ -658,7 +664,11 @@ Image billing uses actual successful image count and resolution bands based on
 the longer edge: 0.5K/512, 1K/1024, 2K/2560, 4K/4096 and 8K/8192.
 Existing exact-size snapshots retain their original prices. The current resolver
 uses matching bands or the closest configured band; missing model prices or
-unreported dimensions remain explicitly unknown. Do not derive service per-image
+unreported dimensions remain explicitly unknown for resolution-based prices.
+Administrators can instead choose a single uniform per-image price, persisted as
+the sole `*` resolution row. Uniform prices cover every resolution and only require
+the actual successful image count, including when dimensions are unreported.
+Uniform and resolution-based prices cannot be mixed. Do not derive service per-image
 band prices from incompatible official token/quality units.
 
 ### Quotas and usage

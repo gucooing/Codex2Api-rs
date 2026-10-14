@@ -1,4 +1,5 @@
 "use client";
+import { ImagePricingFields } from "./image-pricing-fields";
 import { useModelEditor } from "@/app/data/models";
 import { Button } from "@/components/ui/button";
 import { CardTitle } from "@/components/ui/card";
@@ -27,6 +28,7 @@ import {
   additionalPriceTiers,
   emptyBasePrice,
   priceFields,
+  priceRangeLabel,
   priceTierLabels,
 } from "@/lib/model-pricing";
 import { Plus, Trash2, X } from "lucide-react";
@@ -48,6 +50,8 @@ export function ModelEditor({
     actions,
     value,
     pricing,
+    imagePricing,
+    changeImagePricing,
     presetVersion,
     matchedPreset,
     applyPreset,
@@ -303,11 +307,7 @@ export function ModelEditor({
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <strong>
                             {index === 0 ? "基础区间" : `上下文区间 ${index}`} ·{" "}
-                            {row.min_input_tokens.toLocaleString()} —{" "}
-                            {pricing.ranges[index + 1]
-                              ? (pricing.ranges[index + 1].min_input_tokens - 1).toLocaleString()
-                              : "不限"}{" "}
-                            Token
+                            {priceRangeLabel(row, pricing.ranges)} Token
                           </strong>
                           {index > 0 && (
                             <Button
@@ -550,187 +550,11 @@ export function ModelEditor({
                     </FieldSet>
                   </FieldSet>
                 ) : (
-                  <FieldSet className="space-y-3">
-                    <FieldLegend>图像价格（美元 / 张）</FieldLegend>
-                    <div className="space-y-4">
-                      {value.image_prices.map((row, index) => (
-                        <div className="flex flex-wrap items-end gap-2" key={index}>
-                          <Field>
-                            <FieldLabel
-                              htmlFor={
-                                fieldId +
-                                "-field-16" +
-                                "-" +
-                                String(index) +
-                                "-" +
-                                encodeURIComponent(String("分辨率档位"))
-                              }
-                            >
-                              {"分辨率档位"}
-                            </FieldLabel>
-                            <Select
-                              value={row.resolution}
-                              onValueChange={(next) =>
-                                ((resolution) =>
-                                  update(
-                                    "image_prices",
-                                    value.image_prices.map((item, i) =>
-                                      i === index ? { ...item, resolution } : item,
-                                    ),
-                                  ))(
-                                  next ===
-                                    fieldId +
-                                      "-field-16" +
-                                      "-" +
-                                      String(index) +
-                                      "-" +
-                                      encodeURIComponent(String("分辨率档位")) +
-                                      "-empty"
-                                    ? ""
-                                    : next,
-                                )
-                              }
-                              required={true}
-                            >
-                              <SelectTrigger
-                                id={
-                                  fieldId +
-                                  "-field-16" +
-                                  "-" +
-                                  String(index) +
-                                  "-" +
-                                  encodeURIComponent(String("分辨率档位"))
-                                }
-                                aria-label={"分辨率档位"}
-                                data-required="true"
-                                data-empty={String(row.resolution) === "" ? "true" : undefined}
-                                className="w-full"
-                              >
-                                <SelectValue
-                                  placeholder={
-                                    [
-                                      { value: "", label: "请选择" },
-                                      ...[
-                                        ["0.5K", 512],
-                                        ["1K", 1024],
-                                        ["2K", 2560],
-                                        ["4K", 4096],
-                                        ["8K", 8192],
-                                      ].map(([tier, max]) => ({
-                                        value: String(tier),
-                                        label: `${tier} · 长边 ≤ ${max}px`,
-                                        disabled: value.image_prices.some(
-                                          (item, i) => i !== index && item.resolution === tier,
-                                        ),
-                                      })),
-                                    ].find((option) => option.value === "")?.label ?? "请选择"
-                                  }
-                                />
-                              </SelectTrigger>
-                              <SelectContent position="popper">
-                                {[
-                                  { value: "", label: "请选择" },
-                                  ...[
-                                    ["0.5K", 512],
-                                    ["1K", 1024],
-                                    ["2K", 2560],
-                                    ["4K", 4096],
-                                    ["8K", 8192],
-                                  ].map(([tier, max]) => ({
-                                    value: String(tier),
-                                    label: `${tier} · 长边 ≤ ${max}px`,
-                                    disabled: value.image_prices.some(
-                                      (item, i) => i !== index && item.resolution === tier,
-                                    ),
-                                  })),
-                                ].map((option) => (
-                                  <SelectItem
-                                    key={option.value}
-                                    value={
-                                      option.value ||
-                                      fieldId +
-                                        "-field-16" +
-                                        "-" +
-                                        String(index) +
-                                        "-" +
-                                        encodeURIComponent(String("分辨率档位")) +
-                                        "-empty"
-                                    }
-                                    disabled={"disabled" in option && Boolean(option.disabled)}
-                                  >
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </Field>
-                          <Field>
-                            <FieldLabel
-                              htmlFor={
-                                fieldId +
-                                "-field-17" +
-                                "-" +
-                                String(index) +
-                                "-" +
-                                encodeURIComponent(String("每张价格"))
-                              }
-                            >
-                              {"每张价格"}
-                            </FieldLabel>
-                            <Input
-                              id={
-                                fieldId +
-                                "-field-17" +
-                                "-" +
-                                String(index) +
-                                "-" +
-                                encodeURIComponent(String("每张价格"))
-                              }
-                              aria-label={"每张价格"}
-                              required
-                              type="number"
-                              min="0"
-                              step="0.000000001"
-                              value={row.price}
-                              onChange={(e) =>
-                                update(
-                                  "image_prices",
-                                  value.image_prices.map((item, i) =>
-                                    i === index ? { ...item, price: e.target.value } : item,
-                                  ),
-                                )
-                              }
-                            />
-                          </Field>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() =>
-                              update(
-                                "image_prices",
-                                value.image_prices.filter((_, i) => i !== index),
-                              )
-                            }
-                          >
-                            移除
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() =>
-                          update("image_prices", [
-                            ...value.image_prices,
-                            { resolution: "", price: "" },
-                          ])
-                        }
-                      >
-                        <Plus />
-                        添加分辨率档位
-                      </Button>
-                    </div>
-                  </FieldSet>
+                  <ImagePricingFields
+                    id={fieldId}
+                    value={imagePricing}
+                    onChange={changeImagePricing}
+                  />
                 )}
               </FieldGroup>
             </FieldSet>

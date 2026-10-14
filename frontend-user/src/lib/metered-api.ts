@@ -22,6 +22,7 @@ export type ApiTokenPrice = {
   tier: string;
   min_input_tokens: number;
   max_input_tokens: number | null;
+  standard_multiplier: string | null;
   input_usd_per_million: string;
   cached_usd_per_million: string;
   cache_write_usd_per_million: string;
@@ -45,7 +46,15 @@ export type ApiCatalogModel = {
   image_prices: ApiImagePrice[];
   search_price: string | null;
 };
-export type ApiModelMarket = ListPage<ApiCatalogModel> & { group: ApiGroup | null };
+export type ApiOperationPrice = {
+  provider_id: string;
+  operation: string;
+  price_usd: string | null;
+};
+export type ApiModelMarket = ListPage<ApiCatalogModel> & {
+  group: ApiGroup | null;
+  operations: ApiOperationPrice[];
+};
 export type ApiKey = {
   id: string;
   name: string;
@@ -81,5 +90,7 @@ export const apiTier = (tier: string) =>
   ({ standard: "标准", fast: "Fast", flex: "Flex", ultrafast: "Ultrafast" })[tier] ?? tier;
 export const apiRange = (price: Pick<ApiTokenPrice, "min_input_tokens" | "max_input_tokens">) =>
   price.max_input_tokens == null
-    ? `${price.min_input_tokens.toLocaleString()}+`
+    ? price.min_input_tokens === 0
+      ? "不限"
+      : `≥ ${price.min_input_tokens.toLocaleString()}`
     : `${price.min_input_tokens.toLocaleString()}–${price.max_input_tokens.toLocaleString()}`;

@@ -190,7 +190,7 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
             throw new Error("搜索单价须为有效的非负美元金额，最多九位小数");
         }
         if (modelMode === "selected" && !value.allowed_models.length)
-          throw new Error("请选择可用模型或切换为标签支持的全部模型");
+          throw new Error("请选择可用模型或切换为该平台的全部模型");
         const model_rules: ApiModelRule[] = rules
           .map((rule) => ({
             model: rule.model,

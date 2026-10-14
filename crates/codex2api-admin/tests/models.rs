@@ -26,7 +26,15 @@ async fn presets_create_complete_prices_and_reject_stale_or_ambiguous_writes() {
         .unwrap();
     assert_eq!(fast["input_rate"], "12.5");
     assert_eq!(fast["cache_write_rate"], "12.5");
-    assert_eq!(fast["max_input_tokens"], 272_000);
+    assert!(fast["max_input_tokens"].is_null());
+    let fast_long = legacy["token_prices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["tier"] == "fast" && p["min_input_tokens"] == 272001)
+        .unwrap();
+    assert_eq!(fast_long["input_rate"], "25");
+    assert_eq!(fast_long["output_rate"], "112.5");
     let input = json!({"provider_id":"chatgpt","model":"gpt-6.1-sol","kind":"text","enabled":true,"revision":null,"pricing_preset":preset["version"]});
     let mut stale = input.clone();
     stale["pricing_preset"] = "old-preset".into();
@@ -156,5 +164,48 @@ async fn model_prices_and_lifecycle_share_revision_checked_persisted_configurati
     assert_eq!(
         f.request("POST", "/admin/api/models", grok).await.status(),
         StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn image_model_supports_a_revision_checked_uniform_price() {
+    let f = Fixture::new().await;
+    let input = json!({"provider_id":"chatgpt","model":"uniform-admin-image","kind":"image","enabled":true,"revision":null,"token_prices":[],"image_prices":[{"resolution":"*","price":"0.03"}]});
+    assert_eq!(
+        f.request("POST", "/admin/api/models", input.clone())
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let rows = f.get("/admin/api/models?search=uniform-admin-image").await;
+    let model = &rows["items"][0];
+    assert_eq!(
+        model["image_prices"],
+        json!([{"resolution":"*","price":"0.03"}])
+    );
+    let mut mixed = input.clone();
+    mixed["revision"] = model["revision"].clone();
+    mixed["image_prices"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"resolution":"1K","price":"0.02"}));
+    assert_eq!(
+        f.request("POST", "/admin/api/models", mixed).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let mut update = input;
+    update["revision"] = model["revision"].clone();
+    update["image_prices"][0]["price"] = "0.05".into();
+    assert_eq!(
+        f.request("POST", "/admin/api/models", update.clone())
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.request("POST", "/admin/api/models", update)
+            .await
+            .status(),
+        StatusCode::CONFLICT
     );
 }

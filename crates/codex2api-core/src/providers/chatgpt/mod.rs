@@ -5,7 +5,7 @@ pub const SEARCH_OPERATION: &str = "search";
 pub fn billing_operation(endpoint: &str) -> Option<&'static str> {
     matches!(endpoint, "/v1/alpha/search").then_some(SEARCH_OPERATION)
 }
-/// Verified public token prices; unsupported prices remain absent.
+/// Public base rates with service-owned multipliers across all standard intervals.
 pub fn model_price_preset(model: &str) -> Option<Vec<TokenPricePreset>> {
     // Source: https://developers.openai.com/api/docs/pricing and each model page,
     // Standard/Fast/Flex checked 2026-10-03; Astra/Sol Ultrafast checked 2026-10-09.
@@ -32,8 +32,7 @@ pub fn model_price_preset(model: &str) -> Option<Vec<TokenPricePreset>> {
         if tier == "ultrafast" && !matches!(model, "gpt-6-astra" | "gpt-6.1-sol") {
             continue;
         }
-        let limited_fast = model == "gpt-5.5" && tier == "fast";
-        let (numerator, denominator) = if limited_fast {
+        let (numerator, denominator) = if model == "gpt-5.5" && tier == "fast" {
             (5, 2)
         } else {
             (numerator, denominator)
@@ -41,13 +40,10 @@ pub fn model_price_preset(model: &str) -> Option<Vec<TokenPricePreset>> {
         for (start, input_multiplier, output_numerator, output_denominator) in
             [(0, 1, 1, 1), (272_001, 2, 3, 2)]
         {
-            if limited_fast && start != 0 {
-                continue;
-            }
             prices.push(TokenPricePreset {
                 tier,
                 min_input_tokens: start,
-                max_input_tokens: limited_fast.then_some(272_000),
+                max_input_tokens: None,
                 input_rate: input * input_multiplier * numerator / denominator,
                 cached_rate: cached * input_multiplier * numerator / denominator,
                 cache_write_rate: cache_write * input_multiplier * numerator / denominator,

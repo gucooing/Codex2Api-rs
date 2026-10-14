@@ -2,7 +2,7 @@
 import { ModelEditor } from "@/app/components/models/model-editor";
 import { ModelRecordDialog } from "@/app/components/models/model-record-dialog";
 import { emptyModel, useModelPricing } from "@/app/data/models";
-import { priceTierLabels } from "@/lib/model-pricing";
+import { imagePriceLabel, priceTierLabels } from "@/lib/model-pricing";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription } from "@/components/ui/card";
@@ -358,8 +358,8 @@ export function ModelPricing() {
                             </>
                           ) : (
                             model.image_prices.map((rule) => (
-                              <div key={rule.resolution}>
-                                {rule.resolution}：{money(rule.price)} / 张
+                              <div key={imagePriceLabel(rule.resolution)}>
+                                {imagePriceLabel(rule.resolution)}：{money(rule.price)} / 张
                               </div>
                             ))
                           )}

@@ -63,12 +63,20 @@ impl Storage {
                 message: "模型平台与 API 组不一致",
             });
         }
-        let supported:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_catalog m WHERE m.provider_id=? AND m.model=? AND m.enabled=1 AND m.deleted=0 AND m.kind=? AND EXISTS(SELECT 1 FROM api_group_tags gt JOIN supplier_tag_members tm ON tm.tag_id=gt.tag_id JOIN supplier_accounts s ON s.id=tm.account_id JOIN supplier_models sm ON sm.account_id=s.id WHERE gt.group_id=? AND s.provider_id=m.provider_id AND sm.model=m.model))")
-            .bind(&current.group.provider_id).bind(model).bind(if matches!(requirement, PriceRequirement::Image(_)) { "image" } else { "text" }).bind(&current.group.id).fetch_one(&mut *tx).await?;
-        if !supported
-            || (!current.group.allowed_models.is_empty()
-                && !current.group.allowed_models.iter().any(|m| m == model))
-        {
+        let supported: i64 =
+            crate::api_groups::model_catalog_query("COUNT(*)", Some(&current.group), None)?
+                .push(" AND m.model=")
+                .push_bind(model)
+                .push(" AND m.kind=")
+                .push_bind(if matches!(requirement, PriceRequirement::Image(_)) {
+                    "image"
+                } else {
+                    "text"
+                })
+                .build_query_scalar()
+                .fetch_one(&mut *tx)
+                .await?;
+        if supported == 0 {
             return Err(StorageError::Api {
                 code: "model_not_available",
                 message: "该 API 组不支持此模型",
@@ -106,7 +114,8 @@ impl Storage {
                 images.iter().any(|p| {
                     p.model == model
                         && size.is_none_or(|size| {
-                            p.resolution == size
+                            p.resolution == crate::IMAGE_UNIFORM_RESOLUTION
+                                || p.resolution == size
                                 || (crate::image_resolution_tier(size).is_some()
                                     && crate::image_resolution_tier(&p.resolution).is_some())
                         })
