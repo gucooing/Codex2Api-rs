@@ -1349,7 +1349,7 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
             .unwrap();
         truncated.account_id = supplier.clone();
         truncated.http_status = status;
-        truncated.first_byte_ms = first_byte;
+        truncated.first_token_ms = first_byte;
         truncated.status = "failed".into();
         let settled = storage.settle(&truncated).await.unwrap();
         assert_eq!(settled.cost_nano_usd, None, "{id}");
@@ -1453,7 +1453,7 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
     failed.account_name = "private-supplier-name".into();
     failed.status = "failed".into();
     failed.http_status = Some(200);
-    failed.first_byte_ms = Some(35);
+    failed.first_token_ms = Some(35);
     failed.total_ms = Some(1200);
     failed.error_code = Some("upstream_incomplete".into());
     failed.error_message = Some("private diagnostic for administrators".into());
@@ -1472,7 +1472,7 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
     assert_eq!(row.error_message, failed.error_message);
     assert_eq!(row.error_code, failed.error_code);
     assert_eq!(row.http_status, Some(200));
-    assert_eq!(row.first_byte_ms, Some(35));
+    assert_eq!(row.first_token_ms, Some(35));
     assert_eq!(row.total_ms, Some(1200));
     assert_eq!(row.key_id.as_deref(), Some(principal.key_id.as_str()));
     assert_eq!(row.billing_status, "missing_usage");

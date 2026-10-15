@@ -307,7 +307,7 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       role="cell"
                     >
                       <CardDescription className="text-xs">
-                        首字节 {duration(record.first_byte_ms)}
+                        首 Token {duration(record.first_token_ms)}
                       </CardDescription>
                       <CardDescription className="text-xs">
                         总计 {duration(record.total_ms)}

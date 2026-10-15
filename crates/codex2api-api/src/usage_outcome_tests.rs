@@ -201,7 +201,7 @@ async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_ava
         if reset {
             chunks.push(Err(std::io::Error::new(
                 std::io::ErrorKind::ConnectionReset,
-                "fixture reset",
+                "unexpected EOF during chunk size line",
             )));
         }
         let response = reqwest::Response::from(
@@ -227,6 +227,14 @@ async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_ava
         if completed {
             assert_eq!(record.input_tokens, Some(7));
             assert_eq!(record.output_tokens, Some(3));
+        } else if reset {
+            assert!(
+                record
+                    .error_message
+                    .as_deref()
+                    .unwrap()
+                    .contains("unexpected EOF during chunk size line")
+            );
         }
         assert!(
             !storage
@@ -236,6 +244,60 @@ async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_ava
                 .authentication_invalid
         );
     }
+    storage.close().await;
+}
+
+#[tokio::test]
+async fn local_internal_failures_keep_private_diagnostics_and_replay_the_public_response() {
+    use axum::response::IntoResponse;
+    use codex2api_upstream::RequestFailureLog;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("internal.sqlite"))
+        .await
+        .unwrap();
+    let attempt = RequestFailureLog::new(UsageRecord {
+        endpoint: "/v1/responses/compact".into(),
+        transport: "http".into(),
+        user_agent: Some("diagnostic-client/1".into()),
+        ..Default::default()
+    });
+    let response = attempt
+        .scope(async {
+            let error = tokio::spawn(RequestFailureLog::inherit(async {
+                RequestFailureLog::metadata(&RequestMetadata {
+                    model: Some("gpt-test".into()),
+                    ..Default::default()
+                });
+                crate::ApiError::Storage(codex2api_storage::StorageError::Constraint(
+                    "fixture database error Bearer secret-value https://private.example/token"
+                        .into(),
+                ))
+            }))
+            .await
+            .unwrap();
+            error.into_response()
+        })
+        .await;
+    assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(attempt.needs_record(response.status()));
+    let (parts, body) = response.into_parts();
+    let body = attempt
+        .capture(&storage, parts.status, body.into_data_stream())
+        .await;
+    let body = axum::body::to_bytes(Body::from_stream(body), 8192)
+        .await
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&body).contains("fixture database error"));
+    let page = storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(page.total, 1);
+    let row = &page.records[0];
+    assert_eq!(row.http_status, Some(500));
+    assert_eq!(row.model.as_deref(), Some("gpt-test"));
+    assert_eq!(row.user_agent.as_deref(), Some("diagnostic-client/1"));
+    assert_eq!(row.billing_status, "not_charged");
+    let detail = row.error_message.as_deref().unwrap();
+    assert!(detail.contains("fixture database error"));
+    assert!(!detail.contains("secret-value") && !detail.contains("private.example"));
     storage.close().await;
 }
 

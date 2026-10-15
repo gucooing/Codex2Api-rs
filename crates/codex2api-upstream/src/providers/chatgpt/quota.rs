@@ -586,6 +586,15 @@ mod tests {
         .with_direct_test_http();
         let event = r#"{"type":"codex.rate_limits","rate_limits":{"secondary":{"used_percent":45,"window_minutes":10080,"reset_at":2000000000}}}"#;
         let app = Router::new()
+            .route("/images/{operation}", axum::routing::post(|| async {
+                ([
+                    ("content-type", "application/json"),
+                    ("x-codex-primary-used-percent", "0"),
+                    ("x-codex-primary-window-minutes", "300"),
+                    ("x-codex-secondary-used-percent", "0"),
+                    ("x-codex-secondary-window-minutes", "10080"),
+                ], r#"{"data":[{"b64_json":"image"}],"usage":{"input_tokens":12,"output_tokens":34}}"#)
+            }))
             .route(
                 "/http",
                 get(|| async {
@@ -650,6 +659,35 @@ mod tests {
                 .value["rate_limit"]["primary_window"]["used_percent"],
             25.0
         );
+        let previous = storage
+            .get_account_quota(&account.id)
+            .await
+            .unwrap()
+            .unwrap();
+        for operation in ["edits", "generations"] {
+            let response = client
+                .send_prepared(
+                    http::Method::POST,
+                    &format!("http://{address}/images/{operation}"),
+                    crate::request::PreparedRequest {
+                        body: bytes::Bytes::from_static(b"{}"),
+                        headers: HeaderMap::new(),
+                    },
+                    true,
+                )
+                .await
+                .unwrap();
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["usage"]["input_tokens"], 12);
+            assert_eq!(body["usage"]["output_tokens"], 34);
+            let current = storage
+                .get_account_quota(&account.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(current.value, previous.value);
+            assert_eq!(current.observed_at, previous.observed_at);
+        }
         let (mut socket, _) = client
             .connect_websocket_to(&format!("ws://{address}/socket"), HeaderMap::new())
             .await

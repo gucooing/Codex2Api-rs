@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
         storage.insert_usage(&record).await?;
         record.status = status.into();
         record.http_status = Some(http_status);
-        record.first_byte_ms = Some(1569);
+        record.first_token_ms = Some(1569);
         record.total_ms = Some(145383);
         record.input_tokens = Some(24830);
         record.output_tokens = Some(10803);

@@ -5,6 +5,13 @@ use serde_json::Value;
 use std::io::Read;
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 
+pub fn request_user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
 /// Read only non-content metadata for the incoming usage ledger (including zstd bodies).
 #[derive(Default)]
 pub struct RequestMetadata {

@@ -10,10 +10,12 @@ use codex2api_upstream::strip_hop_by_hop_headers;
 pub(crate) async fn complete_on_disconnect(
     work: impl std::future::Future<Output = crate::Result<Response>> + Send + 'static,
 ) -> crate::Result<Response> {
-    tokio::spawn(work).await.map_err(|error| {
-        tracing::error!(%error, "upstream request worker failed");
-        crate::ApiError::internal("Upstream request worker failed.")
-    })?
+    tokio::spawn(codex2api_upstream::RequestFailureLog::inherit(work))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "upstream request worker failed");
+            crate::ApiError::internal("Upstream request worker failed.")
+        })?
 }
 
 pub(crate) fn forward_response(status: StatusCode, mut headers: HeaderMap, body: Body) -> Response {

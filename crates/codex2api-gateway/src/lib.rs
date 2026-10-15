@@ -117,6 +117,13 @@ pub fn router(state: GatewayState) -> Router {
         ))
         .route("/healthz", get(|| async { Json(json!({"ok":true})) }))
         .layer(DefaultBodyLimit::max(codex2api_upstream::MAX_REQUEST_BYTES))
+        .layer(axum::middleware::from_fn(
+            |request: Request, next: Next| async move {
+                codex2api_upstream::RequestClock::default()
+                    .scope(next.run(request))
+                    .await
+            },
+        ))
         .with_state(state)
 }
 
@@ -168,10 +175,35 @@ async fn require_key(
         .authenticate_api_key(&token)
         .await?
         .ok_or_else(GatewayError::invalid_key)?;
+    let log = codex2api_upstream::RequestFailureLog::new(codex2api_storage::UsageRecord {
+        provider_id: principal.group.provider_id.clone(),
+        subject_id: principal.key_id.clone(),
+        subject_kind: "api_key".into(),
+        user_id: Some(principal.user_id.clone()),
+        key_id: Some(principal.key_id.clone()),
+        group_id: Some(principal.group.id.clone()),
+        group_name: Some(principal.group.name.clone()),
+        endpoint: request.uri().path().into(),
+        transport: "http".into(),
+        user_agent: codex2api_upstream::request_user_agent(request.headers()),
+        ..Default::default()
+    });
+    let execution = request.uri().path() != "/v1/models";
     request
         .extensions_mut()
         .insert(ApiCredential { principal, token });
-    Ok(next.run(request).await)
+    let response = log.scope(next.run(request)).await;
+    if !execution || !log.needs_record(response.status()) {
+        return Ok(response);
+    }
+    let (parts, body) = response.into_parts();
+    let body = log
+        .capture(&state.storage, parts.status, body.into_data_stream())
+        .await;
+    Ok(Response::from_parts(
+        parts,
+        axum::body::Body::from_stream(body),
+    ))
 }
 async fn models(
     State(state): State<GatewayState>,
@@ -196,6 +228,9 @@ async fn handle(
         tokio::task::spawn_blocking(move || codex2api_upstream::decode_body(&body, &inbound))
             .await
             .map_err(|_| GatewayError::internal())??;
+    codex2api_upstream::RequestFailureLog::metadata(&codex2api_upstream::request_metadata_value(
+        &value,
+    ));
     let prepared = match credential.principal.group.provider_id.as_str() {
         codex2api_core::CHATGPT => providers::chatgpt::prepare(protocol, value, &headers)?,
         codex2api_core::GROK => providers::grok::prepare(protocol, value, &headers)?,

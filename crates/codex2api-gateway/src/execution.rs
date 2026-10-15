@@ -15,7 +15,6 @@ use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use http::{HeaderMap, StatusCode};
 use serde_json::Value;
-use std::time::Instant;
 
 pub(crate) async fn execute_prepared(
     state: GatewayState,
@@ -25,12 +24,14 @@ pub(crate) async fn execute_prepared(
     prepared: PreparedRequest,
 ) -> Result<Response> {
     // The accepted request and its usage continue if the downstream disconnects.
-    tokio::spawn(run(state, principal, token, headers, prepared))
-        .await
-        .map_err(|error| {
-            tracing::error!(%error,"API request worker failed");
-            GatewayError::internal()
-        })?
+    tokio::spawn(codex2api_upstream::RequestFailureLog::inherit(run(
+        state, principal, token, headers, prepared,
+    )))
+    .await
+    .map_err(|error| {
+        tracing::error!(%error,"API request worker failed");
+        GatewayError::internal()
+    })?
 }
 
 async fn run(
@@ -40,7 +41,9 @@ async fn run(
     headers: HeaderMap,
     prepared: PreparedRequest,
 ) -> Result<Response> {
-    let (mut log, permit) = admit(&state, &principal, &prepared, "http").await?;
+    let user_agent = codex2api_upstream::request_user_agent(&headers);
+    let (mut log, permit) =
+        admit(&state, &principal, &prepared, "http", user_agent.as_deref()).await?;
     let result = forward(&state, &principal, &token, &headers, &prepared, &mut log).await;
     match result {
         Ok((response, context, route)) => {
@@ -60,6 +63,7 @@ pub(crate) async fn admit(
     principal: &ApiPrincipal,
     prepared: &PreparedRequest,
     transport: &str,
+    user_agent: Option<&str>,
 ) -> Result<(ApiLog, ApiPermit)> {
     let metadata = codex2api_upstream::request_metadata_value(&prepared.body);
     let model = metadata
@@ -79,7 +83,8 @@ pub(crate) async fn admit(
         model_rpm: rule.map_or(0, |rule| rule.rpm_limit),
     };
     let model = model.to_owned();
-    let started = Instant::now();
+    let clock = codex2api_upstream::RequestClock::current().unwrap_or_default();
+    let started = clock.started;
     let record = UsageRecord {
         id: uuid::Uuid::new_v4().to_string(),
         provider_id: principal.group.provider_id.clone(),
@@ -87,6 +92,7 @@ pub(crate) async fn admit(
         subject_kind: "api_key".into(),
         endpoint: prepared.endpoint.into(),
         transport: transport.into(),
+        user_agent: user_agent.map(str::to_owned),
         stream: Some(prepared.stream),
         model: metadata.model,
         reasoning_effort: metadata.reasoning_effort,
@@ -104,7 +110,7 @@ pub(crate) async fn admit(
             )
             .expect("image usage")
         }),
-        requested_at_ms: chrono::Utc::now().timestamp_millis(),
+        requested_at_ms: clock.requested_at_ms,
         status: "in_progress".into(),
         ..Default::default()
     };
@@ -446,6 +452,12 @@ async fn response_body(
 ) -> Result<Response> {
     let status = response.status();
     let headers = public_headers(response.headers(), prepared.stream);
+    log.set_timing(
+        response
+            .extensions()
+            .get::<codex2api_upstream::ResponseTiming>()
+            .cloned(),
+    );
     log.headers(status, response.headers());
     remember_affinity(
         &state,
@@ -763,7 +775,9 @@ async fn consume_stream(
             .await
             .map_err(|_| GatewayError::from(UpstreamError::StreamIdleTimeout))?;
         let Some(event) = next else { break };
-        let event = event.map_err(|_| GatewayError::upstream_incomplete())?;
+        let event = event.map_err(|error| {
+            GatewayError::upstream_incomplete().with_diagnostic(&error.to_string())
+        })?;
         if event.data.trim() == "[DONE]" {
             if sender.is_none() && prepared.output == OutputMode::ChatCompletions {
                 return Err(GatewayError::new(

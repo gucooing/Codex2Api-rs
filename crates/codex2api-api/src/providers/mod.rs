@@ -58,4 +58,11 @@ pub(crate) fn router(state: crate::ApiState) -> axum::Router {
                 }
             },
         ))
+        .layer(axum::middleware::from_fn(
+            |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                codex2api_upstream::RequestClock::default()
+                    .scope(next.run(request))
+                    .await
+            },
+        ))
 }

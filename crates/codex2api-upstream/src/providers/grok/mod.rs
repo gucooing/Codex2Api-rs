@@ -187,6 +187,7 @@ impl GrokUpstream {
                 .body(body.bytes);
         }
         // Bound the wait for response headers while leaving long generations to the stream watchdog.
+        let timing = crate::ResponseTiming::default();
         let mut response = tokio::time::timeout(
             std::time::Duration::from_secs(120),
             self.transport.send(request),
@@ -233,7 +234,16 @@ impl GrokUpstream {
                 .insert(SupplierAuthRevision(snapshot.auth_revision));
             return Ok(reqwest::Response::from(rebuilt));
         }
-        Ok(response)
+        let protocol = match path {
+            "responses" => Some(crate::TokenProtocol::Responses),
+            "chat/completions" => Some(crate::TokenProtocol::ChatCompletions),
+            "messages" => Some(crate::TokenProtocol::Messages),
+            _ => None,
+        };
+        Ok(match protocol {
+            Some(protocol) => timing.wrap(response, protocol),
+            None => response,
+        })
     }
 
     pub async fn grok_json(&self, id: &str, path: &str) -> Result<Value> {

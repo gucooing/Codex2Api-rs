@@ -6,6 +6,42 @@ use axum::extract::{DefaultBodyLimit, Extension};
 use axum::routing::{any, get, patch, post};
 use codex2api_upstream::{BackendEndpoint, ChatgptEndpoint, Endpoint};
 
+pub(crate) fn usage_endpoint(method: &str, path: &str) -> Option<&'static str> {
+    if !matches!(method, "POST" | "GET") {
+        return None;
+    }
+    [
+        "/responses",
+        "/responses/compact",
+        "/responses/{*subpath}",
+        "/guardian",
+        "/guardian-classifier",
+        "/alpha/search",
+        "/images/generations",
+        "/images/edits",
+        "/memories/trace_summarize",
+    ]
+    .into_iter()
+    .find(|suffix| path.ends_with(suffix))
+    .and_then(|suffix| {
+        if method == "GET" && !matches!(suffix, "/responses" | "/guardian" | "/guardian-classifier")
+        {
+            return None;
+        }
+        Some(match suffix {
+            "/responses" => "/v1/responses",
+            "/responses/compact" => "/v1/responses/compact",
+            "/responses/{*subpath}" => "/v1/responses/{*subpath}",
+            "/guardian" => "/v1/guardian",
+            "/guardian-classifier" => "/v1/guardian-classifier",
+            "/alpha/search" => "/v1/alpha/search",
+            "/images/generations" => "/v1/images/generations",
+            "/images/edits" => "/v1/images/edits",
+            _ => "/v1/memories/trace_summarize",
+        })
+    })
+}
+
 /// Complete Codex-client API, including existing compatibility prefixes.
 pub fn routes(state: ApiState) -> Router<ApiState> {
     let codex = codex_routes();

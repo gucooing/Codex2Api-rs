@@ -66,7 +66,7 @@ test("unified user usage matches the admin table on desktop and phone", async ({
     reasoning_effort: "high",
     service_tier: "default",
     total_ms: 12813,
-    first_byte_ms: 35,
+    first_token_ms: 35,
     cost_nano_usd: 3_000_000,
     billing_calculation: {
       terms: [

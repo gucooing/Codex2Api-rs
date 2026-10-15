@@ -7,8 +7,7 @@ pub use selection::{
     ScheduleRequest, body_seed, context_required, hash, header_seed, previous_key, select, text,
 };
 pub use transport::{
-    FirstEventAt, generation_observed, inspect_response, observe_failure, prelude_event,
-    recover_auth,
+    generation_observed, inspect_response, observe_failure, prelude_event, recover_auth,
 };
 
 pub type Result<T> = std::result::Result<T, SchedulerError>;

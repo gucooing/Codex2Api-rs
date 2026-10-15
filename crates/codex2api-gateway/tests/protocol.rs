@@ -152,7 +152,7 @@ impl codex2api_upstream::HttpTransport for Mock {
             }
 
             if request.url().path().contains("/images/") {
-                return Ok(http::Response::builder().header("content-type","application/json").body(reqwest::Body::from(json!({"created":100,"data":[{"url":"https://example.test/one.png","width":1024,"height":1024},{"url":"https://example.test/two.png","width":1024,"height":1024}]}).to_string())).unwrap().into());
+                return Ok(http::Response::builder().header("content-type","application/json").body(reqwest::Body::from(json!({"created":100,"data":[{"url":"https://example.test/one.png","width":1024,"height":1024},{"url":"https://example.test/two.png","width":1024,"height":1024}],"usage":{"input_tokens":123,"output_tokens":456,"input_tokens_details":{"cached_tokens":23}}}).to_string())).unwrap().into());
             }
             let native_chat = request.url().path().ends_with("/chat/completions");
             if failed_usage {
@@ -446,6 +446,125 @@ async fn json_body(response: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
+async fn early_rejections_keep_key_ownership_and_do_not_charge_or_duplicate_usage() {
+    let f = fixture("chatgpt").await;
+    let oversized = Bytes::from(vec![b' '; codex2api_upstream::MAX_REQUEST_BYTES + 1]);
+    for (body, expected) in [
+        (oversized, StatusCode::PAYLOAD_TOO_LARGE),
+        (Bytes::from_static(b"not-json"), StatusCode::BAD_REQUEST),
+    ] {
+        let response = f
+            .router
+            .clone()
+            .oneshot(
+                Request::post("/v1/responses/compact")
+                    .header("authorization", format!("Bearer {}", f.token))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        to_bytes(response.into_body(), 8192).await.unwrap();
+    }
+    let response = f
+        .router
+        .clone()
+        .oneshot(request(
+            "/v1/responses/compact",
+            &f.token,
+            json!({"model":"unavailable-model","input":[]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    json_body(response).await;
+    let page = f.storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(page.total, 3);
+    for row in &page.records {
+        assert_eq!(row.user_id.as_deref(), Some("user"));
+        assert_eq!(row.key_id.as_deref(), Some(f.key_id.as_str()));
+        assert_eq!(row.group_id.as_deref(), Some("group"));
+        assert_eq!(row.status, "failed");
+        assert_eq!(row.billing_status, "not_charged");
+        assert_eq!(row.cost_nano_usd, Some(0));
+        assert_eq!(row.wallet_debit_cents, 0);
+        assert!(row.input_tokens.is_none() && row.output_tokens.is_none());
+        assert!(row.error_message.is_some());
+    }
+    assert!(
+        page.records
+            .iter()
+            .any(|row| row.model.as_deref() == Some("unavailable-model"))
+    );
+    assert!(f.mock.requests.lock().unwrap().is_empty());
+    assert_eq!(
+        f.storage.user("user").await.unwrap().unwrap().wallet_cents,
+        100
+    );
+    let user = f
+        .storage
+        .user_store()
+        .usage("user", &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(user["total"], 3);
+    assert!(!user.to_string().contains("error_message"));
+    assert!(!user.to_string().contains("upstream_request_id"));
+
+    f.storage
+        .set_account_status("supplier", codex2api_storage::SupplierStatus::Disabled)
+        .await
+        .unwrap();
+    let response = f
+        .router
+        .clone()
+        .oneshot(request(
+            "/v1/responses",
+            &f.token,
+            json!({"model":"custom-model","input":"Hello"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    json_body(response).await;
+    let page = f.storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(page.total, 4);
+    let row = &page.records[0];
+    assert_eq!(row.http_status, Some(503));
+    assert_eq!(row.billing_status, "not_charged");
+    assert_eq!(row.cost_nano_usd, Some(0));
+    assert_eq!(row.user_agent.as_deref(), Some("consumer-application"));
+    f.storage
+        .set_account_status("supplier", codex2api_storage::SupplierStatus::Active)
+        .await
+        .unwrap();
+
+    *f.mock.status.lock().unwrap() = Some(500);
+    let response = f
+        .router
+        .clone()
+        .oneshot(request(
+            "/v1/responses",
+            &f.token,
+            json!({"model":"custom-model","input":"Hello"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    json_body(response).await;
+    assert_eq!(
+        f.storage
+            .query_usage(&Default::default())
+            .await
+            .unwrap()
+            .total,
+        5
+    );
+    f.storage.close().await;
+}
+
+#[tokio::test]
 async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
     for provider in ["chatgpt", "grok"] {
         for chat in [false, true] {
@@ -514,6 +633,16 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                     98
                 );
                 let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,reasoning_tokens,cost_nano_usd FROM usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
+                let ttft: Option<i64> =
+                    sqlx::query_scalar("SELECT first_token_ms FROM usage_records")
+                        .fetch_one(fixture.storage.pool())
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    ttft.is_some(),
+                    provider == "chatgpt" || stream,
+                    "{provider} stream={stream}"
+                );
                 assert_eq!(
                     record,
                     (
@@ -1053,6 +1182,19 @@ async fn images_use_each_platform_transport_and_bill_actual_count() {
                     .await
                     .unwrap();
             assert_eq!((count, cost), (Some(2), Some(60_000_000)));
+            let user_agent: Option<String> =
+                sqlx::query_scalar("SELECT user_agent FROM usage_records")
+                    .fetch_one(fixture.storage.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(user_agent.as_deref(), Some("consumer-application"));
+            let tokens: (Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+                "SELECT input_tokens,output_tokens,cached_tokens FROM usage_records",
+            )
+            .fetch_one(fixture.storage.pool())
+            .await
+            .unwrap();
+            assert_eq!(tokens, (Some(123), Some(456), Some(23)));
             assert_eq!(
                 fixture
                     .storage

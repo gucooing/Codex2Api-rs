@@ -23,6 +23,7 @@ pub struct UpstreamWebSocket {
     socket: RawWebSocket,
     observer: Option<super::quota::QuotaObserver>,
     pending: Option<Pin<Box<dyn Future<Output = tungstenite::Message> + Send>>>,
+    timing: Option<crate::ResponseTiming>,
 }
 
 impl From<RawWebSocket> for UpstreamWebSocket {
@@ -31,11 +32,15 @@ impl From<RawWebSocket> for UpstreamWebSocket {
             socket,
             observer: None,
             pending: None,
+            timing: None,
         }
     }
 }
 
 impl UpstreamWebSocket {
+    pub fn generation_timing(&self) -> Option<crate::ResponseTiming> {
+        self.timing.clone()
+    }
     pub async fn close(
         &mut self,
         frame: Option<tungstenite::protocol::CloseFrame>,
@@ -59,6 +64,14 @@ impl Stream for UpstreamWebSocket {
                 Some(Ok(message)) => message,
                 other => return Poll::Ready(other),
             };
+            let received = std::time::Instant::now();
+            if let Some(timing) = &this.timing
+                && timing.supplier_ttft_ms().is_none()
+                && let Ok(text) = message.to_text()
+                && let Ok(value) = serde_json::from_str(text)
+            {
+                timing.observe(crate::TokenProtocol::Responses, &value, received);
+            }
             if let Some(observer) = &this.observer
                 && matches!(
                     message,
@@ -94,7 +107,21 @@ impl Sink<tungstenite::Message> for UpstreamWebSocket {
         self: Pin<&mut Self>,
         item: tungstenite::Message,
     ) -> std::result::Result<(), Self::Error> {
-        Pin::new(&mut self.get_mut().socket).start_send(item)
+        #[derive(serde::Deserialize)]
+        struct Envelope<'a> {
+            #[serde(rename = "type", borrow)]
+            kind: Option<&'a str>,
+        }
+        let this = self.get_mut();
+        if item
+            .to_text()
+            .ok()
+            .and_then(|text| serde_json::from_str::<Envelope<'_>>(text).ok())
+            .is_some_and(|value| value.kind == Some("response.create"))
+        {
+            this.timing = Some(crate::ResponseTiming::default());
+        }
+        Pin::new(&mut this.socket).start_send(item)
     }
     fn poll_flush(
         self: Pin<&mut Self>,
@@ -254,6 +281,7 @@ impl UpstreamClient {
                         socket,
                         observer,
                         pending: None,
+                        timing: None,
                     };
                     return Ok((socket, response.headers().clone(), connection));
                 }

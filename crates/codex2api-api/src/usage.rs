@@ -32,6 +32,33 @@ fn elapsed(start: Instant) -> i64 {
     start.elapsed().as_millis().min(i64::MAX as u128) as i64
 }
 
+pub(crate) async fn record_http_failures(
+    storage: &Storage,
+    access: &codex2api_storage::VirtualAccess,
+    endpoint: &str,
+    user_agent: Option<String>,
+    work: impl std::future::Future<Output = axum::response::Response>,
+) -> axum::response::Response {
+    let log = codex2api_upstream::RequestFailureLog::new(UsageRecord {
+        provider_id: access.provider_id.clone(),
+        subject_id: access.virtual_account_id.clone(),
+        subject_name: access.name.clone(),
+        endpoint: endpoint.into(),
+        transport: "http".into(),
+        user_agent,
+        ..Default::default()
+    });
+    let response = log.scope(work).await;
+    if !log.needs_record(response.status()) {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let body = log
+        .capture(storage, parts.status, body.into_data_stream())
+        .await;
+    axum::response::Response::from_parts(parts, Body::from_stream(body))
+}
+
 pub(crate) fn billable(endpoint: Endpoint) -> bool {
     !matches!(
         endpoint,
@@ -45,8 +72,7 @@ pub(crate) trait ProtocolObserver: Send + Sync {
 pub(crate) struct RequestLog {
     supplier_permit: Option<codex2api_storage::RuntimePermit>,
     consumer_permit: Option<codex2api_storage::RuntimePermit>,
-    first_token_ms: Option<f64>,
-    attempt_start: Instant,
+    timing: Option<codex2api_upstream::ResponseTiming>,
     attempt_reported: bool,
     observer: Option<Box<dyn ProtocolObserver>>,
     record: Option<UsageRecord>,
@@ -87,7 +113,9 @@ impl RequestLog {
                     || matches!(record.status.as_str(), "completed" | "submitted"),
                     |outcome| outcome.failure().is_none(),
                 ),
-                self.first_token_ms,
+                self.timing
+                    .as_ref()
+                    .and_then(|timing| timing.supplier_ttft_ms()),
             );
             self.attempt_reported = true;
         }
@@ -124,8 +152,13 @@ impl RequestLog {
         if !self.attempt_reported
             && let Some(record) = &self.record
         {
-            self.storage
-                .report_supplier_result(&record.account_id, false, self.first_token_ms);
+            self.storage.report_supplier_result(
+                &record.account_id,
+                false,
+                self.timing
+                    .as_ref()
+                    .and_then(|timing| timing.supplier_ttft_ms()),
+            );
             self.attempt_reported = true;
         }
         // A rejected attempt is not the generation's terminal result. The final
@@ -136,9 +169,8 @@ impl RequestLog {
     }
 
     pub(crate) fn retry_generation(&mut self) {
-        self.attempt_start = Instant::now();
         self.attempt_reported = false;
-        self.first_token_ms = None;
+        self.timing = None;
         self.lifecycle = ResponseLifecycle::default();
         self.authoritative_model = false;
         self.supplier_failure = None;
@@ -149,7 +181,8 @@ impl RequestLog {
             r.error_message = None;
             r.upstream_request_id = None;
             r.actual_model = None;
-            r.first_byte_ms = None;
+            r.first_token_ms = None;
+            r.generation_observed = false;
             r.input_tokens = None;
             r.output_tokens = None;
             r.cached_tokens = None;
@@ -162,17 +195,23 @@ impl RequestLog {
 
     pub(crate) async fn begin(
         storage: Storage,
-        record: UsageRecord,
+        mut record: UsageRecord,
         start: Instant,
     ) -> crate::Result<Self> {
-        storage.insert_usage(&record).await?;
+        let start = if let Some(clock) = codex2api_upstream::RequestClock::current() {
+            record.requested_at_ms = clock.requested_at_ms;
+            clock.started
+        } else {
+            start
+        };
         let auth_revision = storage.supplier_auth_revision(&record.account_id).await?;
+        storage.insert_usage(&record).await?;
+        codex2api_upstream::RequestFailureLog::recorded();
         Ok(Self {
             supplier_permit: None,
             consumer_permit: None,
             attempt_reported: false,
-            first_token_ms: None,
-            attempt_start: Instant::now(),
+            timing: None,
             observer: None,
             storage,
             record: Some(record),
@@ -380,24 +419,27 @@ impl RequestLog {
             parser.feed(body.as_bytes(), false, self);
             parser.end(false, self);
         }
-        self.lifecycle.fail(error.failure());
+        let mut failure = error.failure();
+        if !matches!(error, codex2api_upstream::UpstreamError::Status { .. }) {
+            failure.message = Some(codex2api_upstream::request_failure::error_diagnostic(error));
+        }
+        if let Some(record) = &mut self.record
+            && record.http_status.is_none()
+            && record.transport == "http"
+        {
+            record.http_status = failure.status.map(i64::from);
+        }
+        self.lifecycle.fail(failure);
         self.apply_outcome();
         self.finish("failed");
     }
-    #[cfg(test)]
-    fn first_byte(&mut self) {
-        self.first_message_at(Instant::now());
-    }
-    fn first_message_at(&mut self, received_at: Instant) {
-        if let Some(record) = &mut self.record
-            && record.first_byte_ms.is_none()
-        {
-            record.first_byte_ms = Some(
-                received_at
-                    .saturating_duration_since(self.start)
-                    .as_millis()
-                    .min(i64::MAX as u128) as i64,
-            );
+    fn capture_timing(&mut self) {
+        if let Some(record) = &mut self.record {
+            record.first_token_ms = self
+                .timing
+                .as_ref()
+                .and_then(|timing| timing.first_token_ms(self.start));
+            record.generation_observed |= record.first_token_ms.is_some();
         }
     }
     pub fn http_status(&mut self, status: u16) {
@@ -412,12 +454,7 @@ impl RequestLog {
         let Some(record) = &mut self.record else {
             return;
         };
-        if self.first_token_ms.is_none()
-            && (event.kind.as_deref().is_some_and(|v| v.ends_with(".delta"))
-                || value.get("output").is_some())
-        {
-            self.first_token_ms = Some(self.attempt_start.elapsed().as_secs_f64() * 1000.0);
-        }
+        record.generation_observed |= codex2api_scheduler::generation_observed(value);
         if let Some(id) = event
             .response
             .as_ref()
@@ -536,7 +573,8 @@ impl RequestLog {
                 record.image_count = Some(0);
                 record.image_usage_json = Some("[]".into());
             }
-        } else if !search
+        }
+        if !search
             && let Some(tokens) = response
                 .and_then(|r| r.usage.as_ref())
                 .or(event.usage.as_ref())
@@ -572,6 +610,7 @@ impl RequestLog {
         }
     }
     fn apply_outcome(&mut self) {
+        self.capture_timing();
         let (Some(outcome), Some(record)) = (self.lifecycle.outcome(), &mut self.record) else {
             return;
         };
@@ -617,18 +656,11 @@ impl RequestLog {
         }
         Ok(())
     }
-    #[cfg(test)]
     fn parse(&mut self, bytes: &[u8]) {
-        self.parse_at(bytes, Instant::now());
-    }
-    fn parse_at(&mut self, bytes: &[u8], received_at: Instant) {
         if let Some(observer) = &mut self.observer {
             let events = observer.observe(bytes);
             for value in events {
                 if let Ok(event) = Event::deserialize(&value) {
-                    if event.generation_message() {
-                        self.first_message_at(received_at);
-                    }
                     self.observe(&event, &value);
                 }
             }
@@ -652,13 +684,11 @@ impl RequestLog {
         if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes)
             && let Ok(event) = Event::deserialize(&value)
         {
-            if event.generation_message() {
-                self.first_message_at(received_at);
-            }
             self.observe(&event, &value);
         }
     }
     pub fn finish(&mut self, status: &str) {
+        self.capture_timing();
         let Some(mut record) = self.record.take() else {
             return;
         };
@@ -720,12 +750,10 @@ impl RequestLog {
         response: reqwest::Response,
         transform: impl FnOnce(Body) -> Body,
     ) -> Body {
-        if let Some(first) = response
+        self.timing = response
             .extensions()
-            .get::<crate::pool_execution::FirstEventAt>()
-        {
-            self.first_message_at(first.0);
-        }
+            .get::<codex2api_upstream::ResponseTiming>()
+            .cloned();
         self.auth_revision = response
             .extensions()
             .get::<codex2api_upstream::SupplierAuthRevision>()
@@ -821,13 +849,9 @@ struct BodyParser {
     skipped: bool,
     after_cr: bool,
     detected_sse: bool,
-    received_at: Option<Instant>,
 }
 impl BodyParser {
     fn feed(&mut self, bytes: &[u8], sse: bool, log: &mut RequestLog) {
-        if !bytes.is_empty() {
-            self.received_at = Some(Instant::now());
-        }
         if !sse && !self.detected_sse {
             if !self.skipped && self.data.len().saturating_add(bytes.len()) <= MAX_CAPTURE {
                 self.data.extend_from_slice(bytes);
@@ -868,7 +892,7 @@ impl BodyParser {
     fn line(&mut self, log: &mut RequestLog) {
         if self.line.is_empty() {
             if !self.skipped && !self.data.is_empty() {
-                log.parse_at(&self.data, self.received_at.unwrap_or_else(Instant::now));
+                log.parse(&self.data);
             }
             self.data.clear();
             self.skipped = false;
@@ -890,12 +914,7 @@ impl BodyParser {
             }
             self.line(log);
         } else if !self.skipped {
-            // Non-streaming JSON has one message. SSE timing is set only by a
-            // complete generation event, never by comments or transport chunks.
-            if serde_json::from_slice::<serde::de::IgnoredAny>(&self.data).is_ok() {
-                log.first_message_at(self.received_at.unwrap_or_else(Instant::now));
-            }
-            log.parse_at(&self.data, self.received_at.unwrap_or_else(Instant::now));
+            log.parse(&self.data);
         }
     }
 }
@@ -1047,6 +1066,11 @@ pub(crate) struct WsLedger {
     initial_headers: Option<http::HeaderMap>,
 }
 impl WsLedger {
+    pub(crate) fn set_timing(&mut self, timing: Option<codex2api_upstream::ResponseTiming>) {
+        if let Some(log) = self.slots.front_mut().and_then(|slot| slot.log.as_mut()) {
+            log.timing = timing;
+        }
+    }
     pub(crate) fn supplier_attempt_failed(&mut self) {
         for slot in &mut self.slots {
             if let Some(log) = &mut slot.log {
@@ -1141,25 +1165,21 @@ impl WsLedger {
     }
     #[cfg(test)]
     async fn observe_authorized(&mut self, bytes: &[u8], allow_new: bool) -> crate::Result<()> {
-        self.observe_at(bytes, allow_new, Instant::now())
-            .await
-            .map(|_| ())
+        let _ = allow_new;
+        self.observe_message(bytes).await.map(|_| ())
     }
-    pub(crate) async fn observe_at(
+    pub(crate) async fn observe_message(
         &mut self,
         bytes: &[u8],
-        _allow_new: bool,
-        received_at: Instant,
     ) -> crate::Result<Option<ResponseOutcome>> {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
             return Ok(None);
         };
-        self.observe_value_at(&value, received_at).await
+        self.observe_value(&value).await
     }
-    pub(crate) async fn observe_value_at(
+    pub(crate) async fn observe_value(
         &mut self,
         value: &serde_json::Value,
-        received_at: Instant,
     ) -> crate::Result<Option<ResponseOutcome>> {
         let Ok(event) = Event::deserialize(value) else {
             return Ok(None);
@@ -1213,7 +1233,6 @@ impl WsLedger {
             slot.response_id = response_id.map(str::to_string);
         }
         if let Some(log) = &mut slot.log {
-            log.first_message_at(received_at);
             log.observe(&event, &value);
             log.persist_auth_rejection().await?;
         }
@@ -1406,12 +1425,9 @@ mod tests {
             )
             .await
             .unwrap();
-        log.parse_at(
-            br#"{"type":"response.created","response":{"service_tier":"default"}}"#,
-            Instant::now(),
-        );
+        log.parse(br#"{"type":"response.created","response":{"service_tier":"default"}}"#);
         log.retry_generation();
-        log.parse_at(br#"{"type":"response.completed","response":{"usage":{"input_tokens":1000,"output_tokens":100,"input_tokens_details":{"cached_tokens":100}}}}"#, Instant::now());
+        log.parse(br#"{"type":"response.completed","response":{"usage":{"input_tokens":1000,"output_tokens":100,"input_tokens_details":{"cached_tokens":100}}}}"#);
         log.finish("completed");
         let rows = finalized(&storage, 1).await;
         assert_eq!(rows[0].service_tier.as_deref(), Some("priority"));
@@ -1931,13 +1947,16 @@ mod tests {
             )
             .await
             .unwrap();
-        let response=br#"{"size":"1024x1024","data":[{"b64_json":"sensitive-image-one"},{"b64_json":"sensitive-image-two","size":"1536x1024"},{"error":{"message":"failed"}},{"b64_json":""}]}"#;
+        let response=br#"{"size":"1024x1024","data":[{"b64_json":"sensitive-image-one"},{"b64_json":"sensitive-image-two","size":"1536x1024"},{"error":{"message":"failed"}},{"b64_json":""}],"usage":{"input_tokens":123,"output_tokens":456,"input_tokens_details":{"cached_tokens":23}}}"#;
         log.parse(response);
         log.parse(response);
         log.finish("completed");
         let rows = finalized(&storage, 1).await;
         assert_eq!(rows[0].image_count, Some(2));
         assert_eq!(rows[0].cost_nano_usd, Some(120_000_000));
+        assert_eq!(rows[0].input_tokens, Some(123));
+        assert_eq!(rows[0].output_tokens, Some(456));
+        assert_eq!(rows[0].cached_tokens, Some(23));
         assert!(
             !rows[0]
                 .image_usage_json
@@ -2110,7 +2129,7 @@ mod tests {
         drop(stream);
         let rows = finalized(&storage, 1).await;
         assert_eq!(rows[0].status, "completed");
-        assert!(rows[0].first_byte_ms.is_some());
+        assert!(rows[0].first_token_ms.is_none());
         assert!(rows[0].total_ms.is_some());
         assert!(rows[0].input_tokens.is_none());
         storage.close().await;
@@ -2177,101 +2196,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_message_ignores_sse_heartbeats_fragments_invalid_json_and_quota_events() {
+    async fn bookkeeping_does_not_invent_ttft_without_upstream_observation() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::open(dir.path().join("timing.sqlite"))
             .await
             .unwrap();
-        let start = Instant::now() - std::time::Duration::from_secs(1);
         let mut log = context(storage.clone(), "/v1/responses", "http")
-            .start(RequestMetadata::default(), start, 1000)
+            .start(RequestMetadata::default(), Instant::now(), 1000)
             .await
             .unwrap();
-        let mut parser = BodyParser::default();
-        for frame in [
-            b": heartbeat\r\n\r\n".as_slice(),
-            b"data: {bad}\n\n",
-            b"data: {\"type\":\"codex.rate_limits\"}\n\n",
-            b"data: {\"type\":\"response.cre",
-        ] {
-            parser.feed(frame, true, &mut log);
-            assert_eq!(log.record.as_ref().unwrap().first_byte_ms, None);
-        }
-        parser.feed(b"ated\",\"response\":{\"id\":\"r\"}}\n\n", true, &mut log);
-        let first = log.record.as_ref().unwrap().first_byte_ms.unwrap();
-        assert!(first >= 1000);
-        parser.feed(
-            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"text\"}\n\n",
-            true,
-            &mut log,
-        );
-        assert_eq!(log.record.as_ref().unwrap().first_byte_ms, Some(first));
+        log.parse(br#"{"type":"response.created","response":{"id":"r"}}"#);
+        log.parse(br#"{"type":"response.output_text.delta","delta":"text"}"#);
+        log.parse(br#"{"type":"response.completed","response":{"id":"r"}}"#);
         log.finish("completed");
-        finalized(&storage, 1).await;
-        let mut ledger =
-            WsLedger::new(execution_context(storage.clone(), "/v1/responses", "websocket").await);
-        let log = context(storage.clone(), "/v1/responses", "websocket")
-            .start(RequestMetadata::default(), start, 1000)
-            .await
-            .unwrap();
-        ledger.push(Some(log));
-        for frame in [
-            br#"{"type":"codex.rate_limits"}"#.as_slice(),
-            br#"{"type":"session.updated","response_id":"unrelated"}"#,
-            b"not JSON",
-        ] {
-            ledger
-                .observe_at(frame, true, start + std::time::Duration::from_millis(10))
-                .await
-                .unwrap();
-            assert_eq!(
-                ledger.slots[0]
-                    .log
-                    .as_ref()
-                    .unwrap()
-                    .record
-                    .as_ref()
-                    .unwrap()
-                    .first_byte_ms,
-                None
-            );
-            assert!(ledger.slots[0].response_id.is_none());
-        }
-        ledger
-            .observe_at(
-                br#"{"type":"response.created","response":{"id":"r"}}"#,
-                true,
-                start + std::time::Duration::from_millis(73),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            ledger.slots[0]
-                .log
-                .as_ref()
-                .unwrap()
-                .record
-                .as_ref()
-                .unwrap()
-                .first_byte_ms,
-            Some(73)
-        );
-        ledger
-            .observe_at(
-                br#"{"type":"response.completed","response":{"id":"r"}}"#,
-                true,
-                Instant::now(),
-            )
-            .await
-            .unwrap();
-        let rows = finalized(&storage, 2).await;
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.transport == "websocket")
-                .unwrap()
-                .first_byte_ms,
-            Some(73)
-        );
+        let rows = finalized(&storage, 1).await;
+        assert_eq!(rows[0].first_token_ms, None);
+        storage.close().await;
     }
 
     // Accounting unit tests start directly at the ledger boundary. Authorization
@@ -2457,7 +2397,14 @@ mod tests {
             .await
             .unwrap();
         log.http_status(200);
-        let mut stream = log.wrap(response).into_data_stream();
+        let timing = codex2api_upstream::ResponseTiming::default();
+        let mut stream = log
+            .wrap(
+                timing
+                    .clone()
+                    .wrap(response, codex2api_upstream::TokenProtocol::Responses),
+            )
+            .into_data_stream();
         let first=Bytes::from_static(b": heartbeat\r\n\r\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\r\n\r\n");
         tx.send(Ok(first.clone())).await.unwrap();
         assert_eq!(
@@ -2469,6 +2416,13 @@ mod tests {
             first
         );
         // The client receives the first bytes while upstream is still open.
+        assert_eq!(timing.supplier_ttft_ms(), None);
+        let delta = Bytes::from_static(
+            b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n",
+        );
+        tx.send(Ok(delta.clone())).await.unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), delta);
+        assert!(timing.supplier_ttft_ms().is_some());
         let completed=b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"model\":\"actual\",\"service_tier\":\"default\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":10}}}}\r\n\r\ndata: [DONE]\r\n\r\n";
         for chunk in completed.chunks(61) {
             tx.send(Ok(Bytes::copy_from_slice(chunk))).await.unwrap();
@@ -2492,8 +2446,8 @@ mod tests {
         assert_eq!(row.actual_model.as_deref(), Some("actual"));
         assert_eq!(row.status, "completed");
         assert_eq!(row.requested_at_ms, 12345);
-        assert!(row.first_byte_ms.is_some());
-        assert!(row.total_ms >= row.first_byte_ms);
+        assert!(row.first_token_ms.is_some());
+        assert!(row.total_ms >= row.first_token_ms);
         server.abort();
         storage.close().await;
     }
@@ -2644,7 +2598,6 @@ mod tests {
                 .start(RequestMetadata::default(), Instant::now(), 1000)
                 .await
                 .unwrap();
-            log.first_byte();
             log.parse(json.as_bytes());
             log.finish("completed");
             assert!(log.record.is_none());

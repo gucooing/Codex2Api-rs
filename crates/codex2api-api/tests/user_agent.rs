@@ -125,14 +125,13 @@ async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() 
             .last_used_at
             .is_none()
     );
-    assert_eq!(
-        storage
-            .query_usage(&UsageFilter::default())
-            .await
-            .unwrap()
-            .total,
-        0
-    );
+    let rejected = storage.query_usage(&UsageFilter::default()).await.unwrap();
+    assert_eq!(rejected.total, 20);
+    assert!(rejected.records.iter().all(|row| row.account_id.is_empty()
+        && row.status == "failed"
+        && row.billing_status == "not_charged"
+        && row.error_code.as_deref() == Some("user_agent_blocked")
+        && row.user_agent.as_deref() == Some("BLOCKED desktop CLIENT/1.0")));
 
     // Saving another mode takes effect in the already-created router.
     for (mode, rules, ua, status) in [

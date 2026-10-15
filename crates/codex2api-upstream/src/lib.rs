@@ -30,10 +30,12 @@ mod error;
 mod outcome;
 pub mod public_output;
 pub mod request_debug;
+pub mod request_failure;
 pub use availability::{
     SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_available,
     quota_unavailable_until,
 };
+pub use request_failure::RequestFailureLog;
 #[derive(Clone, Copy, Debug)]
 pub struct SupplierAuthRevision(pub i64);
 pub use outcome::{FailureKind, ResponseFailure, ResponseLifecycle, ResponseOutcome};
@@ -43,10 +45,12 @@ pub(crate) use providers::chatgpt::proxy;
 pub(crate) use providers::chatgpt::request;
 pub(crate) use providers::chatgpt::routing;
 mod stream;
+mod timing;
 mod transport;
 pub(crate) use providers::chatgpt::timezone;
 pub(crate) use providers::chatgpt::websocket;
 pub use stream::{buffered_sse_lines, sse_data};
+pub use timing::{RequestClock, ResponseTiming, TokenProtocol};
 pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
 
 #[cfg(test)]
@@ -54,7 +58,7 @@ pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
 mod proxy_fixture;
 
 pub use backend::BackendEndpoint;
-pub use body::{data_url_resolution, request_metadata_value};
+pub use body::{data_url_resolution, request_metadata_value, request_user_agent};
 pub use client::{DEFAULT_STREAM_IDLE_TIMEOUT, UpstreamClient, responses_url};
 pub use compat::{ChatgptEndpoint, responses_subpath_url};
 pub use endpoint::Endpoint;

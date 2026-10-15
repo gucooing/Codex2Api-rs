@@ -44,7 +44,7 @@ export type UsageRecord = {
   cache_write_tokens: number | null;
   reasoning_tokens: number | null;
   total_ms: number | null;
-  first_byte_ms: number | null;
+  first_token_ms: number | null;
   cost_nano_usd: number | null;
   billing_status: string;
   billing_calculation: import("./usage-calculation").UsageCalculation | null;

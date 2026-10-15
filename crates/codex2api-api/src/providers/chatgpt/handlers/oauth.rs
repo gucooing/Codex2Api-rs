@@ -382,7 +382,20 @@ pub async fn require_oauth(
         .to_owned();
     let started = std::time::Instant::now();
     request.extensions_mut().insert(credential.clone());
-    let response = next.run(request).await;
+    let endpoint = super::super::routes::usage_endpoint(&method, &path);
+    let user_agent = codex2api_upstream::request_user_agent(request.headers());
+    let response = if let Some(endpoint) = endpoint {
+        crate::usage::record_http_failures(
+            &state.storage,
+            &credential,
+            endpoint,
+            user_agent,
+            next.run(request),
+        )
+        .await
+    } else {
+        next.run(request).await
+    };
     if let Err(error) = state
         .storage
         .record_virtual_request(

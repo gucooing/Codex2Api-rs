@@ -22,6 +22,107 @@ use tower::ServiceExt;
 const ROOT: &str = "/api/oauth/chatgpt";
 
 #[tokio::test]
+async fn rejected_compaction_bodies_are_visible_in_usage_without_charging_or_supplier_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::open(dir.path().join("rejected.sqlite"))
+        .await
+        .unwrap();
+    let (app, account) = fixture(&storage).await;
+    let tokens = login(&app).await;
+    let token = tokens["access_token"].as_str().unwrap();
+    let oversized = axum::body::Bytes::from(vec![b' '; codex2api_upstream::MAX_REQUEST_BYTES + 1]);
+    let mut count = 0;
+    for prefix in ["/v1", "/backend-api/codex"] {
+        for suffix in ["/responses/compact", "/responses"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(format!("{prefix}{suffix}"))
+                        .header("authorization", format!("Bearer {token}"))
+                        .header("user-agent", "downstream-compact/1")
+                        .body(Body::from(oversized.clone()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+            let message = text_body(response).await;
+            assert!(message.contains("length limit exceeded"));
+            count += 1;
+            let page = storage.query_usage(&Default::default()).await.unwrap();
+            assert_eq!(page.total, count);
+            let row = &page.records[0];
+            assert_eq!(row.user_agent.as_deref(), Some("downstream-compact/1"));
+            assert_eq!(row.subject_id, account.id);
+            assert!(row.user_id.is_some());
+            assert_eq!(row.endpoint, format!("/v1{suffix}"));
+            assert_eq!(row.http_status, Some(413));
+            assert_eq!(row.error_code.as_deref(), Some("request_too_large"));
+            assert!(
+                row.error_message
+                    .as_deref()
+                    .unwrap()
+                    .contains("length limit exceeded")
+            );
+            assert_eq!(row.status, "failed");
+            assert_eq!(row.billing_status, "not_charged");
+            assert_eq!(row.cost_nano_usd, Some(0));
+            assert_eq!(row.wallet_debit_cents, 0);
+            assert!(
+                row.model.is_none() && row.input_tokens.is_none() && row.output_tokens.is_none()
+            );
+            assert!(row.account_id.is_empty() && row.upstream_request_id.is_none());
+            assert!(row.total_ms.is_some() && row.completed_at_ms.is_some());
+        }
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/responses/compact")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from("not-json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = json_body(response).await;
+    let page = storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(page.total, count + 1);
+    assert_eq!(
+        page.records[0].error_code.as_deref(),
+        response["error"]["code"].as_str()
+    );
+    assert!(
+        page.records[0]
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("Invalid JSON")
+    );
+
+    storage.ensure_default_admin().await.unwrap();
+    let admin = codex2api_admin::router(codex2api_admin::AdminState::new(storage.clone()).unwrap());
+    let (cookie, csrf) = admin_login(&admin).await;
+    let page = json_body(
+        admin
+            .oneshot(admin_request(
+                "GET",
+                "/admin/api/usage?status=failed",
+                &cookie,
+                &csrf,
+                Value::Null,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.to_string().contains("length limit exceeded"));
+    assert!(page.to_string().contains("request_too_large"));
+    storage.close().await;
+}
+
+#[tokio::test]
 async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isolated() {
     use rsa::{
         RsaPrivateKey, RsaPublicKey,

@@ -202,7 +202,7 @@ impl Storage {
         record.group_id = Some(current.group.id.clone());
         record.group_name = Some(current.group.name.clone());
         record.multiplier_micros = multiplier_micros;
-        crate::request_writer::insert_usage_on(&mut tx, &record, &snapshot).await?;
+        crate::request_writer::insert_usage_on(&mut tx, &record, Some(&snapshot)).await?;
         sqlx::query("UPDATE api_keys SET last_used_at=? WHERE id=?")
             .bind(chrono::Utc::now().to_rfc3339())
             .bind(&current.key_id)

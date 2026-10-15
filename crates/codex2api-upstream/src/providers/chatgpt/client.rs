@@ -271,7 +271,15 @@ impl UpstreamClient {
             if method != http::Method::GET || !prepared.body.is_empty() {
                 request = request.body(prepared.body.clone());
             }
+            let timing = crate::ResponseTiming::default();
             let mut response = self.transport.send(request).await?;
+            if method == http::Method::POST
+                && reqwest::Url::parse(url)
+                    .ok()
+                    .is_some_and(|url| url.path().ends_with("/responses"))
+            {
+                response = timing.wrap(response, crate::TokenProtocol::Responses);
+            }
             if response.status() == StatusCode::UNAUTHORIZED && !retried && self.auth.is_some() {
                 retried = true;
                 self.refresh_access_token(&auth.access_token).await?;
@@ -288,7 +296,12 @@ impl UpstreamClient {
             response
                 .extensions_mut()
                 .insert(crate::SupplierAuthRevision(auth.revision));
-            if let Some(observer) = self.quota_observer(auth.revision) {
+            // The pinned ImagesClient reads ImageResponse usage, not Codex rate limits.
+            // Image endpoint headers must not replace the account's Codex allowance.
+            let images = reqwest::Url::parse(url).ok().is_some_and(|url| {
+                url.path().ends_with("/images/generations") || url.path().ends_with("/images/edits")
+            });
+            if !images && let Some(observer) = self.quota_observer(auth.revision) {
                 response = observer.response(response).await;
             }
             return Ok(response);

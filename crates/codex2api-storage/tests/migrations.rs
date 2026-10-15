@@ -50,6 +50,93 @@ async fn removing_total_limit_preserves_windows_and_charges_without_blocking() {
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 #[tokio::test]
+async fn ttft_migration_does_not_relabel_history_or_repeat_on_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ttft.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version < 85)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO usage_records(id,account_id,account_name,subject_id,subject_name,endpoint,transport,requested_at_ms,status,first_byte_ms,total_ms,cost_nano_usd,user_agent) VALUES('old','','','','','/v1/responses','http',1,'completed',12,100,456,'kept-agent')")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+    for _ in 0..2 {
+        let storage = Storage::open(&path).await.unwrap();
+        let row: (Option<i64>, Option<i64>, Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT first_token_ms,total_ms,cost_nano_usd,user_agent FROM usage_records WHERE id='old'")
+            .fetch_one(storage.pool()).await.unwrap();
+        assert_eq!(row, (None, Some(100), Some(456), Some("kept-agent".into())));
+        let applied: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM _sqlx_migrations WHERE version=85 AND success=1",
+        )
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+        assert_eq!(applied, 1);
+        storage.close().await;
+    }
+}
+
+#[tokio::test]
+async fn usage_user_agent_migration_keeps_historical_values_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage-user-agent.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    Migrator {
+        migrations: Cow::Owned(
+            MIGRATIONS
+                .iter()
+                .filter(|m| m.version < 84)
+                .cloned()
+                .collect(),
+        ),
+        ..Migrator::DEFAULT
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO usage_records(id,account_id,account_name,subject_id,subject_name,endpoint,transport,requested_at_ms,status) VALUES('old','','','','','/v1/responses','http',1,'completed')")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+    let storage = Storage::open(&path).await.unwrap();
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT status,user_agent FROM usage_records WHERE id='old'")
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(row, ("completed".into(), None));
+    storage.close().await;
+}
+
+#[tokio::test]
 async fn unified_usage_migration_keeps_both_sources_and_wallet_links_without_rebilling() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("unified-usage.sqlite");
@@ -104,7 +191,7 @@ async fn unified_usage_migration_keeps_both_sources_and_wallet_links_without_reb
     assert_eq!(paid.wallet_debit_cents, 1);
     assert_eq!(paid.total_ms, Some(400));
     assert_eq!(paid.input_tokens, Some(40));
-    assert_eq!(paid.first_byte_ms, None);
+    assert_eq!(paid.first_token_ms, None);
     let oauth = rows.records.iter().find(|r| r.id == "oauth").unwrap();
     assert_eq!(oauth.error_message.as_deref(), Some("saved diagnostic"));
     assert_eq!(oauth.user_id.as_deref(), Some("owner"));
@@ -1188,7 +1275,7 @@ async fn startup_migrates_fresh_v3_v4_and_manually_cleaned_v4_databases() {
             assert_eq!(row.cache_write_tokens, Some(8));
             assert_eq!(row.reasoning_tokens, Some(9));
             assert_eq!(row.image_size.as_deref(), Some("1024x1024"));
-            assert_eq!(row.first_byte_ms, Some(100));
+            assert_eq!(row.first_token_ms, None);
             assert_eq!(row.total_ms, Some(200));
             assert_eq!(row.requested_at_ms, 300);
             assert_eq!(row.status, "completed");

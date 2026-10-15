@@ -367,6 +367,7 @@ pub(crate) async fn forward(
                 "/backend-api/wham/tasks",
                 "http",
             )
+            .with_user_agent(&headers)
             .with_supplier_permit(ctx.permit.take())
             .start(
                 codex2api_upstream::RequestMetadata {

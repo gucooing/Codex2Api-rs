@@ -14,8 +14,6 @@ pub(crate) use codex2api_scheduler::SupplierContext;
 use codex2api_storage::VirtualAccess;
 use codex2api_upstream::{SupplierFailure, UpstreamError};
 
-pub(crate) use codex2api_scheduler::FirstEventAt;
-
 pub(crate) fn exhausted() -> ApiError {
     ApiError::openai(
         http::StatusCode::SERVICE_UNAVAILABLE,

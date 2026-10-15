@@ -332,6 +332,7 @@ fn usage_scope<'a>(
     query
         .push(" WHERE subject_id=")
         .push_bind(owner)
+        .push(" AND NOT (account_id='' AND status='failed' AND billing_status='not_charged')")
         .push(" AND requested_at_ms>=")
         .push_bind(from_ms)
         .push(" AND requested_at_ms<")
@@ -345,6 +346,52 @@ fn usage_scope<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn rejected_requests_do_not_start_inner_spending_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path().join("rejected-windows.sqlite"))
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let record = crate::UsageRecord {
+            id: "rejected".into(),
+            subject_id: "consumer".into(),
+            endpoint: "/v1/responses/compact".into(),
+            transport: "http".into(),
+            requested_at_ms: now * 1000,
+            status: "failed".into(),
+            http_status: Some(413),
+            error_code: Some("request_too_large".into()),
+            ..Default::default()
+        };
+        storage.insert_rejected_usage(&record).await.unwrap();
+        let rules = spending_windows(&json!([
+            {"duration_seconds": 604800, "cost_limit_usd":"10"},
+            {"duration_seconds": 18000, "cost_limit_usd":"2"}
+        ]))
+        .unwrap();
+        let windows = storage
+            .nested_spending_windows("consumer", &rules, now, now + 1)
+            .await
+            .unwrap();
+        assert!(windows[1]["started_at"].is_null());
+        let actual = crate::UsageRecord {
+            id: "execution".into(),
+            account_id: "supplier".into(),
+            status: "in_progress".into(),
+            http_status: None,
+            error_code: None,
+            ..record
+        };
+        storage.insert_usage(&actual).await.unwrap();
+        let windows = storage
+            .nested_spending_windows("consumer", &rules, now, now + 1)
+            .await
+            .unwrap();
+        assert_eq!(windows[1]["started_at"], now);
+        storage.close().await;
+    }
 
     #[test]
     fn accepts_official_seven_or_thirty_day_period_with_optional_five_hour_window() {

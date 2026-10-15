@@ -28,6 +28,7 @@ struct Session {
     credential: ApiCredential,
     route: SupplierRoute,
     headers: HeaderMap,
+    user_agent: Option<String>,
 }
 
 struct Connection {
@@ -165,12 +166,14 @@ pub(crate) async fn connect(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
     execution::validate(&state, &credential.principal, &credential.token).await?;
+    let user_agent = codex2api_upstream::request_user_agent(&headers);
     let headers = super::request_context(&mut serde_json::json!({}), &headers)?;
     let session = Session {
         route: execution::route(&credential.principal),
         state,
         credential,
         headers,
+        user_agent,
     };
     let request = super::scheduling(&session.headers, &serde_json::json!({}));
     let mut connection = session
@@ -275,7 +278,7 @@ impl Turn {
 
 async fn bridge(session: Session, mut connection: Connection, mut client: WebSocket) {
     let trace = codex2api_upstream::request_debug::RequestTrace::new("websocket", "/v1/responses");
-    let mut queue = VecDeque::<(PreparedRequest, usize)>::new();
+    let mut queue = VecDeque::<(PreparedRequest, usize, codex2api_upstream::RequestClock)>::new();
     let mut queued_bytes = 0usize;
     let mut pending: Option<Turn> = None;
     let mut connected = true;
@@ -288,7 +291,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                 queued_bytes = 0;
                 if pending.is_none() { return Ok(()); }
             }
-            if pending.is_none() && let Some((prepared, bytes)) = queue.pop_front() {
+            if pending.is_none() && let Some((prepared, bytes, clock)) = queue.pop_front() {
                 queued_bytes -= bytes;
                 execution::validate(&session.state, &session.credential.principal, &session.credential.token).await?;
                 let warmup = prepared.body["generate"] == false;
@@ -301,7 +304,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     }
                     (None, None)
                 } else {
-                    let (log, permit) = execution::admit(&session.state, &session.credential.principal, &prepared, "websocket").await?;
+                    let (log, permit) = clock.scope(execution::admit(&session.state, &session.credential.principal, &prepared, "websocket", session.user_agent.as_deref())).await?;
                     (Some(log), Some(permit))
                 };
                 // Store admission before fallible scheduling/connection work so
@@ -329,6 +332,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
             let deadline = pending.as_ref().map_or(idle, |turn| idle.min(turn.deadline));
             tokio::select! {
                 incoming = client.next(), if connected => {
+                    let clock = codex2api_upstream::RequestClock::default();
                     let Some(Ok(message)) = incoming else { connected = false; continue };
                     if let Message::Text(value) = &message { trace.input(value.as_bytes()); }
                     if let Message::Binary(value) = &message { trace.input(value); }
@@ -356,7 +360,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                                 value["stream"] = true.into();
                                 let prepared = super::prepare(Protocol::Responses, value, &session.headers)?;
                                 queued_bytes += text.len();
-                                queue.push_back((prepared, text.len()));
+                                queue.push_back((prepared, text.len(), clock));
                             }
                             Some("response.interrupt") => {
                                 let id = value["response_id"].as_str().filter(|id| !id.is_empty());
@@ -384,6 +388,9 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     }
                 }
                 incoming = connection.socket.next() => {
+                    if let Some(log) = pending.as_mut().and_then(|turn| turn.log.as_mut()) {
+                        log.set_timing(connection.socket.generation_timing());
+                    }
                     last_upstream = tokio::time::Instant::now();
                     let message = match incoming {
                         Some(Ok(message)) => message,
@@ -652,6 +659,7 @@ mod tests {
             };
             let mut inbound = HeaderMap::new();
             inbound.insert("session-id", "caller-session".parse().unwrap());
+            inbound.insert("user-agent", "consumer-websocket/1".parse().unwrap());
             inbound.insert("openai-project", "untrusted-project".parse().unwrap());
             inbound.insert("openai-organization", "untrusted-organization".parse().unwrap());
             inbound.insert("chatgpt-account-id", "untrusted-account".parse().unwrap());
@@ -661,6 +669,7 @@ mod tests {
             let session = Session {
                 route: execution::route(&principal), state: state.clone(),
                 credential: ApiCredential { principal, token: key.secret }, headers,
+                user_agent: codex2api_upstream::request_user_agent(&inbound),
             };
             let ready = std::sync::Arc::new(tokio::sync::Mutex::new(Some((session, connection))));
             let router = axum::Router::new().route("/responses", axum::routing::get(move |upgrade: WebSocketUpgrade| {
@@ -692,6 +701,12 @@ mod tests {
                         "SELECT status,input_tokens,output_tokens,transport FROM usage_records ORDER BY requested_at_ms")
                         .fetch_all(storage.pool()).await.unwrap();
                     assert_eq!(rows.len(), turn);
+                    let timings: Vec<Option<i64>> = sqlx::query_scalar("SELECT first_token_ms FROM usage_records")
+                        .fetch_all(storage.pool()).await.unwrap();
+                    assert!(timings.iter().all(Option::is_some));
+                    let agents: Vec<Option<String>> = sqlx::query_scalar("SELECT user_agent FROM usage_records")
+                        .fetch_all(storage.pool()).await.unwrap();
+                    assert!(agents.iter().all(|agent| agent.as_deref() == Some("consumer-websocket/1")));
                     assert!(rows.iter().all(|(status,input,output,transport)|
                         status == "completed" && *input == Some(10000) && *output == Some(5000) && transport == "websocket"));
                     let debits: i64 = sqlx::query_scalar(

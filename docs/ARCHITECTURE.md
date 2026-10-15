@@ -718,11 +718,28 @@ reported usage determine the record and charge. Normal upstream failures, idle
 timeouts and credential revocation checks still apply. Disconnection itself does
 not mark a platform failure or finalize a partial charge.
 
-Request records contain model, actual model, token counts, cost snapshot, timing,
+Request records contain the downstream User-Agent, model, actual model, token counts, cost snapshot, timing,
 structured error cause and official upstream request ID. They do not retain prompts,
 response text, image bytes or credentials. Error text is bounded and redacted.
-First-byte timing measures the first meaningful generation event, including
-response.created, rather than necessarily the first visible text token.
+Authenticated inference requests rejected before execution, including body-size,
+decoding and local admission failures, also enter the same ledger with their HTTP
+status and diagnostic. They retain subscription or API-key ownership, do not start
+spending windows or charge wallets, and leave unavailable model/token measurements
+unknown. An existing execution record prevents a second rejection record.
+`first_token_ms` measures from proxy HTTP request arrival, or receipt of each
+WebSocket generation message, to the first nonempty generated token content
+observed on the upstream transport. Authentication, input decoding, admission,
+queueing and supplier retries are included. Text, reasoning, refusal and tool
+argument/input increments count; lifecycle events, heartbeats, quota/usage-only
+events, empty deltas and role-only chunks do not. This is the proxy's observable
+TTFT, not the client's network receive time. JSON-only upstream replies, image
+operations and responses with no observable tokens retain null. An API client
+requesting JSON can still have measured TTFT when its supplier uses SSE.
+The shared upstream timing observer runs before prelude buffering, quota writes,
+identity rewriting and protocol conversion. Both ledgers consume its result;
+supplier scheduling derives per-attempt TTFT from the same token timestamp and
+the upstream send time. Historical first-event timings cannot reconstruct TTFT
+and are removed by SQL migration without changing other usage or billing data.
 
 Administrator tables and charts query actual records and preserve unknown fields.
 The official reported model in response headers takes precedence over payload
@@ -749,6 +766,10 @@ observation time. Atomic writes reject older observations and superseded credent
 Empty or invalid observations leave the cache unchanged. These passive updates do
 not infer supplier availability, clear billing/authentication failures, trigger quota
 requests or change virtual consumer quotas; the existing recovery probes remain.
+Image generation/edit responses do not update Codex quota snapshots, matching the
+pinned ImagesClient's separate response handling. Reported image Token usage is
+retained in request records alongside actual image counts; image pricing remains
+based on the configured image rules.
 
 Render only windows actually returned, using their reported duration and reset
 time, including 30-day windows. Do not invent absent primary/secondary windows.

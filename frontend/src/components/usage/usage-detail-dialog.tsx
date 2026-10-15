@@ -59,6 +59,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
             ["消费", selected ? money(usageConsumption(selected)) : null],
             ["请求模型", selected?.model],
             ["实际模型", selected?.actual_model],
+            ["HTTP 状态码", selected?.http_status],
             ...(selected && failedUsage(selected) ? [["错误码", selected.error_code || "-"]] : []),
             [
               "请求状态",
@@ -69,12 +70,16 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
             ],
             ["接口", selected?.endpoint],
             ["传输方式", selected?.transport],
+            ["User-Agent", selected?.user_agent],
             ["来源", usageSourceDetail(selected)],
             ["类型", usageType(selected?.stream)],
-            ["首字节耗时", duration(selected?.first_byte_ms)],
+            ["首 Token 延迟", duration(selected?.first_token_ms)],
             ["总耗时", duration(selected?.total_ms)],
           ].map(([label, value]) => (
-            <Field key={String(label)}>
+            <Field
+              key={String(label)}
+              className={label === "User-Agent" ? "sm:col-span-2" : undefined}
+            >
               <FieldTitle>{label}</FieldTitle>
               <FieldDescription
                 className={`break-words${label === "请求状态" && selected ? ` ${usageStatus(selected.status).className}` : ""}`}

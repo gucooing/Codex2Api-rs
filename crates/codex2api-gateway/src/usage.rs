@@ -15,9 +15,11 @@ pub(crate) struct ApiLog {
     started: Instant,
     settled: bool,
     authoritative_model: bool,
+    timing: Option<codex2api_upstream::ResponseTiming>,
 }
 impl ApiLog {
     pub(crate) fn new(storage: Storage, record: UsageRecord, started: Instant) -> Self {
+        codex2api_upstream::RequestFailureLog::recorded();
         Self {
             storage,
             record,
@@ -28,7 +30,11 @@ impl ApiLog {
             started,
             settled: false,
             authoritative_model: false,
+            timing: None,
         }
+    }
+    pub(crate) fn set_timing(&mut self, timing: Option<codex2api_upstream::ResponseTiming>) {
+        self.timing = timing;
     }
     pub(crate) fn headers(&mut self, status: http::StatusCode, headers: &http::HeaderMap) {
         self.record.http_status = Some(i64::from(status.as_u16()));
@@ -98,10 +104,7 @@ impl ApiLog {
     }
     /// Preserve measurements in physical HTTP failures without trusting a success-shaped body.
     pub(crate) fn measure(&mut self, value: &Value, mode: OutputMode) {
-        if self.record.first_byte_ms.is_none() {
-            self.record.first_byte_ms =
-                Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
-        }
+        self.record.generation_observed |= codex2api_scheduler::generation_observed(value);
         let response = value.get("response").unwrap_or(value);
         if !self.authoritative_model {
             if let Some(model) = response["model"]
@@ -119,8 +122,6 @@ impl ApiLog {
                 &usage["prompt_tokens_details"],
                 &usage["completion_tokens_details"],
             );
-        } else if mode == OutputMode::Images {
-            crate::images::observe_usage(&mut self.record, response);
         } else {
             self.tokens(
                 &usage["input_tokens"],
@@ -128,6 +129,9 @@ impl ApiLog {
                 &usage["input_tokens_details"],
                 &usage["output_tokens_details"],
             );
+        }
+        if mode == OutputMode::Images {
+            crate::images::observe_usage(&mut self.record, response);
         }
     }
     fn tokens(
@@ -166,18 +170,29 @@ impl ApiLog {
         }
     }
     pub(crate) fn fail(&mut self, error: &GatewayError) {
+        if self.record.transport == "http" && self.record.http_status.is_none() {
+            self.record.http_status = Some(i64::from(error.status.as_u16()));
+        }
         // A malformed/unsupported response must fail before it is released, even
         // if its body claimed completion. A settled generation is immutable.
         if !self.settled && self.successful() {
             self.lifecycle = ResponseLifecycle::default();
         }
-        self.lifecycle.fail(ResponseFailure::from_error(
-            Some(error.status.as_u16()),
-            &error.body,
-        ));
+        let mut failure = ResponseFailure::from_error(Some(error.status.as_u16()), &error.body);
+        if let Some(message) = &error.diagnostic {
+            failure.message = Some(message.clone());
+        }
+        self.lifecycle.fail(failure);
     }
     pub(crate) fn fail_upstream(&mut self, error: &codex2api_upstream::UpstreamError) {
-        self.lifecycle.fail(error.failure());
+        let mut failure = error.failure();
+        if !matches!(error, codex2api_upstream::UpstreamError::Status { .. }) {
+            failure.message = Some(codex2api_upstream::request_failure::error_diagnostic(error));
+        }
+        if self.record.transport == "http" && self.record.http_status.is_none() {
+            self.record.http_status = failure.status.map(i64::from);
+        }
+        self.lifecycle.fail(failure);
     }
     pub(crate) async fn settle(&mut self) -> Result<()> {
         if self.settled {
@@ -201,12 +216,19 @@ impl ApiLog {
             self.storage.report_supplier_result(
                 &self.record.account_id,
                 matches!(outcome, ResponseOutcome::Completed),
-                self.record.first_byte_ms.map(|value| value as f64),
+                self.timing
+                    .as_ref()
+                    .and_then(|timing| timing.supplier_ttft_ms()),
             );
         }
         Ok(())
     }
     fn finalize_record(&mut self) {
+        self.record.first_token_ms = self
+            .timing
+            .as_ref()
+            .and_then(|timing| timing.first_token_ms(self.started));
+        self.record.generation_observed |= self.record.first_token_ms.is_some();
         let outcome = self.lifecycle.outcome();
         self.record.status = outcome
             .map_or("interrupted", ResponseOutcome::record_status)

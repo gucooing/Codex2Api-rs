@@ -12,6 +12,7 @@ pub struct GatewayError {
     pub(crate) status: StatusCode,
     pub(crate) body: Value,
     pub(crate) headers: HeaderMap,
+    pub(crate) diagnostic: Option<String>,
 }
 
 impl std::fmt::Display for GatewayError {
@@ -34,6 +35,7 @@ impl GatewayError {
             status,
             body: json!({"error":{"type":kind,"code":code,"message":message.into(),"param":null}}),
             headers: HeaderMap::new(),
+            diagnostic: None,
         }
     }
     pub(crate) fn bad_request(message: impl Into<String>) -> Self {
@@ -52,6 +54,12 @@ impl GatewayError {
             "internal_error",
             "The service could not complete this request.",
         )
+    }
+    pub(crate) fn with_diagnostic(mut self, message: &str) -> Self {
+        let message = codex2api_upstream::request_failure::diagnostic_text(message, 512);
+        codex2api_upstream::RequestFailureLog::diagnostic(&message);
+        self.diagnostic = Some(message);
+        self
     }
     pub(crate) fn upstream_incomplete() -> Self {
         Self::new(
@@ -100,6 +108,7 @@ impl GatewayError {
                 .unwrap_or(StatusCode::BAD_GATEWAY),
             body: json!({"error":codex2api_upstream::public_output::error(raw)}),
             headers,
+            diagnostic: None,
         }
     }
 }
@@ -155,8 +164,9 @@ impl From<codex2api_scheduler::SchedulerError> for GatewayError {
 }
 impl From<codex2api_storage::StorageError> for GatewayError {
     fn from(value: codex2api_storage::StorageError) -> Self {
+        let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&value);
         use codex2api_storage::StorageError as E;
-        match value {
+        let error = match value {
             E::Api { code, message } => {
                 let status = match code.as_ref() {
                     "invalid_api_key" | "api_key_revoked" => StatusCode::UNAUTHORIZED,
@@ -183,7 +193,8 @@ impl From<codex2api_storage::StorageError> for GatewayError {
                 tracing::error!(error=%other,"API gateway storage failure");
                 Self::internal()
             }
-        }
+        };
+        error.with_diagnostic(&diagnostic)
     }
 }
 impl From<codex2api_upstream::UpstreamError> for GatewayError {
@@ -222,6 +233,7 @@ impl From<codex2api_upstream::UpstreamError> for GatewayError {
                 error
             }
             other => {
+                let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&other);
                 let failure = other.failure();
                 Self::new(
                     StatusCode::from_u16(failure.status.unwrap_or(502))
@@ -229,6 +241,7 @@ impl From<codex2api_upstream::UpstreamError> for GatewayError {
                     failure.code.as_deref().unwrap_or("upstream_error"),
                     "The upstream service could not complete this request.",
                 )
+                .with_diagnostic(&diagnostic)
             }
         }
     }

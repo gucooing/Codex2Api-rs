@@ -232,6 +232,7 @@ export type UsageRecord = {
   provider_id: string;
   endpoint: string;
   transport: string;
+  user_agent: string | null;
   stream: boolean | null;
   model: string | null;
   actual_model: string | null;
@@ -247,13 +248,14 @@ export type UsageRecord = {
   image_count: number | null;
   image_usage_json: string | null;
   image_input_usage_json: string | null;
-  first_byte_ms: number | null;
+  first_token_ms: number | null;
   total_ms: number | null;
   requested_at_ms: number;
   status: string;
   error_code: string | null;
   error_message: string | null;
   cost_nano_usd: number | null;
+  http_status: number | null;
   billing_status: string;
   billing_calculation: import("./usage-calculation").UsageCalculation | null;
   cost_calculation: import("./usage-calculation").UsageCalculation | null;

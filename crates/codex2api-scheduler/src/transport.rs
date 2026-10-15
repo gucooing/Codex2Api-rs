@@ -3,8 +3,6 @@ use crate::{Result, SupplierContext};
 use bytes::Bytes;
 use codex2api_upstream::{ResponseFormat, SupplierFailure, UpstreamError};
 use futures::StreamExt;
-#[derive(Clone, Copy, Debug)]
-pub struct FirstEventAt(pub std::time::Instant);
 
 pub async fn observe_failure(
     storage: &codex2api_storage::Storage,
@@ -132,7 +130,6 @@ pub async fn inspect_response(
     let mut prefix = Vec::new();
     let mut parsed = 0;
     let mut scanned = 0;
-    let mut first_event = None;
     'read: while prefix.len() < codex2api_upstream::MAX_REQUEST_BYTES {
         if framing == Some(ResponseFormat::EventStream) && prefix.len() >= 256 * 1024 {
             break;
@@ -222,13 +219,6 @@ pub async fn inspect_response(
             {
                 object.insert("type".into(), event.trim().into());
             }
-            if value
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind.starts_with("response.") || kind == "error")
-            {
-                first_event.get_or_insert_with(std::time::Instant::now);
-            }
             if generation_observed(&value) {
                 break 'read;
             }
@@ -245,9 +235,6 @@ pub async fn inspect_response(
     *rebuilt.version_mut() = version;
     *rebuilt.extensions_mut() = extensions;
     *rebuilt.headers_mut() = headers;
-    if let Some(at) = first_event {
-        rebuilt.extensions_mut().insert(FirstEventAt(at));
-    }
     if let Some(revision) = revision {
         rebuilt.extensions_mut().insert(revision);
     }
@@ -289,6 +276,38 @@ fn reject_recoverable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn prelude_buffering_preserves_transport_token_timing() {
+        let body = "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n";
+        let response: reqwest::Response = http::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(reqwest::Body::from(body))
+            .unwrap()
+            .into();
+        let timing = codex2api_upstream::ResponseTiming::default();
+        let response = inspect_response(
+            "chatgpt",
+            prelude_event,
+            timing
+                .clone()
+                .wrap(response, codex2api_upstream::TokenProtocol::Responses),
+        )
+        .await
+        .unwrap();
+        let measured = timing.supplier_ttft_ms().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(
+            response
+                .extensions()
+                .get::<codex2api_upstream::ResponseTiming>()
+                .unwrap()
+                .supplier_ttft_ms(),
+            Some(measured)
+        );
+        assert_eq!(response.text().await.unwrap(), body);
+        assert_eq!(timing.supplier_ttft_ms(), Some(measured));
+    }
     use serde_json::json;
 
     #[tokio::test]
@@ -325,7 +344,6 @@ mod tests {
                     .0,
                 7
             );
-            assert!(response.extensions().get::<FirstEventAt>().is_some());
             assert_eq!(response.text().await.unwrap(), body);
         }
     }

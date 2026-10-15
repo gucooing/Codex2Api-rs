@@ -34,6 +34,7 @@ pub struct UsageRecord {
     pub completed_at_ms: Option<i64>,
     pub endpoint: String,
     pub transport: String,
+    pub user_agent: Option<String>,
     pub stream: Option<bool>,
     pub model: Option<String>,
     pub actual_model: Option<String>,
@@ -49,7 +50,11 @@ pub struct UsageRecord {
     pub image_count: Option<i64>,
     pub image_usage_json: Option<String>,
     pub image_input_usage_json: Option<String>,
-    pub first_byte_ms: Option<i64>,
+    pub first_token_ms: Option<i64>,
+    /// Per-execution evidence used at settlement, independent of latency availability.
+    #[serde(skip)]
+    #[sqlx(skip)]
+    pub generation_observed: bool,
     pub total_ms: Option<i64>,
     pub requested_at_ms: i64,
     pub status: String,
@@ -91,6 +96,7 @@ impl Default for UsageRecord {
             completed_at_ms: None,
             endpoint: Default::default(),
             transport: Default::default(),
+            user_agent: None,
             stream: None,
             model: Default::default(),
             actual_model: Default::default(),
@@ -106,7 +112,8 @@ impl Default for UsageRecord {
             image_count: Default::default(),
             image_usage_json: Default::default(),
             image_input_usage_json: Default::default(),
-            first_byte_ms: Default::default(),
+            first_token_ms: Default::default(),
+            generation_observed: false,
             total_ms: Default::default(),
             requested_at_ms: Default::default(),
             status: Default::default(),
@@ -411,6 +418,14 @@ impl Storage {
         .await
         .map(|_| ())
     }
+    /// A local rejection never starts spending windows, reserves funds or charges usage.
+    pub async fn insert_rejected_usage(&self, record: &UsageRecord) -> Result<()> {
+        self.write_request(crate::request_writer::Write::Rejected(Box::new(
+            record.clone(),
+        )))
+        .await
+        .map(|_| ())
+    }
 
     pub async fn finish_usage(&self, record: &UsageRecord) -> Result<()> {
         self.write_request(crate::request_writer::Write::Finish(Box::new(
@@ -581,7 +596,7 @@ mod tests {
         let mut record = filtered.records[0].clone();
         record.status = "completed".into();
         record.input_tokens = Some(0);
-        record.first_byte_ms = Some(120);
+        record.first_token_ms = Some(120);
         record.total_ms = Some(900);
         storage.finish_usage(&record).await.unwrap();
         record.input_tokens = Some(99);

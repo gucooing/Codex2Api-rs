@@ -16,6 +16,7 @@ impl Admission {
         endpoint: &str,
         metadata: RequestMetadata,
     ) -> crate::Result<Self> {
+        codex2api_upstream::RequestFailureLog::metadata(&metadata);
         let version = storage.admission_version(owner);
         let service = codex2api_service::ExecutionService::new(storage.clone());
         service
@@ -74,6 +75,7 @@ pub(crate) struct ExecutionContext {
     owner_name: String,
     pub(crate) endpoint: String,
     transport: &'static str,
+    user_agent: Option<String>,
 }
 
 impl ExecutionContext {
@@ -101,6 +103,7 @@ impl ExecutionContext {
             owner_name: owner_name.into(),
             endpoint: endpoint.into(),
             transport,
+            user_agent: None,
         }
     }
 
@@ -113,6 +116,11 @@ impl ExecutionContext {
     }
     pub fn take_supplier_permit(&self) -> Option<codex2api_storage::RuntimePermit> {
         self.supplier_permit.lock().unwrap().take()
+    }
+
+    pub fn with_user_agent(mut self, headers: &http::HeaderMap) -> Self {
+        self.user_agent = codex2api_upstream::request_user_agent(headers);
+        self
     }
     pub async fn authorize(
         &self,
@@ -215,6 +223,7 @@ impl ExecutionContext {
             subject_name: self.owner_name.clone(),
             endpoint: self.endpoint.clone(),
             transport: self.transport.into(),
+            user_agent: self.user_agent.clone(),
             stream: Some(self.transport == "websocket" || metadata.stream.unwrap_or(false)),
             model: metadata.model,
             reasoning_effort: metadata.reasoning_effort,

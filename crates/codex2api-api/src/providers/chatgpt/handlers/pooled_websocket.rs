@@ -15,7 +15,7 @@ use codex2api_upstream::{Endpoint, ResponseOutcome, UpstreamWebSocket};
 use futures::{SinkExt, StreamExt};
 use http::HeaderMap;
 use serde_json::Value;
-use std::{collections::VecDeque, time::Instant};
+use std::collections::VecDeque;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 struct Connection {
@@ -31,6 +31,7 @@ fn context(
     oauth: &VirtualAccess,
     conn: &mut Connection,
     endpoint: Endpoint,
+    headers: &HeaderMap,
 ) -> ExecutionContext {
     ExecutionContext::new(
         state.storage.clone(),
@@ -40,6 +41,7 @@ fn context(
         &format!("/v1/{}", endpoint.codex_path()),
         "websocket",
     )
+    .with_user_agent(headers)
     .with_supplier_permit(conn.ctx.permit.take())
 }
 
@@ -163,7 +165,7 @@ pub(super) async fn connect(
 struct Pending {
     original: Value,
     full_input: Option<Vec<Value>>,
-    prelude: Vec<(String, Value, Instant)>,
+    prelude: Vec<(String, Value)>,
     prelude_bytes: usize,
     committed: bool,
     excluded: Vec<String>,
@@ -197,9 +199,8 @@ async fn deliver(
     oauth: &VirtualAccess,
     text: &str,
     value: &mut Value,
-    at: Instant,
 ) -> Result<Option<ResponseOutcome>> {
-    let outcome = ledger.lock().await.observe_value_at(value, at).await?;
+    let outcome = ledger.lock().await.observe_value(value).await?;
     if !*connected {
         return Ok(outcome);
     }
@@ -224,14 +225,14 @@ async fn bridge(
         "websocket",
         &format!("/v1/{}", endpoint.codex_path()),
     );
-    let mut ledger = WsLedger::new(context(&state, &oauth, &mut conn, endpoint));
+    let mut ledger = WsLedger::new(context(&state, &oauth, &mut conn, endpoint, &headers));
     ledger.response_headers(&conn.headers);
     let ledger = tokio::sync::Mutex::new(ledger);
     let reviewer = endpoint == Endpoint::Guardian
         || headers
             .get("x-codex-guardian")
             .is_some_and(|h| h == "reviewer");
-    let mut queue: VecDeque<(Value, usize)> = VecDeque::new();
+    let mut queue: VecDeque<(Value, usize, codex2api_upstream::RequestClock)> = VecDeque::new();
     let mut queued_bytes = 0usize;
     let mut pending: Option<Pending> = None;
     // In-memory connection context only; never written to logs or shared accounts.
@@ -251,7 +252,7 @@ async fn bridge(
                 }
             }
             if pending.is_none()
-                && let Some((mut original, bytes)) = queue.pop_front()
+                && let Some((mut original, bytes, clock)) = queue.pop_front()
             {
                 queued_bytes -= bytes;
                 let full_input = original.get("input").and_then(Value::as_array).and_then(
@@ -293,7 +294,7 @@ async fn bridge(
                 ledger
                     .lock()
                     .await
-                    .retry_supplier(context(&state, &oauth, &mut conn, endpoint), &account)
+                    .retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account)
                     .await?;
                 ledger.lock().await.response_headers(&conn.headers);
                 if !conn.ctx.previous_response_matches
@@ -315,7 +316,7 @@ async fn bridge(
                         .remove("previous_response_id");
                     original["input"] = serde_json::json!(input);
                 }
-                crate::usage::ws_start(&ledger, &original, admission).await?;
+                clock.scope(crate::usage::ws_start(&ledger, &original, admission)).await?;
                 send(&mut conn, &original, reviewer).await?;
                 idle.as_mut().reset(
                     tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
@@ -332,6 +333,7 @@ async fn bridge(
             }
             tokio::select! {
                 incoming = client.next(), if connected => {
+                    let clock = codex2api_upstream::RequestClock::default();
                     let Some(Ok(message)) = incoming else {
                         connected = false;
                         continue;
@@ -361,7 +363,7 @@ async fn bridge(
                                     return Err(ApiError::bad_request("Too many queued Responses requests."));
                                 }
                                 queued_bytes += text.len();
-                                queue.push_back((value, text.len()));
+                                queue.push_back((value, text.len(), clock));
                             } else {
                                 send(&mut conn, &value, reviewer).await?;
                             }
@@ -373,6 +375,7 @@ async fn bridge(
                     }
                 }
                 incoming = conn.socket.next() => {
+                    ledger.lock().await.set_timing(conn.socket.generation_timing());
                     idle.as_mut()
                         .reset(tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT);
                     let Some(message) = incoming else {
@@ -401,7 +404,7 @@ async fn bridge(
                         ledger
                             .lock()
                             .await
-                            .observe_at(text.as_bytes(), false, Instant::now())
+                            .observe_message(text.as_bytes())
                             .await?;
                         return Err(ApiError::invalid_token());
                     }
@@ -486,7 +489,7 @@ async fn bridge(
                             ledger
                                 .lock()
                                 .await
-                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint), &account)
+                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account)
                                 .await?;
                             ledger.lock().await.response_headers(&conn.headers);
                             send(&mut conn, &retry, reviewer).await?;
@@ -508,20 +511,19 @@ async fn bridge(
                             ledger
                                 .lock()
                                 .await
-                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint), &account)
+                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account)
                                 .await?;
                             continue;
                         }
                     }
-                    let at = Instant::now();
                     if let Some(p) = &mut pending {
                         if !p.committed && pool::prelude_event(&value) && p.prelude_bytes + text.len() <= 256 * 1024
                         {
                             p.prelude_bytes += text.len();
-                            p.prelude.push((text, value, at));
+                            p.prelude.push((text, value));
                             continue;
                         }
-                        for (text, mut value, at) in p.prelude.drain(..) {
+                        for (text, mut value) in p.prelude.drain(..) {
                             deliver(
                                 &mut client,
                                 &mut connected,
@@ -530,7 +532,6 @@ async fn bridge(
                                 &oauth,
                                 &text,
                                 &mut value,
-                                at,
                             )
                             .await?;
                         }
@@ -553,7 +554,7 @@ async fn bridge(
                             .then(|| (id.into(), input));
                         }
                     let outcome = deliver(
-                        &mut client, &mut connected, &ledger, &state, &oauth, &text, &mut value, at,
+                        &mut client, &mut connected, &ledger, &state, &oauth, &text, &mut value,
                     ).await?;
                     if let Some(outcome) = outcome {
                         pending = None;
@@ -706,7 +707,10 @@ mod tests {
                                 state,
                                 oauth,
                                 Endpoint::Responses,
-                                HeaderMap::new(),
+                                HeaderMap::from_iter([(
+                                    http::header::USER_AGENT,
+                                    "oauth-websocket/1".parse().unwrap(),
+                                )]),
                             )
                         })
                     }
@@ -758,6 +762,17 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(rows.len(), 1);
+            let user_agent: Option<String> =
+                sqlx::query_scalar("SELECT user_agent FROM usage_records")
+                    .fetch_one(state.storage.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(user_agent.as_deref(), Some("oauth-websocket/1"));
+            let ttft: Option<i64> = sqlx::query_scalar("SELECT first_token_ms FROM usage_records")
+                .fetch_one(state.storage.pool())
+                .await
+                .unwrap();
+            assert_eq!(ttft.is_some(), read_output);
             assert_eq!(rows[0].0, if failure { "failed" } else { "completed" });
             assert_eq!((rows[0].1, rows[0].2), (Some(700), Some(30)));
             assert!(rows[0].3.unwrap() > 0);

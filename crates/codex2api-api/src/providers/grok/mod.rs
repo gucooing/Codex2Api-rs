@@ -137,7 +137,26 @@ pub async fn require_oauth(
         .to_owned();
     let start = std::time::Instant::now();
     request.extensions_mut().insert(access.clone());
-    let response = next.run(request).await;
+    let endpoint = (method == "POST")
+        .then(|| {
+            ["responses", "chat/completions", "messages"]
+                .into_iter()
+                .find(|endpoint| path.ends_with(&format!("/v1/{endpoint}")))
+        })
+        .flatten();
+    let response = if let Some(endpoint) = endpoint {
+        let user_agent = codex2api_upstream::request_user_agent(request.headers());
+        crate::usage::record_http_failures(
+            &state.storage,
+            &access,
+            &format!("/grok/v1/{endpoint}"),
+            user_agent,
+            next.run(request),
+        )
+        .await
+    } else {
+        next.run(request).await
+    };
     if let Err(error) = state
         .storage
         .record_virtual_request(
@@ -304,6 +323,7 @@ pub(crate) async fn forward(
                 &format!("/grok/v1/{endpoint}"),
                 "http",
             )
+            .with_user_agent(&headers)
             .with_supplier_permit(ctx.permit.take())
             .start_admitted(admission, start, requested_at)
             .await?,

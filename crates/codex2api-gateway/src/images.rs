@@ -32,6 +32,9 @@ async fn handle(
 ) -> Result<Response> {
     let headers = request.headers().clone();
     let mut body = decode(request, edit).await?;
+    codex2api_upstream::RequestFailureLog::metadata(&codex2api_upstream::request_metadata_value(
+        &body,
+    ));
     let metadata = body
         .as_object_mut()
         .and_then(|body| body.remove("metadata"));

@@ -157,6 +157,7 @@ impl OpenAiErrorBody {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        codex2api_upstream::RequestFailureLog::error(&self);
         match self {
             Self::Service(error) => service_error_response(error),
             Self::OpenAi {

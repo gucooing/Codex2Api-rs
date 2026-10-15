@@ -20,6 +20,7 @@ pub(crate) enum Write {
         prices: Arc<String>,
     },
     Finish(Box<UsageRecord>),
+    Rejected(Box<UsageRecord>),
     Touch {
         id: String,
         at: String,
@@ -153,8 +154,20 @@ async fn execute(
             .bind(at.to_rfc3339()).bind(hash.as_str()).bind(at.timestamp()).execute(connection).await?.rows_affected()),
         Write::Reroute { id, supplier, name } => Ok(sqlx::query("UPDATE usage_records SET account_id=?,account_name=? WHERE id=? AND status='in_progress'")
             .bind(supplier.as_str()).bind(name.as_str()).bind(id.as_str()).execute(connection).await?.rows_affected()),
-        Write::Start { record, prices } => insert_usage_on(connection, record, prices).await,
+        Write::Start { record, prices } => insert_usage_on(connection, record, Some(prices)).await,
         Write::Finish(record) => finish_usage_on(connection, record, prices).await,
+        Write::Rejected(record) => {
+            use sqlx::Connection;
+            let mut tx = connection.begin().await?;
+            let mut pending = record.as_ref().clone();
+            pending.status = "in_progress".into();
+            insert_usage_on(&mut tx, &pending, None).await?;
+            let changed = sqlx::query("UPDATE usage_records SET status='failed',http_status=?,total_ms=?,completed_at_ms=?,billing_status='not_charged',base_cost_nano_usd=0,cost_nano_usd=0 WHERE id=?")
+                .bind(record.http_status).bind(record.total_ms).bind(chrono::Utc::now().timestamp_millis()).bind(&record.id)
+                .execute(&mut *tx).await?.rows_affected();
+            tx.commit().await?;
+            Ok(changed)
+        }
         Write::Touch { id, at } => Ok(sqlx::query("UPDATE supplier_accounts SET last_used_at=? WHERE id=?").bind(at.as_str()).bind(id.as_str()).execute(connection).await?.rows_affected()),
         Write::Activity { owner, device, method, path, status, duration, at } => {
             Ok(sqlx::query("INSERT INTO virtual_request_logs(virtual_account_id,device_id,method,path,status,duration_ms,created_at_ms) SELECT id,?,?,?,?,?,? FROM platform_accounts WHERE id=?")
@@ -184,7 +197,7 @@ async fn execute(
 pub(crate) async fn insert_usage_on(
     connection: &mut sqlx::SqliteConnection,
     record: &UsageRecord,
-    prices: &str,
+    prices: Option<&str>,
 ) -> Result<u64> {
     let source_name: Option<String> = if record.subject_kind == "virtual_account" {
         sqlx::query_scalar(
@@ -195,12 +208,12 @@ pub(crate) async fn insert_usage_on(
     } else {
         record.group_name.clone()
     };
-    Ok(sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,image_input_usage_json,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id,user_id,key_id,group_id,group_name,wallet_user_id,multiplier_micros,stream,source_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?),COALESCE(?,(SELECT user_id FROM regular_platforms WHERE id=?)),?,?,?,?,?,?,?)")
+    Ok(sqlx::query("INSERT INTO usage_records (provider_id,subject_kind,id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,reasoning_effort,service_tier,image_size,image_input_usage_json,requested_at_ms,status,actual_model,pricing_snapshot_json,billing_status,error_code,error_message,upstream_request_id,quota_reset_credit_id,user_id,key_id,group_id,group_name,wallet_user_id,multiplier_micros,stream,source_name,user_agent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?),COALESCE(?,(SELECT user_id FROM regular_platforms WHERE id=?)),?,?,?,?,?,?,?,?)")
         .bind(&record.provider_id).bind(&record.subject_kind).bind(&record.id).bind(&record.account_id).bind(&record.account_name).bind(&record.subject_id).bind(&record.subject_name)
         .bind(&record.endpoint).bind(&record.transport).bind(&record.model).bind(&record.reasoning_effort).bind(&record.service_tier).bind(&record.image_size).bind(&record.image_input_usage_json).bind(record.requested_at_ms).bind(&record.status)
         .bind(&record.actual_model).bind(prices).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id).bind(&record.subject_id)
         .bind(&record.user_id).bind(&record.subject_id).bind(&record.key_id).bind(&record.group_id).bind(&record.group_name).bind(&record.wallet_user_id).bind(record.multiplier_micros).bind(record.stream)
-        .bind(source_name)
+        .bind(source_name).bind(&record.user_agent)
         .execute(connection).await?.rows_affected())
 }
 
@@ -261,10 +274,8 @@ async fn finish_usage_on(
     let mut billable = record.clone();
     billable.subject_kind = saved.subject_kind;
     billable.service_tier = record.service_tier.clone().or(saved.service_tier);
-    let not_dispatched = record.account_id.is_empty()
-        && record.http_status.is_none()
-        && record.first_byte_ms.is_none();
-    let rejected = record.first_byte_ms.is_none()
+    let not_dispatched = record.account_id.is_empty();
+    let rejected = !record.generation_observed
         && record.http_status.is_some_and(|status| {
             matches!(
                 status,
@@ -272,6 +283,7 @@ async fn finish_usage_on(
             )
         });
     let unused = record.status == "failed"
+        && !record.generation_observed
         && record.input_tokens.is_none()
         && record.output_tokens.is_none()
         && record.cached_tokens.is_none_or(|n| n == 0)
@@ -300,10 +312,10 @@ async fn finish_usage_on(
     } else {
         0
     };
-    let changed = sqlx::query("UPDATE usage_records SET account_id=?,account_name=?,base_cost_nano_usd=?,cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?,input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_byte_ms=?,total_ms=?,status=?,http_status=?,error_code=?,error_message=?,upstream_request_id=?,wallet_debit_cents=?,completed_at_ms=? WHERE id=? AND status='in_progress'")
+    let changed = sqlx::query("UPDATE usage_records SET account_id=?,account_name=?,base_cost_nano_usd=?,cost_nano_usd=?,billing_status=?,billing_model=?,billing_tier=?,service_tier=?,actual_model=?,input_tokens=?,output_tokens=?,cached_tokens=?,cache_write_tokens=?,reasoning_tokens=?,image_size=?,image_count=?,image_usage_json=?,image_input_usage_json=?,first_token_ms=?,total_ms=?,status=?,http_status=?,error_code=?,error_message=?,upstream_request_id=?,wallet_debit_cents=?,completed_at_ms=? WHERE id=? AND status='in_progress'")
         .bind(&record.account_id).bind(&record.account_name).bind(base).bind(cost).bind(billing_status).bind(billing_model).bind(billing_tier).bind(&billable.service_tier).bind(&record.actual_model)
         .bind(record.input_tokens).bind(record.output_tokens).bind(record.cached_tokens).bind(record.cache_write_tokens).bind(record.reasoning_tokens).bind(&record.image_size).bind(record.image_count).bind(&record.image_usage_json).bind(&record.image_input_usage_json)
-        .bind(record.first_byte_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id)
+        .bind(record.first_token_ms).bind(record.total_ms).bind(&record.status).bind(record.http_status).bind(&record.error_code).bind(&record.error_message).bind(&record.upstream_request_id)
         .bind(debit).bind(chrono::Utc::now().timestamp_millis()).bind(&record.id).execute(&mut *tx).await?.rows_affected();
     tx.commit().await?;
     Ok(changed)

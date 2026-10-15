@@ -93,6 +93,7 @@ pub async fn forward(
                     &format!("/v1/{path}"),
                     "http",
                 )
+                .with_user_agent(&headers)
                 .with_supplier_permit(ctx.permit.take())
                 .start_admitted(admission, start, requested_at)
                 .await?,
