@@ -45,8 +45,8 @@ fn chrono_timestamp() -> String {
 
 #[tokio::test]
 async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("image-prices.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("image-prices-pg"))
         .await
         .unwrap();
     let account = consumer(&storage, "consumer").await;
@@ -146,8 +146,8 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
 #[tokio::test]
 async fn configured_search_price_allows_limited_accounts_without_bypassing_model_or_budget_checks()
 {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("search.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("search-pg"))
         .await
         .unwrap();
     let account = consumer(&storage, "consumer").await;
@@ -225,8 +225,8 @@ async fn configured_search_price_allows_limited_accounts_without_bypassing_model
 
 #[tokio::test]
 async fn model_permissions_are_exact_current_and_provider_scoped() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("policy.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("policy-pg"))
         .await
         .unwrap();
     let account = consumer(&storage, "consumer").await;
@@ -290,8 +290,8 @@ async fn model_permissions_are_exact_current_and_provider_scoped() {
 
 #[tokio::test]
 async fn expired_subscriptions_never_fall_back_to_another_plan() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("expiry.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("expiry-pg"))
         .await
         .unwrap();
     let mut account = consumer(&storage, "consumer").await;
@@ -345,8 +345,10 @@ async fn expired_subscriptions_never_fall_back_to_another_plan() {
 
 #[tokio::test]
 async fn all_models_means_configured_and_enabled_and_consumer_disable_is_immediate() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("all.sqlite")).await.unwrap();
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("all-pg"))
+        .await
+        .unwrap();
     let mut account = consumer(&storage, "consumer").await;
     let service = ExecutionService::new(storage.clone());
     assert!(matches!(

@@ -67,6 +67,9 @@ pub(crate) fn billable(endpoint: Endpoint) -> bool {
 }
 
 pub(crate) trait ProtocolObserver: Send + Sync {
+    fn response_affinity(&self) -> bool {
+        true
+    }
     fn observe(&mut self, bytes: &[u8]) -> Vec<serde_json::Value>;
 }
 pub(crate) struct RequestLog {
@@ -82,7 +85,7 @@ pub(crate) struct RequestLog {
     auth_revision: Option<i64>,
     authoritative_model: bool,
     supplier_failure: Option<codex2api_upstream::SupplierFailure>,
-    response_owner: Option<(String, String)>,
+    response_owner: Option<(codex2api_storage::RoutingKey, String)>,
 }
 impl RequestLog {
     pub(crate) fn set_supplier_permit(&mut self, permit: codex2api_storage::RuntimePermit) {
@@ -464,8 +467,12 @@ impl RequestLog {
             .or_else(|| value.get("id").and_then(serde_json::Value::as_str))
             .filter(|id| id.len() <= 512)
         {
-            if event.kind.as_deref() == Some("response.completed")
-                || (event.kind.is_none() && value.get("output").is_some())
+            if self
+                .observer
+                .as_ref()
+                .is_none_or(|observer| observer.response_affinity())
+                && (event.kind.as_deref() == Some("response.completed")
+                    || (event.kind.is_none() && value.get("output").is_some()))
             {
                 let key = crate::pool_scheduler::previous_key(
                     &record.subject_id,
@@ -1339,8 +1346,8 @@ mod tests {
 
     #[tokio::test]
     async fn request_service_tier_controls_speed_and_billing_across_transports() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("service-tier.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("service-tier-pg"))
             .await
             .unwrap();
         let ws_context = execution_context(storage.clone(), "/v1/responses", "websocket").await;
@@ -1429,10 +1436,11 @@ mod tests {
 
     #[tokio::test]
     async fn supplier_retry_keeps_the_original_request_service_tier() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("service-tier-retry.sqlite"))
-            .await
-            .unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage =
+            codex2api_storage::test_support::open(dir.path().join("service-tier-retry-pg"))
+                .await
+                .unwrap();
         let mut log = context(storage.clone(), "/v1/responses", "sse")
             .start(
                 RequestMetadata {
@@ -1458,8 +1466,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_disconnect_drains_unpolled_and_partial_bodies_and_settles_final_usage() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("disconnect.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("disconnect-pg"))
             .await
             .unwrap();
         for (index, read_first, failed) in [(0, false, false), (1, true, false), (2, true, true)] {
@@ -1540,8 +1548,8 @@ mod tests {
 
     #[tokio::test]
     async fn server_transform_failure_is_not_treated_as_client_disconnect() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("transform.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("transform-pg"))
             .await
             .unwrap();
         let log = context(storage.clone(), "/v1/responses", "http")
@@ -1575,8 +1583,8 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_client_stop_and_cancel_ack_preserve_usage_without_hiding_server_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("ws-stop.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("ws-stop-pg"))
             .await
             .unwrap();
         let context = execution_context(storage.clone(), "/v1/responses", "websocket").await;
@@ -1631,8 +1639,8 @@ mod tests {
 
     #[tokio::test]
     async fn responses_errors_are_preserved_in_request_details() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("response-errors.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("response-errors-pg"))
             .await
             .unwrap();
         let cases = [
@@ -1741,8 +1749,8 @@ mod tests {
 
     #[tokio::test]
     async fn official_model_headers_and_failure_metadata_survive_http_sse_and_websocket() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("metadata.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("metadata-pg"))
             .await
             .unwrap();
         let cases = [
@@ -1921,8 +1929,8 @@ mod tests {
     #[tokio::test]
     async fn image_results_count_returned_outputs_and_disabled_models_stop_http_and_ws() {
         use codex2api_storage::{ImagePrice, ModelConfig};
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("image-ledger.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("image-ledger-pg"))
             .await
             .unwrap();
         let model = ModelConfig {
@@ -2027,8 +2035,8 @@ mod tests {
 
     #[tokio::test]
     async fn length_tracking_preserves_partial_disconnects_errors_and_chunked_completion() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("usage.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("usage-pg"))
             .await
             .unwrap();
         let bytes = Bytes::from_static(br#"{"output":"search result","results":[]}"#);
@@ -2125,8 +2133,8 @@ mod tests {
 
     #[tokio::test]
     async fn length_delimited_search_finishes_when_client_consumes_the_last_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("usage.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("usage-pg"))
             .await
             .unwrap();
         let log = context(storage.clone(), "/v1/alpha/search", "http")
@@ -2157,8 +2165,8 @@ mod tests {
 
     #[tokio::test]
     async fn final_sse_usage_is_recorded_without_content_type_and_across_split_prefixes() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("usage.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("usage-pg"))
             .await
             .unwrap();
         let final_event = r#"{"type":"response.completed","response":{"model":"actual-model","status":"completed","usage":{"input_tokens":21,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":26}}}"#;
@@ -2217,8 +2225,8 @@ mod tests {
 
     #[tokio::test]
     async fn bookkeeping_does_not_invent_ttft_without_upstream_observation() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("timing.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("timing-pg"))
             .await
             .unwrap();
         let mut log = context(storage.clone(), "/v1/responses", "http")
@@ -2315,7 +2323,7 @@ mod tests {
         };
         storage.save_account_fixture(&consumer).await.unwrap();
         for model in ["warmup", "one", "two", "interrupted", "voice-model"] {
-            sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')").bind(model).execute(storage.pool()).await.unwrap();
+            sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',$1,'text') ON CONFLICT DO NOTHING").bind(model).execute(storage.pool()).await.unwrap();
             storage
                 .add_supplier_model(&supplier.id, model)
                 .await
@@ -2332,8 +2340,8 @@ mod tests {
     }
     #[tokio::test]
     async fn successful_task_submission_preserves_status_and_supplier_health() {
-        let directory = tempfile::tempdir().unwrap();
-        let storage = Storage::open(directory.path().join("submitted.sqlite"))
+        let directory = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(directory.path().join("submitted-pg"))
             .await
             .unwrap();
         let context = context(storage.clone(), "/backend-api/codex/tasks", "http");
@@ -2370,8 +2378,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_stream_is_unchanged_and_completion_extracts_usage_across_arbitrary_chunks() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("usage.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("usage-pg"))
             .await
             .unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
@@ -2474,8 +2482,8 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_records_each_generation_skips_warmups_and_keeps_missing_usage_unknown() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("usage.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("usage-pg"))
             .await
             .unwrap();
         let ledger = tokio::sync::Mutex::new(WsLedger::new(
@@ -2599,8 +2607,8 @@ mod tests {
 
     #[tokio::test]
     async fn json_images_search_errors_and_dropped_bodies_are_recorded() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("usage.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("usage-pg"))
             .await
             .unwrap();
         for (endpoint, json) in [

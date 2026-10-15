@@ -10,7 +10,7 @@ use crate::auth_json::AuthDotJson;
 use crate::error::{AccountError, Result};
 use crate::identity::{AccountIdentity, HostRuntime, new_installation_id};
 
-/// SQLite-backed store for isolated per-account Codex identity.
+/// PostgreSQL-backed store for isolated per-account Codex identity.
 ///
 /// SupplierAccount identity, installation_id, and tokens live on the account row /
 /// `supplier_tokens` table. No per-account filesystem home is created.
@@ -124,7 +124,7 @@ impl SupplierAccountStore {
     }
 
     /// Create a pending account: UUID installation_id, official originator /
-    /// UA version, and a random OS/terminal profile frozen on the SQLite row.
+    /// UA version, and a random OS/terminal profile frozen on the PostgreSQL row.
     pub async fn create_pending(&self) -> Result<PendingAccount> {
         let account_id = Uuid::new_v4().to_string();
         self.create_pending_with_id(&account_id).await

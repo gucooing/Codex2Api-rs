@@ -52,65 +52,51 @@ pub fn plan_spending_windows(config: &Value) -> Result<Vec<SpendingWindow>> {
 impl Storage {
     async fn spending_decision(&self, owner: &str) -> Result<std::sync::Arc<SpendingDecision>> {
         let key = format!("spending-decision:{owner}");
-        let current = || {
-            self.runtime
-                .cached::<std::sync::Arc<SpendingDecision>>(&key)
-                .filter(|value| value.version == self.runtime.version(&key))
-        };
-        if let Some(value) = current() {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = current() {
-            return Ok(value);
-        }
-        let version = self.runtime.version(&key);
-        let epoch = self.runtime.epoch();
-        let now = chrono::Utc::now().timestamp();
-        let entitlements = self.effective_entitlements(owner).await?;
-        let limited = entitlements
-            .spending_windows
-            .iter()
-            .any(|w| w.cost_limit_usd.is_some());
-        let windows = if limited {
-            let anchor = self.subscription_anchor(owner).await?;
-            self.nested_spending_windows(
-                owner,
-                &entitlements.spending_windows,
-                if anchor > now { 0 } else { anchor },
-                now,
-            )
-            .await?
-        } else {
-            Vec::new()
-        };
-        let allowed = windows.iter().all(|w| w["allowed"] != false);
-        let deadline = windows
-            .iter()
-            .filter_map(|w| w["reset_at"].as_i64())
-            .chain(entitlements.expires_at)
-            .filter(|at| *at > now)
-            .min();
-        let ttl_ms = deadline.map_or(30_000, |at| {
-            at.saturating_mul(1000)
-                .saturating_sub(chrono::Utc::now().timestamp_millis())
-                .clamp(0, 30_000)
-        });
-        let value = std::sync::Arc::new(SpendingDecision {
-            version,
-            allowed,
-            limited,
-            windows,
-            plan_type: entitlements.plan_type.clone(),
-            enabled: entitlements.execution_enabled,
-        });
-        self.runtime.cache(
-            key,
-            &value,
-            epoch,
-            std::time::Duration::from_millis(ttl_ms as u64),
-        );
-        Ok(value)
+        self.runtime
+            .snapshots
+            .read(key.clone(), async {
+                let version = self.runtime.snapshots.version(&key);
+                let now = chrono::Utc::now().timestamp();
+                let entitlements = self.effective_entitlements(owner).await?;
+                let limited = entitlements
+                    .spending_windows
+                    .iter()
+                    .any(|w| w.cost_limit_usd.is_some());
+                let windows = if limited {
+                    let anchor = self.subscription_anchor(owner).await?;
+                    self.nested_spending_windows(
+                        owner,
+                        &entitlements.spending_windows,
+                        if anchor > now { 0 } else { anchor },
+                        now,
+                    )
+                    .await?
+                } else {
+                    Vec::new()
+                };
+                let allowed = windows.iter().all(|w| w["allowed"] != false);
+                let deadline = windows
+                    .iter()
+                    .filter_map(|w| w["reset_at"].as_i64())
+                    .chain(entitlements.expires_at)
+                    .filter(|at| *at > now)
+                    .min();
+                let ttl_ms = deadline.map_or(30_000, |at| {
+                    at.saturating_mul(1000)
+                        .saturating_sub(chrono::Utc::now().timestamp_millis())
+                        .clamp(0, 30_000)
+                });
+                let value = std::sync::Arc::new(SpendingDecision {
+                    version,
+                    allowed,
+                    limited,
+                    windows,
+                    plan_type: entitlements.plan_type.clone(),
+                    enabled: entitlements.execution_enabled,
+                });
+                Ok((value, std::time::Duration::from_millis(ttl_ms as u64)))
+            })
+            .await
     }
 
     /// Admission reads one cached predicate, never a collection of usage records.
@@ -157,11 +143,12 @@ impl crate::runtime::Runtime {
     pub(crate) fn record_spending_use(&self, record: &crate::UsageRecord) {
         let key = format!("spending-decision:{}", record.subject_id);
         let Some(value) = self
-            .cached::<std::sync::Arc<SpendingDecision>>(&key)
-            .filter(|value| value.version == self.version(&key))
+            .snapshots
+            .get::<std::sync::Arc<SpendingDecision>>(&key)
+            .filter(|value| value.version == self.snapshots.version(&key))
         else {
             // Fence a concurrent cache fill that may have read before this insert.
-            self.advance_version(&key);
+            self.snapshots.invalidate_key(&key);
             return;
         };
         if let Some(inner) = value.windows.get(1) {
@@ -169,12 +156,13 @@ impl crate::runtime::Runtime {
             // A new first use or an earlier concurrently inserted timestamp can
             // change the five-hour anchor. Later uses do not change admission.
             if inner["started_at"].as_i64().is_none_or(|start| at < start) {
-                self.advance_version(&key);
+                self.snapshots.invalidate_key(&key);
             }
         }
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct SpendingDecision {
     version: u64,
     allowed: bool,
@@ -210,7 +198,7 @@ pub(crate) fn quota_view(
 }
 
 pub(crate) async fn windows_on(
-    connection: &mut sqlx::SqliteConnection,
+    connection: &mut sqlx::PgConnection,
     owner: &str,
     rules: &[SpendingWindow],
     anchor: i64,
@@ -226,7 +214,7 @@ pub(crate) async fn windows_on(
     // Old in-flight requests retain their original timestamp and stay out of the
     // new windows even if their historical bill settles after redemption.
     let reset: Option<(String,i64)> = sqlx::query_as(
-            "SELECT c.id,c.redeemed_at_ms FROM virtual_reset_credits c JOIN platform_accounts a ON a.quota_reset_credit_id=c.id AND a.id=c.virtual_account_id WHERE a.id=? AND c.redeemed_at_ms<?",
+            "SELECT c.id,c.redeemed_at_ms FROM virtual_reset_credits c JOIN platform_accounts a ON a.quota_reset_credit_id=c.id AND a.id=c.virtual_account_id WHERE a.id=$1 AND c.redeemed_at_ms<$2",
         )
         .bind(owner)
         .bind(now.saturating_add(1).saturating_mul(1000))
@@ -283,8 +271,9 @@ pub(crate) async fn windows_on(
             })
             .transpose()?;
         let used: i64 = if let Some(start) = start {
-            let mut query =
-                sqlx::QueryBuilder::new("SELECT COALESCE(SUM(cost_nano_usd),0) FROM usage_records");
+            let mut query = sqlx::QueryBuilder::new(
+                "SELECT COALESCE(SUM(cost_nano_usd)::bigint,0) FROM usage_records",
+            );
             usage_scope(
                 &mut query,
                 owner,
@@ -323,7 +312,7 @@ pub(crate) async fn windows_on(
 }
 
 fn usage_scope<'a>(
-    query: &mut sqlx::QueryBuilder<'a, sqlx::Sqlite>,
+    query: &mut sqlx::QueryBuilder<'a, sqlx::Postgres>,
     owner: &'a str,
     from_ms: i64,
     until_ms: i64,
@@ -349,8 +338,8 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_requests_do_not_start_inner_spending_windows() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("rejected-windows.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("rejected-windows-pg"))
             .await
             .unwrap();
         let now = chrono::Utc::now().timestamp();

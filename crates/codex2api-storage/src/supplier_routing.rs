@@ -8,7 +8,7 @@ use std::{
 };
 
 /// Credentials and their generation read together; never expose this record in an API.
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct SupplierAuthSnapshot {
     #[sqlx(flatten)]
     pub tokens: SupplierTokens,
@@ -18,6 +18,7 @@ pub struct SupplierAuthSnapshot {
     #[sqlx(skip)]
     pub cache_generation: u64,
     #[sqlx(skip)]
+    #[serde(skip)]
     decoded: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 }
 
@@ -43,7 +44,8 @@ impl SupplierAuthSnapshot {
 impl Storage {
     pub async fn supplier_account_snapshot(&self, id: &str) -> Result<Arc<SupplierAccount>> {
         self.runtime
-            .snapshot(format!("supplier-account:{id}"), async {
+            .snapshots
+            .read(format!("supplier-account:{id}"), async {
                 Ok((
                     Arc::new(self.require_account(id).await?),
                     Duration::from_secs(30),
@@ -58,11 +60,12 @@ impl Storage {
         email: Option<&str>,
         plan: Option<&str>,
     ) -> Result<bool> {
-        let changed = sqlx::query("UPDATE supplier_accounts SET email=COALESCE(?,email),plan_type=COALESCE(?,plan_type),updated_at=? WHERE id=? AND auth_revision=?")
+        let changed = sqlx::query("UPDATE supplier_accounts SET email=COALESCE($1,email),plan_type=COALESCE($2,plan_type),updated_at=$3 WHERE id=$4 AND auth_revision=$5")
             .bind(email.filter(|s|!s.trim().is_empty())).bind(plan.filter(|s|!s.trim().is_empty())).bind(Utc::now().to_rfc3339()).bind(id).bind(revision)
             .execute(self.pool()).await?.rows_affected()==1;
         if changed {
             self.runtime
+                .snapshots
                 .invalidate_key(&format!("supplier-account:{id}"));
         }
         Ok(changed)
@@ -74,12 +77,26 @@ impl Storage {
         revision: i64,
         tokens: SupplierTokens,
     ) -> Result<bool> {
-        let updated = sqlx::query("UPDATE supplier_tokens SET auth_mode=?,id_token=?,access_token=?,refresh_token=?,last_refresh=?,raw_auth_json=?,updated_at=? WHERE account_id=? AND EXISTS(SELECT 1 FROM supplier_accounts WHERE id=? AND auth_revision=?)")
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_supplier(&mut tx, id).await?;
+        let updated = sqlx::query("UPDATE supplier_tokens SET auth_mode=$1,id_token=$2,access_token=$3,refresh_token=$4,last_refresh=$5,raw_auth_json=$6,updated_at=$7 WHERE account_id=$8 AND EXISTS(SELECT 1 FROM supplier_accounts WHERE id=$9 AND auth_revision=$10)")
             .bind(tokens.auth_mode).bind(tokens.id_token).bind(tokens.access_token).bind(tokens.refresh_token)
             .bind(tokens.last_refresh).bind(tokens.raw_auth_json).bind(Utc::now().to_rfc3339()).bind(id).bind(id).bind(revision)
-            .execute(self.pool()).await?.rows_affected()==1;
+            .execute(&mut *tx).await?.rows_affected()==1;
+        tx.commit().await?;
         if updated {
-            self.invalidate_runtime_cache();
+            self.runtime
+                .snapshots
+                .invalidate_key(&format!("supplier-auth:{id}"));
+            self.runtime
+                .snapshots
+                .invalidate_key(&format!("supplier-auth-revision:{id}"));
+            self.runtime
+                .snapshots
+                .invalidate_key(&format!("supplier-routing:{id}"));
+            self.runtime
+                .snapshots
+                .invalidate(&[crate::snapshots::Domain::Pools]);
         }
         Ok(updated)
     }
@@ -87,9 +104,9 @@ impl Storage {
         &self,
         id: &str,
     ) -> Result<Option<Arc<SupplierAuthSnapshot>>> {
-        self.runtime.snapshot(format!("supplier-auth:{id}"), async {
-            let generation = self.runtime.epoch();
-            let mut value: Option<SupplierAuthSnapshot> = sqlx::query_as("SELECT t.*, a.auth_revision, a.provider_id, a.chatgpt_account_id FROM supplier_tokens t JOIN supplier_accounts a ON a.id=t.account_id WHERE a.id=?")
+        self.runtime.snapshots.read(format!("supplier-auth:{id}"), async {
+            let generation = self.runtime.snapshots.version(&format!("supplier-auth:{id}"));
+            let mut value: Option<SupplierAuthSnapshot> = sqlx::query_as("SELECT t.*, a.auth_revision, a.provider_id, a.chatgpt_account_id FROM supplier_tokens t JOIN supplier_accounts a ON a.id=t.account_id WHERE a.id=$1")
                 .bind(id).fetch_optional(self.pool()).await?;
             if let Some(value) = &mut value { value.cache_generation = generation; }
             Ok((value.map(Arc::new), Duration::from_secs(30)))
@@ -98,9 +115,10 @@ impl Storage {
 
     pub async fn supplier_auth_revision(&self, id: &str) -> Result<Option<i64>> {
         self.runtime
-            .snapshot(format!("supplier-auth-revision:{id}"), async {
+            .snapshots
+            .read(format!("supplier-auth-revision:{id}"), async {
                 let value =
-                    sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
+                    sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=$1")
                         .bind(id)
                         .fetch_optional(self.pool())
                         .await?;
@@ -113,16 +131,13 @@ impl Storage {
         &self,
         id: &str,
     ) -> Result<Option<Arc<(QuotaSnapshot, Option<i64>)>>> {
-        self.runtime.snapshot(format!("supplier-routing:{id}"), async {
+        self.runtime.snapshots.read(format!("supplier-routing:{id}"), async {
         let row: Option<(String, DateTime<Utc>, Option<i64>)> = sqlx::query_as(
-            "SELECT response_json, observed_at, auth_revision FROM supplier_info_cache WHERE account_id=? AND section='details'",
+            "SELECT response_json, observed_at, auth_revision FROM supplier_info_cache WHERE account_id=$1 AND section='details'",
         ).bind(id).fetch_optional(self.pool()).await?;
         let value = row.map(|(json, observed_at, revision)| {
             Ok::<_, crate::StorageError>(Arc::new((
-                QuotaSnapshot {
-                    value: serde_json::from_str(&json)?,
-                    observed_at,
-                },
+                QuotaSnapshot::new(serde_json::from_str(&json)?, observed_at),
                 revision,
             )))
         })
@@ -149,6 +164,7 @@ impl Storage {
             == 1;
         if changed {
             self.runtime
+                .snapshots
                 .invalidate_key(&format!("supplier-routing:{id}"));
         }
         Ok(changed)
@@ -161,11 +177,16 @@ impl Storage {
         user_agent: &str,
         fingerprint: &str,
     ) -> Result<bool> {
-        let changed = sqlx::query("UPDATE supplier_accounts SET user_agent=?,http_fingerprint_json=? WHERE id=? AND user_agent=? AND http_fingerprint_json=?")
+        let changed = sqlx::query("UPDATE supplier_accounts SET user_agent=$1,http_fingerprint_json=$2 WHERE id=$3 AND user_agent=$4 AND http_fingerprint_json=$5")
             .bind(user_agent).bind(fingerprint).bind(&account.id).bind(&account.user_agent).bind(&account.http_fingerprint_json)
             .execute(self.pool()).await?.rows_affected() == 1;
         if changed {
-            self.invalidate_runtime_cache();
+            self.runtime
+                .snapshots
+                .invalidate_key(&format!("supplier-account:{}", account.id));
+            self.runtime
+                .snapshots
+                .invalidate_key(&format!("supplier-transport:{}", account.id));
         }
         Ok(changed)
     }

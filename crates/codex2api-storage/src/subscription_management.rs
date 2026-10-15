@@ -2,7 +2,7 @@
 use crate::{PlatformAccount, Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{QueryBuilder, Sqlite, SqliteConnection};
+use sqlx::{PgConnection, Postgres, QueryBuilder};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -29,7 +29,7 @@ impl SubscriptionFilters {
         Ok(())
     }
 
-    pub(crate) fn conditions(&self, query: &mut QueryBuilder<'_, Sqlite>, now: i64) {
+    pub(crate) fn conditions(&self, query: &mut QueryBuilder<'_, Postgres>, now: i64) {
         // Both the visible list and 'all matching' use this exact predicate.
         query.push(" WHERE 1=1");
         for (column, value) in [
@@ -47,25 +47,25 @@ impl SubscriptionFilters {
         }
         if !self.search.trim().is_empty() {
             query
-                .push(" AND instr(lower(name || ' ' || username || ' ' || email),lower(")
+                .push(" AND strpos(lower(name || ' ' || username || ' ' || email),lower(")
                 .push_bind(self.search.trim().to_owned())
                 .push("))>0");
         }
         match self.status.as_str() {
             "enabled" => {
-                query.push(" AND enabled=1");
+                query.push(" AND enabled=TRUE");
             }
             "disabled" => {
-                query.push(" AND enabled=0");
+                query.push(" AND enabled=FALSE");
             }
             _ => {}
         }
         match self.subscription.as_str() {
             "active" => {
-                query.push(" AND (subscription_expires_at IS NULL OR unixepoch(subscription_expires_at)>").push_bind(now).push(")");
+                query.push(" AND (subscription_expires_at IS NULL OR floor(extract(epoch FROM (subscription_expires_at)::timestamptz))::bigint>").push_bind(now).push(")");
             }
             "expired" => {
-                query.push(" AND subscription_expires_at IS NOT NULL AND COALESCE(unixepoch(subscription_expires_at),0)<=").push_bind(now);
+                query.push(" AND subscription_expires_at IS NOT NULL AND COALESCE(floor(extract(epoch FROM (subscription_expires_at)::timestamptz))::bigint,0)<=").push_bind(now);
             }
             _ => {}
         }
@@ -157,7 +157,7 @@ impl SubscriptionSelection {
         self.excluded_ids.dedup();
         Ok(())
     }
-    fn query(&self, now: i64, columns: &str) -> QueryBuilder<'static, Sqlite> {
+    fn query(&self, now: i64, columns: &str) -> QueryBuilder<'static, Postgres> {
         let mut q = QueryBuilder::new(format!("SELECT {columns} FROM regular_platforms"));
         if self.all_matching {
             self.filters.conditions(&mut q, now);
@@ -170,7 +170,7 @@ impl SubscriptionSelection {
         q
     }
 }
-fn ids_clause(q: &mut QueryBuilder<'_, Sqlite>, prefix: &str, ids: &[String]) {
+fn ids_clause(q: &mut QueryBuilder<'_, Postgres>, prefix: &str, ids: &[String]) {
     q.push(prefix);
     let mut separated = q.separated(",");
     for id in ids {
@@ -180,13 +180,15 @@ fn ids_clause(q: &mut QueryBuilder<'_, Sqlite>, prefix: &str, ids: &[String]) {
 }
 
 pub(crate) async fn replay(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     scope: &str,
     id: &str,
     signature: &str,
 ) -> Result<Option<Value>> {
     crate::reset_credits::request_id(id)?;
-    let previous: Option<(String,String)> = sqlx::query_as("SELECT signature,result_json FROM admin_subscription_operations WHERE scope=? AND request_id=?")
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':operation:' || $1 || ':' || $2,0))")
+        .bind(scope).bind(id).execute(&mut *connection).await?;
+    let previous: Option<(String,String)> = sqlx::query_as("SELECT signature,result_json FROM admin_subscription_operations WHERE scope=$1 AND request_id=$2")
         .bind(scope).bind(id).fetch_optional(connection).await?;
     if let Some((stored, result)) = previous {
         if stored != signature {
@@ -199,14 +201,14 @@ pub(crate) async fn replay(
     Ok(None)
 }
 pub(crate) async fn remember(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     scope: &str,
     id: &str,
     signature: &str,
     result: &Value,
     now: i64,
 ) -> Result<()> {
-    sqlx::query("INSERT INTO admin_subscription_operations VALUES(?,?,?,?,?)")
+    sqlx::query("INSERT INTO admin_subscription_operations VALUES($1,$2,$3,$4,$5)")
         .bind(scope)
         .bind(id)
         .bind(signature)
@@ -256,7 +258,10 @@ impl Storage {
         filters.validate()?;
         let size = crate::table_page_size(page_size)?;
         let now = chrono::Utc::now().timestamp();
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let mut count = QueryBuilder::new("SELECT COUNT(*) FROM regular_platforms");
         filters.conditions(&mut count, now);
         let total: i64 = count.build_query_scalar().fetch_one(&mut *tx).await?;
@@ -294,7 +299,7 @@ impl Storage {
         }
         let signature =
             json!({"operation":operation,"selection":selection,"grant":grant}).to_string();
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         if let Some(result) = replay(&mut tx, "batch", request_id, &signature).await? {
             tx.commit().await?;
             return Ok(result);
@@ -323,6 +328,7 @@ impl Storage {
             }
             cursor = ids.last().unwrap().clone();
             for id in ids {
+                crate::storage::lock_subscription(&mut tx, &id).await?;
                 match operation {
                     "delete" => {
                         crate::user_subscriptions::delete_on(&mut tx, &id).await?;
@@ -359,7 +365,9 @@ impl Storage {
             json!({"ok":true,"matched":matched,"affected":affected,"skipped":matched-affected});
         remember(&mut tx, "batch", request_id, &signature, &result, now).await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(result)
     }
 }

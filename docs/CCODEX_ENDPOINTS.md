@@ -19,7 +19,7 @@
 | 设备码响应 | device_auth_id/user_code/interval 为字符串；pending 403、过期 410；成功返回 PKCE code 参数 | 保存精确的 service/deviceauth/callback 兑换 URI |
 | Responses/compact/Guardian | backend-api/codex/responses 及相应子路径，HTTP/SSE/WS | 同一模型授权、实际账本及请求记录 |
 | WS interrupt | 原 socket 转发 response.interrupt，保持动态响应 ID | 不创建新生成记录、不自动重连 |
-| 模型/额度/工作区/资料 | backend-api 现有明确路由，模型目录只提供虚拟账户允许的已启用模型 | SQLite 模型、预设、套餐、虚拟额度和自有资料 |
+| 模型/额度/工作区/资料 | backend-api 现有明确路由，模型目录只提供虚拟账户允许的已启用模型 | PostgreSQL 模型、预设、套餐、虚拟额度和自有资料 |
 | 图像/搜索/input_tokens/Realtime | 现有显式 HTTP/WS 路由 | 实际返回数据、计价和通话归属 |
 | 配置/会话/通知/任务 | 按账号归属查询、写入或执行 | virtual state/resources/events 及管理记录 |
 

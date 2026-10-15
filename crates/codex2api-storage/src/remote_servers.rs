@@ -36,7 +36,7 @@ impl Storage {
         expires: i64,
     ) -> Result<RemoteServer> {
         let now = chrono::Utc::now().timestamp_millis();
-        Ok(sqlx::query_as("INSERT INTO virtual_remote_servers(id,environment_id,virtual_account_id,device_id,installation_id,name,os,arch,app_server_version,token_hash,expires_at,created_at_ms,last_seen_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(virtual_account_id,installation_id) DO UPDATE SET device_id=excluded.device_id,name=excluded.name,os=excluded.os,arch=excluded.arch,app_server_version=excluded.app_server_version,token_hash=excluded.token_hash,expires_at=excluded.expires_at,last_seen_at_ms=excluded.last_seen_at_ms RETURNING *")
+        Ok(sqlx::query_as("INSERT INTO virtual_remote_servers(id,environment_id,virtual_account_id,device_id,installation_id,name,os,arch,app_server_version,token_hash,expires_at,created_at_ms,last_seen_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(virtual_account_id,installation_id) DO UPDATE SET device_id=excluded.device_id,name=excluded.name,os=excluded.os,arch=excluded.arch,app_server_version=excluded.app_server_version,token_hash=excluded.token_hash,expires_at=excluded.expires_at,last_seen_at_ms=excluded.last_seen_at_ms RETURNING *")
             .bind(format!("srv_{}",uuid::Uuid::new_v4())).bind(format!("env_{}",uuid::Uuid::new_v4())).bind(&access.virtual_account_id).bind(&access.device_id).bind(&input.installation_id).bind(&input.name).bind(&input.os).bind(&input.arch).bind(&input.app_server_version).bind(hash_token(token)).bind(expires).bind(now).bind(now).fetch_one(self.pool()).await?)
     }
 
@@ -48,34 +48,34 @@ impl Storage {
         token: &str,
         expires: i64,
     ) -> Result<Option<RemoteServer>> {
-        Ok(sqlx::query_as("UPDATE virtual_remote_servers SET token_hash=?,expires_at=?,last_seen_at_ms=? WHERE id=? AND virtual_account_id=? AND device_id=? AND installation_id=? RETURNING *")
+        Ok(sqlx::query_as("UPDATE virtual_remote_servers SET token_hash=$1,expires_at=$2,last_seen_at_ms=$3 WHERE id=$4 AND virtual_account_id=$5 AND device_id=$6 AND installation_id=$7 RETURNING *")
             .bind(hash_token(token)).bind(expires).bind(chrono::Utc::now().timestamp_millis()).bind(server).bind(&access.virtual_account_id).bind(&access.device_id).bind(installation).fetch_optional(self.pool()).await?)
     }
 
     pub async fn remote_server_for_token(&self, token: &str) -> Result<Option<RemoteServer>> {
-        Ok(sqlx::query_as("SELECT s.* FROM virtual_remote_servers s JOIN platform_principals v ON v.id=s.virtual_account_id JOIN virtual_devices d ON d.id=s.device_id AND d.virtual_account_id=v.id WHERE s.token_hash=? AND s.expires_at>? AND v.enabled=1")
+        Ok(sqlx::query_as("SELECT s.* FROM virtual_remote_servers s JOIN platform_principals v ON v.id=s.virtual_account_id JOIN virtual_devices d ON d.id=s.device_id AND d.virtual_account_id=v.id WHERE s.token_hash=$1 AND s.expires_at>$2 AND v.enabled=TRUE")
             .bind(hash_token(token)).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
 
     pub async fn remote_servers(&self, owner: &str) -> Result<Vec<RemoteServer>> {
-        Ok(sqlx::query_as("SELECT * FROM virtual_remote_servers WHERE virtual_account_id=? ORDER BY last_seen_at_ms DESC,id").bind(owner).fetch_all(self.pool()).await?)
+        Ok(sqlx::query_as("SELECT * FROM virtual_remote_servers WHERE virtual_account_id=$1 ORDER BY last_seen_at_ms DESC,id").bind(owner).fetch_all(self.pool()).await?)
     }
 
     pub async fn connect_remote_server(&self, id: &str, connection: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query("UPDATE virtual_remote_servers SET connection_id=?,connected_until_ms=?,last_seen_at_ms=? WHERE id=?")
+        sqlx::query("UPDATE virtual_remote_servers SET connection_id=$1,connected_until_ms=$2,last_seen_at_ms=$3 WHERE id=$4")
             .bind(connection).bind(now+30000).bind(now).bind(id).execute(self.pool()).await?;
         Ok(())
     }
 
     pub async fn touch_remote_server(&self, id: &str, connection: &str) -> Result<bool> {
         let now = chrono::Utc::now().timestamp_millis();
-        Ok(sqlx::query("UPDATE virtual_remote_servers SET connected_until_ms=?,last_seen_at_ms=? WHERE id=? AND connection_id=?")
+        Ok(sqlx::query("UPDATE virtual_remote_servers SET connected_until_ms=$1,last_seen_at_ms=$2 WHERE id=$3 AND connection_id=$4")
             .bind(now+30000).bind(now).bind(id).bind(connection).execute(self.pool()).await?.rows_affected()==1)
     }
 
     pub async fn disconnect_remote_server(&self, id: &str, connection: &str) -> Result<()> {
-        sqlx::query("UPDATE virtual_remote_servers SET connection_id=NULL,connected_until_ms=0 WHERE id=? AND connection_id=?")
+        sqlx::query("UPDATE virtual_remote_servers SET connection_id=NULL,connected_until_ms=0 WHERE id=$1 AND connection_id=$2")
             .bind(id).bind(connection).execute(self.pool()).await?;
         Ok(())
     }

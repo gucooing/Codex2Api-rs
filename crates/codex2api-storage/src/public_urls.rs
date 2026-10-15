@@ -70,10 +70,10 @@ impl Storage {
         };
         let value = serde_json::to_string(&saved)?;
         let changed = if settings.revision == 0 {
-            sqlx::query("INSERT INTO meta (key, value) VALUES ('public_url_settings', ?) ON CONFLICT(key) DO NOTHING")
+            sqlx::query("INSERT INTO meta (key, value) VALUES ('public_url_settings', $1) ON CONFLICT(key) DO NOTHING")
                 .bind(value).execute(self.pool()).await?
         } else {
-            sqlx::query("UPDATE meta SET value = ? WHERE key = 'public_url_settings' AND json_extract(value, '$.revision') = ?")
+            sqlx::query("UPDATE meta SET value = $1 WHERE key = 'public_url_settings' AND (value::jsonb #>> '{revision}')::bigint = $2")
                 .bind(value).bind(settings.revision).execute(self.pool()).await?
         };
         Ok((changed.rows_affected() == 1).then_some(saved))

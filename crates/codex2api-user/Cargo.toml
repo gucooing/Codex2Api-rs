@@ -19,6 +19,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+codex2api-storage = { workspace = true, features = ["test-support"] }
 sqlx.workspace = true
 tempfile = "3"
 tower.workspace = true

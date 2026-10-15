@@ -201,7 +201,6 @@ mod tests {
         http::{HeaderMap, Uri},
         response::Response,
     };
-    use codex2api_storage::Storage;
 
     #[tokio::test]
     async fn probes_use_selected_proxy_measure_requests_and_persist_independent_results() {
@@ -231,9 +230,9 @@ mod tests {
             response.body(Body::from(body)).unwrap()
         });
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("checks.sqlite");
-        let storage = Storage::open(&path).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let path = dir.path().join("checks-pg");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let proxy = storage
             .create_outbound_proxy("test", &format!("http://{address}"))
             .await
@@ -276,7 +275,7 @@ mod tests {
                 .unwrap();
         }
         storage.close().await;
-        let storage = Storage::open(&path).await.unwrap();
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let saved = storage.require_outbound_proxy(&proxy.id).await.unwrap();
         assert_eq!(saved.country.as_deref(), Some("美国"));
         assert_eq!(saved.connection_ok, Some(true));
@@ -302,8 +301,8 @@ mod tests {
     #[ignore = "requires CODEX2API_TEST_PROXY_URL and external network"]
     async fn live_proxy_checks() {
         let url = std::env::var("CODEX2API_TEST_PROXY_URL").expect("set explicit test proxy");
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("live-check.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("live-check-pg"))
             .await
             .unwrap();
         let proxy = storage

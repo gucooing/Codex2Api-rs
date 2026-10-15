@@ -22,7 +22,7 @@ async fn gateway_settings_require_session_and_csrf_and_persist_mode_and_rules() 
             .status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    let reopened = codex2api_storage::Storage::open(f.dir.path().join("test.sqlite"))
+    let reopened = codex2api_storage::test_support::open(f.dir.path().join("test-pg"))
         .await
         .unwrap();
     assert!(

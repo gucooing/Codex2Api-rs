@@ -5,5 +5,5 @@
 /docker-compose.yml text eol=lf
 /.env.example text eol=lf
 /.github/workflows/*.yml text eol=lf
-# SQLx hashes migration bytes. Keep release and local builds identical on Windows.
-/crates/codex2api-storage/migrations/*.sql text eol=lf
+# Keep embedded PostgreSQL schema and seed SQL identical across platforms.
+/crates/codex2api-storage/*.sql text eol=lf

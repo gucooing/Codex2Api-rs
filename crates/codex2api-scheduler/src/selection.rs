@@ -65,11 +65,8 @@ pub fn text(body: &Value, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
 }
-pub fn previous_key(owner: &str, provider: &str, response: &str) -> String {
-    format!(
-        "response_owner:{}",
-        hash(&serde_json::json!([owner, provider, response]).to_string())
-    )
+pub fn previous_key(owner: &str, provider: &str, response: &str) -> codex2api_storage::RoutingKey {
+    codex2api_storage::RoutingKey::response(owner, provider, response)
 }
 fn busy() -> SchedulerError {
     SchedulerError::openai(
@@ -119,7 +116,7 @@ where
     if tags.is_empty() {
         return Err(crate::exhausted());
     }
-    // Preserve existing one-tag affinity keys; multi-tag routes use a canonical hash.
+    // Equivalent tag sets share one stable affinity scope.
     let tag = if tags.len() == 1 {
         tags[0].clone()
     } else {
@@ -127,23 +124,15 @@ where
     };
     let settings = storage.gateway_settings().await?;
     let sticky_key = request.session_hash.as_ref().map(|hash| {
-        format!(
-            "sticky_session:{}:{tag}:{}:{hash}",
-            route.provider_id, route.owner_id
-        )
+        codex2api_storage::RoutingKey::session(&route.owner_id, &route.provider_id, &tag, hash)
     });
-    let sticky = match &sticky_key {
-        Some(key) => storage.routing_affinity(key).await?,
-        None => None,
-    };
-    let previous = match &request.previous_response {
-        Some(id) => {
-            storage
-                .routing_affinity(&previous_key(&route.owner_id, &route.provider_id, id))
-                .await?
-        }
-        None => None,
-    };
+    let previous_key = request
+        .previous_response
+        .as_ref()
+        .map(|id| previous_key(&route.owner_id, &route.provider_id, id));
+    let [sticky, previous] = storage
+        .routing_affinities([sticky_key.as_ref(), previous_key.as_ref()])
+        .await?;
     let previous_candidate = match previous
         .as_deref()
         .filter(|id| !excluded.iter().any(|v| v == id))

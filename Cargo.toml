@@ -56,10 +56,10 @@ redis = { version = "0.32.7", default-features = false, features = ["tokio-rustl
 rsa = { version = "0.9.10", features = ["sha2"] }
 ring = "0.17"
 reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "stream", "cookies", "socks"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "chrono", "uuid", "migrate"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls-ring-native-roots", "macros", "chrono", "uuid", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs", "net", "sync", "time", "io-util"] }
 tokio-stream = "0.1"

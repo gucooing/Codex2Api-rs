@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use codex2api_storage::{Storage, TokenPurpose};
+use codex2api_storage::TokenPurpose;
 use rsa::{
     RsaPrivateKey,
     pkcs1v15::SigningKey,
@@ -32,9 +32,9 @@ fn signed(key: &SigningKey<Sha256>, header: &Value, claims: &Value) -> String {
 
 #[tokio::test]
 async fn jwt_domains_purposes_algorithms_and_registered_claims_are_enforced() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("jwt.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("jwt-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let now = chrono::Utc::now().timestamp();
     let input = json!({"sub":"owner","jti":"test-grant","iat":now,"exp":now+3600});
     let purposes = [
@@ -194,7 +194,7 @@ async fn jwt_domains_purposes_algorithms_and_registered_claims_are_enforced() {
         );
     }
     storage.close().await;
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     for (purpose, token) in purposes.into_iter().zip(tokens) {
         assert!(reopened.verify_jwt(purpose, &token).await.is_ok());
     }
@@ -203,8 +203,8 @@ async fn jwt_domains_purposes_algorithms_and_registered_claims_are_enforced() {
 
 #[tokio::test]
 async fn jwt_browser_sessions_require_live_matching_role_records() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("sessions.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("sessions-pg"))
         .await
         .unwrap();
     let admin = storage

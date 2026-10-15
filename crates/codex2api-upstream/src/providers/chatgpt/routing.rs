@@ -260,10 +260,10 @@ impl UpstreamClient {
                 )
                 .with_auth_revision(request.revision));
             }
-            Ok(QuotaSnapshot {
-                value: serde_json::from_slice(&body)?,
-                observed_at: Utc::now(),
-            })
+            Ok(QuotaSnapshot::new(
+                serde_json::from_slice(&body)?,
+                Utc::now(),
+            ))
         }
         .await;
         let snapshot = result?;
@@ -398,9 +398,9 @@ mod tests {
 
     #[tokio::test]
     async fn persisted_routing_rejects_stale_discovery_and_invalidates_existing_connections() {
-        let path =
-            std::env::temp_dir().join(format!("codex-routing-{}.sqlite", uuid::Uuid::new_v4()));
-        let storage = codex2api_storage::Storage::open(&path).await.unwrap();
+        let directory = codex2api_storage::test_support::tempdir().unwrap();
+        let path = directory.path().join("fixture");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let store = SupplierAccountStore::open(storage.clone());
         let account = store.create_pending().await.unwrap().account;
         let other = store.create_pending().await.unwrap().account;
@@ -422,10 +422,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let mut snapshot = QuotaSnapshot {
-            value: accounts("NO_CONSTRAINT", "us"),
-            observed_at: Utc::now(),
-        };
+        let mut snapshot = QuotaSnapshot::new(accounts("NO_CONSTRAINT", "us"), Utc::now());
         assert!(
             storage
                 .store_supplier_routing_snapshot(&account.id, revision, &snapshot)
@@ -515,7 +512,6 @@ mod tests {
             "https://regional-2.example"
         );
         storage.close().await;
-        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]

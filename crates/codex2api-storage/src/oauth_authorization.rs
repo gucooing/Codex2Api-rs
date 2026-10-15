@@ -29,7 +29,7 @@ impl Storage {
         cookie: &str,
         csrf: &str,
     ) -> Result<bool> {
-        Ok(sqlx::query("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>?")
+        Ok(sqlx::query("DELETE FROM oauth_browser_flows WHERE id=$1 AND cookie_hash=$2 AND csrf_hash=$3 AND expires_at>$4")
             .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(chrono::Utc::now().timestamp())
             .execute(self.pool()).await?.rows_affected() == 1)
     }
@@ -42,15 +42,15 @@ impl Storage {
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        sqlx::query("DELETE FROM oauth_browser_flows WHERE expires_at<=?")
+        sqlx::query("DELETE FROM oauth_browser_flows WHERE expires_at<=$1")
             .bind(now)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM virtual_authorization_codes WHERE expires_at<=?")
+        sqlx::query("DELETE FROM virtual_authorization_codes WHERE expires_at<=$1")
             .bind(now)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO oauth_browser_flows(id,cookie_hash,csrf_hash,request_json,expires_at) VALUES(?,?,?,?,?)")
+        sqlx::query("INSERT INTO oauth_browser_flows(id,cookie_hash,csrf_hash,request_json,expires_at) VALUES($1,$2,$3,$4,$5)")
             .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(request).bind(now+600).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
@@ -62,7 +62,7 @@ impl Storage {
         cookie: &str,
         csrf: &str,
     ) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar("SELECT request_json FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>?")
+        Ok(sqlx::query_scalar("SELECT request_json FROM oauth_browser_flows WHERE id=$1 AND cookie_hash=$2 AND csrf_hash=$3 AND expires_at>$4")
             .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
 
@@ -82,11 +82,12 @@ impl Storage {
             scopes,
         } = request;
         let now = chrono::Utc::now().timestamp();
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription_identity(&mut tx, &account.id).await?;
         if !crate::users::confirmed_browser_identity(&mut tx, id, account).await? {
             return Ok(false);
         }
-        let flow:Option<(i64,String)>=sqlx::query_as("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? RETURNING expires_at,request_json")
+        let flow:Option<(i64,String)>=sqlx::query_as("DELETE FROM oauth_browser_flows WHERE id=$1 AND cookie_hash=$2 AND csrf_hash=$3 AND expires_at>$4 RETURNING expires_at,request_json")
             .bind(id).bind(hash_token(cookie)).bind(hash_token(csrf)).bind(now).fetch_optional(&mut *tx).await?;
         let Some((expiry, request_json)) = flow else {
             return Ok(false);
@@ -95,13 +96,13 @@ impl Storage {
             .ok()
             .and_then(|v| v["nonce"].as_str().map(str::to_owned));
         let inserted=sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms)
-            SELECT ?,v.id,?,?,?,?,v.provider_id,?,?,? FROM platform_principals v
-            WHERE v.id=? AND v.password_hash=? AND v.enabled=1")
+            SELECT $1,v.id,$2,$3,$4,$5,v.provider_id,$6,$7,$8 FROM platform_principals v
+            WHERE v.id=$9 AND v.password_hash=$10 AND v.enabled=TRUE")
             .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(now+120).bind(scopes).bind(chrono::Utc::now().timestamp_millis()).bind((expiry-600)*1000).bind(&account.id).bind(&account.password_hash).execute(&mut *tx).await?;
         if inserted.rows_affected() != 1 {
             return Ok(false);
         }
-        sqlx::query("UPDATE virtual_authorization_codes SET oidc_nonce=? WHERE code_hash=?")
+        sqlx::query("UPDATE virtual_authorization_codes SET oidc_nonce=$1 WHERE code_hash=$2")
             .bind(nonce)
             .bind(hash_token(code))
             .execute(&mut *tx)
@@ -125,13 +126,18 @@ impl Storage {
             device,
         } = request;
         let mut tx = self.pool().begin().await?;
-        let token: Option<(String,String,String,i64,i64)>=sqlx::query_as("DELETE FROM virtual_authorization_codes WHERE code_hash=? AND client_id=? AND redirect_uri=? AND code_challenge=? AND expires_at>? AND provider_id=? RETURNING virtual_account_id,provider_id,scopes,COALESCE(authenticated_at_ms,(expires_at-120)*1000),COALESCE(requested_at_ms,(expires_at-120)*1000)")
+        let selected: Option<String> = sqlx::query_scalar("SELECT virtual_account_id FROM virtual_authorization_codes WHERE code_hash=$1 AND provider_id=$2")
+            .bind(hash_token(code)).bind(provider).fetch_optional(&mut *tx).await?;
+        if let Some(selected) = selected {
+            crate::storage::lock_subscription_identity(&mut tx, &selected).await?;
+        }
+        let token: Option<(String,String,String,i64,i64)>=sqlx::query_as("DELETE FROM virtual_authorization_codes WHERE code_hash=$1 AND client_id=$2 AND redirect_uri=$3 AND code_challenge=$4 AND expires_at>$5 AND provider_id=$6 RETURNING virtual_account_id,provider_id,scopes,COALESCE(authenticated_at_ms,(expires_at-120)*1000),COALESCE(requested_at_ms,(expires_at-120)*1000)")
             .bind(hash_token(code)).bind(client_id).bind(redirect_uri).bind(challenge).bind(chrono::Utc::now().timestamp()).bind(provider).fetch_optional(&mut *tx).await?;
         let Some((owner, provider, scopes, authenticated_at_ms, requested_at_ms)) = token else {
             return Ok(None);
         };
         let account: Option<crate::PlatformAccount> =
-            sqlx::query_as("SELECT * FROM platform_principals WHERE id=? AND enabled=1")
+            sqlx::query_as("SELECT * FROM platform_principals WHERE id=$1 AND enabled=TRUE")
                 .bind(&owner)
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -141,7 +147,7 @@ impl Storage {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         // Code consumption and session creation must serialize with password changes and disable.
-        sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,installation_id,user_agent,created_at,last_login_at,provider_id,scopes,authenticated_at_ms,requested_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO virtual_devices(id,virtual_account_id,refresh_hash,installation_id,user_agent,created_at,last_login_at,provider_id,scopes,authenticated_at_ms,requested_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
             .bind(&id).bind(&owner).bind(hash_token(refresh)).bind(&device.installation_id).bind(&device.user_agent).bind(&now).bind(&now).bind(provider).bind(scopes).bind(authenticated_at_ms).bind(requested_at_ms).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(self

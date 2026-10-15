@@ -32,10 +32,7 @@ async fn deleting_supply_or_proxy_preserves_consumers_and_usage_history() {
     f.storage
         .store_account_quota(
             &a.id,
-            &codex2api_storage::QuotaSnapshot {
-                value: json!({}),
-                observed_at: chrono::Utc::now(),
-            },
+            &codex2api_storage::QuotaSnapshot::new(json!({}), chrono::Utc::now()),
         )
         .await
         .unwrap();
@@ -92,7 +89,7 @@ async fn deleting_supply_or_proxy_preserves_consumers_and_usage_history() {
     let history = f.storage.query_usage(&Default::default()).await.unwrap();
     assert_eq!(history.total, 1);
     assert_eq!(history.records[0].account_name, "supply history");
-    let reopened = codex2api_storage::Storage::open(f.dir.path().join("test.sqlite"))
+    let reopened = codex2api_storage::test_support::open(f.dir.path().join("test-pg"))
         .await
         .unwrap();
     assert_eq!(

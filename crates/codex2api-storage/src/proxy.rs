@@ -89,7 +89,7 @@ impl Storage {
         proxy: &OutboundProxy,
         check: &ProxyConnectionCheck,
     ) -> Result<OutboundProxy> {
-        let result = sqlx::query("UPDATE outbound_proxies SET connection_ok=?, connection_latency_ms=?, connection_error=?, connection_checked_at=?, exit_ip=?, country_code=?, country=?, region=?, city=?, timezone=? WHERE id=? AND url=?")
+        let result = sqlx::query("UPDATE outbound_proxies SET connection_ok=$1, connection_latency_ms=$2, connection_error=$3, connection_checked_at=$4, exit_ip=$5, country_code=$6, country=$7, region=$8, city=$9, timezone=$10 WHERE id=$11 AND url=$12")
             .bind(check.ok).bind(check.latency_ms).bind(&check.error).bind(chrono::Utc::now().to_rfc3339())
             .bind(&check.exit_ip).bind(&check.country_code).bind(&check.country).bind(&check.region).bind(&check.city).bind(&check.timezone).bind(&proxy.id).bind(&proxy.url)
             .execute(self.pool()).await?;
@@ -105,7 +105,7 @@ impl Storage {
         proxy: &OutboundProxy,
         check: &ProxyQualityCheck,
     ) -> Result<OutboundProxy> {
-        let result = sqlx::query("UPDATE outbound_proxies SET quality_ok=?, quality_latency_ms=?, quality_http_status=?, quality_error=?, quality_checked_at=? WHERE id=? AND url=?")
+        let result = sqlx::query("UPDATE outbound_proxies SET quality_ok=$1, quality_latency_ms=$2, quality_http_status=$3, quality_error=$4, quality_checked_at=$5 WHERE id=$6 AND url=$7")
             .bind(check.ok).bind(check.latency_ms).bind(check.http_status).bind(&check.error).bind(chrono::Utc::now().to_rfc3339()).bind(&proxy.id).bind(&proxy.url)
             .execute(self.pool()).await?;
         let current = self.require_outbound_proxy(&proxy.id).await?;
@@ -122,7 +122,7 @@ impl Storage {
         }
         let url = parse_proxy_url(url.trim())?;
         Ok(sqlx::query_as(
-            "INSERT INTO outbound_proxies (id,name,url,created_at) VALUES (?,?,?,?) RETURNING *",
+            "INSERT INTO outbound_proxies (id,name,url,created_at) VALUES ($1,$2,$3,$4) RETURNING *",
         )
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(name)
@@ -152,23 +152,23 @@ impl Storage {
         }
         let url = parse_proxy_url(url.trim())?;
         let updated = sqlx::query_as(
-            "UPDATE outbound_proxies SET name=?1, url=?2,
-            exit_ip=CASE WHEN url=?2 THEN exit_ip END,
-            country_code=CASE WHEN url=?2 THEN country_code END,
-            country=CASE WHEN url=?2 THEN country END,
-            region=CASE WHEN url=?2 THEN region END,
-            city=CASE WHEN url=?2 THEN city END,
-            timezone=CASE WHEN url=?2 THEN timezone END,
-            connection_ok=CASE WHEN url=?2 THEN connection_ok END,
-            connection_latency_ms=CASE WHEN url=?2 THEN connection_latency_ms END,
-            connection_error=CASE WHEN url=?2 THEN connection_error END,
-            connection_checked_at=CASE WHEN url=?2 THEN connection_checked_at END,
-            quality_ok=CASE WHEN url=?2 THEN quality_ok END,
-            quality_latency_ms=CASE WHEN url=?2 THEN quality_latency_ms END,
-            quality_http_status=CASE WHEN url=?2 THEN quality_http_status END,
-            quality_error=CASE WHEN url=?2 THEN quality_error END,
-            quality_checked_at=CASE WHEN url=?2 THEN quality_checked_at END
-            WHERE id=?3 RETURNING *",
+            "UPDATE outbound_proxies SET name=$1, url=$2,
+            exit_ip=CASE WHEN url=$2 THEN exit_ip END,
+            country_code=CASE WHEN url=$2 THEN country_code END,
+            country=CASE WHEN url=$2 THEN country END,
+            region=CASE WHEN url=$2 THEN region END,
+            city=CASE WHEN url=$2 THEN city END,
+            timezone=CASE WHEN url=$2 THEN timezone END,
+            connection_ok=CASE WHEN url=$2 THEN connection_ok END,
+            connection_latency_ms=CASE WHEN url=$2 THEN connection_latency_ms END,
+            connection_error=CASE WHEN url=$2 THEN connection_error END,
+            connection_checked_at=CASE WHEN url=$2 THEN connection_checked_at END,
+            quality_ok=CASE WHEN url=$2 THEN quality_ok END,
+            quality_latency_ms=CASE WHEN url=$2 THEN quality_latency_ms END,
+            quality_http_status=CASE WHEN url=$2 THEN quality_http_status END,
+            quality_error=CASE WHEN url=$2 THEN quality_error END,
+            quality_checked_at=CASE WHEN url=$2 THEN quality_checked_at END
+            WHERE id=$3 RETURNING *",
         )
         .bind(name)
         .bind(url.as_str())
@@ -176,12 +176,14 @@ impl Storage {
         .fetch_optional(self.pool())
         .await?
         .ok_or(StorageError::ProxyNotFound)?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Suppliers]);
         Ok(updated)
     }
 
     pub async fn require_outbound_proxy(&self, id: &str) -> Result<OutboundProxy> {
-        sqlx::query_as("SELECT * FROM outbound_proxies WHERE id=?")
+        sqlx::query_as("SELECT * FROM outbound_proxies WHERE id=$1")
             .bind(id)
             .fetch_optional(self.pool())
             .await?
@@ -191,15 +193,17 @@ impl Storage {
     pub async fn delete_outbound_proxy(&self, id: &str, confirm_unbind: bool) -> Result<bool> {
         let mut tx = self.pool().begin().await?;
         if !confirm_unbind {
-            let result = sqlx::query("DELETE FROM outbound_proxies WHERE id=? AND NOT EXISTS (SELECT 1 FROM supplier_accounts WHERE proxy_id=?)")
+            let result = sqlx::query("DELETE FROM outbound_proxies WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM supplier_accounts WHERE proxy_id=$2)")
                 .bind(id).bind(id).execute(&mut *tx).await?;
             if result.rows_affected() > 0 {
                 tx.commit().await?;
-                self.invalidate_runtime_cache();
+                self.runtime
+                    .snapshots
+                    .invalidate(&[crate::snapshots::Domain::Suppliers]);
                 return Ok(true);
             }
             let count: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM supplier_accounts WHERE proxy_id=?")
+                sqlx::query_scalar("SELECT COUNT(*) FROM supplier_accounts WHERE proxy_id=$1")
                     .bind(id)
                     .fetch_one(&mut *tx)
                     .await?;
@@ -209,17 +213,19 @@ impl Storage {
             tx.commit().await?;
             return Ok(false);
         }
-        sqlx::query("UPDATE supplier_accounts SET proxy_id=NULL, updated_at=? WHERE proxy_id=?")
+        sqlx::query("UPDATE supplier_accounts SET proxy_id=NULL, updated_at=$1 WHERE proxy_id=$2")
             .bind(chrono::Utc::now().to_rfc3339())
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        let result = sqlx::query("DELETE FROM outbound_proxies WHERE id=?")
+        let result = sqlx::query("DELETE FROM outbound_proxies WHERE id=$1")
             .bind(id)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Suppliers]);
         Ok(result.rows_affected() > 0)
     }
 
@@ -232,7 +238,7 @@ impl Storage {
             self.require_outbound_proxy(id).await?;
         }
         let result =
-            sqlx::query("UPDATE supplier_accounts SET proxy_id=?, updated_at=? WHERE id=?")
+            sqlx::query("UPDATE supplier_accounts SET proxy_id=$1, updated_at=$2 WHERE id=$3")
                 .bind(proxy_id)
                 .bind(chrono::Utc::now().to_rfc3339())
                 .bind(account_id)
@@ -241,7 +247,9 @@ impl Storage {
         if result.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account_id.to_owned()));
         }
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Suppliers]);
         self.require_account(account_id).await
     }
 }

@@ -7,7 +7,7 @@ mod account_fixture {
 }
 #[cfg(test)]
 use account_fixture::AccountFixture;
-use codex2api_storage::{ImagePrice, ImageUsage, ModelConfig, Storage, UsageFilter, UsageRecord};
+use codex2api_storage::{ImagePrice, ImageUsage, ModelConfig, UsageFilter, UsageRecord};
 
 #[test]
 fn screen_resolution_bands_accept_dynamic_dimensions_and_both_orientations() {
@@ -36,8 +36,8 @@ fn screen_resolution_bands_accept_dynamic_dimensions_and_both_orientations() {
 
 #[tokio::test]
 async fn old_fixed_resolution_snapshots_keep_their_original_price() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("legacy-size.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("legacy-size-pg"))
         .await
         .unwrap();
     let model = ModelConfig {
@@ -93,8 +93,8 @@ async fn old_fixed_resolution_snapshots_keep_their_original_price() {
 
 #[tokio::test]
 async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_delete() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("images.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("images-pg"))
         .await
         .unwrap();
     let model = ModelConfig {
@@ -251,8 +251,8 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
 
 #[tokio::test]
 async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("image-errors.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("image-errors-pg"))
         .await
         .unwrap();
     let model = ModelConfig {
@@ -336,6 +336,7 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         // This failure occurred after an upstream response; it is not a request
         // rejected before dispatch (which is correctly charged as zero).
         if id == "transport-failure" {
+            r.account_id = "dispatched-supplier".into();
             r.http_status = Some(200);
         }
         r.image_count = count;
@@ -374,9 +375,9 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
 #[tokio::test]
 async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
     use codex2api_storage::{IMAGE_UNIFORM_RESOLUTION, PriceRequirement};
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("uniform-images.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("uniform-images-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let model = ModelConfig {
         provider_id: "chatgpt".into(),
         model: "uniform-image-test".into(),
@@ -491,7 +492,7 @@ async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
     assert_eq!(saved.billing_status, "missing_usage");
     assert_eq!(saved.cost_nano_usd, None);
     storage.close().await;
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     let prices = reopened.image_prices("chatgpt").await.unwrap();
     assert!(
         prices.iter().any(|p| p.model == model.model

@@ -29,6 +29,7 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+codex2api-storage = { workspace = true, features = ["test-support"] }
 codex2api-auth.workspace = true
 codex2api-accounts.workspace = true
 sqlx.workspace = true

@@ -21,8 +21,8 @@ async fn main() -> Result<()> {
         std::env::var("CODEX2API_USER_BIND").unwrap_or_else(|_| "127.0.0.1:8082".into());
     let metered_api_bind =
         std::env::var("CODEX2API_METERED_API_BIND").unwrap_or_else(|_| "127.0.0.1:8083".into());
-    let db_path = std::env::var("CODEX2API_DB")
-        .unwrap_or_else(|_| codex2api_storage::DEFAULT_DB_PATH.to_string());
+    let database_url = std::env::var("CODEX2API_DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("CODEX2API_DATABASE_URL is required"))?;
 
     tracing::info!(
         commit = CODEX_REF_COMMIT,
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         "starting Codex2API with the pinned official Codex protocol target"
     );
 
-    let storage = Storage::open(&db_path).await?;
+    let storage = Storage::open(&database_url).await?;
     let registered = storage
         .sync_supported_models(&codex2api_upstream::supported_models())
         .await?;
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     let metered_api_listener = tokio::net::TcpListener::bind(&metered_api_bind)
         .await
         .with_context(|| format!("bind metered API {metered_api_bind}"))?;
-    tracing::info!(%api_bind,%admin_bind,%user_bind,%metered_api_bind,db=%db_path,"listening on independent surfaces");
+    tracing::info!(%api_bind,%admin_bind,%user_bind,%metered_api_bind,"listening on independent surfaces");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let signal = tokio::spawn(async move {
         shutdown_signal().await;

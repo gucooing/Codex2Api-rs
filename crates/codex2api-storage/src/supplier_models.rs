@@ -4,8 +4,10 @@ use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Deserialize, Serialize, sqlx::FromRow)]
 pub struct SupplierScheduling {
+    #[sqlx(try_from = "i64")]
     pub concurrency: u32,
     pub priority: i32,
+    #[sqlx(try_from = "crate::pg_types::OptionalU32")]
     pub load_factor: Option<u32>,
     pub revision: i64,
 }
@@ -30,7 +32,7 @@ impl Storage {
     pub async fn supplier_scheduling(&self, id: &str) -> Result<SupplierScheduling> {
         Ok(sqlx::query_as(
             "SELECT concurrency,priority,load_factor,revision
-             FROM supplier_scheduling WHERE account_id=?",
+             FROM supplier_scheduling WHERE account_id=$1",
         )
         .bind(id)
         .fetch_optional(self.pool())
@@ -52,28 +54,31 @@ impl Storage {
         }
         let query = if value.revision == 0 {
             "INSERT INTO supplier_scheduling(account_id,concurrency,priority,load_factor,revision)
-             SELECT id,?,?,?,1 FROM supplier_accounts WHERE id=? AND ?=0
+             SELECT id,$1,$2,$3,1 FROM supplier_accounts WHERE id=$4 AND $5=0
              ON CONFLICT(account_id) DO NOTHING"
         } else {
             "UPDATE supplier_scheduling
-             SET concurrency=?,priority=?,load_factor=?,revision=revision+1
-             WHERE account_id=? AND revision=?"
+             SET concurrency=$1,priority=$2,load_factor=$3,revision=revision+1
+             WHERE account_id=$4 AND revision=$5"
         };
         let changed = sqlx::query(query)
-            .bind(value.concurrency)
-            .bind(value.priority)
-            .bind(value.load_factor)
+            .bind(i64::from(value.concurrency))
+            .bind(i64::from(value.priority))
+            .bind(value.load_factor.map(i64::from))
             .bind(id)
             .bind(value.revision)
             .execute(self.pool())
             .await?
             .rows_affected();
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(changed == 1)
     }
     pub async fn supplier_models(&self, id: &str) -> Result<Vec<SupplierModel>> {
         Ok(sqlx::query_as(
-            "SELECT model,source,observed_at FROM supplier_models WHERE account_id=? ORDER BY model",
+            "SELECT model,source,observed_at FROM supplier_models WHERE account_id=$1 ORDER BY model",
         )
         .bind(id)
         .fetch_all(self.pool())
@@ -98,12 +103,12 @@ impl Storage {
     }
     pub async fn supplier_model_options(&self, id: &str, search: &str) -> Result<Vec<Value>> {
         let rows: Vec<(String, bool)> = sqlx::query_as(
-            "SELECT model,MAX(enabled) FROM (
+            "SELECT model,bool_or(enabled) FROM (
              SELECT m.model,m.enabled FROM model_catalog m
              JOIN supplier_accounts a ON a.provider_id=m.provider_id
-             WHERE a.id=? AND m.deleted=0 AND instr(lower(m.model),lower(?))>0
-             UNION ALL SELECT model,0 FROM supplier_models
-             WHERE account_id=? AND instr(lower(model),lower(?))>0)
+             WHERE a.id=$1 AND m.deleted=FALSE AND strpos(lower(m.model),lower($2))>0
+             UNION ALL SELECT model,FALSE FROM supplier_models
+             WHERE account_id=$3 AND strpos(lower(model),lower($4))>0)
              GROUP BY model ORDER BY model LIMIT 100",
         )
         .bind(id)
@@ -123,7 +128,7 @@ impl Storage {
         }
         let changed = sqlx::query(
             "INSERT INTO supplier_models(account_id,model,source)
-             SELECT id,?,'custom' FROM supplier_accounts WHERE id=?
+             SELECT id,$1,'custom' FROM supplier_accounts WHERE id=$2
              ON CONFLICT(account_id,model) DO UPDATE SET source='custom'",
         )
         .bind(model)
@@ -134,7 +139,10 @@ impl Storage {
         if changed == 0 {
             return Err(StorageError::AccountNotFound(id.into()));
         }
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(())
     }
     /// Replace the complete availability list atomically for one provider's suppliers.
@@ -148,11 +156,11 @@ impl Storage {
         {
             return Err(StorageError::Constraint("账户或模型列表无效".into()));
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         let mut provider = None;
         for id in ids {
             let current: String =
-                sqlx::query_scalar("SELECT provider_id FROM supplier_accounts WHERE id=?")
+                sqlx::query_scalar("SELECT provider_id FROM supplier_accounts WHERE id=$1")
                     .bind(id)
                     .fetch_optional(&mut *tx)
                     .await?
@@ -163,13 +171,13 @@ impl Storage {
             provider = Some(current);
         }
         for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
-            sqlx::query("DELETE FROM supplier_models WHERE account_id=?")
+            sqlx::query("DELETE FROM supplier_models WHERE account_id=$1")
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
             for model in models.iter().collect::<std::collections::BTreeSet<_>>() {
                 sqlx::query(
-                    "INSERT INTO supplier_models(account_id,model,source) VALUES(?,?,'custom')",
+                    "INSERT INTO supplier_models(account_id,model,source) VALUES($1,$2,'custom')",
                 )
                 .bind(id)
                 .bind(model)
@@ -178,16 +186,22 @@ impl Storage {
             }
         }
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(())
     }
     pub async fn remove_supplier_model(&self, id: &str, model: &str) -> Result<()> {
-        sqlx::query("DELETE FROM supplier_models WHERE account_id=? AND model=?")
+        sqlx::query("DELETE FROM supplier_models WHERE account_id=$1 AND model=$2")
             .bind(id)
             .bind(model)
             .execute(self.pool())
             .await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(())
     }
     /// Discovery changes only supplier availability. Never writes catalog/pricing.
@@ -200,9 +214,9 @@ impl Storage {
         if models.len() > 2048 {
             return Err(StorageError::Constraint("上游模型列表过大".into()));
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         let valid: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM supplier_accounts WHERE id=? AND auth_revision=?)",
+            "SELECT EXISTS(SELECT 1 FROM supplier_accounts WHERE id=$1 AND auth_revision=$2)",
         )
         .bind(id)
         .bind(auth_revision)
@@ -211,7 +225,7 @@ impl Storage {
         if !valid {
             return Ok(false);
         }
-        sqlx::query("DELETE FROM supplier_models WHERE account_id=? AND source='upstream'")
+        sqlx::query("DELETE FROM supplier_models WHERE account_id=$1 AND source='upstream'")
             .bind(id)
             .execute(&mut *tx)
             .await?;
@@ -223,7 +237,7 @@ impl Storage {
                 .ok_or_else(|| StorageError::Constraint("上游模型名称无效".into()))?;
             sqlx::query(
                 "INSERT INTO supplier_models(account_id,model,source,descriptor_json,observed_at)
-                 VALUES(?,?,'upstream',?,?) ON CONFLICT(account_id,model)
+                 VALUES($1,$2,'upstream',$3,$4) ON CONFLICT(account_id,model)
                  DO UPDATE SET descriptor_json=excluded.descriptor_json,observed_at=excluded.observed_at",
             )
             .bind(id)
@@ -234,7 +248,7 @@ impl Storage {
             .await?;
         }
         sqlx::query(
-            "INSERT INTO supplier_model_sync(account_id,observed_at,auth_revision) VALUES(?,?,?)
+            "INSERT INTO supplier_model_sync(account_id,observed_at,auth_revision) VALUES($1,$2,$3)
              ON CONFLICT(account_id) DO UPDATE
              SET observed_at=excluded.observed_at,auth_revision=excluded.auth_revision",
         )
@@ -244,7 +258,10 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(true)
     }
     pub async fn supplier_supports_model(&self, id: &str, model: &str) -> Result<bool> {
@@ -255,23 +272,19 @@ impl Storage {
         id: &str,
     ) -> Result<std::sync::Arc<std::collections::HashSet<String>>> {
         let key = format!("supplier-models:{id}");
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let models: Vec<String> =
-            sqlx::query_scalar("SELECT model FROM supplier_models WHERE account_id=?")
-                .bind(id)
-                .fetch_all(self.pool())
-                .await?;
-        let value =
-            std::sync::Arc::new(models.into_iter().collect::<std::collections::HashSet<_>>());
         self.runtime
-            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
-        Ok(value)
+            .snapshots
+            .read(key.clone(), async {
+                let models: Vec<String> =
+                    sqlx::query_scalar("SELECT model FROM supplier_models WHERE account_id=$1")
+                        .bind(id)
+                        .fetch_all(self.pool())
+                        .await?;
+                let value = std::sync::Arc::new(
+                    models.into_iter().collect::<std::collections::HashSet<_>>(),
+                );
+                Ok((value, std::time::Duration::from_secs(30)))
+            })
+            .await
     }
 }

@@ -10,9 +10,9 @@ use account_fixture::AccountFixture;
 use codex2api_storage::{PlatformAccount, Storage};
 use serde_json::json;
 
-async fn fixture() -> (tempfile::TempDir, Storage) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("contention.sqlite"))
+async fn fixture() -> (codex2api_storage::test_support::TestDirectory, Storage) {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("contention-pg"))
         .await
         .unwrap();
     storage
@@ -35,12 +35,12 @@ async fn fixture() -> (tempfile::TempDir, Storage) {
 }
 
 #[tokio::test]
-async fn existing_configuration_reads_do_not_acquire_sqlite_write_locks() {
+async fn existing_configuration_reads_do_not_acquire_postgresql_write_locks() {
     let (_dir, storage) = fixture().await;
     storage.virtual_quota("account").await.unwrap();
     let key = storage.oauth_signing_key().await.unwrap();
     storage.desktop_support_settings().await.unwrap();
-    let tx = storage.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let tx = storage.pool().begin().await.unwrap();
     let reads = tokio::time::timeout(std::time::Duration::from_millis(300), async {
         let (quota, secret, support) = tokio::join!(
             storage.virtual_quota("account"),

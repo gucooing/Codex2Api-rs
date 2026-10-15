@@ -33,9 +33,9 @@ pub struct GatewayState {
 impl GatewayState {
     pub fn new(storage: Storage, upstream: UpstreamPool) -> Self {
         Self {
+            runtime: GatewayRuntime::new(storage.clone()),
             storage,
             upstream,
-            runtime: GatewayRuntime::default(),
         }
     }
     pub fn runtime(&self) -> &GatewayRuntime {

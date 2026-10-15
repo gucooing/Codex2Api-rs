@@ -64,11 +64,14 @@ impl Storage {
         let offset = (filter.page - 1)
             .checked_mul(filter.limit)
             .ok_or(StorageError::InvalidAdminUpdate("流水页码超出范围"))?;
-        let condition = " WHERE w.kind IN ('order_payment','system_adjustment') AND (?='' OR w.user_id=?) AND (?='' OR w.kind=?) AND (? IS NULL OR julianday(w.created_at)>=julianday(?/1000.0,'unixepoch')) AND (? IS NULL OR julianday(w.created_at)<julianday(?/1000.0,'unixepoch'))";
-        let mut tx = self.pool().begin().await?;
+        let condition = " WHERE w.kind IN ('order_payment','system_adjustment') AND ($1='' OR w.user_id=$2) AND ($3='' OR w.kind=$4) AND ($5 IS NULL OR (w.created_at)::timestamptz>=to_timestamp(($6/1000.0)::double precision)) AND ($7 IS NULL OR (w.created_at)::timestamptz<to_timestamp(($8/1000.0)::double precision))";
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM wallet_entries w JOIN regular_users u ON u.id=w.user_id{condition}"))
             .bind(&filter.user_id).bind(&filter.user_id).bind(&filter.kind).bind(&filter.kind).bind(filter.from_ms).bind(filter.from_ms).bind(filter.until_ms).bind(filter.until_ms).fetch_one(&mut *tx).await?;
-        let items:Vec<AdminWalletEntry>=sqlx::query_as(&format!("SELECT w.*,u.username,u.name AS user_name FROM wallet_entries w JOIN regular_users u ON u.id=w.user_id{condition} ORDER BY julianday(w.created_at) DESC,w.rowid DESC LIMIT ? OFFSET ?"))
+        let items:Vec<AdminWalletEntry>=sqlx::query_as(&format!("SELECT w.*,u.username,u.name AS user_name FROM wallet_entries w JOIN regular_users u ON u.id=w.user_id{condition} ORDER BY (w.created_at)::timestamptz DESC,w.sort_id DESC LIMIT $9 OFFSET $10"))
             .bind(&filter.user_id).bind(&filter.user_id).bind(&filter.kind).bind(&filter.kind).bind(filter.from_ms).bind(filter.from_ms).bind(filter.until_ms).bind(filter.until_ms).bind(filter.limit).bind(offset).fetch_all(&mut *tx).await?;
         tx.commit().await?;
         Ok(json!({"items":items,"total":total,"page":filter.page,"limit":filter.limit}))
@@ -91,10 +94,11 @@ impl Storage {
         if reason.is_some_and(|value| value.len() > 1000) {
             return Err(StorageError::InvalidAdminUpdate("调整原因最多 1000 字节"));
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_user(&mut tx, owner).await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         let (actor, actor_name): (String, String) =
-            sqlx::query_as("SELECT account_id,username FROM admin_identities WHERE id=?")
+            sqlx::query_as("SELECT account_id,username FROM admin_identities WHERE id=$1")
                 .bind(administrator)
                 .fetch_optional(&mut *tx)
                 .await?
@@ -111,14 +115,14 @@ impl Storage {
             .to_string(),
         );
         let prior: Option<WalletEntry> =
-            sqlx::query_as("SELECT * FROM wallet_entries WHERE user_id=? AND request_id=?")
+            sqlx::query_as("SELECT * FROM wallet_entries WHERE user_id=$1 AND request_id=$2")
                 .bind(owner)
                 .bind(&key)
                 .fetch_optional(&mut *tx)
                 .await?;
         if let Some(prior) = prior {
             let original: String =
-                sqlx::query_scalar("SELECT signature FROM wallet_entries WHERE id=?")
+                sqlx::query_scalar("SELECT signature FROM wallet_entries WHERE id=$1")
                     .bind(&prior.id)
                     .fetch_one(&mut *tx)
                     .await?;
@@ -129,12 +133,13 @@ impl Storage {
             }
             return Ok(prior);
         }
-        let (before, revision): (i64, i64) =
-            sqlx::query_as("SELECT wallet_cents,revision FROM users WHERE id=? AND kind='regular'")
-                .bind(owner)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
+        let (before, revision): (i64, i64) = sqlx::query_as(
+            "SELECT wallet_cents,revision FROM users WHERE id=$1 AND kind='regular'",
+        )
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         // Revisions protect identity edits. Wallet deltas use the current balance
         // under the write transaction and do not invalidate other pending deltas.
         if revision != input.expected_revision {
@@ -147,7 +152,7 @@ impl Storage {
                 "减少金额不能超过当前余额，增加后余额不能超出金额范围",
             ))?;
         let api_pending: i64 = sqlx::query_scalar(
-            "SELECT COALESCE((SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id=?),0)",
+            "SELECT COALESCE((SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id=$1),0)",
         )
         .bind(owner)
         .fetch_one(&mut *tx)
@@ -158,16 +163,16 @@ impl Storage {
                 "调整后余额不能低于已发生的 API 待扣费用",
             ));
         }
-        sqlx::query("UPDATE users SET wallet_cents=? WHERE id=? AND revision=?")
+        sqlx::query("UPDATE users SET wallet_cents=$1 WHERE id=$2 AND revision=$3")
             .bind(after)
             .bind(owner)
             .bind(revision)
             .execute(&mut *tx)
             .await?;
         let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,amount_cents,balance_cents,created_at,operator_account_id,operator_name,reason) VALUES(?,?,?,?,'system_adjustment',?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,amount_cents,balance_cents,created_at,operator_account_id,operator_name,reason) VALUES($1,$2,$3,$4,'system_adjustment',$5,$6,$7,$8,$9,$10)")
             .bind(&id).bind(owner).bind(key).bind(signature).bind(input.amount_cents).bind(after).bind(chrono::Utc::now().to_rfc3339()).bind(actor).bind(actor_name).bind(reason).execute(&mut *tx).await?;
-        let entry = sqlx::query_as("SELECT * FROM wallet_entries WHERE id=?")
+        let entry = sqlx::query_as("SELECT * FROM wallet_entries WHERE id=$1")
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;

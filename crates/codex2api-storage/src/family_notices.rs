@@ -58,12 +58,13 @@ impl Storage {
                 "Invalid family event notice".into(),
             ));
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription(&mut tx, owner).await?;
         let recipient = match recipient_type {
             FamilyNoticeRecipient::Teen => "teen",
             FamilyNoticeRecipient::Parent => "parent",
         };
-        let existing:Option<String> = sqlx::query_scalar("SELECT id FROM virtual_resources WHERE virtual_account_id=? AND kind=? AND json_extract(value_json,'$.source_event_id')=? AND json_extract(value_json,'$.recipient_type')=?")
+        let existing:Option<String> = sqlx::query_scalar("SELECT id FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 AND (value_json::jsonb #>> '{source_event_id}')=$3 AND (value_json::jsonb #>> '{recipient_type}')=$4")
             .bind(owner).bind(KIND).bind(source_event_id).bind(recipient).fetch_optional(&mut *tx).await?;
         if let Some(id) = existing {
             tx.commit().await?;
@@ -80,7 +81,7 @@ impl Storage {
             dismissed_at_ms: None,
             dismissed_by_device_id: None,
         };
-        sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4::jsonb,$5,$6)")
             .bind(owner).bind(KIND).bind(&notice.id).bind(serde_json::to_string(&notice)?).bind(now).bind(now).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(notice.id)
@@ -91,7 +92,7 @@ impl Storage {
         owner: &str,
         include_dismissed: bool,
     ) -> Result<Vec<FamilyGraduationNotice>> {
-        let rows:Vec<String> = sqlx::query_scalar("SELECT value_json FROM virtual_resources WHERE virtual_account_id=? AND kind=? AND (? OR json_extract(value_json,'$.dismissed_at_ms') IS NULL) ORDER BY created_at_ms,id")
+        let rows:Vec<String> = sqlx::query_scalar("SELECT value_json::text FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 AND ($3 OR (value_json::jsonb #>> '{dismissed_at_ms}') IS NULL) ORDER BY created_at_ms,id")
             .bind(owner).bind(KIND).bind(include_dismissed).fetch_all(self.pool()).await?;
         rows.into_iter()
             .map(|s| serde_json::from_str(&s).map_err(StorageError::from))
@@ -105,11 +106,12 @@ impl Storage {
         access: &VirtualAccess,
         ids: &[String],
     ) -> Result<bool> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription(&mut tx, &access.virtual_account_id).await?;
         let mut notices = Vec::new();
         let ids: std::collections::BTreeSet<_> = ids.iter().collect();
         for id in ids {
-            let raw:Option<String> = sqlx::query_scalar("SELECT value_json FROM virtual_resources WHERE virtual_account_id=? AND kind=? AND id=?")
+            let raw:Option<String> = sqlx::query_scalar("SELECT value_json::text FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 AND id=$3")
                 .bind(&access.virtual_account_id).bind(KIND).bind(id).fetch_optional(&mut *tx).await?;
             let Some(raw) = raw else {
                 tx.rollback().await?;
@@ -124,7 +126,7 @@ impl Storage {
             }
             notice.dismissed_at_ms = Some(now);
             notice.dismissed_by_device_id = Some(access.device_id.clone());
-            sqlx::query("UPDATE virtual_resources SET value_json=?,updated_at_ms=? WHERE virtual_account_id=? AND kind=? AND id=?")
+            sqlx::query("UPDATE virtual_resources SET value_json=$1::jsonb,updated_at_ms=$2 WHERE virtual_account_id=$3 AND kind=$4 AND id=$5")
                 .bind(serde_json::to_string(&notice)?).bind(now).bind(&access.virtual_account_id).bind(KIND).bind(&notice.id).execute(&mut *tx).await?;
         }
         tx.commit().await?;

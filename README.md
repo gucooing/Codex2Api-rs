@@ -22,28 +22,25 @@
 
 计费配置提供经过核实的价格预设，包括 GPT-5.5。输入已支持名称即可自动填价；升级后的首次启动自动登记新支持模型，价格完整时默认启用，按现有套餐规则使用。已有人工定价、停用和删除状态保持原样，历史请求仍按原快照结算。GPT-5.5 Fast 的短上下文上限随价格保存，不把未知长上下文价格当作免费。GPT-6 Astra 和 GPT-6.1 Sol 支持独立的 Ultrafast 档位；管理员配置 Ultrafast 价格后，代理同时在 Codex 模型目录和 Desktop 版本预设中发布该选项，按请求快照计费，缺少价格时保持未定价。Responses 在生成输出前遇到供应授权或额度拒绝时，会在标签号池内自动换号；已输出后的中断不重放生成。
 
-数据用 SQLite（默认 `data/codex2api.sqlite`）。管理端只有一个管理员，账户密码登录，首次启动默认 `admin` / `admin`。
+数据仅使用 PostgreSQL，通过必填的 `CODEX2API_DATABASE_URL` 连接。管理端只有一个管理员，账户密码登录，首次启动默认 `admin` / `admin`。
 
 Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授权，支持本地套餐、钱包购买、模型计价和用量记录。`cgrok` 的默认服务根与 `ccodex` 同域，使用 `/api/oauth/grok`。模型可用性由管理端配置及套餐决定，自定义模型无需内置名单认证；官方数据仅作预设。接入方式及能力边界见 [Grok 渠道](docs/GROK.md)。
 
 ## Docker Compose 部署
 
-需要 Docker Engine、Docker Compose（`docker compose`）和容器可访问的 Redis。Compose 不创建 Redis 服务，必须在 `.env` 中填写 `CODEX2API_REDIS_URL`。镜像地址为 `ghcr.io/gucooing/codex2api-rs`，支持 `linux/amd64` 和 `linux/arm64`；两个前端已经嵌入镜像内的 Rust 可执行文件，服务器不需要安装 Node.js 或 Rust。
+需要 Docker Engine、Docker Compose（`docker compose`）和容器可访问的 PostgreSQL、Redis。Compose 不创建数据库服务，必须在 `.env` 中填写 `CODEX2API_DATABASE_URL` 和 `CODEX2API_REDIS_URL`。镜像地址为 `ghcr.io/gucooing/codex2api-rs`，支持 `linux/amd64` 和 `linux/arm64`；两个前端已经嵌入镜像内的 Rust 可执行文件，服务器不需要安装 Node.js 或 Rust。
 
 下载仓库中的 `docker-compose.yml` 和 `.env.example` 到同一目录，或在仓库根目录执行：
 
 ```bash
 cp .env.example .env
-# 填写 .env 中必需的 Redis 地址，并按部署环境编辑端口和对外访问地址。
-mkdir -p data
-# Linux：让容器运行用户能够读写此目录；已有数据库文件也需要相同权限。
-sudo chown -R 10001:10001 ./data
+# 填写 PostgreSQL、Redis 地址，并按部署环境编辑端口和对外访问地址。
 docker compose pull
 docker compose up -d --wait
 docker compose logs -f --tail=100
 ```
 
-PowerShell 中复制配置使用 `Copy-Item .env.example .env`，创建目录使用 `New-Item -ItemType Directory -Force data`；Docker Desktop 不需要执行 Linux 的 `chown`。如修改 `CODEX2API_DATA_DIR`，创建目录和设置权限时使用该实际路径。默认镜像标签为 `latest`，指向最近成功发布的正式版本；首个正式版本镜像发布前，可将 `.env` 中的 `CODEX2API_IMAGE` 改为 `ghcr.io/gucooing/codex2api-rs:edge`，使用通过 CI 的 `main` 构建。生产部署也可以指定已发布的完整版本标签或 `@sha256:…` 摘要固定镜像。
+PowerShell 中复制配置使用 `Copy-Item .env.example .env`。默认镜像标签为 `latest`，指向最近成功发布的正式版本；首个正式版本镜像发布前，可将 `.env` 中的 `CODEX2API_IMAGE` 改为 `ghcr.io/gucooing/codex2api-rs:edge`，使用通过 CI 的 `main` 构建。生产部署也可以指定已发布的完整版本标签或 `@sha256:…` 摘要固定镜像。
 
 默认只在宿主机回环地址开放四个端口：
 
@@ -58,15 +55,7 @@ PowerShell 中复制配置使用 `Copy-Item .env.example .env`，创建目录使
 
 管理端 **设置 → 访问地址** 中保存的地址优先于 `.env` 中的启动默认值；已有部署改域名时同步更新该设置，并重新发起客户端登录。
 
-SQLite 及账户身份直接保存在宿主机目录，默认映射为 `./data:/app/data`，数据库就是宿主机的 `./data/codex2api.sqlite`。可用 `.env` 中的 `CODEX2API_DATA_DIR` 指定其他目录；相对路径以 `docker-compose.yml` 所在目录为基准。容器使用 UID/GID `10001:10001`，Linux 上该目录及已有文件需允许该用户读写。升级、重建容器和 `docker compose down` 均保留宿主机文件。复用已有 `./data` 时先停止原服务，避免两个进程同时运行在同一数据库上。若部署多个实例，使用不同的 Compose 项目名、端口和数据目录。
-
-升级前备份数据；停止服务后复制整个宿主机数据目录，包括可能存在的 SQLite WAL 文件。以下示例使用 Bash 和默认 `./data`：
-
-```bash
-docker compose stop
-sudo tar -czf ../codex2api-data-backup.tar.gz data
-docker compose start
-```
+账户、配置和账本保存在外部 PostgreSQL。首次启动在已创建的空数据库内原子初始化当前 schema 和预设；没有旧库迁移、历史兼容或文件数据库路径。实际数据由部署者处理。数据库备份使用 PostgreSQL 自身的备份工具。
 
 升级时执行：
 
@@ -82,7 +71,7 @@ docker build --build-arg CODEX2API_BUILD_TAG=local -t codex2api:local .
 docker compose up -d --wait --pull never
 ```
 
-构建会分别检查、导出两个前端，再使用仓库锁定的 Rust 工具链及 `Cargo.lock` 编译。运行容器为非 root 用户，根文件系统只读，写入使用挂载的数据目录和临时目录；健康检查覆盖四个监听入口，停止时向 Rust 进程直接发送 SIGTERM，并预留 60 秒关闭时间。自定义 CA 证书可通过 Compose override 只读挂载到容器，再设置 `CODEX_CA_CERTIFICATE` 为容器内路径。
+构建会分别检查、导出两个前端，再使用仓库锁定的 Rust 工具链及 `Cargo.lock` 编译。运行容器为非 root 用户，根文件系统只读，持久化写入 PostgreSQL 和 Redis，临时文件使用临时目录；健康检查覆盖四个监听入口，停止时向 Rust 进程直接发送 SIGTERM，并预留 60 秒关闭时间。自定义 CA 证书可通过 Compose override 只读挂载到容器，再设置 `CODEX_CA_CERTIFICATE` 为容器内路径。
 
 ### CI 镜像发布
 
@@ -115,7 +104,7 @@ bash scripts/build.sh --release
 
 管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。AI API 在 `127.0.0.1:8080`，仅注册客户端协议接口。按量 API 在 `127.0.0.1:8083`，只接受 API Key。四端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
 
-反向代理部署后，在管理端 **设置 → 访问地址** 填写 OAuth API、按量 API、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/api/oauth/grok`、`/user`、`/admin` 等路径。浏览器与 OAuth 入口可由反向代理按路径区分；按量 API 建议使用独立域名，以免与 OAuth 的 `/v1` 兼容路径冲突。保存到 SQLite 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
+反向代理部署后，在管理端 **设置 → 访问地址** 填写 OAuth API、按量 API、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/api/oauth/grok`、`/user`、`/admin` 等路径。浏览器与 OAuth 入口可由反向代理按路径区分；按量 API 建议使用独立域名，以免与 OAuth 的 `/v1` 兼容路径冲突。保存到 PostgreSQL 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
 
 开发时可使用 `cargo run -p codex2api --features dev-frontend`，再分别运行两个前端的 `pnpm dev`，无需预先导出静态页面。该特性仅用于本地开发，release 构建不允许启用；完整配置见 [本地验证](docs/LOCAL_TEST.md#前后端开发启动)。
 
@@ -135,14 +124,21 @@ bash scripts/build.sh --release
 | `CODEX2API_PUBLIC_USER_URL` | `http://127.0.0.1:8082` | 对外用户端 origin，用于浏览器授权跳转、同源校验和安全 Cookie。 |
 | `CODEX2API_PUBLIC_ADMIN_URL` | `http://127.0.0.1:8081` | 对外管理端 origin；HTTPS 时登录、退出和改密 Cookie 都带 `Secure`，不采信请求中的转发协议头。 |
 | `CODEX2API_PUBLIC_METERED_API_URL` | `http://127.0.0.1:8083` | 按量 API 公开 origin；用户 API Key 页显示此地址加 `/v1`。 |
-| `CODEX2API_DB` | `data/codex2api.sqlite` | SQLite 数据库文件路径；相对路径以程序启动目录为基准。 |
+| `CODEX2API_DATABASE_URL` | 必填 | PostgreSQL URL，例如 `postgresql://codex2api:password@127.0.0.1:5432/codex2api`。 |
+| `CODEX2API_DB_MAX_CONNECTIONS` | `32` | 单进程 PostgreSQL 连接上限，范围 1–1024。 |
+| `CODEX2API_DB_MIN_CONNECTIONS` | `2` | 保持的最小连接数，不得超过上限。 |
+| `CODEX2API_DB_ACQUIRE_TIMEOUT_SECONDS` | `10` | 等待池连接的超时秒数。 |
+| `CODEX2API_DB_IDLE_TIMEOUT_SECONDS` | `300` | 空闲连接回收时间。 |
+| `CODEX2API_DB_MAX_LIFETIME_SECONDS` | `1800` | 连接最长寿命。 |
 | `CODEX2API_REDIS_URL` | 必填 | Redis 连接地址，例如 `redis://127.0.0.1:6379/0`；未配置或连接失败时启动报错。 |
-| `CODEX2API_REDIS_PREFIX` | 数据库绝对路径的哈希 | 共享 Redis 的独立部署使用不同且固定的键前缀。 |
+| `CODEX2API_REDIS_PREFIX` | PostgreSQL 主机、端口、库名及 schema 的哈希 | 共享 Redis 的独立部署使用不同且固定的键前缀。 |
 | `CODEX_CA_CERTIFICATE` | 未设置 | 可选的 PEM 格式自定义 CA 证书文件路径。 |
 | `SSL_CERT_FILE` | 未设置 | 未配置 `CODEX_CA_CERTIFICATE` 时使用的自定义 CA 证书文件路径。 |
 | `RUST_LOG` | `codex2api=info` | 日志过滤规则；`codex2api=debug` 启用完整 AI 请求输入输出日志。 |
 
-使用 `codex2api --debug` 启动也可启用 debug 模式。AI 请求与响应正文按请求 ID、方向和序号完整打印到控制台，覆盖 HTTP、SSE 和 WebSocket，不截断流式内容；二进制或跨块 UTF-8 字节以 Base64 保留。默认启动不打印正文，正文不写入 SQLite。
+PostgreSQL 连接数应按实例总数和数据库 `max_connections` 分配，并预留运维连接。连接池不随 HTTP 请求创建；池满时有界等待，超时返回存储错误。Redis 使用一个可复用的异步连接管理器。请求结算按账户加行锁、独立事务提交；不同账户可并行执行。分页和多段统计使用一致的只读快照。
+
+使用 `codex2api --debug` 启动也可启用 debug 模式。AI 请求与响应正文按请求 ID、方向和序号完整打印到控制台，覆盖 HTTP、SSE 和 WebSocket，不截断流式内容；二进制或跨块 UTF-8 字节以 Base64 保留。默认启动不打印正文，正文不写入 PostgreSQL。
 
 通过 HTTPS 反向代理提供管理端时，将 `CODEX2API_PUBLIC_ADMIN_URL` 设置为浏览器访问的 HTTPS origin。该配置不启动 TLS 监听器。
 
@@ -157,7 +153,7 @@ Linux 或 macOS 自定义监听地址和数据库路径：
 ```bash
 CODEX2API_API_BIND=0.0.0.0:8080 \
 CODEX2API_REDIS_URL=redis://127.0.0.1:6379/0 \
-CODEX2API_DB=/var/lib/codex2api/codex2api.sqlite \
+CODEX2API_DATABASE_URL=postgresql://codex2api:password@127.0.0.1:5432/codex2api \
 ./codex2api
 ```
 
@@ -166,7 +162,7 @@ Windows PowerShell：
 ```powershell
 $env:CODEX2API_API_BIND = "0.0.0.0:8080"
 $env:CODEX2API_REDIS_URL = "redis://127.0.0.1:6379/0"
-$env:CODEX2API_DB = "D:\data\codex2api.sqlite"
+$env:CODEX2API_DATABASE_URL = "postgresql://codex2api:password@127.0.0.1:5432/codex2api"
 .\codex2api.exe
 ```
 
@@ -184,7 +180,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 管理员在 **用户管理** 创建用户，在 **订阅管理** 新增、续期、调整或终止用户订阅。列表以用户、套餐和独立订阅编号区分记录，“管理”打开设置、用量、重置卡、记录和登录设备。
 
-用户中心采用侧栏、顶部导航和紧凑内容区，风格与管理端一致。首页总览显示本人钱包、本人持有的全部独立订阅、实际请求与 Token / 计费用量趋势和最近订单；钱包位于“账户”，模型广场位于“工作台”；侧栏还可进入使用信息、订阅、套餐、订单、设备和用户信息。使用信息支持时间、平台、模型和结果筛选，展示本人请求明细；未知用量或费用不当作零。用户信息页为 `/user/profile/`，展示基本资料并提供修改密码。刷新先恢复会话，站内切换及刷新保留当前页面。新用户默认无订阅，同平台可同时持有多个订阅。没有 Free 默认套餐或到期兜底，过期记录保留且停止执行权益。钱包与套餐售价使用 USD，余额按整数美分保存，初始为零；管理员可在用户管理中增加或减少余额，增加或减少按事务内当前余额执行，不因其他钱包变动发生身份版本冲突；每次调整记录为系统操作，保留操作人及变动前后余额，原因可选填。管理端“流水管理”集中查看全部用户的来源、前后余额和时间，并支持时间范围与用户名筛选；用户端没有充值或调整余额接口，支付方式仅支持钱包余额。套餐只有已配置售价且开启“允许购买”时才显示在用户目录并允许购买、续订；预览、确认和支付均校验。未定价或停售套餐仍可由管理员分配，供应号池配置不影响展示。套餐可设置售价、购买有效天数、RPM 与并发限制（默认 40 和 10）以及仅管理端可见的默认供应号池；用户端展示套餐及订阅的生效限流值。点击下单先打开不落单的预览，核对套餐、有效期、升级抵扣和优惠券后选择支付方式；点击“确认订单”才创建待支付订单，再单独确认钱包支付，成功后显示订单完成。金额和权益在 SQLite 写事务中一起提交，重复确认或支付不重复落单、扣款。供应路由只用于执行，不作为钱包支付条件。
+用户中心采用侧栏、顶部导航和紧凑内容区，风格与管理端一致。首页总览显示本人钱包、本人持有的全部独立订阅、实际请求与 Token / 计费用量趋势和最近订单；钱包位于“账户”，模型广场位于“工作台”；侧栏还可进入使用信息、订阅、套餐、订单、设备和用户信息。使用信息支持时间、平台、模型和结果筛选，展示本人请求明细；未知用量或费用不当作零。用户信息页为 `/user/profile/`，展示基本资料并提供修改密码。刷新先恢复会话，站内切换及刷新保留当前页面。新用户默认无订阅，同平台可同时持有多个订阅。没有 Free 默认套餐或到期兜底，过期记录保留且停止执行权益。钱包与套餐售价使用 USD，余额按整数美分保存，初始为零；管理员可在用户管理中增加或减少余额，增加或减少按事务内当前余额执行，不因其他钱包变动发生身份版本冲突；每次调整记录为系统操作，保留操作人及变动前后余额，原因可选填。管理端“流水管理”集中查看全部用户的来源、前后余额和时间，并支持时间范围与用户名筛选；用户端没有充值或调整余额接口，支付方式仅支持钱包余额。套餐只有已配置售价且开启“允许购买”时才显示在用户目录并允许购买、续订；预览、确认和支付均校验。未定价或停售套餐仍可由管理员分配，供应号池配置不影响展示。套餐可设置售价、购买有效天数、RPM 与并发限制（默认 40 和 10）以及仅管理端可见的默认供应号池；用户端展示套餐及订阅的生效限流值。点击下单先打开不落单的预览，核对套餐、有效期、升级抵扣和优惠券后选择支付方式；点击“确认订单”才创建待支付订单，再单独确认钱包支付，成功后显示订单完成。金额和权益在 PostgreSQL 写事务中一起提交，重复确认或支付不重复落单、扣款。供应路由只用于执行，不作为钱包支付条件。
 
 同套餐可以续订；当期换套餐按日均售价判断，只能升级，降级或同价换套餐在到期后办理。升级按确认的预览时刻剩余时长计算新套餐费用，再抵扣原订阅的剩余价值，保持原到期时间和用量周期起点。购买、续订和管理员发放均保存各期售价快照，后续改价不重算原抵扣价值。预览有效期最多 5 分钟，确认订单后沿用该截止时间，最终应付金额在确认订单前显示。优惠券可缩短预览有效期；修改优惠码后必须重新计算。管理端“订单管理”支持按用户、订单号、套餐与状态查询明细和取消待支付订单；用户只能查看、支付或取消自己的订单。管理员在“优惠券管理”创建或停用固定 USD 金额优惠券，设置适用套餐、有效期、最低应付金额及总量 / 每人次数。预览不占用次数；确认订单时预留，取消或超时释放，支付成功后核销。已确认订单保留优惠快照，之后升级按优惠后的剩余价值抵扣；日均售价比较仍使用原标价。
 
@@ -198,15 +194,15 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 套餐设置 RPM 和并发限制，默认 40 和 10；订阅可覆盖或留空继承，0 表示无限。系统设置中没有这两项全局默认值。供应账户调度仍有独立并发上限、优先级和负载容量。HTTP 与 WebSocket 共用每份订阅的限制，内部换号不重复计算 RPM 或并发。
 
-运行态必须通过 `CODEX2API_REDIS_URL` 接入 Redis，存放会话粘连、响应归属、RPM 和并发租约。`CODEX2API_REDIS_PREFIX` 用于隔离共享 Redis 的不同部署；留空时按数据库绝对路径生成。容器内数据库路径相同的独立部署应设置不同前缀。未配置 Redis 或初始连接失败时启动报错；运行中 Redis 不可用时拒绝新的调度请求，不使用本地替代。响应归属写入 Redis 后才交付完成响应。SQLite 保留身份、配置和真实计费账本；候选与价格快照使用主动失效缓存，最近使用时间合并写入。
+运行态必须通过 `CODEX2API_REDIS_URL` 接入 Redis，存放会话粘连、响应归属、RPM 和并发租约。`CODEX2API_REDIS_PREFIX` 用于隔离共享 Redis 的不同部署；留空时按 PostgreSQL 主机、端口、库名及 schema 生成。独立部署可显式设置不同前缀。未配置 Redis 或初始连接失败时启动报错；运行中 Redis 不可用时拒绝新的调度请求，不使用本地替代。响应归属写入 Redis 后才交付完成响应。PostgreSQL 保留身份、配置和真实计费账本；业务快照统一使用本地热缓存、Redis 和合并回源，按业务域或对象失效。API 组/模型与订阅的限流统一使用 Redis；价格快照在 PostgreSQL 事务中校验版本，最近使用时间合并写入。
 
 语音通话功能已移除。原 Realtime、Live、通话创建、侧边 WebSocket、语音目录及语音选择 API 返回 `501 voice_calls_unavailable`，不会调用供应账号。客户端设置明确关闭语音入口，独立听写功能保留。
 
-订阅详情顶部提供 **账户设置、用量统计、重置卡、记录查询、登录设备** 页签。配置使用输入框、开关、下拉框和可增删列表，保存校验结构与版本；用量以指标、额度进度和每日图表展示，资源与日志使用表格。网页和客户端使用同一份 SQLite 数据。实现范围与验证边界见[订阅客户端数据与管理](docs/ARCHITECTURE.md#subscription-client-data-and-management)。
+订阅详情顶部提供 **账户设置、用量统计、重置卡、记录查询、登录设备** 页签。配置使用输入框、开关、下拉框和可增删列表，保存校验结构与版本；用量以指标、额度进度和每日图表展示，资源与日志使用表格。网页和客户端使用同一份 PostgreSQL 数据。实现范围与验证边界见[订阅客户端数据与管理](docs/ARCHITECTURE.md#subscription-client-data-and-management)。
 
 邀请记录、个人偏好、会话、侧栏项目、审批和安装状态由客户端或实际业务流程维护，管理端仅供查询；身份、功能政策、目录和订阅权益使用具名业务控件管理。Desktop 启动所需的账号、认证方式及设备标识由系统构造，用户无需填写协议字段。升级涉及启动配置的修复后，请重新打开 Desktop，避免继续使用进程内缓存的旧配置。
 
-**订阅额度独立**：使用 7 天或 30 天外层与可选 5 小时内层两个美元费用窗口，各订阅额度由其套餐决定，无订阅或订阅到期后不提供兜底权益。模型价格在请求开始时快照，按实际普通输入、缓存输入、缓存写入与输出结算，推理 Token 不重复收费。修改价格不重算历史；未知价格或用量明确标注。客户端响应、HTTP 头、SSE 与 WebSocket 读取同一 SQLite 账本。未完成的并发请求尚未结算，可能造成短暂超额。
+**订阅额度独立**：使用 7 天或 30 天外层与可选 5 小时内层两个美元费用窗口，各订阅额度由其套餐决定，无订阅或订阅到期后不提供兜底权益。模型价格在请求开始时快照，按实际普通输入、缓存输入、缓存写入与输出结算，推理 Token 不重复收费。修改价格不重算历史；未知价格或用量明确标注。客户端响应、HTTP 头、SSE 与 WebSocket 读取同一 PostgreSQL 账本。未完成的并发请求尚未结算，可能造成短暂超额。
 
 本系统真实用量单独记录，每条记录保留请求时的实际供应账户和来源名称，号池变化不会重写历史。供应账户详情提供“可用模型”和“调度”。同步上游模型只更新当前账号，手动添加项来自同平台计费配置（可未启用或未定价）；两者都不改变计费配置，空模型列表不接受请求。Grok 独立的“官方模型”功能已移除。
 
@@ -246,7 +242,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 现有 Codex 和 WHAM 路由均可通过此前缀访问，包括图片、搜索和账户资料。HTTP/WS 由应用提供，证书和外部 HTTPS/WSS 由反向代理处理；反向代理需保留请求路径并支持 WebSocket Upgrade。
 
-客户端配置保存在 SQLite 的 `virtual_client_state`，任务、会话归属和活动元数据保存在 `virtual_resources`，通知事件保存在 `virtual_events`，请求日志保存在 `virtual_request_logs`。数据跨重启、变更号池保留。默认配置首次读取时持久化，网页可修改；集合没有本账号记录时才返回空。私人配置不继承供应账户，也不等于完成外部付款、自动化执行或站点发布。
+客户端配置保存在 PostgreSQL 的 `virtual_client_state`，任务、会话归属和活动元数据保存在 `virtual_resources`，通知事件保存在 `virtual_events`，请求日志保存在 `virtual_request_logs`。数据跨重启、变更号池保留。默认配置首次读取时持久化，网页可修改；集合没有本账号记录时才返回空。私人配置不继承供应账户，也不等于完成外部付款、自动化执行或站点发布。
 
 云任务只列出本账号实际创建并记录的任务；详情和兄弟轮次请求校验归属。任务与已创建会话保留原供应来源，只有原账号仍属于当前号池且可用时才能继续执行；不能用新账号读取旧供应资源。ChatGPT conduit 凭据在服务端保存，以有期限且绑定虚拟账号及执行来源的本地凭据替换。只有上游实际返回会话 ID 后才建立会话归属。
 
@@ -271,11 +267,11 @@ Responses 子路径和同级模型、图片、搜索、实时接口按该客户�
 
 授权请求使用 `response_type=code`、`client_id=app_EMoamEEZ73f0CkXaXp7hrann`、`state`、`code_challenge_method=S256` 和 `code_challenge`。目前允许 HTTP 回环地址的 `/auth/callback`，必须包含端口，不接受外部回调、查询参数、用户信息或片段。授权码有效期两分钟，只能兑换一次，并绑定客户端、完整回调地址和 PKCE 证明。
 
-令牌接口接受 JSON 或表单。兑换需要 `grant_type=authorization_code`、`client_id`、`redirect_uri`、`code`、`code_verifier`；后续由客户端使用 `grant_type=refresh_token` 和设备 Refresh Token 续期。Access Token 与 ID Token 的字段及有效期遵循固定官方协议，Refresh Token 保持客户端 OAuth 原有契约；不复用网页登录 JWT。返回身份均为本地平台账户。业务请求使用 `Authorization: Bearer <access_token>`；若发送 `ChatGPT-Account-ID`，值必须是虚拟账号 ID。签名密钥、设备凭据哈希和 Access Token 哈希持久化到 SQLite，服务重启后可以继续续期。
+令牌接口接受 JSON 或表单。兑换需要 `grant_type=authorization_code`、`client_id`、`redirect_uri`、`code`、`code_verifier`；后续由客户端使用 `grant_type=refresh_token` 和设备 Refresh Token 续期。Access Token 与 ID Token 的字段及有效期遵循固定官方协议，Refresh Token 保持客户端 OAuth 原有契约；不复用网页登录 JWT。返回身份均为本地平台账户。业务请求使用 `Authorization: Bearer <access_token>`；若发送 `ChatGPT-Account-ID`，值必须是虚拟账号 ID。签名密钥、设备凭据哈希和 Access Token 哈希持久化到 PostgreSQL，服务重启后可以继续续期。
 
 每次授权创建独立设备会话。后台显示客户端／UA、安装标识、首次登录、最近续期和最近使用，支持下线单个设备；下线使它的 Refresh Token 和全部 Access Token 失效。安装标识和 UA 是客户端上报信息，不能可靠识别物理设备，也不表示当前在线。
 
-客户端仅接受虚拟消费账户的 OAuth Access Token，已移除 API Key 客户端模式。授权 scope 随设备保存，刷新仅可保持或缩小；客户端令牌不能管理账户、套餐、价格、路由或读取供应凭据。管理端和用户端均使用 JWT，网页通过各自 HttpOnly Cookie 携带；接口也可使用对应用途的 Bearer JWT，写入仍要求 X-CSRF-Token。管理员与用户使用两套独立 RSA 密钥，保存在 SQLite 的 `jwt_signing_keys`。验签只允许服务端固定的 RS256，拒绝 none、空算法、其他算法、未知密钥和旧随机会话凭据。签名之外还校验 account_type、token_use、aud、iss、有效期及服务端会话/设备撤销记录；错误 Bearer 不会回退使用 Cookie。首次应用账户结构迁移会撤销旧网页登录，需要重新登录管理或用户网页；Codex OAuth 的签名密钥、设备授权和令牌保持原有契约，账户、订阅、钱包及用量历史保留。旧 API Key 用量作为历史来源保留，不再保留可用密钥。
+客户端仅接受虚拟消费账户的 OAuth Access Token，已移除 API Key 客户端模式。授权 scope 随设备保存，刷新仅可保持或缩小；客户端令牌不能管理账户、套餐、价格、路由或读取供应凭据。管理端和用户端均使用 JWT，网页通过各自 HttpOnly Cookie 携带；接口也可使用对应用途的 Bearer JWT，写入仍要求 X-CSRF-Token。管理员与用户使用两套独立 RSA 密钥，保存在 PostgreSQL 的 `jwt_signing_keys`。验签只允许服务端固定的 RS256，拒绝 none、空算法、其他算法、未知密钥和旧随机会话凭据。签名之外还校验 account_type、token_use、aud、iss、有效期及服务端会话/设备撤销记录；错误 Bearer 不会回退使用 Cookie。Codex OAuth 的签名密钥、设备授权和令牌保持原有契约。
 
 未实现的路径和 HTTP 方法返回 `501 / endpoint_not_implemented`，在 **系统设置 → 端点诊断** 中记录方法、路径、次数、首次和最近时间，不保存查询参数、请求正文、密码或令牌。诊断只覆盖到达代理此前缀的请求，无法捕获应用绕过代理的直连流量。
 
@@ -317,7 +313,7 @@ Proxy 进程内部为每个账户维护独立的上游通信上下文。账户�
 - `installation_id`；
 - HTTP/WebSocket 客户端状态；
 - 会话、线程和回合相关状态；
-- 账户专属身份与 token（SQLite，不落官方 `$CODEX_HOME` 文件）。
+- 账户专属身份与 token（PostgreSQL，不落官方 `$CODEX_HOME` 文件）。
 
 以下内容不能在账户之间共享：
 

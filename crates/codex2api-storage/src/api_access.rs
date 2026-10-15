@@ -4,7 +4,7 @@ use crate::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{FromRow, PgConnection};
 
 #[derive(Clone, Debug)]
 pub struct ApiPrincipal {
@@ -88,23 +88,27 @@ impl KeyRow {
 }
 const KEY_COLUMNS:&str="k.id,k.name,k.group_id,g.name AS group_name,g.provider_id,k.key_prefix,k.enabled,k.revoked_at,k.created_at,k.last_used_at,k.revision,k.user_id,u.username,
  (SELECT COUNT(*) FROM usage_records r WHERE r.key_id=k.id) AS total_requests,
- (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(input_tokens)=COUNT(*) THEN SUM(input_tokens) END FROM usage_records r WHERE r.key_id=k.id) AS input_tokens,
- (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(output_tokens)=COUNT(*) THEN SUM(output_tokens) END FROM usage_records r WHERE r.key_id=k.id) AS output_tokens,
- (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(cost_nano_usd)=COUNT(*) THEN SUM(cost_nano_usd) END FROM usage_records r WHERE r.key_id=k.id) AS cost_nano_usd,
+ (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(input_tokens)=COUNT(*) THEN SUM(input_tokens)::bigint END FROM usage_records r WHERE r.key_id=k.id) AS input_tokens,
+ (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(output_tokens)=COUNT(*) THEN SUM(output_tokens)::bigint END FROM usage_records r WHERE r.key_id=k.id) AS output_tokens,
+ (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(cost_nano_usd)=COUNT(*) THEN SUM(cost_nano_usd)::bigint END FROM usage_records r WHERE r.key_id=k.id) AS cost_nano_usd,
  (SELECT COUNT(*) FROM usage_records r WHERE r.key_id=k.id AND r.cost_nano_usd IS NULL) AS unknown_cost_requests";
 
 pub(crate) async fn principal_on(
-    connection: &mut SqliteConnection,
+    storage: &Storage,
+    connection: &mut PgConnection,
     key: &str,
     hash: bool,
 ) -> Result<Option<ApiPrincipal>> {
-    let selector = if hash { "k.token_hash=?" } else { "k.id=?" };
-    let row:Option<(String,String,String)>=sqlx::query_as(&format!("SELECT k.id,k.user_id,k.group_id FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {selector} AND k.enabled=1 AND k.revoked_at IS NULL AND u.enabled=1 AND g.enabled=1 AND g.deleted=0"))
+    let selector = if hash { "k.token_hash=$1" } else { "k.id=$1" };
+    let row:Option<(String,String,String,i64)>=sqlx::query_as(&format!("SELECT k.id,k.user_id,k.group_id,g.revision FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {selector} AND k.enabled=TRUE AND k.revoked_at IS NULL AND u.enabled=TRUE AND g.enabled=TRUE AND g.deleted=FALSE"))
         .bind(key).fetch_optional(&mut *connection).await?;
-    let Some((key_id, user_id, group_id)) = row else {
+    let Some((key_id, user_id, group_id, revision)) = row else {
         return Ok(None);
     };
-    let Some(group) = crate::api_groups::group_on(connection, &group_id).await? else {
+    let Some(group) = storage
+        .api_group_snapshot_on(connection, &group_id, revision)
+        .await?
+    else {
         return Ok(None);
     };
     Ok(Some(ApiPrincipal {
@@ -119,7 +123,7 @@ impl Storage {
             return Ok(None);
         }
         let mut tx = self.pool().begin().await?;
-        let principal = principal_on(&mut tx, &crate::hash_token(token), true).await?;
+        let principal = principal_on(self, &mut tx, &crate::hash_token(token), true).await?;
         tx.commit().await?;
         Ok(principal)
     }
@@ -133,15 +137,18 @@ impl Storage {
     ) -> Result<ListPage<ApiKeyView>> {
         query.validate()?;
         let selected_owner = owner.unwrap_or(&query.user_id);
-        let condition = "(?='' OR k.user_id=?) AND (?='' OR k.group_id=?) AND (?='' OR k.id=?) AND (?='' OR g.provider_id=?) AND (?='' OR instr(lower(k.name||' '||k.key_prefix||' '||u.username),lower(?))>0) AND (?='' OR (? IN ('active','enabled') AND k.enabled=1 AND k.revoked_at IS NULL) OR (?='disabled' AND k.enabled=0 AND k.revoked_at IS NULL) OR (?='revoked' AND k.revoked_at IS NOT NULL))";
-        let mut tx = self.pool().begin().await?;
+        let condition = "($1='' OR k.user_id=$2) AND ($3='' OR k.group_id=$4) AND ($5='' OR k.id=$6) AND ($7='' OR g.provider_id=$8) AND ($9='' OR strpos(lower(k.name||' '||k.key_prefix||' '||u.username),lower($10))>0) AND ($11='' OR ($12 IN ('active','enabled') AND k.enabled=TRUE AND k.revoked_at IS NULL) OR ($13='disabled' AND k.enabled=FALSE AND k.revoked_at IS NULL) OR ($14='revoked' AND k.revoked_at IS NOT NULL))";
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         if let Some(owner) = owner {
             crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         }
         let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {condition}"))
             .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id).bind(&query.provider_id).bind(&query.provider_id)
             .bind(&query.search).bind(&query.search).bind(&query.status).bind(&query.status).bind(&query.status).bind(&query.status).fetch_one(&mut *tx).await?;
-        let items=sqlx::query_as::<_,KeyRow>(&format!("SELECT {KEY_COLUMNS} FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {condition} ORDER BY k.created_at DESC,k.id LIMIT ? OFFSET ?"))
+        let items=sqlx::query_as::<_,KeyRow>(&format!("SELECT {KEY_COLUMNS} FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {condition} ORDER BY k.created_at DESC,k.id LIMIT $15 OFFSET $16"))
             .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id).bind(&query.provider_id).bind(&query.provider_id)
             .bind(&query.search).bind(&query.search).bind(&query.status).bind(&query.status).bind(&query.status).bind(&query.status)
             .bind(i64::from(query.page_size)).bind(query.offset_for(total)).fetch_all(&mut *tx).await?.into_iter().map(|r|r.view(owner.is_none())).collect();
@@ -177,7 +184,11 @@ impl UserStore {
     }
     pub async fn api_catalog(&self, owner: &str, query: &ApiListQuery) -> Result<Value> {
         query.validate()?;
-        let mut tx = self.storage.pool().begin().await?;
+        let mut tx = self
+            .storage
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         let group = if query.group_id.is_empty() {
             None
@@ -225,9 +236,9 @@ impl UserStore {
         group_id: &str,
     ) -> Result<CreatedApiKey> {
         valid_key_name(name)?;
-        let mut tx = self.storage.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.storage.pool().begin().await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
-        let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM regular_users u CROSS JOIN api_groups g WHERE u.id=? AND u.enabled=1 AND g.id=? AND g.enabled=1 AND g.deleted=0)").bind(owner).bind(group_id).fetch_one(&mut *tx).await?;
+        let available:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM regular_users u CROSS JOIN api_groups g WHERE u.id=$1 AND u.enabled=TRUE AND g.id=$2 AND g.enabled=TRUE AND g.deleted=FALSE)").bind(owner).bind(group_id).fetch_one(&mut *tx).await?;
         if !available {
             return Err(StorageError::Api {
                 code: "api_group_unavailable",
@@ -237,9 +248,9 @@ impl UserStore {
         let id = uuid::Uuid::new_v4().to_string();
         let secret = format!("sk-c2a-{}", crate::oauth_secret());
         let prefix = &secret[..15];
-        sqlx::query("INSERT INTO api_keys(id,user_id,group_id,name,token_hash,key_prefix,created_at) VALUES(?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO api_keys(id,user_id,group_id,name,token_hash,key_prefix,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
             .bind(&id).bind(owner).bind(group_id).bind(name.trim()).bind(crate::hash_token(&secret)).bind(prefix).bind(chrono::Utc::now().to_rfc3339()).execute(&mut *tx).await?;
-        let key=sqlx::query_as::<_,KeyRow>(&format!("SELECT {KEY_COLUMNS} FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE k.id=?"))
+        let key=sqlx::query_as::<_,KeyRow>(&format!("SELECT {KEY_COLUMNS} FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE k.id=$1"))
             .bind(&id).fetch_one(&mut *tx).await?.view(false);
         tx.commit().await?;
         Ok(CreatedApiKey { key, secret })
@@ -256,14 +267,14 @@ impl UserStore {
         self.storage
             .require_account_scope(owner, crate::AccountScope::User)
             .await?;
-        Ok(sqlx::query("UPDATE api_keys SET name=?,enabled=?,revision=revision+1 WHERE id=? AND user_id=? AND revision=? AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM regular_users WHERE id=? AND enabled=1)")
+        Ok(sqlx::query("UPDATE api_keys SET name=$1,enabled=$2,revision=revision+1 WHERE id=$3 AND user_id=$4 AND revision=$5 AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM regular_users WHERE id=$6 AND enabled=TRUE)")
             .bind(name.trim()).bind(enabled).bind(id).bind(owner).bind(revision).bind(owner).execute(self.storage.pool()).await?.rows_affected()==1)
     }
     pub async fn revoke_api_key(&self, owner: &str, id: &str, revision: i64) -> Result<bool> {
         self.storage
             .require_account_scope(owner, crate::AccountScope::User)
             .await?;
-        Ok(sqlx::query("UPDATE api_keys SET enabled=0,revoked_at=?,revision=revision+1 WHERE id=? AND user_id=? AND revision=? AND revoked_at IS NULL")
+        Ok(sqlx::query("UPDATE api_keys SET enabled=FALSE,revoked_at=$1,revision=revision+1 WHERE id=$2 AND user_id=$3 AND revision=$4 AND revoked_at IS NULL")
             .bind(chrono::Utc::now().to_rfc3339()).bind(id).bind(owner).bind(revision).execute(self.storage.pool()).await?.rows_affected()==1)
     }
 }

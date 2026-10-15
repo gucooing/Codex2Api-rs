@@ -47,11 +47,11 @@ validation are complete.
 ## Product constraints
 
 - One process.
-- SQLite storage (`data/codex2api.sqlite`).
+- PostgreSQL storage (`CODEX2API_DATABASE_URL` is required); no historical migrations or SQLite support.
 - Redis is required for affinity, response ownership, RPM and concurrency leases.
   Missing configuration or failed initial connection must stop startup. Do not add
   in-process substitutes when Redis is absent or unavailable.
-- Isolated persistent per-account identity and HTTP fingerprint in SQLite (no `$CODEX_HOME` files).
+- Isolated persistent per-account identity and HTTP fingerprint in PostgreSQL (no `$CODEX_HOME` files).
 - HTTP fingerprint: official header names/formula; originator + UA version are constants; OS/terminal are random per account then frozen. Do not use the proxy host. Do not forge TLS/JA3.
 - Admin web: one user, username/password, default `admin` / `admin`.
 - User web/API, administrator web/API, and AI API have separate routers and
@@ -129,7 +129,7 @@ validation are complete.
 - responses path: `/responses`
 - OAuth scopes: `openid profile email offline_access api.connectors.read api.connectors.invoke`
 - headers: `originator`, `User-Agent`, `Authorization: Bearer`, `ChatGPT-Account-ID`, `x-codex-installation-id`
-- installation_id: UUID persisted on the account SQLite row
+- installation_id: UUID persisted on the account PostgreSQL row
 
 ## Coding rules
 
@@ -140,7 +140,7 @@ validation are complete.
   in `frontend/src/components/providers/chatgpt/` or `providers/grok/`.
 - A channel may not import another channel or add branches to the other channel's
   authentication, transport or handlers. Root modules may dispatch by provider;
-  shared SQLite, supplier pools, billing, sessions and UI layout stay protocol-neutral.
+  shared PostgreSQL, supplier pools, billing, sessions and UI layout stay protocol-neutral.
 - Common supplier error handling is common within a provider: ChatGPT quota
   probes and administrator refreshes reuse ChatGPT execution's credential refresh,
   retry and error classification. Never apply ChatGPT error codes or recovery
@@ -231,7 +231,7 @@ virtual account as a subscription account, following the ChatGPT subscription
 account model. Every client identity belongs to a user's explicitly created subscription.
 Subscriptions are administrator grants or local-wallet purchases, never official
 checkout payments. Grants, renewals, plan changes and expiration must agree in
-administration, SQLite, client responses and execution checks. Expiration ends
+administration, PostgreSQL, client responses and execution checks. Expiration ends
 subscription benefits without selecting another plan.
 Keep client-owned state under the ownership rule above. Every requested subscription
 or endpoint repair must include its corresponding administration operation or record
@@ -241,7 +241,7 @@ Before changing subscription client endpoints, read
 [Subscription client data and management](docs/ARCHITECTURE.md#subscription-client-data-and-management).
 
 - Client identity, private data, preferences and feature configuration belong to the
-  virtual account. Configure and persist them locally in SQLite and expose them in
+  virtual account. Configure and persist them locally in PostgreSQL and expose them in
   the admin web UI. Do not inherit a bound upstream account's private data.
 - Private data is locally configurable virtual data; do not unconditionally blank
   it or disable its feature merely because the account is virtual.
@@ -249,7 +249,7 @@ Before changing subscription client endpoints, read
   records. Replacing upstream identity fields does not establish data ownership.
 - Supplier quota synchronization has been removed. Never restore `sync_quota`,
   fixed usage percentages, or passthrough supplier quotas for virtual clients.
-  Read virtual spending limits and actual billed usage from SQLite, including HTTP headers,
+  Read virtual spending limits and actual billed usage from PostgreSQL, including HTTP headers,
   SSE events, WebSocket events and quota pages. Supplier binding is for execution.
 - Virtual quota has at most two nested windows, using model-priced USD costs:
   the outer window is 7 days or 30 days, and the optional inner window is 5
@@ -342,5 +342,5 @@ Before changing subscription client endpoints, read
 - Keep account isolation. Never share auth, installation_id, HTTP client, or session state.
 - Persist identity; do not regenerate installation_id on re-login of the same ChatGPT account.
 - Dynamic IDs (session/thread/turn/request) stay request-scoped.
-- Write compiling Rust (edition 2024). Prefer `anyhow`/`thiserror`, `axum` 0.8, `sqlx` sqlite, `reqwest` rustls.
+- Write compiling Rust (edition 2024). Prefer `anyhow`/`thiserror`, `axum` 0.8, `sqlx` postgres, `reqwest` rustls.
 - After your crate is implemented, `cargo check -p <crate>` should pass.

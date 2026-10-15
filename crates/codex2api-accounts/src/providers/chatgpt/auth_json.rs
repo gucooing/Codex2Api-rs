@@ -6,7 +6,7 @@ use codex2api_storage::SupplierTokens;
 use crate::error::Result;
 
 /// In-memory ChatGPT token payload. Shape matches official `auth.json` so
-/// request/token fields stay compatible; persistence is SQLite `supplier_tokens`.
+/// request/token fields stay compatible; persistence is PostgreSQL `supplier_tokens`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct AuthDotJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]

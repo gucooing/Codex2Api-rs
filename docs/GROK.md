@@ -6,7 +6,7 @@ Grok 与 ChatGPT 是独立渠道。客户端参考 [gucooing/grok-build](https:/
 
 各 crate 的 `src/providers/grok/` 保存 Grok 身份、认证、请求、响应和管理实现；`src/providers/chatgpt/` 保存 ChatGPT 实现。入口模块仅负责渠道分发。数据库、供应池、请求账本、模型计价、用户钱包和订阅事务是公共基础能力。`scripts/check-provider-boundaries.py` 检查跨渠道导入。
 
-Grok 供应凭据使用独立的 `GrokCredentials`，不会通过 Codex `auth.json` 解析。每个供应账户在 SQLite 内保存独立身份、安装 UUID、冻结的设备资料、凭据版本和代理；HTTP 连接与刷新锁按账户隔离。供应表中的 `chatgpt_account_id` / `chatgpt_user_id` 是兼容既有数据库的列名，Grok 分别保存带个人／团队前缀的主体及官方用户编号，不跨提供商合并。
+Grok 供应凭据使用独立的 `GrokCredentials`，不会通过 Codex `auth.json` 解析。每个供应账户在 PostgreSQL 内保存独立身份、安装 UUID、冻结的设备资料、凭据版本和代理；HTTP 连接与刷新锁按账户隔离。供应表中的 `chatgpt_account_id` / `chatgpt_user_id` 是兼容既有数据库的列名，Grok 分别保存带个人／团队前缀的主体及官方用户编号，不跨提供商合并。
 
 ## 供应授权和资料
 
@@ -16,7 +16,7 @@ RT 创建一行一个，每批最多 50 条；页面依次提交并显示每行�
 
 官方供应地址是 `https://cli-chat-proxy.grok.com/v1`，issuer 是 `https://auth.x.ai`。请求使用 Grok Build UA、`X-XAI-Token-Auth: xai-grok-cli`、`x-grok-client-version` 和供应身份，不携带 Codex 头或客户端账户凭据。刷新按凭据版本比较更新，迟到结果不能覆盖新授权。
 
-供应列表和详情以邮箱作为主标识。订阅名称优先采用 `/settings` 的 `subscription_tier_display`；缺失时才将 `/user?include=subscription` 的内部档位转换为官方名称，不会把缺失值猜成付费订阅。资料保存在账户和官方快照中，旧账户可以通过“刷新官方资料”更新。额度从 `/billing?format=credits` 的实际周期与百分比生成紧凑摘要，继续使用既有 SQLite 缓存。
+供应列表和详情以邮箱作为主标识。订阅名称优先采用 `/settings` 的 `subscription_tier_display`；缺失时才将 `/user?include=subscription` 的内部档位转换为官方名称，不会把缺失值猜成付费订阅。资料保存在账户和官方快照中，旧账户可以通过“刷新官方资料”更新。额度从 `/billing?format=credits` 的实际周期与百分比生成紧凑摘要，继续使用既有 PostgreSQL 缓存。
 
 ## 模型和计价
 

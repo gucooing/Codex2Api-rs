@@ -8,12 +8,12 @@ use axum::{
 use ring::signature::KeyPair;
 
 async fn fixture() -> (
-    tempfile::TempDir,
+    codex2api_storage::test_support::TestDirectory,
     GrokAuthService,
     tokio::task::JoinHandle<()>,
 ) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = codex2api_storage::Storage::open(dir.path().join("grok.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("grok-pg"))
         .await
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

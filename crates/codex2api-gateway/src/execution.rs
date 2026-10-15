@@ -116,13 +116,17 @@ pub(crate) async fn admit(
     };
     state.storage.admit_api_request(principal, &record).await?;
     let mut log = ApiLog::new(state.storage.clone(), record, started);
-    let permit = match state.runtime.acquire(
-        &principal.user_id,
-        &principal.key_id,
-        &principal.group.id,
-        &model,
-        limits,
-    ) {
+    let permit = match state
+        .runtime
+        .acquire(
+            &principal.user_id,
+            &principal.key_id,
+            &principal.group.id,
+            &model,
+            limits,
+        )
+        .await
+    {
         Ok(permit) => permit,
         Err(error) => {
             let error = GatewayError::from(error);
@@ -175,16 +179,10 @@ pub(crate) async fn owned_headers(
 ) -> codex2api_upstream::Result<HeaderMap> {
     let mut headers = inbound.clone();
     if let Some(turn) = headers.get("x-codex-turn-state") {
-        let key = format!(
-            "api_turn_state:{}",
-            codex2api_scheduler::hash(
-                &serde_json::json!([
-                    route.owner_id,
-                    route.provider_id,
-                    turn.to_str().unwrap_or("")
-                ])
-                .to_string()
-            )
+        let key = codex2api_storage::RoutingKey::turn(
+            &route.owner_id,
+            &route.provider_id,
+            turn.to_str().unwrap_or(""),
         );
         if state.storage.routing_affinity(&key).await?.as_deref()
             != Some(context.account.id.as_str())
@@ -203,32 +201,23 @@ pub(crate) async fn remember_affinity(
     headers: Option<&HeaderMap>,
 ) -> Result<()> {
     let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
-    if let Some(id) = response_id.filter(|id| !id.is_empty() && id.len() <= 256) {
-        state
-            .storage
-            .save_routing_affinity(
-                &codex2api_scheduler::previous_key(&route.owner_id, &route.provider_id, id),
-                account,
-                ttl,
-            )
-            .await?;
-    }
-    if let Some(turn) = headers
+    let response = response_id
+        .filter(|id| !id.is_empty() && id.len() <= 256)
+        .map(|id| codex2api_storage::RoutingKey::response(&route.owner_id, &route.provider_id, id));
+    let turn = headers
         .and_then(|h| h.get("x-codex-turn-state"))
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty() && v.len() <= 16384)
-    {
-        let key = format!(
-            "api_turn_state:{}",
-            codex2api_scheduler::hash(
-                &serde_json::json!([route.owner_id, route.provider_id, turn]).to_string()
-            )
-        );
-        state
-            .storage
-            .save_routing_affinity(&key, account, ttl)
-            .await?;
-    }
+        .map(|v| codex2api_storage::RoutingKey::turn(&route.owner_id, &route.provider_id, v));
+    let bindings: Vec<_> = response
+        .iter()
+        .chain(turn.iter())
+        .map(|key| (key, account))
+        .collect();
+    state
+        .storage
+        .save_routing_affinities(&bindings, ttl)
+        .await?;
     Ok(())
 }
 

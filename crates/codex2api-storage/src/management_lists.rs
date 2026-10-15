@@ -3,12 +3,12 @@ use crate::{
     ListPage, ListQuery, ModelConfig, OutboundProxy, Result, Storage, SupplierTag, User,
     UserSubscription, VirtualPlan,
 };
-use sqlx::{QueryBuilder, Sqlite};
+use sqlx::{Postgres, QueryBuilder};
 
 const SUPPLIERS: &str = "supplier_accounts a LEFT JOIN supplier_tokens k ON k.account_id=a.id LEFT JOIN supplier_health h ON h.account_id=a.id";
-const SUPPLIER_STATUS: &str = "CASE WHEN a.status!='active' THEN 'disabled' WHEN COALESCE(k.access_token,'')='' OR h.rejected_auth_revision=a.auth_revision THEN 'error' WHEN h.payment_required_at IS NOT NULL THEN 'payment_required' WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>unixepoch() THEN 'quota_exhausted' ELSE 'active' END";
+const SUPPLIER_STATUS: &str = "CASE WHEN a.status!='active' THEN 'disabled' WHEN COALESCE(k.access_token,'')='' OR h.rejected_auth_revision=a.auth_revision THEN 'error' WHEN h.payment_required_at IS NOT NULL THEN 'payment_required' WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>floor(extract(epoch FROM clock_timestamp()))::bigint THEN 'quota_exhausted' ELSE 'active' END";
 
-pub(crate) fn supplier_predicate(q: &mut QueryBuilder<'static, Sqlite>, filter: &ListQuery) {
+pub(crate) fn supplier_predicate(q: &mut QueryBuilder<'static, Postgres>, filter: &ListQuery) {
     search(
         q,
         &["a.display_name", "a.email", "a.provider_id"],
@@ -29,7 +29,7 @@ pub(crate) fn supplier_predicate(q: &mut QueryBuilder<'static, Sqlite>, filter: 
 
 impl Storage {
     pub async fn plan_options(&self, provider: &str) -> Result<Vec<serde_json::Value>> {
-        let rows: Vec<(String,String,String,String)> = sqlx::query_as("SELECT id,name,provider_id,plan_type FROM virtual_plans WHERE (?='' OR provider_id=?) ORDER BY provider_id,name,id")
+        let rows: Vec<(String,String,String,String)> = sqlx::query_as("SELECT id,name,provider_id,plan_type FROM virtual_plans WHERE ($1='' OR provider_id=$2) ORDER BY provider_id,name,id")
             .bind(provider).bind(provider).fetch_all(self.pool()).await?;
         Ok(rows.into_iter().map(|(id,name,provider,kind)|serde_json::json!({"id":id,"name":name,"provider_id":provider,"plan_type":kind})).collect())
     }
@@ -43,13 +43,13 @@ impl Storage {
         if search.len() > 1024 || plan_id.len() > 128 {
             return Err(crate::StorageError::InvalidAdminUpdate("模型查询参数无效"));
         }
-        let rows: Vec<(String,String,String,bool)> = sqlx::query_as("SELECT provider_id,model,kind,enabled FROM model_catalog m WHERE deleted=0 AND (?='' OR provider_id=?) AND instr(lower(model),lower(?))>0 AND (enabled=1 OR EXISTS(SELECT 1 FROM virtual_plans p,json_each(p.config,'$.models') s WHERE p.id=? AND json_extract(s.value,'$.provider_id')=m.provider_id AND json_extract(s.value,'$.model')=m.model)) ORDER BY provider_id,model")
+        let rows: Vec<(String,String,String,bool)> = sqlx::query_as("SELECT provider_id,model,kind,enabled FROM model_catalog m WHERE deleted=FALSE AND ($1='' OR provider_id=$2) AND strpos(lower(model),lower($3))>0 AND (enabled=TRUE OR EXISTS(SELECT 1 FROM virtual_plans p,jsonb_array_elements(p.config::jsonb #> '{models}') s WHERE p.id=$4 AND (s.value::jsonb #>> '{provider_id}')=m.provider_id AND (s.value::jsonb #>> '{model}')=m.model)) ORDER BY provider_id,model")
             .bind(provider).bind(provider).bind(search.trim()).bind(plan_id).fetch_all(self.pool()).await?;
         Ok(rows.into_iter().map(|(provider,model,kind,enabled)|serde_json::json!({"provider_id":provider,"model":model,"kind":kind,"enabled":enabled})).collect())
     }
 
     pub async fn tag_options(&self, provider: &str) -> Result<Vec<SupplierTag>> {
-        Ok(sqlx::query_as("SELECT t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,(SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id) AS binding_count FROM supplier_tags t WHERE (?='' OR t.provider_id=?) ORDER BY t.provider_id,t.name,t.id")
+        Ok(sqlx::query_as("SELECT t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,(SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id) AS binding_count FROM supplier_tags t WHERE ($1='' OR t.provider_id=$2) ORDER BY t.provider_id,t.name,t.id")
             .bind(provider).bind(provider).fetch_all(self.pool()).await?)
     }
 
@@ -73,7 +73,7 @@ impl Storage {
         provider: &str,
         model: &str,
     ) -> Result<Vec<crate::ModelPrice>> {
-        Ok(sqlx::query_as("SELECT * FROM model_prices WHERE provider_id=? AND model=? ORDER BY tier,min_input_tokens")
+        Ok(sqlx::query_as("SELECT * FROM model_prices WHERE provider_id=$1 AND model=$2 ORDER BY tier,min_input_tokens")
             .bind(provider).bind(model).fetch_all(self.pool()).await?)
     }
 
@@ -83,7 +83,7 @@ impl Storage {
         model: &str,
     ) -> Result<Vec<crate::ImagePrice>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM model_image_prices WHERE provider_id=? AND model=? ORDER BY resolution",
+            "SELECT * FROM model_image_prices WHERE provider_id=$1 AND model=$2 ORDER BY resolution",
         )
         .bind(provider)
         .bind(model)
@@ -93,7 +93,7 @@ impl Storage {
 
     pub async fn outbound_proxy_account_count(&self, id: &str) -> Result<i64> {
         Ok(
-            sqlx::query_scalar("SELECT COUNT(*) FROM supplier_accounts WHERE proxy_id=?")
+            sqlx::query_scalar("SELECT COUNT(*) FROM supplier_accounts WHERE proxy_id=$1")
                 .bind(id)
                 .fetch_one(self.pool())
                 .await?,
@@ -109,7 +109,7 @@ impl Storage {
             filter,
             "w.*",
             "wallet_entries w JOIN regular_users u ON u.id=w.user_id",
-            "julianday(w.created_at) DESC,w.rowid DESC",
+            "(w.created_at)::timestamptz DESC,w.sort_id DESC",
             |q| {
                 q.push(" AND w.kind IN ('order_payment','system_adjustment') AND w.user_id=")
                     .push_bind(owner.to_owned());
@@ -119,7 +119,7 @@ impl Storage {
     }
 
     pub async fn supplier_tag_labels(&self, account: &str) -> Result<Vec<(String, String)>> {
-        Ok(sqlx::query_as("SELECT t.id,t.name FROM supplier_tags t JOIN supplier_tag_members m ON m.tag_id=t.id WHERE m.account_id=? ORDER BY t.id").bind(account).fetch_all(self.pool()).await?)
+        Ok(sqlx::query_as("SELECT t.id,t.name FROM supplier_tags t JOIN supplier_tag_members m ON m.tag_id=t.id WHERE m.account_id=$1 ORDER BY t.id").bind(account).fetch_all(self.pool()).await?)
     }
 
     pub async fn supplier_page(&self, filter: &ListQuery) -> Result<ListPage<String>> {
@@ -134,7 +134,7 @@ impl Storage {
     pub async fn supplier_selection(&self, filter: &ListQuery) -> Result<Vec<serde_json::Value>> {
         filter.validate()?;
         let mut q = QueryBuilder::new(format!(
-            "SELECT a.id,a.provider_id,(SELECT json_group_array(tag_id) FROM supplier_tag_members WHERE account_id=a.id) FROM {SUPPLIERS} WHERE 1=1"
+            "SELECT a.id,a.provider_id,(SELECT COALESCE(jsonb_agg(tag_id),'[]'::jsonb)::text FROM supplier_tag_members WHERE account_id=a.id) FROM {SUPPLIERS} WHERE 1=1"
         ));
         supplier_predicate(&mut q, filter);
         q.push(" ORDER BY a.created_at,a.id LIMIT 1001");
@@ -192,7 +192,7 @@ impl Storage {
     }
 
     pub async fn plan_page(&self, filter: &ListQuery) -> Result<ListPage<VirtualPlan>> {
-        self.read_list(filter, "p.*", "virtual_plans p", "p.rowid", |q| {
+        self.read_list(filter, "p.*", "virtual_plans p", "p.sort_id", |q| {
             search(
                 q,
                 &["p.name", "p.provider_id", "p.plan_type"],
@@ -215,7 +215,7 @@ impl Storage {
             "model_catalog m",
             "m.provider_id,m.model",
             |q| {
-                q.push(" AND m.deleted=0");
+                q.push(" AND m.deleted=FALSE");
                 search(q, &["m.model", "m.provider_id"], &filter.search);
                 exact(q, "m.provider_id", &filter.provider_id);
                 exact(q, "m.kind", &filter.kind);
@@ -239,7 +239,7 @@ impl Storage {
             return Err(crate::StorageError::InvalidAdminUpdate("代理筛选条件无效"));
         }
         // Credentials are excluded from searchable URL components.
-        let source = "(SELECT p.*, CASE WHEN substr(authority,1,1)='[' THEN substr(authority,2,instr(authority,']')-2) WHEN instr(authority,':')>0 THEN substr(authority,1,instr(authority,':')-1) ELSE authority END AS host FROM (SELECT p.*, CASE WHEN instr(address,'@')>0 THEN substr(address,instr(address,'@')+1) ELSE address END AS authority FROM (SELECT p.*, substr(url,1,instr(url,'://')-1) AS protocol, rtrim(substr(url,instr(url,'://')+3),'/') AS address FROM outbound_proxies p) p) p) p";
+        let source = "(SELECT p.*, CASE WHEN substr(authority,1,1)='[' THEN substr(authority,2,strpos(authority,']')-2) WHEN strpos(authority,':')>0 THEN substr(authority,1,strpos(authority,':')-1) ELSE authority END AS host FROM (SELECT p.*, CASE WHEN strpos(address,'@')>0 THEN substr(address,strpos(address,'@')+1) ELSE address END AS authority FROM (SELECT p.*, substr(url,1,strpos(url,'://')-1) AS protocol, rtrim(substr(url,strpos(url,'://')+3),'/') AS address FROM outbound_proxies p) p) p) p";
         self.read_list(filter, "p.*", source, "p.created_at,p.id", |q| {
             search(q, &["p.name", "p.host"], &filter.search);
             exact(q, "p.protocol", &filter.protocol);
@@ -248,10 +248,10 @@ impl Storage {
                     q.push(" AND p.connection_ok IS NULL");
                 }
                 "success" => {
-                    q.push(" AND p.connection_ok=1");
+                    q.push(" AND p.connection_ok=TRUE");
                 }
                 "failed" => {
-                    q.push(" AND p.connection_ok=0");
+                    q.push(" AND p.connection_ok=FALSE");
                 }
                 _ => {}
             }
@@ -278,7 +278,7 @@ impl Storage {
                 exact(q, "v.user_id", &filter.user_id);
                 exact(q, "v.plan_id", &filter.plan_id);
                 exact(q, "v.provider_id", &filter.provider_id);
-                if !filter.include_expired { q.push(" AND (v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>").push_bind(now).push(")"); }
+                if !filter.include_expired { q.push(" AND (v.subscription_expires_at IS NULL OR floor(extract(epoch FROM (v.subscription_expires_at)::timestamptz))::bigint>").push_bind(now).push(")"); }
             }).await
     }
 }

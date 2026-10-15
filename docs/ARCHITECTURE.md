@@ -28,7 +28,7 @@ One Rust process runs four listeners: OAuth/client protocols (8080), administrat
 | Crate | Responsibility |
 | --- | --- |
 | codex2api-core | Provider identities, entitlement rules and model price presets |
-| codex2api-storage | SQLite schema, credentials, configuration, resources and request ledger |
+| codex2api-storage | PostgreSQL schema, credentials, configuration, resources and request ledger |
 | codex2api-accounts | Persistent supplier identity and frozen per-account HTTP fingerprint |
 | codex2api-auth | Supplier OAuth, token refresh/revoke and isolated account transports |
 | codex2api-upstream | Official outbound endpoints, headers, body normalization, HTTP/SSE/WS |
@@ -64,7 +64,7 @@ only identical platform-resource operations share handlers. Handlers adapt reque
 derive routes from outbound endpoint enums. Gateway provider adapters own the
 conversion from public API semantics to official client bodies and request-scoped
 headers. Auth/upstream own supplier credentials, frozen fingerprints, account-bound
-normalization and network transport. SQLite code neither calls providers nor
+normalization and network transport. PostgreSQL code neither calls providers nor
 registers HTTP routes.
 
 ## API gateway and OAuth client surfaces
@@ -146,11 +146,19 @@ continues to account for usage when the downstream disconnects.
 
 ## Storage and supplier isolation
 
-The default database is `data/codex2api.sqlite`. SQLx applies forward migrations.
-Applied SQL remains immutable and uses LF, because migration checksums cover raw
-bytes. Table rebuilds temporarily disable foreign keys only on a dedicated
-connection that is closed after migration; normal application connections enforce
-foreign keys. Never replace a live SQLite file to merge accounts or roll back code.
+PostgreSQL is the only durable store. `CODEX2API_DATABASE_URL` is mandatory;
+`schema.sql` and `seed.sql` initialize a fresh schema atomically under a
+schema-scoped transaction advisory lock. There is no historical migration runner,
+file database, or old-schema fallback. Existing data is managed outside this application.
+All listeners share one SQLx PostgreSQL connection pool. Its maximum/minimum size,
+acquisition timeout, idle timeout and maximum lifetime are configurable. Connections
+idle for at least sixty seconds are probed before reuse; active connections avoid
+a redundant round trip on every query. Pool
+acquisition bounds concurrent database work; HTTP streams do not retain connections.
+JSON configuration and client collections use JSONB, monetary amounts use BIGINT,
+flags use BOOLEAN, and generated event IDs use PostgreSQL identity sequences.
+Foreign keys and PL/pgSQL triggers enforce role, ownership and ledger immutability.
+
 
 Each supplier has its own row, installation UUID, frozen OS/architecture/terminal,
 HTTP fingerprint, tokens, cookie jar, HTTP clients and session state. There are no
@@ -241,57 +249,88 @@ including after reconnecting; a missing or unavailable owner returns
 `supplier_context_required`. Known full WS context permits safe supplier changes.
 
 `CODEX2API_REDIS_URL` is required. Redis owns affinity, response ownership, rolling
-RPM and renewable concurrency leases. Missing configuration or a failed initial
+RPM, login-attempt counters and renewable concurrency leases. Missing configuration or a failed initial
 connection prevents startup; no local substitute is used. `CODEX2API_REDIS_PREFIX` isolates
-independent deployments sharing a Redis database; the default hashes the absolute
-SQLite path. In containers with the same internal SQLite path, explicitly use
-different prefixes for independent installations. A configured Redis outage fails
+independent deployments sharing a Redis database; the default hashes the PostgreSQL host, port, database and schema. Use a stable explicit
+prefix when multiple connection URLs address the same deployment. A configured Redis outage fails
 new admissions closed. Response ownership is written before completion reaches
 the client. Concurrency leases last ninety seconds and
 renew every twenty seconds; release and expiry cover both normal completion and
 process loss. A local slot guard also prevents a Redis restart from admitting
 more than the single process's configured capacity.
 
-SQLite remains authoritative for identity, credentials, entitlements, model
-configuration and immutable accounting. Shared scheduling, model catalogs,
-supplier model membership, frozen transport fields and price snapshots use
-bounded native in-process caches. Immutable lists are shared through `Arc`;
-each candidate pool owns its scheduling index, so replacing a pool releases the
-old index when its last reader finishes. Multi-tag unions use stable provider,
-tag-set and model keys and weak source references; changed sources replace the
-same cache entry without retaining old source pools. Cache reads do not
-encode/decode JSON. Concurrent misses for one key share a
-loader, cancellation releases that loader, and generation fencing prevents a
-pre-edit read from repopulating an invalidated cache. Administrator and supplier
-state writes invalidate snapshots, including fingerprint edits, proxy URL changes
-and unbinding. Pool snapshots expire within thirty seconds or at the earliest
-pending quota reset, including empty pools. Model and account changes invalidate
-the expansion before the next selection. Entitlement, route and spending
-admission snapshots share the same invalidation boundary; subscription expiry
-and quota reset timestamps bound their lifetime. Consumer authorization and revocation
-remain live reads; the HTTP dispatcher passes the validated principal to its provider.
-Admission runs before selection and carries its policy/spending/time generation
-to request start; changes require revalidation. Supplier credentials and account
-records are immutable snapshots invalidated by login, refresh, deletion and account edits.
-Providers decode their own credentials once per snapshot. Healthy credentials
-avoid the refresh lock; refresh and rejected-token recovery recheck after locking.
-Workspace routes reuse the persisted snapshot and parsed route; discovery locks
-only cache misses and explicit refresh. Account client caches have independent
-construction locks, preserving isolated clients, cookies and refresh locks.
-Targeted routing/profile updates invalidate only their own key and fence stale fills.
+PostgreSQL remains authoritative for identity, credentials, entitlements, model
+configuration and immutable accounting. Business reads use a bounded native hot
+cache, then Redis, then a coalesced PostgreSQL loader. Hot values live for at most two
+seconds; Redis configuration snapshots live for at most thirty seconds, and API
+group/price catalogs for five minutes. Subscription expiration and quota reset
+bound the applicable TTL. Downward TTL jitter spreads refreshes without extending
+business deadlines. Unknown model/account lookups remain only in the bounded hot
+cache and do not create Redis entries.
+
+Redis snapshot keys are stable business identifiers. Generations and the process
+incarnation are stored inside values, so edits and restarts do not create new key
+families. A fresh process reloads database snapshots to cover a crash between commit
+and invalidation. Configuration writes invalidate their business domains; supplier
+credential/routing changes and usage settlement invalidate specific object keys.
+An old loader cannot repopulate a newer generation. Redis failures propagate instead
+of silently switching admission to process-local state.
+
+Candidate pools build native indexes from cached provider/tag rows. Immutable
+lists share `Arc` values; each pool owns its scheduling index and releases it when
+its last reader finishes. Multi-tag unions retain weak references to source pools
+under stable provider/tag-set/model keys. Mutable indexes, live metrics, decoded
+credentials and HTTP clients remain process-local and account-isolated.
+
+Consumer authentication checks live PostgreSQL ownership, revocation and enabled flags.
+API group policy is loaded from the shared snapshot service and checked against the
+live group revision. API admission loads the platform price/catalog snapshot before
+its write transaction, then checks a PostgreSQL revision maintained atomically by catalog
+and price triggers. A concurrent edit reloads prices from that transaction. Ordinary
+admissions reuse the serialized price snapshot; group-specific operation prices
+retain their own immutable request snapshot. Wallet checks and journal/ledger writes
+remain atomic in PostgreSQL. Subscription policy, route, spending and pricing reads use
+the same cache service; settlement invalidates only the corresponding spending decision.
+
+Redis keys are organized by responsibility:
+
+| Prefix inside the deployment namespace | Lifetime and ownership |
+| --- | --- |
+| `cache:*` | One current snapshot per business object; bounded TTL |
+| `routing:session:*` | Provider, pool and consumer scoped session binding; configured affinity TTL |
+| `routing:response:*`, `routing:turn:*` | Provider and consumer scoped response/turn ownership; configured affinity TTL |
+| `concurrency:*` | One sorted set per supplier, subscription, API user/group/model or key; 90-second renewable leases |
+| `login-attempts:*` | Hashed username, atomic ten-attempt limit, fixed 60-second TTL |
+| `rpm:*` | One rolling-minute sorted set per limited subscription or API user/group/model; 60-second TTL |
+
+Session and previous-response lookup use one `MGET`. Completion ownership mappings
+are written in one transaction before completion reaches the client. Conditional
+refresh/delete cannot overwrite a newer binding. Grok subscription Responses do not
+write unused response-owner mappings. API group/model RPM and concurrency are checked
+in one Lua operation before any scope is consumed, with Redis time as the clock;
+all API keys for one user share those scopes. Unlimited RPM creates no counter.
+Old runtime key layouts are not read or migrated; they expire under their existing
+TTL. After deploying a layout change, clients must establish fresh affinity and send
+full context when a previous response no longer has an ownership mapping.
+
 Local capacity
 waiters wake on permit release; Redis-backed waits also poll for remote releases.
 Scheduling, RPM and
-slot acquisition take no SQLite write lock. Last-used timestamp writes coalesce
+slot acquisition take no PostgreSQL write lock. Last-used timestamp writes coalesce
 for sixty seconds. Generation admission reads cached eligibility and pricing
 availability for tokens, images and per-operation charges, not usage details.
 Settlement invalidates the owner's spending
 decision; first use also updates the optional inner-window anchor. Cache misses
-aggregate indexed amounts in SQLite instead of fetching every ledger row into
+aggregate indexed amounts in PostgreSQL instead of fetching every ledger row into
 Rust. Protocol quota fields reuse that snapshot; lifetime totals belong to
 administration and statistics. Request start, completion, retry attribution, activity,
-device/supplier touches, routing and passive supplier quota observations use one bounded writer, batching immediately
-available work into durable transactions. Acknowledgements and cache updates
+device/supplier touches, routing and passive supplier quota observations use independent
+PostgreSQL transactions through the shared pool. Usage completion locks its ledger
+row before testing idempotency, then locks the user before wallet/debt settlement.
+Adjustments, orders and grants use the same owner-first lock order. Coupon confirmation
+locks the coupon before counting reservations; reset operations lock their subscription.
+Unrelated users do not share a writer queue. Batch supplier membership changes use
+arrays and set operations. Multi-query read views use REPEATABLE READ READ ONLY. Acknowledgements and cache updates
 follow commit. Request prices remain immutable and duplicate completions do not
 charge twice.
 
@@ -341,7 +380,7 @@ Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags
 Subscriptions inherit their plan's pool unless an administrator explicitly selects
 a subscription-specific pool. Selection is per generation with runtime affinity and
 concurrency, as described above; it never counts or persists fixed assignments.
-Referenced tags cannot be deleted. Existing migrated tags are retained.
+Referenced tags cannot be deleted.
 
 Supplier tag definitions are managed on their own administrator page. Account
 detail and list batch editing submit a complete checked tag set, limited to the
@@ -378,7 +417,7 @@ cleared by successful quota reads or ordinary token refresh. Explicit successful
 reauthorization or the administrator state-reset operation clears it. Grok does not
 inherit this ChatGPT-specific classification.
 
-Quota cooldowns persist in SQLite and expire automatically at the official reset or
+Quota cooldowns persist in PostgreSQL and expire automatically at the official reset or
 Retry-After time. When timing is absent, a sixty-second retry cooldown is used;
 it is not presented as an official quota reset. Fresh main quota responses can
 also record exhaustion; model-specific additional windows do not disable the whole
@@ -400,7 +439,7 @@ Failed reads preserve the last quota snapshot; no separate probe failure counter
 These wire-error and authentication rules remain in the ChatGPT adapter and are
 never applied to Grok or another provider.
 No browser is needed.
-The worker is cancelled before storage closes. Supplier lists use only the SQLite
+The worker is cancelled before storage closes. Supplier lists use only the PostgreSQL
 snapshots included in the list DTO, including stale or missing snapshots. They do
 not call quota endpoints and have no refresh button or batch quota refresh. Query,
 view changes and UI timer ticks never call the provider. Explicit official refresh
@@ -448,7 +487,7 @@ are read-only in administration; normal client writes remain supported.
 Mixed responses separate service flags from client preferences. Protocol fields
 and identifiers are generated in code, not entered through arbitrary field editors.
 
-Private data and settings belong to the virtual account in SQLite. Pool selection
+Private data and settings belong to the virtual account in PostgreSQL. Pool selection
 authorizes execution without inheriting supplier private data, usage, tasks, profile
 or quotas. Account/resource IDs in paths, queries and bodies must pass ownership
 checks. Pool changes preserve virtual identity, configuration and historical records.
@@ -484,11 +523,9 @@ Credential changes revoke all devices and pending authorizations owned by that
 user; disabling or deleting one subscription affects only that subscription.
 The removed `/consumers` administrator namespace has no compatibility routes.
 
-SQL migration removes standalone virtual users, their platforms, credentials,
-resources, configuration, usage and batch-operation history. Implicit Free
-platforms and the Free plan catalog disappear. Ordinary-user usage, wallet and
-order history is retained. Historical price periods carry an explicit `user_id`
-even after an implicit identity or administered subscription is deleted.
+Every persisted platform belongs to an ordinary user. Standalone virtual users
+and implicit Free platforms have no schema or runtime path. Subscription price
+periods retain explicit ownership even when an administered subscription is deleted.
 The user HTTP crate receives `UserStore`, a narrow repository with no raw SQL,
 supplier or administrator access. Response DTOs explicitly select user-visible
 fields; common signing primitives do not create a shared HTTP login/data endpoint.
@@ -499,7 +536,7 @@ User creation does not create platform identities. A grant or new purchase creat
 
 Subscriptions inherit the assigned plan's supplier pool unless administration
 sets an explicit pool override. `regular_subscription_pools` and
-`effective_execution_routes` resolve that choice in SQLite. Clearing the override
+`effective_execution_routes` resolve that choice in PostgreSQL. Clearing the override
 restores plan inheritance. The administration route is
 `/subscriptions/{id}/routing`; user APIs never expose supplier routing.
 Pool edits preserve identity, expiration, spending anchors and price snapshots.
@@ -508,7 +545,7 @@ Wallet balance is `users.wallet_cents`, with a nonnegative integer constraint. I
 
 `POST /user/api/checkout/preview` computes an unpersisted, five-minute quote with plan, effective period, current-subscription credit, coupon discount and payable amount. It never creates an order, reserves a coupon or debits the wallet. A short-lived RS256 proof binds the authenticated owner, selection, exact optional target subscription ID, pricing instant and quote digest to `checkout_preview` / `codex2api-checkout` under the user signing key. It cannot authenticate a web session or Codex client. No supplier configuration is in the proof or response.
 
-Only explicit confirmation calls `POST /user/api/orders` with that proof. Inside `BEGIN IMMEDIATE`, it recomputes the signed quote at its original pricing instant, validates current plan/subscription/coupon revisions and capacity, and creates the order. The proof ID is the owner-scoped idempotency key. Coupon eligibility and remaining-subscription expiry can shorten the original deadline; confirmation never extends it. Client amounts and owner selectors are not accepted. Order views explicitly select business fields.
+Only explicit confirmation calls `POST /user/api/orders` with that proof. Inside a transaction holding the user row and coupon reservation lock, it recomputes the signed quote at its original pricing instant, validates current plan/subscription/coupon revisions and capacity, and creates the order. The proof ID is the owner-scoped idempotency key. Coupon eligibility and remaining-subscription expiry can shorten the original deadline; confirmation never extends it. Client amounts and owner selectors are not accepted. Order views explicitly select business fields.
 
 Payment is a separate `/orders/{id}/pay` operation. It checks ownership, enabled state, deadline, configured price, plan publication/revision and subscription revision. The debit, entitlement update, price-period snapshot, unique order-linked wallet entry and paid state commit together. Replaying a paid order returns its existing result. Competing changes to the same subscription cannot both settle from one revision. Independent new-purchase orders create different subscriptions and may both settle. Plan changes, closed sales, changed/disabled subscriptions and expiry have distinct messages; cancelled orders retain their reason. Insufficient balance leaves the order pending, with no debit or entitlement mutation. Infrastructure failures are logged privately and return a generic retry message without database or supplier detail. Paid orders are immutable.
 
@@ -583,7 +620,7 @@ means no client login; the page links to the user center. `oauth_browser_users`
 keeps the flow-scoped proof, and confirmation binds the selected subscription in
 `oauth_browser_identities`. Verification alone never creates a code or device.
 
-Administrator Settings / Public addresses stores the OAuth/client API, metered API, user and administrator HTTP(S) origins together in SQLite with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website and metered API public addresses to the user HTTP module. Existing settings without a metered API origin use the configured startup default until the administrator saves it. Listener bindings and router isolation are unchanged.
+Administrator Settings / Public addresses stores the OAuth/client API, metered API, user and administrator HTTP(S) origins together in PostgreSQL with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website and metered API public addresses to the user HTTP module. Existing settings without a metered API origin use the configured startup default until the administrator saves it. Listener bindings and router isolation are unchanged.
 
 Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Administrators authenticate only on the administrator listener. Subscription ownership, platform, enabled state and expiration are checked again when confirming a selection.
 
@@ -604,7 +641,7 @@ revoke the whole login. Migrating from single-token sessions requires one new lo
 Web tokens cannot authorize AI/client endpoints. No opaque web sessions or
 failed-Bearer-to-cookie fallback is accepted.
 
-Codex OAuth belongs to the AI API protocol and retains its own SQLite-backed RSA
+Codex OAuth belongs to the AI API protocol and retains its own PostgreSQL-backed RSA
 signer, official claim shape, token lifetimes, refresh/revoke contract and auxiliary
 client credential formats. It does not gain web account_type/token_use fields or
 web JWT rules. Client grants remain bound to the local platform account/device and
@@ -743,8 +780,7 @@ requesting JSON can still have measured TTFT when its supplier uses SSE.
 The shared upstream timing observer runs before prelude buffering, quota writes,
 identity rewriting and protocol conversion. Both ledgers consume its result;
 supplier scheduling derives per-attempt TTFT from the same token timestamp and
-the upstream send time. Historical first-event timings cannot reconstruct TTFT
-and are removed by SQL migration without changing other usage or billing data.
+the upstream send time. Missing token timings remain unknown.
 
 Administrator tables and charts query actual records and preserve unknown fields.
 The official reported model in response headers takes precedence over payload
@@ -758,7 +794,7 @@ requests. In-flight requests retain their original generation. See
 
 ### Supplier quota snapshots
 
-Supplier lists read SQLite snapshots. Missing/expired quota data uses the existing
+Supplier lists read PostgreSQL snapshots. Missing/expired quota data uses the existing
 ten-minute cache and per-account lock; failures retain the previous snapshot.
 UI filters, view changes and countdown ticks never call the provider.
 
@@ -828,13 +864,12 @@ See [CCODEX_ENDPOINTS.md](CCODEX_ENDPOINTS.md) for the current route groups.
 Desktop support provides authenticated feature configuration and a cache of
 allowlisted public resources. It does not collect client telemetry, SDK exceptions,
 Statsig events or metrics. Retired intake URLs return 404 without recording their
-requests; there is no diagnostic management API or collection setting. Database
-migration removes the collected diagnostic data while preserving public resources,
-account-owned activity and the inference billing ledger.
+requests; there is no diagnostic table, management API or collection setting. Public
+resources, account-owned activity and the inference billing ledger are separate.
 
 The existing `computer_use_policy.browser_enabled` account setting controls
 Desktop's built-in browser gate (`410262010`). Bootstrap and authenticated SDK
-refreshes publish the same SQLite policy and mark the external-browser gate
+refreshes publish the same PostgreSQL policy and mark the external-browser gate
 (`410065390`) unavailable: the external extension host cannot obtain the proxy's
 Desktop credential. Desktop's normal backend selection therefore uses the built-in
 browser. The administrator page and saved settings stay unchanged; native feature

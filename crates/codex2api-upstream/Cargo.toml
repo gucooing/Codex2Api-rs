@@ -35,4 +35,5 @@ tungstenite.workspace = true
 tokio-rustls.workspace = true
 
 [dev-dependencies]
+codex2api-storage = { workspace = true, features = ["test-support"] }
 axum.workspace = true

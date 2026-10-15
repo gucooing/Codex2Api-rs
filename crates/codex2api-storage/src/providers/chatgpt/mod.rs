@@ -2,7 +2,7 @@ use crate::{ListPage, ListQuery, Result, Storage, StorageError};
 use serde_json::Value;
 
 pub(crate) async fn catalog_operation_prices(
-    connection: &mut sqlx::SqliteConnection,
+    connection: &mut sqlx::PgConnection,
     group: Option<&crate::ApiGroup>,
 ) -> Result<Vec<crate::api_groups::ApiOperationPrice>> {
     use codex2api_core::{CHATGPT, providers::chatgpt::SEARCH_OPERATION};
@@ -10,7 +10,7 @@ pub(crate) async fn catalog_operation_prices(
         group.search_price_usd.clone()
     } else {
         let price: Option<i64> = sqlx::query_scalar(
-            "SELECT price_nano_usd FROM operation_prices WHERE provider_id=? AND operation=?",
+            "SELECT price_nano_usd FROM operation_prices WHERE provider_id=$1 AND operation=$2",
         )
         .bind(CHATGPT)
         .bind(SEARCH_OPERATION)
@@ -32,17 +32,21 @@ impl Storage {
         owner: &str,
         query: &ListQuery,
     ) -> Result<ListPage<Value>> {
-        let source = match query.kind.as_str() {
-            "details" => "supplier_info_cache c,json_each(c.response_json,'$.accounts') j",
-            "credits" => "supplier_info_cache c,json_each(c.response_json,'$.credits') j",
+        let field = match query.kind.as_str() {
+            "details" => "accounts",
+            "credits" => "credits",
             _ => return Err(StorageError::InvalidAdminUpdate("未知官方记录类别")),
         };
-        self.read_list::<(String,)>(query, "j.value", source, "j.key", |q| {
+        let value = format!("c.response_json::jsonb->'{field}'");
+        let source = format!("supplier_info_cache c CROSS JOIN LATERAL (
+            SELECT key,value FROM jsonb_each(CASE WHEN jsonb_typeof({value})='object' THEN {value} ELSE '{{}}'::jsonb END)
+            UNION ALL SELECT (ordinality-1)::text,value FROM jsonb_array_elements(CASE WHEN jsonb_typeof({value})='array' THEN {value} ELSE '[]'::jsonb END) WITH ORDINALITY) j");
+        self.read_list::<(String,)>(query, "j.value::text", &source, "j.key", |q| {
             q.push(" AND c.account_id=")
                 .push_bind(owner.to_owned())
                 .push(" AND c.section=")
                 .push_bind(query.kind.clone())
-                .push(" AND j.type='object'");
+                .push(" AND jsonb_typeof(j.value)='object'");
         })
         .await?
         .try_map(|(text,)| Ok(serde_json::from_str(&text)?))

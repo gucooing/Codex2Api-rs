@@ -1,10 +1,5 @@
 use codex2api_storage::{Storage, SubscriptionChange, User, UserKind};
 use serde_json::json;
-use sqlx::{
-    migrate::Migrator,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-};
-use std::borrow::Cow;
 
 async fn user(storage: &Storage) -> User {
     let user = User {
@@ -39,8 +34,8 @@ async fn grant(storage: &Storage, owner: &str) -> String {
 
 #[tokio::test]
 async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_independent() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("subscriptions.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("subscriptions-pg"))
         .await
         .unwrap();
     let owner = user(&storage).await;
@@ -94,23 +89,20 @@ async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_indep
     for id in [&first, &second] {
         assert!(
             storage
-                .admit_virtual_request(id, true, 100_000)
+                .admit_virtual_request(id, true)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             storage
-                .admit_virtual_request(id, true, 100_000)
+                .admit_virtual_request(id, true)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert_eq!(
-            storage
-                .admit_virtual_request(id, true, 100_000)
-                .await
-                .unwrap(),
+            storage.admit_virtual_request(id, true).await.unwrap(),
             Some(60)
         );
     }
@@ -124,7 +116,7 @@ async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_indep
         .unwrap();
     assert!(
         storage
-            .admit_virtual_request(&second, true, 100_000)
+            .admit_virtual_request(&second, true)
             .await
             .unwrap()
             .is_none()
@@ -208,126 +200,5 @@ async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_indep
     storage.delete_user_subscription(&first).await.unwrap();
     assert!(storage.user(&owner.id).await.unwrap().is_some());
     assert!(storage.platform_account(&second).await.unwrap().is_some());
-    storage.close().await;
-}
-
-#[tokio::test]
-async fn migration_removes_standalone_and_implicit_free_data_but_preserves_user_history() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("upgrade.sqlite");
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(&path)
-                .create_if_missing(true)
-                .foreign_keys(false),
-        )
-        .await
-        .unwrap();
-    let migrations = sqlx::migrate!("./migrations");
-    Migrator {
-        migrations: Cow::Owned(
-            migrations
-                .iter()
-                .filter(|m| m.version < 83)
-                .cloned()
-                .collect(),
-        ),
-        ..Migrator::DEFAULT
-    }
-    .run(&pool)
-    .await
-    .unwrap();
-    sqlx::raw_sql("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES('owner','user','owner','hash',1,'now','now'),('free-owner','user','free-owner','hash',1,'now','now'),('standalone','user','standalone','hash',1,'now','now'),('operator','admin','operator','hash',1,'now','now');
-      INSERT INTO users(id,name,email,wallet_cents,kind) VALUES('owner','Owner','o@example.test',1234,'regular'),('free-owner','Free','f@example.test',0,'regular'),('standalone','Removed','v@example.test',0,'virtual');
-      INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,created_at) VALUES('paid','owner','chatgpt','plus','plus','2026-10-01'),('implicit','free-owner','chatgpt','free','free','2026-10-01'),('old-virtual','standalone','chatgpt','plus','plus','2026-10-01');
-      INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES('paid','chatgpt'),('implicit','chatgpt'),('old-virtual','chatgpt');
-      INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision) VALUES('paid','cloud_preferences','{\"kept\":true}',1),('implicit','cloud_preferences','{}',1),('old-virtual','cloud_preferences','{\"deleted\":true}',1);
-      INSERT INTO usage_records(id,account_id,account_name,subject_id,subject_name,user_id,endpoint,transport,requested_at_ms,status,cost_nano_usd) VALUES('kept-usage','','','paid','Owner','owner','/v1/responses','http',1,'completed',7),('old-free-usage','','','implicit','Free','free-owner','/v1/responses','http',1,'completed',8),('deleted-usage','','','old-virtual','Removed',NULL,'/v1/responses','http',1,'completed',9);
-      INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,amount_cents,balance_cents,created_at,operator_account_id,operator_name) VALUES('kept-wallet','owner','system:fixture','fixture','system_adjustment',1234,1234,'2026-10-01','operator','operator');
-      INSERT INTO subscription_pricing_periods(id,subscription_id,plan_id,starts_at_ms,ends_at_ms,unit_price_cents,duration_days,source,created_at_ms) VALUES('kept-price','paid','plus',1,100,100,30,'admin',1),('old-price','implicit','plus',1,100,200,30,'admin',1),('deleted-price','old-virtual','plus',1,100,300,30,'admin',1);
-      INSERT INTO meta(key,value) VALUES('gateway_settings','{\"default_rpm\":1,\"default_concurrency\":1}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;")
-      .execute(&pool).await.unwrap();
-    pool.close().await;
-    let storage = Storage::open(&path).await.unwrap();
-    assert!(
-        storage
-            .user_by_username("standalone")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        storage
-            .platform_account("old-virtual")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        storage
-            .platform_account("implicit")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        storage.user("owner").await.unwrap().unwrap().wallet_cents,
-        1234
-    );
-    assert_eq!(storage.wallet_entries("owner").await.unwrap().len(), 1);
-    assert_eq!(
-        storage
-            .virtual_client_state("paid", "cloud_preferences")
-            .await
-            .unwrap()
-            .unwrap()
-            .value,
-        json!({"kept":true})
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM usage_records")
-            .fetch_one(storage.pool())
-            .await
-            .unwrap(),
-        2
-    );
-    let periods: Vec<(String, String)> =
-        sqlx::query_as("SELECT id,user_id FROM subscription_pricing_periods ORDER BY id")
-            .fetch_all(storage.pool())
-            .await
-            .unwrap();
-    assert_eq!(
-        periods,
-        vec![
-            ("kept-price".into(), "owner".into()),
-            ("old-price".into(), "free-owner".into())
-        ]
-    );
-    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('platform_free_plans','virtual_users','virtual_platforms','admin_consumer_operations')").fetch_one(storage.pool()).await.unwrap(),0);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pragma_foreign_key_check")
-            .fetch_one(storage.pool())
-            .await
-            .unwrap(),
-        0
-    );
-    assert!(
-        serde_json::to_value(storage.gateway_settings().await.unwrap())
-            .unwrap()
-            .get("default_rpm")
-            .is_none()
-    );
-    let second = grant(&storage, "owner").await;
-    assert_ne!(second, "paid");
-    assert_eq!(
-        storage
-            .user_subscriptions(Some("owner"), true)
-            .await
-            .unwrap()
-            .len(),
-        2
-    );
     storage.close().await;
 }

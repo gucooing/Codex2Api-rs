@@ -14,8 +14,8 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn independent_routers_do_not_register_other_surfaces_or_accept_user_tokens_as_admin() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = codex2api_storage::Storage::open(temp.path().join("surfaces.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("surfaces-pg"))
         .await
         .unwrap();
     let apps = codex2api::routers(

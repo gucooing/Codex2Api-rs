@@ -30,6 +30,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+codex2api-storage = { workspace = true, features = ["test-support"] }
 sqlx.workspace = true
 futures.workspace = true
 tempfile = "3"

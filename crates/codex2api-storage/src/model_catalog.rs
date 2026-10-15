@@ -79,48 +79,39 @@ impl Storage {
         provider: &str,
     ) -> Result<std::sync::Arc<Vec<ModelConfig>>> {
         let key = format!("model-catalog:{provider}");
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let value = std::sync::Arc::new(
+        self.runtime
+            .snapshots
+            .read(key.clone(), async {
+                let value = std::sync::Arc::new(
             sqlx::query_as(
-                "SELECT * FROM model_catalog WHERE provider_id=? AND deleted=0 ORDER BY model",
+                "SELECT * FROM model_catalog WHERE provider_id=$1 AND deleted=FALSE ORDER BY model",
             )
             .bind(provider)
             .fetch_all(self.pool())
             .await?,
         );
-        self.runtime
-            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
-        Ok(value)
+                Ok((value, std::time::Duration::from_secs(30)))
+            })
+            .await
     }
     pub async fn model_config(&self, provider: &str, model: &str) -> Result<Option<ModelConfig>> {
         let key = format!("model-config:{provider}:{model}");
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let value = sqlx::query_as("SELECT * FROM model_catalog WHERE provider_id=? AND model=?")
-            .bind(provider)
-            .bind(model)
-            .fetch_optional(self.pool())
-            .await?;
         self.runtime
-            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
-        Ok(value)
+            .snapshots
+            .read(key.clone(), async {
+                let value =
+                    sqlx::query_as("SELECT * FROM model_catalog WHERE provider_id=$1 AND model=$2")
+                        .bind(provider)
+                        .bind(model)
+                        .fetch_optional(self.pool())
+                        .await?;
+                Ok((value, std::time::Duration::from_secs(30)))
+            })
+            .await
     }
     pub async fn unavailable_models(&self, provider: &str) -> Result<Vec<String>> {
         Ok(sqlx::query_scalar(
-            "SELECT model FROM model_catalog WHERE provider_id=? AND (enabled=0 OR deleted=1)",
+            "SELECT model FROM model_catalog WHERE provider_id=$1 AND (enabled=FALSE OR deleted=TRUE)",
         )
         .bind(provider)
         .fetch_all(self.pool())
@@ -128,7 +119,7 @@ impl Storage {
     }
     pub async fn image_prices(&self, provider: &str) -> Result<Vec<ImagePrice>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM model_image_prices WHERE provider_id=? ORDER BY model,resolution",
+            "SELECT * FROM model_image_prices WHERE provider_id=$1 ORDER BY model,resolution",
         )
         .bind(provider)
         .fetch_all(self.pool())
@@ -213,32 +204,32 @@ impl Storage {
         }
         let mut tx = self.pool().begin().await?;
         let changed = if let Some(revision) = expected {
-            sqlx::query("UPDATE model_catalog SET kind=?,enabled=?,revision=revision+1 WHERE provider_id=? AND model=? AND revision=? AND deleted=0")
+            sqlx::query("UPDATE model_catalog SET kind=$1,enabled=$2,revision=revision+1 WHERE provider_id=$3 AND model=$4 AND revision=$5 AND deleted=FALSE")
                 .bind(&model.kind).bind(model.enabled).bind(&model.provider_id).bind(&model.model).bind(revision).execute(&mut *tx).await?.rows_affected()
         } else {
-            sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES(?,?,?,?) ON CONFLICT(provider_id,model) DO UPDATE SET kind=excluded.kind,enabled=excluded.enabled,deleted=0,revision=model_catalog.revision+1 WHERE model_catalog.deleted=1")
+            sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(provider_id,model) DO UPDATE SET kind=excluded.kind,enabled=excluded.enabled,deleted=FALSE,revision=model_catalog.revision+1 WHERE model_catalog.deleted=TRUE")
                 .bind(&model.provider_id).bind(&model.model).bind(&model.kind).bind(model.enabled).execute(&mut *tx).await?.rows_affected()
         };
         if changed == 0 {
             return Ok(false);
         }
-        sqlx::query("DELETE FROM model_prices WHERE provider_id=? AND model=?")
+        sqlx::query("DELETE FROM model_prices WHERE provider_id=$1 AND model=$2")
             .bind(&model.provider_id)
             .bind(&model.model)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM model_image_prices WHERE provider_id=? AND model=?")
+        sqlx::query("DELETE FROM model_image_prices WHERE provider_id=$1 AND model=$2")
             .bind(&model.provider_id)
             .bind(&model.model)
             .execute(&mut *tx)
             .await?;
         for price in tokens {
-            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,max_input_tokens,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,max_input_tokens,revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
                 .bind(&model.provider_id).bind(&model.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.source).bind(price.max_input_tokens).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
         }
         for price in images {
             sqlx::query(
-                "INSERT INTO model_image_prices(provider_id,model,resolution,price_nano_usd) VALUES(?,?,?,?)",
+                "INSERT INTO model_image_prices(provider_id,model,resolution,price_nano_usd) VALUES($1,$2,$3,$4)",
             )
             .bind(&model.provider_id).bind(&model.model)
             .bind(&price.resolution)
@@ -247,7 +238,10 @@ impl Storage {
             .await?;
         }
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Catalog,
+            crate::snapshots::Domain::Billing,
+        ]);
         Ok(true)
     }
     pub async fn set_model_enabled(
@@ -257,8 +251,11 @@ impl Storage {
         enabled: bool,
         revision: i64,
     ) -> Result<bool> {
-        let changed=sqlx::query("UPDATE model_catalog SET enabled=?,revision=revision+1 WHERE provider_id=? AND model=? AND revision=? AND deleted=0").bind(enabled).bind(provider).bind(model).bind(revision).execute(self.pool()).await?.rows_affected()==1;
-        self.invalidate_runtime_cache();
+        let changed=sqlx::query("UPDATE model_catalog SET enabled=$1,revision=revision+1 WHERE provider_id=$2 AND model=$3 AND revision=$4 AND deleted=FALSE").bind(enabled).bind(provider).bind(model).bind(revision).execute(self.pool()).await?.rows_affected()==1;
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Catalog,
+            crate::snapshots::Domain::Billing,
+        ]);
         Ok(changed)
     }
     pub async fn delete_model_config(
@@ -269,22 +266,25 @@ impl Storage {
     ) -> Result<bool> {
         let mut tx = self.pool().begin().await?;
         // Keep a tombstone so stale clients cannot continue using a deleted model.
-        let changed=sqlx::query("UPDATE model_catalog SET deleted=1,enabled=0,revision=revision+1 WHERE provider_id=? AND model=? AND revision=? AND deleted=0").bind(provider).bind(model).bind(revision).execute(&mut *tx).await?.rows_affected();
+        let changed=sqlx::query("UPDATE model_catalog SET deleted=TRUE,enabled=FALSE,revision=revision+1 WHERE provider_id=$1 AND model=$2 AND revision=$3 AND deleted=FALSE").bind(provider).bind(model).bind(revision).execute(&mut *tx).await?.rows_affected();
         if changed == 0 {
             return Ok(false);
         }
-        sqlx::query("DELETE FROM model_prices WHERE provider_id=? AND model=?")
+        sqlx::query("DELETE FROM model_prices WHERE provider_id=$1 AND model=$2")
             .bind(provider)
             .bind(model)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM model_image_prices WHERE provider_id=? AND model=?")
+        sqlx::query("DELETE FROM model_image_prices WHERE provider_id=$1 AND model=$2")
             .bind(provider)
             .bind(model)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Catalog,
+            crate::snapshots::Domain::Billing,
+        ]);
         Ok(true)
     }
 }

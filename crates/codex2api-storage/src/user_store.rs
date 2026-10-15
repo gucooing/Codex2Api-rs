@@ -113,12 +113,12 @@ impl UserStore {
         let mut items = vec![];
         let page = self
             .storage
-            .read_list::<crate::VirtualPlan>(query, "p.*", "virtual_plans p", "p.rowid", |q| {
-                q.push(" AND p.allow_purchase=1 AND json_type(p.config,'$.sale_price_usd')='text' AND trim(json_extract(p.config,'$.sale_price_usd'))!=''");
+            .read_list::<crate::VirtualPlan>(query, "p.*", "virtual_plans p", "p.sort_id", |q| {
+                q.push(" AND p.allow_purchase=TRUE AND jsonb_typeof(p.config::jsonb #> '{sale_price_usd}')='string' AND trim((p.config::jsonb #>> '{sale_price_usd}'))!=''");
                 crate::list_query::exact(q, "p.provider_id", &query.provider_id);
                 crate::list_query::search(
                     q,
-                    &["p.name", "json_extract(p.config,'$.description')"],
+                    &["p.name", "(p.config::jsonb #>> '{description}')"],
                     &query.search,
                 );
             })
@@ -129,7 +129,7 @@ impl UserStore {
                     .ok_or(crate::StorageError::InvalidAdminUpdate("套餐未配置售价"))?,
                 2,
             );
-            let models: Vec<(String,String,String)> = sqlx::query_as("SELECT m.provider_id,m.model,m.kind FROM model_catalog m JOIN virtual_plans p ON p.provider_id=m.provider_id WHERE p.id=? AND m.enabled=1 AND m.deleted=0 AND (json_extract(p.config,'$.model_access')='all' OR (json_extract(p.config,'$.model_access')='selected' AND EXISTS(SELECT 1 FROM json_each(p.config,'$.models') selected WHERE json_extract(selected.value,'$.provider_id')=m.provider_id AND json_extract(selected.value,'$.model')=m.model))) ORDER BY m.provider_id,m.model")
+            let models: Vec<(String,String,String)> = sqlx::query_as("SELECT m.provider_id,m.model,m.kind FROM model_catalog m JOIN virtual_plans p ON p.provider_id=m.provider_id WHERE p.id=$1 AND m.enabled=TRUE AND m.deleted=FALSE AND ((p.config::jsonb #>> '{model_access}')='all' OR ((p.config::jsonb #>> '{model_access}')='selected' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p.config::jsonb #> '{models}') selected WHERE (selected.value::jsonb #>> '{provider_id}')=m.provider_id AND (selected.value::jsonb #>> '{model}')=m.model))) ORDER BY m.provider_id,m.model")
                 .bind(&plan.id).fetch_all(self.storage.pool()).await?;
             let models: Vec<Value> = models.into_iter().map(|(provider,model,kind)|json!({"provider_id":provider,"model":model,"kind":kind})).collect();
             items.push(json!({"id":plan.id,"name":plan.name,"provider_id":plan.provider_id,"plan_type":plan.plan_type,
@@ -170,7 +170,7 @@ impl UserStore {
                 .virtual_plan(&account.plan_id)
                 .await?
                 .ok_or_else(|| crate::StorageError::AccountNotFound(account.plan_id.clone()))?;
-            let pricing:Option<(Option<i64>,i64)>=sqlx::query_as("SELECT unit_price_cents,duration_days FROM subscription_pricing_periods WHERE subscription_id=? AND superseded_at_ms IS NULL AND starts_at_ms<=? AND ends_at_ms>? ORDER BY starts_at_ms DESC LIMIT 1")
+            let pricing:Option<(Option<i64>,i64)>=sqlx::query_as("SELECT unit_price_cents,duration_days FROM subscription_pricing_periods WHERE subscription_id=$1 AND superseded_at_ms IS NULL AND starts_at_ms<=$2 AND ends_at_ms>$3 ORDER BY starts_at_ms DESC LIMIT 1")
                 .bind(&account.id).bind(chrono::Utc::now().timestamp_millis()).bind(chrono::Utc::now().timestamp_millis()).fetch_optional(self.storage.pool()).await?;
             let now = chrono::Utc::now().timestamp();
             let anchor = self.storage.subscription_anchor(&account.id).await?;
@@ -186,7 +186,7 @@ impl UserStore {
             let mut windows = Vec::new();
             for window in raw_windows {
                 let unpriced: i64 = if let Some(start) = window["started_at"].as_i64() {
-                    sqlx::query_scalar("SELECT COUNT(*) FROM usage_records WHERE subject_kind='virtual_account' AND subject_id=? AND requested_at_ms>=? AND requested_at_ms<? AND cost_nano_usd IS NULL AND ((SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?) IS NULL OR quota_reset_credit_id=(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=?))")
+                    sqlx::query_scalar("SELECT COUNT(*) FROM usage_records WHERE subject_kind='virtual_account' AND subject_id=$1 AND requested_at_ms>=$2 AND requested_at_ms<$3 AND cost_nano_usd IS NULL AND ((SELECT quota_reset_credit_id FROM platform_accounts WHERE id=$4) IS NULL OR quota_reset_credit_id=(SELECT quota_reset_credit_id FROM platform_accounts WHERE id=$5))")
                         .bind(&account.id).bind(start*1000).bind((now+1)*1000).bind(&account.id).bind(&account.id).fetch_one(self.storage.pool()).await?
                 } else {
                     0
@@ -225,7 +225,7 @@ impl UserStore {
         Ok(page.map(|device|json!({"id":device.id,"provider_id":device.provider_id,"user_agent":device.user_agent,"created_at":device.created_at,"last_used_at":device.last_used_at})))
     }
     pub async fn revoke_device(&self, owner: &str, id: &str) -> Result<bool> {
-        Ok(sqlx::query("DELETE FROM virtual_devices WHERE id=? AND virtual_account_id IN(SELECT s.id FROM platform_accounts s JOIN user_identities u ON u.id=s.user_id WHERE u.id=? AND u.enabled=1 AND u.kind='regular')")
+        Ok(sqlx::query("DELETE FROM virtual_devices WHERE id=$1 AND virtual_account_id IN(SELECT s.id FROM platform_accounts s JOIN user_identities u ON u.id=s.user_id WHERE u.id=$2 AND u.enabled=TRUE AND u.kind='regular')")
             .bind(id).bind(owner).execute(self.storage.pool()).await?.rows_affected()==1)
     }
     pub async fn oauth_subscriptions(&self, user: &str, provider: &str) -> Result<Vec<Value>> {

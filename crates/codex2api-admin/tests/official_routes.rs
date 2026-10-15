@@ -36,10 +36,10 @@ async fn workspace_details_are_local_readonly_and_show_credential_invalidation()
         .await
         .unwrap()
         .unwrap();
-    let snapshot = codex2api_storage::QuotaSnapshot {
-        value: json!({"accounts":[{"id":"selected","workspace_backend_origin":"https://regional.example","account_routing_override":"us"}]}),
-        observed_at: chrono::Utc::now(),
-    };
+    let snapshot = codex2api_storage::QuotaSnapshot::new(
+        json!({"accounts":[{"id":"selected","workspace_backend_origin":"https://regional.example","account_routing_override":"us"}]}),
+        chrono::Utc::now(),
+    );
     assert!(
         f.storage
             .store_supplier_routing_snapshot(&account.id, revision, &snapshot)
@@ -54,10 +54,10 @@ async fn workspace_details_are_local_readonly_and_show_credential_invalidation()
     );
     assert_eq!(ready["routing"]["constraint"], "us");
     assert!(ready["routing"].get("auth_revision").is_none());
-    let unconstrained = codex2api_storage::QuotaSnapshot {
-        value: json!({"accounts":[{"id":"selected","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"us_cr"}]}),
-        observed_at: chrono::Utc::now(),
-    };
+    let unconstrained = codex2api_storage::QuotaSnapshot::new(
+        json!({"accounts":[{"id":"selected","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"us_cr"}]}),
+        chrono::Utc::now(),
+    );
     assert!(
         f.storage
             .store_supplier_routing_snapshot(&account.id, revision, &unconstrained)
@@ -100,10 +100,10 @@ async fn supplier_detail_reads_cached_official_username() {
         .store_supplier_info(
             &account.id,
             codex2api_storage::SupplierInfoSection::Usage,
-            &codex2api_storage::QuotaSnapshot {
-                value: json!({"profile":{"username":"cached-user"}}),
-                observed_at: chrono::Utc::now(),
-            },
+            &codex2api_storage::QuotaSnapshot::new(
+                json!({"profile":{"username":"cached-user"}}),
+                chrono::Utc::now(),
+            ),
         )
         .await
         .unwrap();
@@ -220,7 +220,7 @@ async fn session_storage_failure_returns_503_without_invalidating_the_session() 
         assert!(response.headers().get("set-cookie").is_none());
         assert_eq!(body(response).await["error"]["code"], "session_unavailable");
     }
-    let reopened = codex2api_storage::Storage::open(f.dir.path().join("test.sqlite"))
+    let reopened = codex2api_storage::test_support::open(f.dir.path().join("test-pg"))
         .await
         .unwrap();
     assert!(

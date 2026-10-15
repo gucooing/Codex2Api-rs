@@ -413,8 +413,8 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
 #[ignore = "manual fragmented stream performance comparison"]
 async fn benchmark_fragmented_sse() {
     use axum::body::{Body, Bytes};
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("stream.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("stream-pg"))
         .await
         .unwrap();
     let frame = Bytes::from(format!(
@@ -455,8 +455,8 @@ async fn benchmark_fragmented_sse() {
 #[tokio::test]
 async fn fragmented_events_preserve_bytes_and_sanitize_metadata_across_mixed_boundaries() {
     use axum::body::{Body, Bytes};
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("frames.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("frames-pg"))
         .await
         .unwrap();
     let prefix = ": keepalive\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"分片🙂\"}\r\n\r\n";
@@ -539,8 +539,8 @@ mod isolation_tests {
 
     #[tokio::test]
     async fn responses_events_keep_partial_answers_and_nested_retry_advice() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("events.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("events-pg"))
             .await
             .unwrap();
         let events = [
@@ -589,8 +589,10 @@ mod isolation_tests {
     }
     #[tokio::test]
     async fn sse_quota_is_replaced_across_split_frames_without_changing_model_output() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("sse.sqlite")).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("sse-pg"))
+            .await
+            .unwrap();
         let account = PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "virtual".into(),

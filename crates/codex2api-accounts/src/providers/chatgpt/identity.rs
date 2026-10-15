@@ -159,7 +159,7 @@ impl HostRuntime {
 /// Matches logged-in CLI request identity:
 /// `originator`, `User-Agent`, `x-codex-installation-id`, plus this account's
 /// cookie jar. OS/terminal in the UA are rolled once at account creation and
-/// frozen in SQLite. Re-login never regenerates them.
+/// frozen in PostgreSQL. Re-login never regenerates them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpFingerprint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,7 +203,7 @@ impl HttpFingerprint {
 
 /// Isolated Codex request identity for one upstream account.
 ///
-/// Persisted on the `accounts` SQLite row. Upstream headers are built from the
+/// Persisted on the `accounts` PostgreSQL row. Upstream headers are built from the
 /// frozen [`HttpFingerprint`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountIdentity {

@@ -1,10 +1,10 @@
-use codex2api_storage::{NewSupplierAccount, Storage, SupplierTokens};
+use codex2api_storage::{NewSupplierAccount, SupplierTokens};
 
 #[tokio::test]
 async fn authorized_account_and_credentials_commit_together() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("authorized.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("authorized-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let mut account = NewSupplierAccount::pending_identity(
         "installation",
         "codex_cli_rs",
@@ -24,7 +24,7 @@ async fn authorized_account_and_credentials_commit_together() {
         refresh_token: Some("refresh-fixture".into()),
         ..Default::default()
     };
-    sqlx::query("CREATE TRIGGER reject_tokens BEFORE INSERT ON supplier_tokens BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+    sqlx::raw_sql("CREATE FUNCTION reject_tokens_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test failure'; RETURN NULL; END; $$; CREATE TRIGGER reject_tokens BEFORE INSERT ON supplier_tokens FOR EACH ROW EXECUTE FUNCTION reject_tokens_fn();")
         .execute(storage.pool()).await.unwrap();
     assert!(
         storage
@@ -40,7 +40,7 @@ async fn authorized_account_and_credentials_commit_together() {
             .unwrap()
             .is_none()
     );
-    sqlx::query("DROP TRIGGER reject_tokens")
+    sqlx::query("DROP TRIGGER reject_tokens ON supplier_tokens")
         .execute(storage.pool())
         .await
         .unwrap();
@@ -50,7 +50,7 @@ async fn authorized_account_and_credentials_commit_together() {
         .unwrap();
     assert_eq!(saved.status, codex2api_storage::SupplierStatus::Active);
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(storage.list_accounts().await.unwrap().len(), 1);
     assert_eq!(
         storage
@@ -75,8 +75,8 @@ async fn authorized_account_and_credentials_commit_together() {
 
 #[tokio::test]
 async fn concurrent_logins_deduplicate_only_the_same_user_and_workspace() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("concurrent.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("concurrent-pg"))
         .await
         .unwrap();
     let make = |id: &str, user: &str, workspace: &str| {

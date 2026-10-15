@@ -1,5 +1,5 @@
 use codex2api_core::SupportedModel;
-use codex2api_storage::{Storage, UsageFilter, UsageRecord, preset_model_prices};
+use codex2api_storage::{UsageFilter, UsageRecord, preset_model_prices};
 use serde_json::json;
 
 fn supported(model: &str) -> SupportedModel {
@@ -12,9 +12,9 @@ fn supported(model: &str) -> SupportedModel {
 
 #[tokio::test]
 async fn new_models_are_priced_once_unknown_prices_stay_disabled_and_restarts_are_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("models.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("models-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let models = [
         supported("gpt-6.1-sol"),
         supported("gpt-5.5"),
@@ -64,7 +64,7 @@ async fn new_models_are_priced_once_unknown_prices_stay_disabled_and_restarts_ar
     );
     let before = json!([storage.model_configs("chatgpt").await.unwrap(), prices]);
     storage.close().await;
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(reopened.sync_supported_models(&models).await.unwrap(), 0);
     assert_eq!(
         json!([
@@ -77,8 +77,8 @@ async fn new_models_are_priced_once_unknown_prices_stay_disabled_and_restarts_ar
 
 #[tokio::test]
 async fn registration_preserves_custom_prices_disabled_models_tombstones_and_request_snapshots() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("preservation.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("preservation-pg"))
         .await
         .unwrap();
     let models = [supported("gpt-6.1-sol")];
@@ -168,11 +168,11 @@ async fn registration_preserves_custom_prices_disabled_models_tombstones_and_req
 
 #[tokio::test]
 async fn newly_verified_prices_enable_only_untouched_pending_records() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("pending.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("pending-pg"))
         .await
         .unwrap();
-    sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES('chatgpt','gpt-6.1-sol','text',0)").execute(storage.pool()).await.unwrap();
+    sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES('chatgpt','gpt-6.1-sol','text',FALSE)").execute(storage.pool()).await.unwrap();
     let models = [supported("gpt-6.1-sol")];
     assert_eq!(
         storage.sync_supported_models(&models).await.unwrap(),
@@ -199,8 +199,8 @@ async fn newly_verified_prices_enable_only_untouched_pending_records() {
 
 #[tokio::test]
 async fn invalid_seed_rolls_back_the_entire_registration() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("atomic.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("atomic-pg"))
         .await
         .unwrap();
     assert!(
@@ -220,8 +220,8 @@ async fn invalid_seed_rolls_back_the_entire_registration() {
 
 #[tokio::test]
 async fn gpt55_global_tier_multipliers_and_cache_writes_keep_request_snapshots() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("gpt55.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("gpt55-pg"))
         .await
         .unwrap();
     storage
@@ -310,102 +310,5 @@ async fn gpt55_global_tier_multipliers_and_cache_writes_keep_request_snapshots()
         .execute(storage.pool())
         .await
         .unwrap();
-    }
-}
-
-#[tokio::test]
-async fn global_fast_migration_repairs_only_unchanged_defaults_and_preserves_history() {
-    use sqlx::{
-        migrate::Migrator,
-        sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    };
-    use std::borrow::Cow;
-    static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
-    for custom in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("before-global-fast.sqlite");
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(&path)
-                    .create_if_missing(true)
-                    .foreign_keys(false),
-            )
-            .await
-            .unwrap();
-        Migrator {
-            migrations: Cow::Owned(
-                MIGRATIONS
-                    .iter()
-                    .filter(|m| m.version <= 80)
-                    .cloned()
-                    .collect(),
-            ),
-            ..Migrator::DEFAULT
-        }
-        .run(&pool)
-        .await
-        .unwrap();
-        sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled,revision) VALUES('chatgpt','gpt-5.5','text',0,7)").execute(&pool).await.unwrap();
-        let mut old_prices = preset_model_prices("chatgpt", "gpt-5.5").unwrap();
-        old_prices.retain(|p| p.tier != "fast" || p.min_input_tokens == 0);
-        for price in &mut old_prices {
-            price.source = if custom {
-                "custom"
-            } else {
-                "preset:2026-10-09"
-            }
-            .into();
-            if price.tier == "fast" {
-                price.max_input_tokens = Some(272000);
-            }
-            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,max_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-                .bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.max_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.source).bind(4_i64).execute(&pool).await.unwrap();
-        }
-        let snapshot = serde_json::to_string(&old_prices).unwrap();
-        sqlx::query("INSERT INTO usage_records(id,account_id,account_name,subject_id,subject_name,endpoint,transport,model,requested_at_ms,status,pricing_snapshot_json,cost_nano_usd,billing_status) VALUES('history','','','owner','','/v1/responses','http','gpt-5.5',0,'completed',?,3400000000,'priced')")
-            .bind(&snapshot).execute(&pool).await.unwrap();
-        pool.close().await;
-        let storage = Storage::open(&path).await.unwrap();
-        let rows = storage.model_prices("chatgpt").await.unwrap();
-        let fast: Vec<_> = rows
-            .iter()
-            .filter(|p| p.model == "gpt-5.5" && p.tier == "fast")
-            .collect();
-        assert_eq!(fast.len(), if custom { 1 } else { 2 });
-        assert_eq!(
-            fast[0].max_input_tokens,
-            if custom { Some(272000) } else { None }
-        );
-        if !custom {
-            assert_eq!(fast[1].input_rate, 25_000_000);
-            assert_eq!(fast[1].output_rate, 112_500_000);
-        }
-        let config = storage
-            .model_config("chatgpt", "gpt-5.5")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!config.enabled);
-        assert_eq!(config.revision, if custom { 7 } else { 8 });
-        let history: (String, i64) = sqlx::query_as(
-            "SELECT pricing_snapshot_json,cost_nano_usd FROM usage_records WHERE id='history'",
-        )
-        .fetch_one(storage.pool())
-        .await
-        .unwrap();
-        assert_eq!(history, (snapshot, 3_400_000_000));
-        storage.close().await;
-        let reopened = Storage::open(&path).await.unwrap();
-        assert_eq!(
-            reopened
-                .model_config("chatgpt", "gpt-5.5")
-                .await
-                .unwrap()
-                .unwrap()
-                .revision,
-            config.revision
-        );
     }
 }

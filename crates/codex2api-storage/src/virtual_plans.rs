@@ -1,6 +1,6 @@
 use crate::{Result, Storage, StorageError, VirtualClientState};
 use serde_json::{Value, json};
-use sqlx::{FromRow, Row, sqlite::SqliteRow};
+use sqlx::{FromRow, Row, postgres::PgRow};
 
 #[derive(Clone)]
 pub struct VirtualPlan {
@@ -14,18 +14,15 @@ pub struct VirtualPlan {
     pub updated_at_ms: i64,
 }
 
-impl<'r> FromRow<'r, SqliteRow> for VirtualPlan {
-    fn from_row(row: &'r SqliteRow) -> std::result::Result<Self, sqlx::Error> {
-        let config: String = row.try_get("config")?;
+impl<'r> FromRow<'r, PgRow> for VirtualPlan {
+    fn from_row(row: &'r PgRow) -> std::result::Result<Self, sqlx::Error> {
+        let config: sqlx::types::Json<Value> = row.try_get("config")?;
         Ok(Self {
             provider_id: row.try_get("provider_id")?,
             id: row.try_get("id")?,
             name: row.try_get("name")?,
             plan_type: row.try_get("plan_type")?,
-            config: serde_json::from_str(&config).map_err(|e| sqlx::Error::ColumnDecode {
-                index: "config".into(),
-                source: Box::new(e),
-            })?,
+            config: config.0,
             allow_purchase: row.try_get("allow_purchase")?,
             revision: row.try_get("revision")?,
             updated_at_ms: row.try_get("updated_at_ms")?,
@@ -148,13 +145,15 @@ impl Storage {
     }
 
     pub async fn virtual_plans(&self) -> Result<Vec<VirtualPlan>> {
-        Ok(sqlx::query_as("SELECT * FROM virtual_plans ORDER BY rowid")
-            .fetch_all(self.pool())
-            .await?)
+        Ok(
+            sqlx::query_as("SELECT * FROM virtual_plans ORDER BY sort_id")
+                .fetch_all(self.pool())
+                .await?,
+        )
     }
 
     pub async fn virtual_plan(&self, id: &str) -> Result<Option<VirtualPlan>> {
-        Ok(sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")
+        Ok(sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1")
             .bind(id)
             .fetch_optional(self.pool())
             .await?)
@@ -166,10 +165,10 @@ impl Storage {
         expected: Option<i64>,
     ) -> Result<bool> {
         plan.validate()?;
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         if let Some(tag) = plan.config["supplier_tag_id"].as_str() {
             let valid: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=? AND provider_id=?)",
+                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=$1 AND provider_id=$2)",
             )
             .bind(tag)
             .bind(&plan.provider_id)
@@ -181,15 +180,15 @@ impl Storage {
         }
         let now = chrono::Utc::now().timestamp_millis();
         let changed = if let Some(revision) = expected {
-            sqlx::query("UPDATE virtual_plans SET name=?,config=?,allow_purchase=?,revision=revision+1,updated_at_ms=?,plan_type=? WHERE id=? AND revision=? AND provider_id=?")
+            sqlx::query("UPDATE virtual_plans SET name=$1,config=$2::jsonb,allow_purchase=$3,revision=revision+1,updated_at_ms=$4,plan_type=$5 WHERE id=$6 AND revision=$7 AND provider_id=$8")
                 .bind(plan.name.trim()).bind(plan.config.to_string()).bind(plan.allow_purchase).bind(now).bind(&plan.plan_type).bind(&plan.id).bind(revision).bind(&plan.provider_id).execute(&mut *tx).await?.rows_affected()
         } else {
-            sqlx::query("INSERT INTO virtual_plans(provider_id,id,name,plan_type,config,allow_purchase,updated_at_ms) VALUES(?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO virtual_plans(provider_id,id,name,plan_type,config,allow_purchase,updated_at_ms) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7)")
                 .bind(&plan.provider_id).bind(&plan.id).bind(plan.name.trim()).bind(&plan.plan_type).bind(plan.config.to_string()).bind(plan.allow_purchase).bind(now).execute(&mut *tx).await?.rows_affected()
         };
         if changed == 1 {
             sqlx::query(
-                "UPDATE platform_accounts SET plan_type=? WHERE plan_id=? AND provider_id=?",
+                "UPDATE platform_accounts SET plan_type=$1 WHERE plan_id=$2 AND provider_id=$3",
             )
             .bind(&plan.plan_type)
             .bind(&plan.id)
@@ -199,19 +198,21 @@ impl Storage {
         }
         tx.commit().await?;
         if changed == 1 {
-            self.invalidate_runtime_cache();
+            self.runtime
+                .snapshots
+                .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         }
         Ok(changed == 1)
     }
 
     pub async fn delete_virtual_plan(&self, id: &str, revision: i64) -> Result<bool> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         // Acquire the write lock before checking references, including concurrent assignments.
-        let changed = sqlx::query("DELETE FROM virtual_plans WHERE id=? AND revision=? AND NOT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=?)")
+        let changed = sqlx::query("DELETE FROM virtual_plans WHERE id=$1 AND revision=$2 AND NOT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=$3)")
             .bind(id).bind(revision).bind(id).execute(&mut *tx).await?.rows_affected();
         if changed == 0 {
             let used: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=?)",
+                "SELECT EXISTS(SELECT 1 FROM platform_accounts WHERE plan_id=$1)",
             )
             .bind(id)
             .fetch_one(&mut *tx)

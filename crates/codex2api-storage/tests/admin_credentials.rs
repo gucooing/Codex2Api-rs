@@ -1,9 +1,7 @@
-use codex2api_storage::Storage;
-
 #[tokio::test]
 async fn credential_changes_are_atomic_and_allow_changing_either_field() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("admin.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("admin-pg"))
         .await
         .unwrap();
     let session = storage
@@ -12,7 +10,7 @@ async fn credential_changes_are_atomic_and_allow_changing_either_field() {
         .unwrap()
         .unwrap();
     // If revoking sessions fails, the credential change must roll back as well.
-    sqlx::query("CREATE TRIGGER reject_session_delete BEFORE DELETE ON admin_sessions BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+    sqlx::raw_sql("CREATE FUNCTION reject_session_delete_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test failure'; RETURN NULL; END; $$; CREATE TRIGGER reject_session_delete BEFORE DELETE ON admin_sessions FOR EACH ROW EXECUTE FUNCTION reject_session_delete_fn();")
         .execute(storage.pool()).await.unwrap();
     assert!(
         storage
@@ -34,7 +32,7 @@ async fn credential_changes_are_atomic_and_allow_changing_either_field() {
             .unwrap()
             .is_some()
     );
-    sqlx::query("DROP TRIGGER reject_session_delete")
+    sqlx::query("DROP TRIGGER reject_session_delete ON admin_sessions")
         .execute(storage.pool())
         .await
         .unwrap();

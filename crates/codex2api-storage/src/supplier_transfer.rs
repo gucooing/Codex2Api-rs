@@ -98,10 +98,10 @@ impl Storage {
         {
             return Err(StorageError::Constraint("供应账户数据无效".into()));
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM supplier_accounts WHERE id=? OR installation_id=?
-             OR (provider_id=? AND chatgpt_account_id=? AND chatgpt_user_id=?))",
+            "SELECT EXISTS(SELECT 1 FROM supplier_accounts WHERE id=$1 OR installation_id=$2
+             OR (provider_id=$3 AND chatgpt_account_id=$4 AND chatgpt_user_id=$5))",
         )
         .bind(&a.id)
         .bind(&a.installation_id)
@@ -123,7 +123,7 @@ impl Storage {
                 return Err(StorageError::InvalidProxy);
             }
             let existing: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM outbound_proxies WHERE url=? ORDER BY id LIMIT 1",
+                "SELECT id FROM outbound_proxies WHERE url=$1 ORDER BY id LIMIT 1",
             )
             .bind(url.as_str())
             .fetch_optional(&mut *tx)
@@ -133,7 +133,7 @@ impl Storage {
                 None => {
                     let id = uuid::Uuid::new_v4().to_string();
                     sqlx::query(
-                        "INSERT INTO outbound_proxies(id,name,url,created_at) VALUES(?,?,?,?)",
+                        "INSERT INTO outbound_proxies(id,name,url,created_at) VALUES($1,$2,$3,$4)",
                     )
                     .bind(&id)
                     .bind(proxy.name.trim())
@@ -149,7 +149,7 @@ impl Storage {
         };
         sqlx::query("INSERT INTO supplier_accounts(id,provider_id,status,display_name,chatgpt_account_id,chatgpt_user_id,
             email,plan_type,installation_id,originator,user_agent,os_type,os_version,arch,home_dir,http_fingerprint_json,
-            proxy_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',?,?,?,?)")
+            proxy_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'',$15,$16,$17,$18)")
             .bind(&id).bind(&a.provider_id).bind(a.status.as_str()).bind(&a.display_name)
             .bind(&a.chatgpt_account_id).bind(&a.chatgpt_user_id).bind(&a.email).bind(&a.plan_type)
             .bind(&a.installation_id).bind(&a.originator).bind(&a.user_agent).bind(&a.os_type)
@@ -157,25 +157,28 @@ impl Storage {
             .execute(&mut *tx).await?;
         if let Some(t) = &item.tokens {
             sqlx::query("INSERT INTO supplier_tokens(account_id,auth_mode,id_token,access_token,refresh_token,last_refresh,raw_auth_json,updated_at)
-                VALUES(?,?,?,?,?,?,?,?)")
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
                 .bind(&id).bind(&t.auth_mode).bind(&t.id_token).bind(&t.access_token).bind(&t.refresh_token)
                 .bind(&t.last_refresh).bind(&t.raw_auth_json).bind(&now).execute(&mut *tx).await?;
         }
-        sqlx::query("INSERT INTO supplier_scheduling(account_id,concurrency,priority,load_factor,revision) VALUES(?,?,?,?,1)")
-            .bind(&id).bind(scheduling.concurrency).bind(scheduling.priority).bind(scheduling.load_factor)
+        sqlx::query("INSERT INTO supplier_scheduling(account_id,concurrency,priority,load_factor,revision) VALUES($1,$2,$3,$4,1)")
+            .bind(&id).bind(i64::from(scheduling.concurrency)).bind(i64::from(scheduling.priority)).bind(scheduling.load_factor.map(i64::from))
             .execute(&mut *tx).await?;
         for m in &item.models {
-            sqlx::query("INSERT INTO supplier_models(account_id,model,source,observed_at) VALUES(?,?,?,?) ON CONFLICT DO NOTHING")
+            sqlx::query("INSERT INTO supplier_models(account_id,model,source,observed_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING")
                 .bind(&id).bind(&m.model).bind(&m.source).bind(&m.observed_at).execute(&mut *tx).await?;
         }
         for name in &item.tags {
-            sqlx::query("INSERT INTO supplier_tags(id,provider_id,name) VALUES(?,?,?) ON CONFLICT(provider_id,name) DO NOTHING")
+            sqlx::query("INSERT INTO supplier_tags(id,provider_id,name) VALUES($1,$2,$3) ON CONFLICT(provider_id,lower(name)) DO NOTHING")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(&a.provider_id).bind(name.trim()).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO supplier_tag_members(tag_id,account_id) SELECT id,? FROM supplier_tags WHERE provider_id=? AND name=? ON CONFLICT DO NOTHING")
+            sqlx::query("INSERT INTO supplier_tag_members(tag_id,account_id) SELECT id,$1 FROM supplier_tags WHERE provider_id=$2 AND lower(name)=lower($3) ON CONFLICT DO NOTHING")
                 .bind(&id).bind(&a.provider_id).bind(name.trim()).execute(&mut *tx).await?;
         }
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(true)
     }
 }

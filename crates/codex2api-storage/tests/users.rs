@@ -2,9 +2,13 @@ use chrono::{Duration, Utc};
 use codex2api_storage::{Storage, SubscriptionChange, User, hash_token};
 use serde_json::json;
 
-async fn setup() -> (tempfile::TempDir, Storage, User) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("users.sqlite"))
+async fn setup() -> (
+    codex2api_storage::test_support::TestDirectory,
+    Storage,
+    User,
+) {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("users-pg"))
         .await
         .unwrap();
     let user = User {
@@ -37,6 +41,69 @@ async fn setup() -> (tempfile::TempDir, Storage, User) {
         .await
         .unwrap();
     (dir, storage, user)
+}
+
+#[tokio::test]
+async fn a_locked_wallet_does_not_block_another_users_transaction() {
+    let (_dir, storage, user) = setup().await;
+    let other = User {
+        id: "other-owner".into(),
+        username: "other-owner".into(),
+        ..user.clone()
+    };
+    storage.save_user(&other, None).await.unwrap();
+    let mut locked = storage.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+        .bind(&user.id)
+        .execute(&mut *locked)
+        .await
+        .unwrap();
+    let admin = storage.require_admin_user().await.unwrap();
+    let entry = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        storage.adjust_user_wallet(
+            &other.id,
+            admin.id,
+            codex2api_storage::WalletAdjustment {
+                request_id: "independent-owner".into(),
+                amount_cents: 25,
+                expected_revision: 1,
+                reason: None,
+            },
+        ),
+    )
+    .await
+    .expect("independent users must not share a write lock")
+    .unwrap();
+    assert_eq!(entry.balance_cents, 25);
+    locked.rollback().await.unwrap();
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        0
+    );
+}
+
+#[tokio::test]
+async fn login_attempt_limits_are_atomic_case_insensitive_and_survive_reconnect() {
+    let (_dir, storage, _) = setup().await;
+    let mut tasks = tokio::task::JoinSet::new();
+    for index in 0..20 {
+        let storage = storage.clone();
+        tasks.spawn(async move {
+            storage
+                .allow_user_login_attempt(if index % 2 == 0 { "Alice" } else { "alice" })
+                .await
+                .unwrap()
+        });
+    }
+    let mut allowed = 0;
+    while let Some(result) = tasks.join_next().await {
+        allowed += usize::from(result.unwrap());
+    }
+    assert_eq!(allowed, 10);
+    let reopened = storage.reopen().await.unwrap();
+    assert!(!reopened.allow_user_login_attempt("ALICE").await.unwrap());
+    assert!(reopened.allow_user_login_attempt("bob").await.unwrap());
 }
 #[tokio::test]
 async fn administrator_wallet_adjustments_are_atomic_idempotent_and_auditable() {
@@ -133,7 +200,7 @@ async fn administrator_wallet_adjustments_are_atomic_idempotent_and_auditable() 
         assert!(entry.get("operator_account_id").is_none());
     }
     assert!(
-        sqlx::query("UPDATE wallet_entries SET amount_cents=1 WHERE id=?")
+        sqlx::query("UPDATE wallet_entries SET amount_cents=1 WHERE id=$1")
             .bind(&first.id)
             .execute(storage.pool())
             .await

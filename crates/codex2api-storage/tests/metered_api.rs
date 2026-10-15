@@ -5,9 +5,17 @@ use codex2api_storage::{
 };
 use serde_json::json;
 
-async fn setup() -> (tempfile::TempDir, Storage, User, ApiGroup, String) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("api.sqlite")).await.unwrap();
+async fn setup() -> (
+    codex2api_storage::test_support::TestDirectory,
+    Storage,
+    User,
+    ApiGroup,
+    String,
+) {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("api-pg"))
+        .await
+        .unwrap();
     let user = User {
         id: "regular".into(),
         username: "regular".into(),
@@ -142,6 +150,59 @@ fn request(id: &str) -> UsageRecord {
 }
 
 #[tokio::test]
+async fn cached_catalog_is_fenced_by_transactional_price_and_model_revisions() {
+    let (_dir, storage, user, group, supplier) = setup().await;
+    let (secret, principal) = credential(&storage, &user, &group).await;
+    storage
+        .admit_api_request(&principal, &request("warm-cache"))
+        .await
+        .unwrap();
+    // Simulate the commit/invalidation race: change PostgreSQL without invalidating L1/L2.
+    sqlx::query("UPDATE model_prices SET input_rate=2000000 WHERE provider_id='chatgpt' AND model='api-text'")
+        .execute(storage.pool()).await.unwrap();
+    let mut current = request("new-price");
+    storage
+        .admit_api_request(&principal, &current)
+        .await
+        .unwrap();
+    current.account_id = supplier;
+    current.status = "completed".into();
+    current.input_tokens = Some(1000);
+    current.output_tokens = Some(0);
+    assert_eq!(
+        storage.settle(&current).await.unwrap().cost_nano_usd,
+        Some(3_000_000)
+    );
+    sqlx::query(
+        "UPDATE model_catalog SET enabled=FALSE WHERE provider_id='chatgpt' AND model='api-text'",
+    )
+    .execute(storage.pool())
+    .await
+    .unwrap();
+    assert!(matches!(
+        storage
+            .admit_api_request(&principal, &request("disabled-model"))
+            .await,
+        Err(StorageError::Api {
+            code: "model_not_available",
+            ..
+        })
+    ));
+    sqlx::query("UPDATE api_keys SET revoked_at='revoked' WHERE id=$1")
+        .bind(&principal.key_id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .authenticate_api_key(&secret)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn wallet_deltas_use_current_balance_after_usage_and_debt_settlement() {
     let (_dir, storage, user, group, _) = setup().await;
     let snapshot = storage.user(&user.id).await.unwrap().unwrap();
@@ -206,7 +267,7 @@ async fn wallet_deltas_use_current_balance_after_usage_and_debt_settlement() {
     let current = storage.user(&user.id).await.unwrap().unwrap();
     assert_eq!(current.wallet_cents, 25);
     assert_eq!(current.revision, snapshot.revision);
-    let entries: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT amount_cents,balance_before_cents,balance_cents FROM wallet_entries WHERE user_id=? ORDER BY rowid")
+    let entries: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT amount_cents,balance_before_cents,balance_cents FROM wallet_entries WHERE user_id=$1 ORDER BY sort_id")
         .bind(&user.id).fetch_all(storage.pool()).await.unwrap();
     assert_eq!(
         entries,
@@ -229,7 +290,7 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
     let (secret, principal) = credential(&storage, &user, &group).await;
     assert_eq!(secret.len(), 71);
     let (hash, prefix): (String, String) =
-        sqlx::query_as("SELECT token_hash,key_prefix FROM api_keys WHERE id=?")
+        sqlx::query_as("SELECT token_hash,key_prefix FROM api_keys WHERE id=$1")
             .bind(&principal.key_id)
             .fetch_one(storage.pool())
             .await
@@ -318,7 +379,7 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
             .await
             .unwrap()
     );
-    sqlx::query("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES('virtual','user','virtual','hash',1,'now','now')").execute(storage.pool()).await.unwrap();
+    sqlx::query("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES('virtual','user','virtual','hash',TRUE,'now','now')").execute(storage.pool()).await.unwrap();
     assert!(
         sqlx::query(
             "INSERT INTO users(id,name,email,kind) VALUES('virtual','Virtual','','virtual')"
@@ -343,7 +404,7 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
     );
     assert!(sqlx::query("INSERT INTO api_keys(id,user_id,group_id,name,token_hash,key_prefix,created_at) VALUES('bad','virtual','group','bad','bad','bad','now')").execute(storage.pool()).await.is_err());
     assert!(
-        sqlx::query("UPDATE api_keys SET user_id='another' WHERE id=?")
+        sqlx::query("UPDATE api_keys SET user_id='another' WHERE id=$1")
             .bind(&principal.key_id)
             .execute(storage.pool())
             .await
@@ -364,7 +425,7 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
             .is_none()
     );
     assert!(
-        sqlx::query("UPDATE api_keys SET revoked_at=NULL,enabled=1 WHERE id=?")
+        sqlx::query("UPDATE api_keys SET revoked_at=NULL,enabled=TRUE WHERE id=$1")
             .bind(&principal.key_id)
             .execute(storage.pool())
             .await
@@ -723,6 +784,39 @@ async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissio
 }
 
 #[tokio::test]
+async fn concurrent_completion_of_one_request_debits_the_wallet_once() {
+    let (_dir, storage, user, group, _) = setup().await;
+    let (_, principal) = credential(&storage, &user, &group).await;
+    let mut record = request("same-completion");
+    storage
+        .admit_api_request(&principal, &record)
+        .await
+        .unwrap();
+    record.input_tokens = Some(100_000);
+    record.output_tokens = Some(0);
+    record.status = "completed".into();
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let storage = storage.clone();
+        let record = record.clone();
+        tasks.spawn(async move { storage.finish_usage(&record).await });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap().unwrap();
+    }
+    let (entries, debit): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*),COALESCE(SUM(-amount_cents),0)::bigint FROM wallet_entries WHERE usage_record_id=$1",
+    )
+    .bind(&record.id).fetch_one(storage.pool()).await.unwrap();
+    assert_eq!(entries, 1);
+    assert!(debit > 0);
+    assert_eq!(
+        storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
+        100 - debit
+    );
+}
+
+#[tokio::test]
 async fn search_compact_and_input_count_share_usage_with_operation_specific_billing() {
     let (_dir, storage, user, mut group, _) = setup().await;
     group.model_rules = vec![ApiModelRule {
@@ -905,7 +999,7 @@ async fn search_compact_and_input_count_share_usage_with_operation_specific_bill
         })
     ));
     let totals: (i64, i64) = sqlx::query_as(
-        "SELECT COUNT(*),SUM(cost_nano_usd) FROM usage_records WHERE wallet_user_id=?",
+        "SELECT COUNT(*),SUM(cost_nano_usd)::bigint FROM usage_records WHERE wallet_user_id=$1",
     )
     .bind(&user.id)
     .fetch_one(storage.pool())
@@ -1192,77 +1286,6 @@ async fn api_model_membership_pagination_and_provider_boundaries_follow_current_
 }
 
 #[tokio::test]
-async fn metered_api_migration_preserves_existing_wallet_entries_and_guards() {
-    use sqlx::{
-        migrate::Migrator,
-        sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    };
-    use std::borrow::Cow;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("before-api.sqlite");
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(&path)
-                .create_if_missing(true)
-                .foreign_keys(false),
-        )
-        .await
-        .unwrap();
-    let migrations = sqlx::migrate!("./migrations");
-    Migrator {
-        migrations: Cow::Owned(
-            migrations
-                .iter()
-                .filter(|m| m.version < 76)
-                .cloned()
-                .collect(),
-        ),
-        ..Migrator::DEFAULT
-    }
-    .run(&pool)
-    .await
-    .unwrap();
-    sqlx::raw_sql("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES('kept','user','kept','hash',1,'2026-01-01','2026-01-01');
-        INSERT INTO users(id,name,email,wallet_cents) VALUES('kept','Kept','kept@example.test',123);
-        INSERT INTO wallet_entries(id,user_id,request_id,signature,kind,plan_id,plan_name,provider_id,amount_cents,balance_cents,created_at) VALUES('old-entry','kept','old-request','signature','order_payment','plus','Plus','chatgpt',-5,123,'2026-01-01');")
-        .execute(&pool).await.unwrap();
-    pool.close().await;
-    let storage = Storage::open(&path).await.unwrap();
-    let entries = storage.wallet_entries("kept").await.unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].id, "old-entry");
-    assert_eq!(entries[0].amount_cents, -5);
-    assert_eq!(entries[0].balance_before_cents, 128);
-    assert_eq!(entries[0].usage_record_id, None);
-    assert_eq!(
-        storage.user("kept").await.unwrap().unwrap().wallet_cents,
-        123
-    );
-    assert!(
-        sqlx::query("UPDATE wallet_entries SET amount_cents=-1 WHERE id='old-entry'")
-            .execute(storage.pool())
-            .await
-            .is_err()
-    );
-    assert!(
-        sqlx::query("DELETE FROM wallet_entries WHERE id='old-entry'")
-            .execute(storage.pool())
-            .await
-            .is_err()
-    );
-    assert!(
-        sqlx::query("PRAGMA foreign_key_check")
-            .fetch_all(storage.pool())
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(storage.recover_interrupted_usage().await.unwrap(), 0);
-}
-
-#[tokio::test]
 async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage() {
     let (_dir, storage, user, group, supplier) = setup().await;
     storage
@@ -1417,13 +1440,13 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
         .await
         .unwrap();
     let mut oauth = request("oauth-shared");
-    let original_plan: (String, String) = sqlx::query_as("SELECT p.id,p.name FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id WHERE a.id=?")
+    let original_plan: (String, String) = sqlx::query_as("SELECT p.id,p.name FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id WHERE a.id=$1")
         .bind(&subscription).fetch_one(storage.pool()).await.unwrap();
     oauth.subject_id = subscription;
     oauth.subject_name = "Subscription".into();
     oauth.account_id = supplier.clone();
     storage.insert_usage(&oauth).await.unwrap();
-    sqlx::query("UPDATE virtual_plans SET name='Renamed after request' WHERE id=?")
+    sqlx::query("UPDATE virtual_plans SET name='Renamed after request' WHERE id=$1")
         .bind(&original_plan.0)
         .execute(storage.pool())
         .await
@@ -1566,7 +1589,7 @@ async fn all_request_sources_share_history_statistics_and_failure_details() {
         0
     );
     let tables: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name='api_usage_records'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='api_usage_records'")
             .fetch_one(storage.pool())
             .await
             .unwrap();
@@ -1585,7 +1608,7 @@ async fn shared_finalization_rolls_back_wallet_when_record_cannot_be_saved() {
     request.input_tokens = Some(100_000);
     request.output_tokens = Some(0);
     request.status = "completed".into();
-    sqlx::raw_sql("CREATE TRIGGER reject_settlement BEFORE UPDATE ON usage_records WHEN NEW.id='rollback' AND NEW.status='completed' BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;").execute(storage.pool()).await.unwrap();
+    sqlx::raw_sql("CREATE FUNCTION reject_settlement_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id='rollback' AND NEW.status='completed' THEN RAISE EXCEPTION 'fixture write failure'; END IF; RETURN NEW; END; $$; CREATE TRIGGER reject_settlement BEFORE UPDATE ON usage_records FOR EACH ROW EXECUTE FUNCTION reject_settlement_fn();").execute(storage.pool()).await.unwrap();
     assert!(storage.finish_usage(&request).await.is_err());
     assert_eq!(
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
@@ -1604,7 +1627,7 @@ async fn shared_finalization_rolls_back_wallet_when_record_cannot_be_saved() {
             .unwrap(),
         0
     );
-    sqlx::query("DROP TRIGGER reject_settlement")
+    sqlx::query("DROP TRIGGER reject_settlement ON usage_records")
         .execute(storage.pool())
         .await
         .unwrap();
@@ -1618,7 +1641,7 @@ async fn shared_finalization_rolls_back_wallet_when_record_cannot_be_saved() {
 impl SettleUsage for Storage {
     async fn settle(&self, record: &UsageRecord) -> codex2api_storage::Result<UsageRecord> {
         self.finish_usage(record).await?;
-        Ok(sqlx::query_as("SELECT * FROM usage_records WHERE id=?")
+        Ok(sqlx::query_as("SELECT * FROM usage_records WHERE id=$1")
             .bind(&record.id)
             .fetch_one(self.pool())
             .await?)

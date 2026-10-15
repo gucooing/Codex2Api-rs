@@ -40,11 +40,7 @@ impl ExecutionService {
     }
 
     pub async fn admit_request(&self, owner: &str, consume: bool) -> Result<()> {
-        if let Some(retry_after) = self
-            .storage
-            .admit_virtual_request(owner, consume, chrono::Utc::now().timestamp_millis())
-            .await?
-        {
+        if let Some(retry_after) = self.storage.admit_virtual_request(owner, consume).await? {
             return Err(ServiceError::RpmExceeded { retry_after });
         }
         Ok(())

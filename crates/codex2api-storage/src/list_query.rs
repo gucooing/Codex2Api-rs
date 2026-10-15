@@ -1,6 +1,6 @@
 use crate::{Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, QueryBuilder, Sqlite, sqlite::SqliteRow};
+use sqlx::{FromRow, Postgres, QueryBuilder, postgres::PgRow};
 
 /// Management list parameters. SQL identifiers and ordering are chosen by the repository.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -92,7 +92,7 @@ impl<T> ListPage<T> {
     }
 }
 
-pub(crate) fn exact(query: &mut QueryBuilder<'static, Sqlite>, column: &str, value: &str) {
+pub(crate) fn exact(query: &mut QueryBuilder<'static, Postgres>, column: &str, value: &str) {
     if !value.is_empty() {
         query
             .push(" AND ")
@@ -102,7 +102,7 @@ pub(crate) fn exact(query: &mut QueryBuilder<'static, Sqlite>, column: &str, val
     }
 }
 
-pub(crate) fn search(query: &mut QueryBuilder<'static, Sqlite>, columns: &[&str], value: &str) {
+pub(crate) fn search(query: &mut QueryBuilder<'static, Postgres>, columns: &[&str], value: &str) {
     let value = value.trim();
     if value.is_empty() {
         return;
@@ -113,7 +113,7 @@ pub(crate) fn search(query: &mut QueryBuilder<'static, Sqlite>, columns: &[&str]
             query.push(" OR ");
         }
         query
-            .push("instr(lower(COALESCE(")
+            .push("strpos(lower(COALESCE(")
             .push(column)
             .push(",'')),lower(")
             .push_bind(value.to_owned())
@@ -130,13 +130,16 @@ impl Storage {
         columns: &str,
         source: &str,
         order: &str,
-        predicate: impl Fn(&mut QueryBuilder<'static, Sqlite>),
+        predicate: impl Fn(&mut QueryBuilder<'static, Postgres>),
     ) -> Result<ListPage<T>>
     where
-        T: for<'r> FromRow<'r, SqliteRow> + Send + Unpin,
+        T: for<'r> FromRow<'r, PgRow> + Send + Unpin,
     {
         let page_size = request.validate()?;
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let mut count = QueryBuilder::new(format!("SELECT COUNT(*) FROM {source} WHERE 1=1"));
         predicate(&mut count);
         let total: i64 = count.build_query_scalar().fetch_one(&mut *tx).await?;

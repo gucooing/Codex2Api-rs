@@ -23,8 +23,8 @@ const ROOT: &str = "/api/oauth/chatgpt";
 
 #[tokio::test]
 async fn rejected_compaction_bodies_are_visible_in_usage_without_charging_or_supplier_use() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("rejected.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("rejected-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -152,9 +152,9 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
             Value::Null => json!("null"),
         }
     }
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("jwt-contract.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("jwt-contract-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let supplier = test_supplier(&storage, &account).await.unwrap();
     let tokens = login(&app).await;
@@ -335,7 +335,7 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
     assert!(!bob_access.to_string().contains(&account.email));
     bind_test_supplier(&storage, &account, None).await;
     storage.close().await;
-    let storage = Storage::open(&db).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let app = router(&storage);
     let response = app
         .clone()
@@ -421,8 +421,8 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
 async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usage() {
     use serde_json::json;
     use std::io::Write;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("reset-contract.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("reset-contract-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -651,8 +651,8 @@ async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usa
 async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_client() {
     use serde_json::json;
     use std::io::Write;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("native-update.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("native-update-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -811,8 +811,8 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
 #[tokio::test]
 async fn model_policy_covers_token_inspection_realtime_and_native_preparation_before_forwarding() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("model-entrypoints.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("model-entrypoints-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -981,8 +981,8 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
 #[tokio::test]
 async fn global_catalog_and_desktop_picker_agree_when_legacy_groups_omit_new_models() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("catalog-policy.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("catalog-policy-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -1085,8 +1085,8 @@ async fn global_catalog_and_desktop_picker_agree_when_legacy_groups_omit_new_mod
 #[tokio::test]
 async fn oauth_grants_are_consumer_only_scope_bounded_and_not_admin_credentials() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("least-privilege.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("least-privilege-pg"))
         .await
         .unwrap();
     let (api, account) = fixture(&storage).await;
@@ -1172,8 +1172,8 @@ async fn oauth_grants_are_consumer_only_scope_bounded_and_not_admin_credentials(
 #[tokio::test]
 async fn consumer_tokens_cannot_cross_account_headers_paths_queries_or_resources() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("oauth-isolation.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("oauth-isolation-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -1256,8 +1256,8 @@ async fn consumer_tokens_cannot_cross_account_headers_paths_queries_or_resources
 #[tokio::test]
 async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_permissions() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("plan-models.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("plan-models-pg"))
         .await
         .unwrap();
     let (api, mut account) = fixture(&storage).await;
@@ -1456,8 +1456,8 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
 
 #[tokio::test]
 async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("support.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("support-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -1569,8 +1569,12 @@ async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() 
         }
     }
     assert!(storage.missing_endpoints().await.unwrap().is_empty());
-    let table_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='desktop_diagnostics')")
-        .fetch_one(storage.pool()).await.unwrap();
+    let table_exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass(current_schema() || '.desktop_diagnostics') IS NOT NULL",
+    )
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
     assert!(!table_exists);
     let config = storage
         .virtual_config(&account.id, "feature_bootstrap")
@@ -1673,9 +1677,9 @@ async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() 
 
 #[tokio::test]
 async fn desktop_wham_analytics_persist_owned_metadata_and_deduplicate() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("wham-events.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("wham-events-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let token = login(&app).await["access_token"]
         .as_str()
@@ -1771,7 +1775,7 @@ async fn desktop_wham_analytics_persist_owned_metadata_and_deduplicate() {
             .status(),
         StatusCode::BAD_REQUEST
     );
-    let reopened = Storage::open(&db).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
     assert_eq!(
         reopened
             .virtual_analytics(&account.id, 0, i64::MAX)
@@ -1784,8 +1788,8 @@ async fn desktop_wham_analytics_persist_owned_metadata_and_deduplicate() {
 #[tokio::test]
 async fn exhausted_spending_limit_rejects_http_and_websocket_before_upstream() {
     use tokio_tungstenite::tungstenite::{Error, client::IntoClientRequest};
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("budget.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("budget-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -1918,8 +1922,8 @@ async fn exhausted_spending_limit_rejects_http_and_websocket_before_upstream() {
 
 #[tokio::test]
 async fn installed_plugins_generate_desktop_pagination_for_legacy_configuration() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("desktop-plugins.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("desktop-plugins-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -2018,8 +2022,8 @@ async fn installed_plugins_generate_desktop_pagination_for_legacy_configuration(
 
 #[tokio::test]
 async fn referral_tracking_filters_the_virtual_records_and_paginates_without_looping() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("referrals.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("referrals-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -2182,8 +2186,8 @@ async fn referral_tracking_filters_the_virtual_records_and_paginates_without_loo
 
 #[tokio::test]
 async fn desktop_services_authenticate_and_heartbeat_updates_virtual_device_without_supplier() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("desktop-services.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("desktop-services-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -2261,9 +2265,9 @@ async fn desktop_services_authenticate_and_heartbeat_updates_virtual_device_with
 
 #[tokio::test]
 async fn virtual_management_reads_persisted_private_data_and_isolates_actual_activity() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("managed.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("managed-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
@@ -2499,7 +2503,7 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
     assert_eq!(tasks["items"], serde_json::json!([]));
     bind_test_supplier(&storage, &account, None).await;
     storage.save_account_fixture(&account).await.unwrap();
-    let reopened = Storage::open(&db).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
     assert_eq!(
         reopened
             .virtual_config(&account.id, "payment_methods")
@@ -2541,8 +2545,8 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
 #[tokio::test]
 async fn virtual_pubsub_tickets_deliver_only_owned_events_and_revoke_with_device() {
     use futures::{SinkExt, StreamExt};
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("pubsub.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("pubsub-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -2696,9 +2700,9 @@ fn client_json(method: &str, path: &str, token: &str, value: Value) -> Request<B
 
 #[tokio::test]
 async fn desktop_usage_reads_actual_virtual_tokens_across_bindings() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("usage.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("usage-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
@@ -2900,7 +2904,7 @@ async fn desktop_usage_reads_actual_virtual_tokens_across_bindings() {
     // Historical analytics remain virtual-account data after unbinding.
     bind_test_supplier(&storage, &account, None).await;
     storage.save_account_fixture(&account).await.unwrap();
-    let reopened = Storage::open(&db).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
     assert_eq!(
         json_body(
             router(&reopened)
@@ -2944,9 +2948,9 @@ async fn desktop_usage_reads_actual_virtual_tokens_across_bindings() {
 
 #[tokio::test]
 async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_and_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("client-state.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("client-state-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
@@ -3095,7 +3099,7 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
     );
     drop(app);
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let persisted = storage
         .virtual_client_state(&account.id, "browser_settings")
         .await
@@ -3149,8 +3153,8 @@ async fn desktop_cloud_reads_are_isolated_and_client_settings_survive_rebinding_
 
 #[tokio::test]
 async fn mcp_discovery_is_public_and_batch_and_mcp_require_virtual_credentials() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("mcp-discovery.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("mcp-discovery-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -3267,8 +3271,8 @@ async fn mcp_discovery_is_public_and_batch_and_mcp_require_virtual_credentials()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Python and CODEX2API_TEST_CLI pointing to the installed desktop CLI"]
 async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("desktop.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("desktop-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -3284,7 +3288,7 @@ async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh()
     plan.config["model_access"] = serde_json::json!("selected");
     plan.config["models"] = serde_json::json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"},{"provider_id":"chatgpt","model":"gpt-6-astra"},{"provider_id":"chatgpt","model":"gpt-6-sol"},{"provider_id":"chatgpt","model":"gpt-6-luna"}]);
     for model in ["gpt-6-sol", "gpt-6-luna"] {
-        sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')")
+        sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',$1,'text') ON CONFLICT DO NOTHING")
             .bind(model)
             .execute(storage.pool())
             .await
@@ -3465,8 +3469,8 @@ async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh()
 
 #[tokio::test]
 async fn desktop_login_wrapper_redirects_only_to_local_authorization_and_preserves_pkce() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("desktop-login.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("desktop-login-pg"))
         .await
         .unwrap();
     let (app, _) = fixture(&storage).await;
@@ -3525,8 +3529,8 @@ async fn desktop_login_wrapper_redirects_only_to_local_authorization_and_preserv
 
 #[tokio::test]
 async fn desktop_plugin_routes_require_virtual_auth_and_never_use_supplier_private_catalogs() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("plugins.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("plugins-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -3893,9 +3897,9 @@ async fn login_scoped(app: &Router, scope: &str) -> Value {
 
 #[tokio::test]
 async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("virtual.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let path = temp.path().join("virtual-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let access = tokens["access_token"].as_str().unwrap();
@@ -4030,7 +4034,7 @@ async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
     let tokens = login(&app).await;
     let refresh = tokens["refresh_token"].as_str().unwrap().to_string();
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     assert!(
         storage
             .virtual_refresh_device(&refresh)
@@ -4067,8 +4071,8 @@ async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
 
 #[tokio::test]
 async fn rejects_csrf_bad_password_redirects_and_pkce_replay() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("pkce.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("pkce-pg"))
         .await
         .unwrap();
     let (app, _) = fixture(&storage).await;
@@ -4201,9 +4205,9 @@ async fn profile(app: &Router, token: &str) -> axum::response::Response {
 
 #[tokio::test]
 async fn desktop_profile_has_virtual_identity_and_persistent_local_statistics() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("profile.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("profile-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
@@ -4234,7 +4238,7 @@ async fn desktop_profile_has_virtual_identity_and_persistent_local_statistics() 
     record_usage(&storage, &account, "another-supplier", "second", 25).await;
     bind_test_supplier(&storage, &account, None).await;
     storage.save_account_fixture(&account).await.unwrap();
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     let value = json_body(profile(&router(&reopened), token).await).await;
     assert_eq!(value["profile"], empty["profile"]);
     assert_eq!(value["stats"]["lifetime_tokens"], 39);
@@ -4390,9 +4394,9 @@ async fn remote_host_registration_refresh_socket_and_device_revocation_are_isola
         connect_async,
         tungstenite::{Message, client::IntoClientRequest},
     };
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("remote.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let path = temp.path().join("remote-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
@@ -4428,7 +4432,7 @@ async fn remote_host_registration_refresh_socket_and_device_revocation_are_isola
     assert!(storage.remote_servers(&other.id).await.unwrap().is_empty());
     bind_test_supplier(&storage, &account, None).await;
     storage.save_account_fixture(&account).await.unwrap();
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(reopened.remote_servers(&account.id).await.unwrap().len(), 1);
     let refreshed = app
         .clone()
@@ -4537,9 +4541,9 @@ async fn remote_host_registration_refresh_socket_and_device_revocation_are_isola
 #[tokio::test]
 async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_both_usage_dimensions()
 {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("binding.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let path = temp.path().join("binding-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let tokens = login(&app).await;
     let access = tokens["access_token"].as_str().unwrap();
@@ -4640,7 +4644,7 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
     );
     drop(app);
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let app = router(&storage);
     assert_eq!(refresh(&app, rt).await.status(), StatusCode::OK);
     assert_eq!(
@@ -4696,8 +4700,8 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
 
 #[tokio::test]
 async fn authorization_codes_expire_bind_client_and_callback_and_redeem_atomically() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("codes.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("codes-pg"))
         .await
         .unwrap();
     let (app, _) = fixture(&storage).await;
@@ -4831,8 +4835,8 @@ async fn authorization_codes_expire_bind_client_and_callback_and_redeem_atomical
 
 #[tokio::test]
 async fn credentials_are_device_scoped_and_identity_and_diagnostic_boundaries_hold() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("boundaries.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("boundaries-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -4904,7 +4908,7 @@ async fn credentials_are_device_scoped_and_identity_and_diagnostic_boundaries_ho
     assert_eq!(diagnostics[0].method, "POST");
     assert_eq!(diagnostics[0].path, format!("{ROOT}/not-yet-implemented"));
     let (flow, csrf, cookie, _) = authorize(&app).await;
-    sqlx::query("UPDATE oauth_browser_flows SET expires_at=0 WHERE id=?")
+    sqlx::query("UPDATE oauth_browser_flows SET expires_at=0 WHERE id=$1")
         .bind(&flow)
         .execute(storage.pool())
         .await
@@ -4927,8 +4931,8 @@ async fn credentials_are_device_scoped_and_identity_and_diagnostic_boundaries_ho
 #[tokio::test]
 async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("repairs.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("repairs-pg"))
         .await
         .unwrap();
     let (app, mut account) = fixture(&storage).await;
@@ -5164,8 +5168,8 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
 #[tokio::test]
 async fn repairs_nested_task_and_turn_ownership_mcp_and_rebinding_are_checked_before_execution() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("isolation.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("isolation-pg"))
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
@@ -5304,9 +5308,9 @@ async fn repairs_nested_task_and_turn_ownership_mcp_and_rebinding_are_checked_be
 #[tokio::test]
 async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_restart() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("client-state.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("client-state-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (app, account) = fixture(&storage).await;
     let token = login(&app).await["access_token"]
         .as_str()
@@ -5553,7 +5557,7 @@ async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_
         );
     }
     storage.close().await;
-    let reopened = Storage::open(&db).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
     assert!(
         reopened
             .virtual_client_state(&account.id, "voice")
@@ -5614,9 +5618,9 @@ fn run_repair_contract(source: &str, sample: Value) {
 #[tokio::test]
 async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownership() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("controls-family.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("controls-family-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (api, account) = fixture(&storage).await;
     let app = api.merge(codex2api_admin::router(
         codex2api_admin::AdminState::new(storage.clone()).unwrap(),
@@ -5795,7 +5799,7 @@ async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownersh
         );
     }
     storage.close().await;
-    let reopened = Storage::open(&db).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
     assert_eq!(
         reopened
             .virtual_config(&account.id, "computer_use_policy")
@@ -5817,8 +5821,8 @@ async fn controls_policy_and_family_reads_match_actual_desktop_and_admin_ownersh
 #[tokio::test]
 async fn desktop_browser_policy_controls_bootstrap_and_sdk_refresh() {
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("browser-policy.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("browser-policy-pg"))
         .await
         .unwrap();
     let (api, account) = fixture(&storage).await;
@@ -5951,9 +5955,9 @@ async fn desktop_browser_policy_controls_bootstrap_and_sdk_refresh() {
 async fn family_graduation_notices_are_owned_persistent_and_dismiss_only_captured_ids() {
     use codex2api_storage::FamilyNoticeRecipient::{Parent, Teen};
     use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("graduation.sqlite");
-    let storage = Storage::open(&db).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let db = dir.path().join("graduation-pg");
+    let storage = codex2api_storage::test_support::open(&db).await.unwrap();
     let (api, account) = fixture(&storage).await;
     let app = api.merge(codex2api_admin::router(
         codex2api_admin::AdminState::new(storage.clone()).unwrap(),
@@ -6227,7 +6231,7 @@ async fn family_graduation_notices_are_owned_persistent_and_dismiss_only_capture
             .any(|m| m.path.contains("u18_graduation"))
     );
     storage.close().await;
-    let reopened = Storage::open(&db).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
     assert_eq!(
         reopened
             .family_graduation_notices(&account.id, false)
@@ -6298,7 +6302,7 @@ async fn set_test_plan_config(
             }
             .into();
             for model in plan.config["models"].as_array().unwrap() {
-                sqlx::query("INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',?,'text')").bind(model["model"].as_str().unwrap()).execute(storage.pool()).await?;
+                sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',$1,'text') ON CONFLICT DO NOTHING").bind(model["model"].as_str().unwrap()).execute(storage.pool()).await?;
             }
             assert!(
                 storage

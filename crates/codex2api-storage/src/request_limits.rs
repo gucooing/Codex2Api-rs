@@ -12,22 +12,17 @@ impl Storage {
     /// Request-local proof; policy edits, settlements and time boundaries require re-admission.
     pub fn admission_version(&self, owner: &str) -> (u64, u64, i64) {
         (
-            self.runtime.epoch(),
-            self.runtime.version(&format!("spending-decision:{owner}")),
+            self.runtime.snapshots.policy_revision(),
+            self.runtime
+                .snapshots
+                .version(&format!("spending-decision:{owner}")),
             chrono::Utc::now().timestamp(),
         )
     }
     pub async fn virtual_rpm_limit(&self, owner: &str) -> Result<VirtualRpmLimit> {
         let key = format!("request-limits:{owner}");
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let (rpm,concurrency):(Option<i64>,Option<i64>)=sqlx::query_as("SELECT (SELECT rpm FROM virtual_rpm_limits WHERE virtual_account_id=?),(SELECT concurrency FROM virtual_concurrency_limits WHERE virtual_account_id=?)").bind(owner).bind(owner).fetch_one(self.pool()).await?;
+        self.runtime.snapshots.read(key.clone(), async {
+        let (rpm,concurrency):(Option<i64>,Option<i64>)=sqlx::query_as("SELECT (SELECT rpm FROM virtual_rpm_limits WHERE virtual_account_id=$1),(SELECT concurrency FROM virtual_concurrency_limits WHERE virtual_account_id=$2)").bind(owner).bind(owner).fetch_one(self.pool()).await?;
         let account = self
             .platform_account(owner)
             .await?
@@ -46,9 +41,8 @@ impl Storage {
             plan_concurrency: plan.concurrency_limit(),
             effective_concurrency: concurrency.unwrap_or(plan.concurrency_limit()),
         };
-        self.runtime
-            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
-        Ok(value)
+        Ok((value, std::time::Duration::from_secs(30)))
+        }).await
     }
     pub async fn save_virtual_request_limits(
         &self,
@@ -62,21 +56,24 @@ impl Storage {
             ));
         }
         let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription(&mut tx, owner).await?;
         for (table, column, value) in [
             ("virtual_rpm_limits", "rpm", rpm),
             ("virtual_concurrency_limits", "concurrency", concurrency),
         ] {
             if let Some(value) = value {
-                sqlx::query(&format!("INSERT INTO {table}(virtual_account_id,{column}) VALUES(?,?) ON CONFLICT(virtual_account_id) DO UPDATE SET {column}=excluded.{column}")).bind(owner).bind(value).execute(&mut *tx).await?;
+                sqlx::query(&format!("INSERT INTO {table}(virtual_account_id,{column}) VALUES($1,$2) ON CONFLICT(virtual_account_id) DO UPDATE SET {column}=excluded.{column}")).bind(owner).bind(i64::from(value)).execute(&mut *tx).await?;
             } else {
-                sqlx::query(&format!("DELETE FROM {table} WHERE virtual_account_id=?"))
+                sqlx::query(&format!("DELETE FROM {table} WHERE virtual_account_id=$1"))
                     .bind(owner)
                     .execute(&mut *tx)
                     .await?;
             }
         }
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(())
     }
     pub async fn save_virtual_rpm_limit(&self, owner: &str, rpm: Option<u32>) -> Result<()> {
@@ -87,18 +84,12 @@ impl Storage {
         )
         .await
     }
-    pub async fn admit_virtual_request(
-        &self,
-        owner: &str,
-        consume: bool,
-        now_ms: i64,
-    ) -> Result<Option<u32>> {
+    pub async fn admit_virtual_request(&self, owner: &str, consume: bool) -> Result<Option<u32>> {
         self.runtime
             .rpm(
                 owner,
                 self.virtual_rpm_limit(owner).await?.effective_rpm,
                 consume,
-                now_ms,
             )
             .await
     }

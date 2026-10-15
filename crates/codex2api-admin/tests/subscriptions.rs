@@ -308,7 +308,7 @@ async fn configuration_options_use_separate_account_owned_lists() {
     let owner = first["id"].as_str().unwrap();
     let other = second["id"].as_str().unwrap();
     // Seed a persisted client observation without granting a new client write capability.
-    sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin,updated_at_ms) VALUES(?,'installed_plugins',?,1,'client',1)")
+    sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin,updated_at_ms) VALUES($1,'installed_plugins',$2::jsonb,1,'client',1)")
         .bind(owner).bind(json!({"plugins":[{"id":"owner-plugin","name":"Owner plugin"}]}).to_string())
         .execute(f.storage.pool()).await.unwrap();
     f.storage

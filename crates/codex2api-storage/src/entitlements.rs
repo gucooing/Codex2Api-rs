@@ -2,7 +2,7 @@
 use crate::{Result, Storage, StorageError};
 use codex2api_core::ModelAccess;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct EffectiveEntitlements {
     pub virtual_account_id: String,
     pub provider_id: String,
@@ -20,27 +20,29 @@ impl Storage {
         owner: &str,
     ) -> Result<std::sync::Arc<EffectiveEntitlements>> {
         let key = format!("entitlements:{owner}");
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
+        let mut value = self
+            .runtime
+            .snapshots
+            .read(key.clone(), async {
+                let now = chrono::Utc::now().timestamp();
+                let value = std::sync::Arc::new(self.effective_entitlements_at(owner, now).await?);
+                let ttl = value.expires_at.map_or(30_000, |at| {
+                    at.saturating_mul(1000)
+                        .saturating_sub(chrono::Utc::now().timestamp_millis())
+                        .clamp(0, 30_000)
+                });
+                Ok((value, std::time::Duration::from_millis(ttl as u64)))
+            })
+            .await?;
+        if value
+            .expires_at
+            .is_some_and(|at| at <= chrono::Utc::now().timestamp())
+        {
+            let value = std::sync::Arc::make_mut(&mut value);
+            value.subscription_active = false;
+            value.execution_enabled = false;
+            value.models = ModelAccess::None;
         }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let now = chrono::Utc::now().timestamp();
-        let value = std::sync::Arc::new(self.effective_entitlements_at(owner, now).await?);
-        let ttl = value.expires_at.map_or(30_000, |at| {
-            at.saturating_mul(1000)
-                .saturating_sub(chrono::Utc::now().timestamp_millis())
-                .clamp(0, 30_000)
-        });
-        self.runtime.cache(
-            key,
-            &value,
-            epoch,
-            std::time::Duration::from_millis(ttl as u64),
-        );
         Ok(value)
     }
 

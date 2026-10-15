@@ -71,9 +71,9 @@ fn apps(storage: Storage) -> codex2api::ApplicationRouters {
 
 #[tokio::test]
 async fn administrator_addresses_apply_to_existing_routers_and_survive_restart() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("public-urls.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let path = temp.path().join("public-urls-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let routers = apps(storage.clone());
     let login = send(
         &routers.admin,
@@ -341,7 +341,7 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
     }
     drop(routers);
     storage.close().await;
-    let reopened = Storage::open(path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(path).await.unwrap();
     let routers = apps(reopened);
     let discovery = payload(
         send(
@@ -362,8 +362,8 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
 
 #[tokio::test]
 async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("validation.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("validation-pg"))
         .await
         .unwrap();
     let routers = apps(storage.clone());

@@ -116,8 +116,8 @@ async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/oauth/token", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let temp = tempfile::tempdir().unwrap();
-    let storage = codex2api_storage::Storage::open(temp.path().join("test.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("test-pg"))
         .await
         .unwrap();
     let accounts = SupplierAccountStore::open(storage.clone());

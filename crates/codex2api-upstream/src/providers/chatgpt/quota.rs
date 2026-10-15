@@ -385,13 +385,13 @@ mod tests {
         ] {
             headers.insert(name, value.parse().unwrap());
         }
-        let previous = QuotaSnapshot {
-            observed_at: DateTime::from_timestamp(1000, 0).unwrap(),
-            value: json!({"plan_type":"plus", "rate_limit":{"allowed":false,
+        let previous = QuotaSnapshot::new(
+            json!({"plan_type":"plus", "rate_limit":{"allowed":false,
                 "primary_window":{"used_percent":99,"reset_after_seconds":10},
                 "secondary_window":{"used_percent":30,"limit_window_seconds":604800,"reset_after_seconds":100}},
                 "credits":{"has_credits":true,"unlimited":false,"balance":"5"}}),
-        };
+            DateTime::from_timestamp(1000, 0).unwrap(),
+        );
         let value = merge(Some(previous), header_updates(&headers));
         assert_eq!(value["rate_limit"]["primary_window"]["used_percent"], 12.5);
         assert_eq!(
@@ -446,9 +446,9 @@ mod tests {
 
     #[tokio::test]
     async fn observations_are_persisted_before_forwarding_and_stale_credentials_are_ignored() {
-        let path =
-            std::env::temp_dir().join(format!("response-quota-{}.sqlite", uuid::Uuid::new_v4()));
-        let storage = Storage::open(&path).await.unwrap();
+        let directory = codex2api_storage::test_support::tempdir().unwrap();
+        let path = directory.path().join("fixture");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
         let account = accounts.create_pending().await.unwrap().account;
         let other = accounts.create_pending().await.unwrap().account;
@@ -551,16 +551,15 @@ mod tests {
         drop(observer);
         drop(stale);
         drop(storage);
-        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
     async fn http_and_websocket_transport_capture_headers_and_events() {
         use axum::{Router, extract::WebSocketUpgrade, response::IntoResponse, routing::get};
         use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
-        let path =
-            std::env::temp_dir().join(format!("quota-transport-{}.sqlite", uuid::Uuid::new_v4()));
-        let storage = Storage::open(&path).await.unwrap();
+        let directory = codex2api_storage::test_support::tempdir().unwrap();
+        let path = directory.path().join("fixture");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let accounts = SupplierAccountStore::open(storage.clone());
         let account = accounts.create_pending().await.unwrap().account;
         accounts
@@ -733,6 +732,5 @@ mod tests {
         drop(client);
         drop(accounts);
         drop(storage);
-        let _ = std::fs::remove_file(path);
     }
 }

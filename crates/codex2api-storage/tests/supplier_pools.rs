@@ -17,8 +17,8 @@ async fn supplier(storage: &Storage, id: &str) {
 
 #[tokio::test]
 async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("journal.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("journal-pg"))
         .await
         .unwrap();
     supplier(&storage, "supplier").await;
@@ -112,8 +112,8 @@ async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
 #[tokio::test]
 async fn shared_snapshots_refresh_models_transport_and_availability_for_each_provider() {
     use std::sync::Arc;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("snapshots.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("snapshots-pg"))
         .await
         .unwrap();
     for provider in ["chatgpt", "grok"] {
@@ -323,8 +323,8 @@ async fn consumer(storage: &Storage, id: &str) {
 
 #[tokio::test]
 async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("granted.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("granted-pg"))
         .await
         .unwrap();
     let user = codex2api_storage::User {
@@ -403,8 +403,8 @@ async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
 
 #[tokio::test]
 async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthorization() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("billing.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("billing-pg"))
         .await
         .unwrap();
     for id in ["s", "other"] {
@@ -526,8 +526,8 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
 
 #[tokio::test]
 async fn billing_reset_preserves_credentials_and_rejects_stale_probe_observations() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("billing-reset.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("billing-reset-pg"))
         .await
         .unwrap();
     supplier(&storage, "s").await;
@@ -569,93 +569,9 @@ async fn billing_reset_preserves_credentials_and_rejects_stale_probe_observation
 }
 
 #[tokio::test]
-async fn obsolete_request_cooldowns_are_ignored_and_migrated_without_clearing_real_failures() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("retired-state.sqlite"))
-        .await
-        .unwrap();
-    for id in ["limited", "exhausted", "unauthorized"] {
-        supplier(&storage, id).await;
-    }
-    for (id, kind) in [
-        ("limited", "rate_limited"),
-        ("exhausted", "quota_exhausted"),
-        ("unauthorized", "rate_limited"),
-    ] {
-        let revision = storage.supplier_auth_revision(id).await.unwrap().unwrap();
-        sqlx::query("INSERT INTO supplier_health(account_id,cooldown_kind,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at) VALUES(?,?,?,?,?,?)")
-            .bind(id).bind(kind).bind(chrono::Utc::now().timestamp()+600).bind(revision).bind("fixture").bind(chrono::Utc::now().timestamp()).execute(storage.pool()).await.unwrap();
-    }
-    consumer(&storage, "v").await;
-    storage
-        .save_supplier_tag("pool", "chatgpt", "Pool")
-        .await
-        .unwrap();
-    storage
-        .edit_supplier_tags(&["limited".into()], &["pool".into()], false)
-        .await
-        .unwrap();
-    assert!(
-        storage
-            .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
-            .await
-            .unwrap()
-    );
-    assert!(
-        storage
-            .supplier_health("limited")
-            .await
-            .unwrap()
-            .cooldown_kind
-            .is_none()
-    );
-    let revision = storage
-        .supplier_auth_revision("unauthorized")
-        .await
-        .unwrap()
-        .unwrap();
-    storage
-        .reject_supplier_auth("unauthorized", revision)
-        .await
-        .unwrap();
-    sqlx::query(include_str!(
-        "../migrations/0052_remove_supplier_throttling.sql"
-    ))
-    .execute(storage.pool())
-    .await
-    .unwrap();
-    let remaining:i64=sqlx::query_scalar("SELECT COUNT(*) FROM supplier_health WHERE cooldown_kind='rate_limited' OR (account_id!='exhausted' AND cooldown_until IS NOT NULL)").fetch_one(storage.pool()).await.unwrap();
-    assert_eq!(remaining, 0);
-    assert!(
-        storage
-            .supplier_health("unauthorized")
-            .await
-            .unwrap()
-            .authentication_invalid
-    );
-    assert_eq!(
-        storage
-            .supplier_health("exhausted")
-            .await
-            .unwrap()
-            .cooldown_kind
-            .as_deref(),
-        Some("quota_exhausted")
-    );
-    assert_eq!(
-        storage
-            .select_pool_supplier("v", "chatgpt", &[])
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("limited")
-    );
-}
-
-#[tokio::test]
 async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("replace-tags.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("replace-tags-pg"))
         .await
         .unwrap();
     for id in ["s1", "s2", "untouched"] {
@@ -735,8 +651,8 @@ async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
 
 #[tokio::test]
 async fn concurrent_pool_configuration_is_provider_isolated() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("pools.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("pools-pg"))
         .await
         .unwrap();
     for id in ["s1", "s2", "outside"] {
@@ -829,8 +745,8 @@ async fn concurrent_pool_configuration_is_provider_isolated() {
 
 #[tokio::test]
 async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("cooldown.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("cooldown-pg"))
         .await
         .unwrap();
     supplier(&storage, "s").await;
@@ -869,12 +785,12 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
             .unwrap()
             .is_none()
     );
-    sqlx::query("UPDATE supplier_health SET cooldown_until=? WHERE account_id='s'")
+    sqlx::query("UPDATE supplier_health SET cooldown_until=$1 WHERE account_id='s'")
         .bind(now - 1)
         .execute(storage.pool())
         .await
         .unwrap();
-    storage.invalidate_runtime_cache();
+    storage.invalidate_cached_snapshots();
     assert_eq!(
         storage
             .select_pool_supplier("v", "chatgpt", &[])
@@ -924,8 +840,8 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
 
 #[tokio::test]
 async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_newer_failures() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("recovery.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("recovery-pg"))
         .await
         .unwrap();
     supplier(&storage, "s").await;
@@ -1067,8 +983,8 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
 
 #[tokio::test]
 async fn background_candidates_are_only_currently_exhausted_authorized_enabled_suppliers() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("probes.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("probes-pg"))
         .await
         .unwrap();
     let now = chrono::Utc::now().timestamp();
@@ -1121,7 +1037,7 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
                 assert!(!storage.recover_supplier_quota(id, auth, old).await.unwrap());
             }
             "no-token" => {
-                sqlx::query("DELETE FROM supplier_tokens WHERE account_id=?")
+                sqlx::query("DELETE FROM supplier_tokens WHERE account_id=$1")
                     .bind(id)
                     .execute(storage.pool())
                     .await
@@ -1159,9 +1075,9 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
 
 #[tokio::test]
 async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rpm.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("rpm-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     consumer(&storage, "v").await;
     assert_eq!(
         storage.virtual_rpm_limit("v").await.unwrap().effective_rpm,
@@ -1172,7 +1088,7 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     for _ in 0..8 {
         let s = storage.clone();
         attempts.push(tokio::spawn(async move {
-            s.admit_virtual_request("v", true, 100_000).await.unwrap()
+            s.admit_virtual_request("v", true).await.unwrap()
         }));
     }
     let mut allowed = 0;
@@ -1183,24 +1099,23 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     }
     assert_eq!(allowed, 2);
     assert_eq!(
-        storage
-            .admit_virtual_request("v", false, 159_999)
-            .await
-            .unwrap(),
-        Some(1)
+        storage.admit_virtual_request("v", false).await.unwrap(),
+        Some(60)
     );
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(
-        storage
-            .admit_virtual_request("v", true, 159_999)
-            .await
-            .unwrap(),
-        Some(1)
+        storage.admit_virtual_request("v", true).await.unwrap(),
+        Some(60)
     );
+    // Age existing members using the Redis clock instead of injecting an application clock.
+    let client = redis::Client::open(std::env::var("CODEX2API_REDIS_URL").unwrap()).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    redis::Script::new("local t=redis.call('TIME'); local now=t[1]*1000+math.floor(t[2]/1000); local members=redis.call('ZRANGE',KEYS[1],0,-1); for _,id in ipairs(members) do redis.call('ZADD',KEYS[1],now-60000,id) end; return 1")
+        .key(codex2api_storage::test_support::redis_key(&storage,"rpm:v")).invoke_async::<i64>(&mut conn).await.unwrap();
     assert!(
         storage
-            .admit_virtual_request("v", true, 160_000)
+            .admit_virtual_request("v", true)
             .await
             .unwrap()
             .is_none()
@@ -1208,7 +1123,7 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     storage.save_virtual_rpm_limit("v", Some(0)).await.unwrap();
     assert!(
         storage
-            .admit_virtual_request("v", true, 160_000)
+            .admit_virtual_request("v", true)
             .await
             .unwrap()
             .is_none()
@@ -1234,18 +1149,15 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
         1
     );
     assert_eq!(
-        storage
-            .admit_virtual_request("v", true, 160_000)
-            .await
-            .unwrap(),
+        storage.admit_virtual_request("v", true).await.unwrap(),
         Some(60)
     );
 }
 
 #[tokio::test]
 async fn plan_display_tier_updates_members_without_resetting_subscription_or_billing() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("plans.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("plans-pg"))
         .await
         .unwrap();
     consumer(&storage, "v").await;

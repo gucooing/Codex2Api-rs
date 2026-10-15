@@ -13,12 +13,12 @@ $env:CODEX2API_PUBLIC_API_URL = 'http://127.0.0.1:8080'
 $env:CODEX2API_PUBLIC_ADMIN_URL = 'http://127.0.0.1:8081'
 $env:CODEX2API_PUBLIC_USER_URL = 'http://127.0.0.1:8082'
 $env:CODEX2API_PUBLIC_METERED_API_URL = 'http://127.0.0.1:8083'
-$env:CODEX2API_DB = 'data/codex2api-test.sqlite'
+$env:CODEX2API_DATABASE_URL = 'postgresql://codex2api:password@127.0.0.1:5432/codex2api_test'
 $env:CODEX2API_REDIS_URL = 'redis://127.0.0.1:6379/0'
 .\codex2api.exe
 ```
 
-启动前需要准备可访问的测试 Redis；缺少配置或连接失败时服务不会启动。默认键前缀由 SQLite 绝对路径生成，自动化用例的不同临时数据库不要共用手工指定的前缀。
+启动前需要准备独立的 PostgreSQL 测试数据库和可访问的测试 Redis；缺少配置或连接失败时服务不会启动。默认键前缀由 PostgreSQL 主机、端口、库名及 schema生成，自动化用例的不同临时数据库不要共用手工指定的前缀。
 
 测试库首次管理员为 admin/admin。通过管理页授权供应账户、配置模型和套餐、创建用户、发放订阅并配置套餐号池。
 已有人工价格、停用和删除状态应保留；有完整预设的新支持模型应自动出现并启用。
@@ -29,7 +29,7 @@ Invoke-RestMethod http://127.0.0.1:8080/version
 ```
 
 核对 package_version、release_commit 与仓库版本常量一致。Ctrl+C 停止服务；重新运行保留该测试库。
-不要让测试实例与正式服务同时使用同一个 SQLite 文件。
+测试必须使用独立 PostgreSQL 数据库，不得连接正式库。
 
 ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录、模型和额度读取、连续两轮生成、
 取消及客户端重连。使用实际反向代理入口时配置 CODEX2API_PUBLIC_API_URL 并启用 WebSocket；
@@ -52,7 +52,6 @@ Rust 设置 `CODEX2API_PUBLIC_USER_URL=http://127.0.0.1:3001`；管理前端在 
 `pnpm dev --hostname 127.0.0.1 --port 3001`。对应后端默认端口为 8081 和 8082，OAuth 客户端入口为 8080，按量 API 为 8083。
 Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p codex2api --features dev-frontend`，并将 MinGW 的 bin 目录加入 PATH。
 
-已应用迁移的 SQL 文件必须保持字节不变。结构调整只能新增迁移；不得手工修改 `_sqlx_migrations` 的校验值，也不得为消除错误删除已有数据库。
 
 用户登录经 Next 同源代理转发时，浏览器的 `Sec-Fetch-Site: same-origin` 保留浏览器入口语义；后端允许该同源请求或与 `CODEX2API_PUBLIC_USER_URL` 精确匹配的 Origin，并拒绝 cross-site。受保护的写入另行校验 CSRF。访问 3000、3001 的根路径分别跳转 `/admin/`、`/user/`。
 
@@ -72,12 +71,20 @@ Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p
 
 完成代码和文档修改后集中运行整套相关检查，避免边改边反复运行零散测试；禁止编译或启动服务的会话只做对应的源码和隔离数据库检查，不声称运行时验证完成。
 
-迁移通过 SQLx 编译进 Rust 可执行文件。新增迁移后，需要重新执行开发用的 `cargo run -p codex2api --features dev-frontend`，仅刷新前端或运行旧 exe 不会载入新迁移。`codex2api-storage/build.rs` 跟踪整个 migrations 目录；启动先执行迁移，再开放接口。不能为缺表错误手动修改迁移校验值或删除数据库。
 
 订单、订阅与用量筛选需组合用户和套餐条件，核对总数、分页与全部匹配行；用户订单的套餐候选和记录均不能包含其他用户内容。检查停售套餐仍在历史订单候选中，订阅默认隐藏到期记录，用户搜索支持用户名 / 名称 / 邮箱，空结果和清除选择可恢复全部记录。
 
 余额调整检查原因省略、null、空字符串和全空格，以及正向、负向、超额减少、并发支付、身份旧版本拒绝及同请求重放；并发钱包变动不能导致相对调整版本冲突，余额必须与新增系统流水同时成功或同时回滚，不能删除或修改流水。用户响应中不得出现操作人和管理原因。概览用两位用户、多条当日请求、昨日记录及多个独立订阅用量验证活跃用户去重和本地午夜边界；正常订阅数须排除停用及到期账户。
 
-流水管理联合检查用户名、来源和时间范围筛选，核对总数与分页一致、开始包含 / 结束排除、空结果、同一时间多笔流水的顺序，以及历史订单支付和可空原因的系统操作同时可见。仅管理会话可访问全站流水；用户接口仍只返回本人流水，不显示管理操作人和原因。迁移后既有流水、操作人和关联订单不变，金额及记录不可改写或删除。
+流水管理联合检查用户名、来源和时间范围筛选，核对总数与分页一致、开始包含 / 结束排除、空结果、同一时间多笔流水的顺序，以及历史订单支付和可空原因的系统操作同时可见。仅管理会话可访问全站流水；用户接口仍只返回本人流水，不显示管理操作人和原因。金额及记录不可改写或删除。
 
-账户存储和业务隔离：运行 `python scripts/test-account-migration.py` 验证实际 SQL 迁移、同名账户处理、凭据与历史保留、外键以及绕过 Rust 检查后的数据库触发器限制。Rust 回归覆盖旧独立虚拟账户与 Free 兜底数据清理、普通用户账本保留、新用户无订阅、同平台多订阅和两类 OAuth 的身份验证与目标订阅确认。验证 `/subscriptions/{id}` 的配置、设备、路由、用量和记录均校验订阅归属，旧独立虚拟账户管理路由不再提供。续费和升级必须指定目标订阅，另购应创建独立 ID；套餐限流默认为 RPM 40、并发 10，订阅覆盖与继承分别验证。
+账户存储和业务隔离：Rust 回归在真实 PostgreSQL 中验证钱包并发、订单幂等、数据库约束、新用户无订阅和同平台多订阅。验证 `/subscriptions/{id}` 的配置、设备、路由、用量和记录均校验订阅归属，旧独立虚拟账户管理路由不再提供。续费和升级必须指定目标订阅，另购应创建独立 ID；套餐限流默认为 RPM 40、并发 10，订阅覆盖与继承分别验证。
+
+Rust 数据库回归必须设置 `CODEX2API_TEST_DATABASE_URL`，使用有建 schema 权限的专用测试数据库。每个临时 fixture 创建独立 schema，释放后删除该 schema；没有内存数据库替代实现。
+
+```powershell
+$env:CODEX2API_TEST_DATABASE_URL = 'postgresql://codex2api:password@127.0.0.1:5432/codex2api_test'
+$env:CODEX2API_DB_MIN_CONNECTIONS = '0'
+$env:CODEX2API_DB_MAX_CONNECTIONS = '4'
+cargo test --workspace --no-fail-fast -- --test-threads=4
+```

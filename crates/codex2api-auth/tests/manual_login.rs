@@ -7,7 +7,6 @@ use axum::{
 use base64::Engine;
 use codex2api_accounts::{AccountIdentity, HostRuntime, SupplierAccountStore, new_installation_id};
 use codex2api_auth::{AuthService, LoginFlow, OAuthConfig};
-use codex2api_storage::Storage;
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -69,9 +68,9 @@ async fn mock_issuer() -> (String, Requests, tokio::task::JoinHandle<()>) {
 async fn manual_callback_validates_full_url_and_works_with_occupied_callback_port() {
     let (issuer, requests, server) = mock_issuer().await;
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("manual.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("manual-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let proxy = storage
         .create_outbound_proxy("callback-proxy", &issuer)
         .await
@@ -99,7 +98,7 @@ async fn manual_callback_validates_full_url_and_works_with_occupied_callback_por
         LoginFlow::Callback { .. }
     ));
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let auth =
         AuthService::with_config(SupplierAccountStore::open(storage.clone()), config).unwrap();
     let valid = format!(
@@ -211,8 +210,8 @@ async fn manual_callback_validates_full_url_and_works_with_occupied_callback_por
 #[tokio::test]
 async fn refresh_token_login_uses_the_draft_identity_proxy_and_persists_only_the_result() {
     let (issuer, requests, server) = mock_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("refresh.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("refresh-pg"))
         .await
         .unwrap();
     let proxy = storage
@@ -331,8 +330,8 @@ fn draft_identity() -> AccountIdentity {
 #[tokio::test]
 async fn callback_draft_is_not_saved_until_success_and_deduplicates_accounts() {
     let (issuer, requests, server) = mock_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("draft.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("draft-pg"))
         .await
         .unwrap();
     let proxy = storage
@@ -427,8 +426,8 @@ async fn callback_draft_is_not_saved_until_success_and_deduplicates_accounts() {
 #[tokio::test]
 async fn draft_device_enforces_poll_interval_and_saves_only_after_authorization() {
     let (issuer, requests, server) = mock_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("device-draft.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("device-draft-pg"))
         .await
         .unwrap();
     let auth = AuthService::with_config(
@@ -491,9 +490,9 @@ async fn draft_device_enforces_poll_interval_and_saves_only_after_authorization(
 #[tokio::test]
 async fn device_code_uses_official_requests_persists_pending_state_and_enforces_poll_interval() {
     let (issuer, requests, server) = mock_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("device.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("device-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let proxy = storage
         .create_outbound_proxy("device-proxy", &issuer)
         .await
@@ -533,7 +532,7 @@ async fn device_code_uses_official_requests_persists_pending_state_and_enforces_
             .is_err()
     );
     storage.close().await;
-    let storage = Storage::open(&path).await.unwrap();
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let auth =
         AuthService::with_config(SupplierAccountStore::open(storage.clone()), config).unwrap();
     assert!(

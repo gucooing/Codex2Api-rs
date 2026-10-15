@@ -9,7 +9,7 @@ use codex2api_storage::Storage;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 pub struct Fixture {
-    pub dir: tempfile::TempDir,
+    pub dir: codex2api_storage::test_support::TestDirectory,
     pub storage: Storage,
     pub state: codex2api_admin::AdminState,
     pub app: Router,
@@ -18,8 +18,10 @@ pub struct Fixture {
 }
 impl Fixture {
     pub async fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("test.sqlite")).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("test-pg"))
+            .await
+            .unwrap();
         let state = codex2api_admin::AdminState::new(storage.clone()).unwrap();
         let app = codex2api_admin::router(state.clone());
         let response = app
@@ -85,8 +87,10 @@ impl Fixture {
     }
     pub async fn get(&self, path: &str) -> Value {
         let r = self.request("GET", path, Value::Null).await;
-        assert_eq!(r.status(), StatusCode::OK, "{path}");
-        body(r).await
+        let status = r.status();
+        let value = body(r).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {value}");
+        value
     }
     pub async fn consumer(&self, id: &str) -> Value {
         let user = body(self.request("POST","/admin/api/users",json!({"username":id,"password":"secret-fixture","name":id,"email":format!("{id}@example.test"),"enabled":true,"revision":null})).await).await;

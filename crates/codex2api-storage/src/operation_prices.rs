@@ -16,7 +16,7 @@ impl Storage {
         operation: &str,
     ) -> Result<Option<OperationPrice>> {
         Ok(
-            sqlx::query_as("SELECT * FROM operation_prices WHERE provider_id=? AND operation=?")
+            sqlx::query_as("SELECT * FROM operation_prices WHERE provider_id=$1 AND operation=$2")
                 .bind(provider)
                 .bind(operation)
                 .fetch_optional(self.pool())
@@ -41,13 +41,15 @@ impl Storage {
             return Err(StorageError::InvalidAdminUpdate("按次价格无效"));
         }
         let changed = if let Some(revision) = expected {
-            sqlx::query("UPDATE operation_prices SET price_nano_usd=?,revision=revision+1 WHERE provider_id=? AND operation=? AND revision=?")
+            sqlx::query("UPDATE operation_prices SET price_nano_usd=$1,revision=revision+1 WHERE provider_id=$2 AND operation=$3 AND revision=$4")
                 .bind(price.price_nano_usd).bind(&price.provider_id).bind(&price.operation).bind(revision).execute(self.pool()).await?
         } else {
-            sqlx::query("INSERT INTO operation_prices(provider_id,operation,price_nano_usd) VALUES(?,?,?) ON CONFLICT(provider_id,operation) DO NOTHING")
+            sqlx::query("INSERT INTO operation_prices(provider_id,operation,price_nano_usd) VALUES($1,$2,$3) ON CONFLICT(provider_id,operation) DO NOTHING")
                 .bind(&price.provider_id).bind(&price.operation).bind(price.price_nano_usd).execute(self.pool()).await?
         };
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Billing]);
         Ok(changed.rows_affected() == 1)
     }
 }

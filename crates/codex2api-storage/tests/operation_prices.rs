@@ -1,9 +1,9 @@
-use codex2api_storage::{OperationPrice, Storage, UsageFilter, UsageRecord};
+use codex2api_storage::{OperationPrice, UsageFilter, UsageRecord};
 
 #[tokio::test]
 async fn search_charges_once_at_start_price_and_preserves_failures_and_unknowns() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("search.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("search-pg"))
         .await
         .unwrap();
     let mut price = OperationPrice {
@@ -96,7 +96,7 @@ async fn search_charges_once_at_start_price_and_preserves_failures_and_unknowns(
     assert_eq!(row.cost_nano_usd, None);
     assert_eq!(row.billing_status, "unpriced");
     storage.close().await;
-    let reopened = Storage::open(dir.path().join("search.sqlite"))
+    let reopened = codex2api_storage::test_support::open(dir.path().join("search-pg"))
         .await
         .unwrap();
     assert_eq!(

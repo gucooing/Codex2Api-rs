@@ -6,8 +6,8 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_official_methods() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = codex2api_storage::Storage::open(temp.path().join("test.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("test-pg"))
         .await
         .unwrap();
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());

@@ -1,10 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use sqlx::migrate::{Migrate, Migration};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::error::{Result, StorageError};
@@ -23,13 +22,12 @@ const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_ac
      plan_type, installation_id, originator, user_agent, os_type, os_version, arch, home_dir, \
      http_fingerprint_json, proxy_id, created_at, updated_at, last_used_at";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Storage {
     pub(crate) runtime: std::sync::Arc<crate::runtime::Runtime>,
-    pub(crate) request_writer:
-        std::sync::Arc<tokio::sync::OnceCell<crate::request_writer::RequestWriter>>,
-    pool: SqlitePool,
-    db_path: PathBuf,
+    pub(crate) request_prices: std::sync::Arc<crate::request_writer::PriceCache>,
+    pool: PgPool,
+    connect_options: PgConnectOptions,
     pub(crate) jwt_keys:
         std::sync::Arc<[tokio::sync::OnceCell<std::sync::Arc<crate::jwt::JwtKey>>; 2]>,
 }
@@ -88,94 +86,108 @@ impl TryFrom<AccountRow> for SupplierAccount {
 }
 
 impl Storage {
-    pub async fn open(db_path: impl AsRef<Path>) -> Result<Self> {
-        let db_path = db_path.as_ref().to_path_buf();
-        if let Some(parent) = db_path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            tokio::fs::create_dir_all(parent).await?;
+    pub async fn open(database_url: &str) -> Result<Self> {
+        if !database_url.starts_with("postgres://") && !database_url.starts_with("postgresql://") {
+            return Err(StorageError::InvalidAdminUpdate(
+                "CODEX2API_DATABASE_URL must be a PostgreSQL URL",
+            ));
         }
+        Self::connect_with(PgConnectOptions::from_str(database_url)?).await
+    }
 
-        let options = SqliteConnectOptions::new()
-            .filename(&db_path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(5));
-
-        let pool = SqlitePoolOptions::new()
-            .max_connections(8)
-            .connect_with(options)
-            .await?;
-
+    pub(crate) async fn connect_with(options: PgConnectOptions) -> Result<Self> {
+        let max_connections = pool_setting("CODEX2API_DB_MAX_CONNECTIONS", 32)?;
+        let min_connections = pool_setting("CODEX2API_DB_MIN_CONNECTIONS", 2)?;
+        let acquire_seconds = pool_setting("CODEX2API_DB_ACQUIRE_TIMEOUT_SECONDS", 10)?;
+        let idle_seconds = pool_setting("CODEX2API_DB_IDLE_TIMEOUT_SECONDS", 300)?;
+        let lifetime_seconds = pool_setting("CODEX2API_DB_MAX_LIFETIME_SECONDS", 1800)?;
+        if !(1..=1024).contains(&max_connections)
+            || min_connections > max_connections
+            || acquire_seconds == 0
+            || idle_seconds == 0
+            || lifetime_seconds == 0
+        {
+            return Err(StorageError::InvalidAdminUpdate(
+                "invalid PostgreSQL pool limits or timeouts",
+            ));
+        }
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections)
+            .min_connections(min_connections)
+            .acquire_timeout(Duration::from_secs(u64::from(acquire_seconds)))
+            .idle_timeout(Duration::from_secs(u64::from(idle_seconds)))
+            .max_lifetime(Duration::from_secs(u64::from(lifetime_seconds)))
+            .test_before_acquire(false)
+            .before_acquire(|conn, metadata| Box::pin(async move {
+                if metadata.idle_for >= Duration::from_secs(60) {
+                    sqlx::Connection::ping(conn).await?;
+                }
+                Ok(true)
+            }))
+            .after_connect(|conn, _| Box::pin(async move {
+                sqlx::query("SELECT set_config('TimeZone','UTC',false), set_config('idle_in_transaction_session_timeout','30s',false)")
+                    .execute(conn).await?;
+                Ok(())
+            }))
+            .connect_with(options.clone()).await?;
+        let (database, schema): (String, String) =
+            sqlx::query_as("SELECT current_database(), current_schema()")
+                .fetch_one(&pool)
+                .await?;
+        let namespace = format!(
+            "{}:{}/{database}/{schema}",
+            options.get_host(),
+            options.get_port()
+        );
         let storage = Self {
-            runtime: crate::runtime::Runtime::new(&db_path).await?,
-            request_writer: std::sync::Arc::default(),
+            runtime: crate::runtime::Runtime::new(&namespace).await?,
+            request_prices: std::sync::Arc::default(),
             pool,
-            db_path,
+            connect_options: options,
             jwt_keys: std::sync::Arc::new(std::array::from_fn(|_| tokio::sync::OnceCell::new())),
         };
-        storage.migrate().await?;
+        storage.initialize().await?;
         storage.stamp_codex_ref().await?;
         storage.ensure_default_admin().await?;
         Ok(storage)
     }
 
-    pub fn pool(&self) -> &SqlitePool {
+    pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
-    pub fn db_path(&self) -> &Path {
-        &self.db_path
+    /// Reconnect to the same PostgreSQL database and schema.
+    pub async fn reopen(&self) -> Result<Self> {
+        Self::connect_with(self.connect_options.clone()).await
     }
 
-    pub async fn migrate(&self) -> Result<()> {
-        let mut connection = self.pool.acquire().await?;
-        // Table rebuilds must not cascade into their children. Never return this
-        // connection to the application pool, including after failed migrations.
-        connection.close_on_drop();
-        sqlx::query("PRAGMA foreign_keys=OFF")
-            .execute(&mut *connection)
-            .await?;
-        let mut migrator = sqlx::migrate!("./migrations");
-        connection.ensure_migrations_table().await?;
-        // Migration 46 was also applied by Windows builds with CRLF. Match
-        // those exact historical bytes without rewriting checksums or accepting
-        // any SQL changes; new databases keep the canonical LF migration.
-        if let Some(applied) = connection
-            .list_applied_migrations()
-            .await?
-            .into_iter()
-            .find(|migration| migration.version == 46)
-            && let Some(migration) = migrator
-                .migrations
-                .to_mut()
-                .iter_mut()
-                .find(|migration| migration.version == 46)
-            && migration.checksum != applied.checksum
-        {
-            let windows_migration = Migration::new(
-                migration.version,
-                migration.description.clone(),
-                migration.migration_type,
-                migration
-                    .sql
-                    .replace("\r\n", "\n")
-                    .replace('\n', "\r\n")
-                    .into(),
-                migration.no_tx,
-            );
-            if windows_migration.checksum == applied.checksum {
-                *migration = windows_migration;
-            }
+    async fn initialize(&self) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        // Only bootstrap is serialized; normal transactions lock business rows.
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':bootstrap', 0))",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let initialized: bool =
+            sqlx::query_scalar("SELECT to_regclass(current_schema() || '.meta') IS NOT NULL")
+                .fetch_one(&mut *tx)
+                .await?;
+        if !initialized {
+            sqlx::raw_sql(include_str!("../schema.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::raw_sql(include_str!("../seed.sql"))
+                .execute(&mut *tx)
+                .await?;
         }
-        migrator.run(&mut *connection).await?;
+        tx.commit().await?;
         Ok(())
     }
 
     async fn stamp_codex_ref(&self) -> Result<()> {
         sqlx::query(
-            "INSERT INTO meta (key, value) VALUES (?, ?)
+            "INSERT INTO meta (key, value) VALUES ($1, $2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
         .bind("codex_ref_commit")
@@ -183,7 +195,7 @@ impl Storage {
         .execute(&self.pool)
         .await?;
         sqlx::query(
-            "INSERT INTO meta (key, value) VALUES (?, ?)
+            "INSERT INTO meta (key, value) VALUES ($1, $2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
         .bind("codex_ref_repo")
@@ -194,7 +206,8 @@ impl Storage {
     }
 
     pub async fn ensure_default_admin(&self) -> Result<()> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':admin-bootstrap', 0))").execute(&mut *tx).await?;
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM admin_users")
             .fetch_one(&mut *tx)
             .await?;
@@ -202,9 +215,9 @@ impl Storage {
             let hash = hash_password(DEFAULT_ADMIN_PASSWORD)?;
             let now = now_rfc3339();
             let account_id = Uuid::new_v4().to_string();
-            sqlx::query("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES(?,'admin',?,?,1,?,?)")
+            sqlx::query("INSERT INTO accounts(id,account_type,username,password_hash,enabled,created_at,updated_at) VALUES($1,'admin',$2,$3,TRUE,$4,$5)")
                 .bind(&account_id).bind(DEFAULT_ADMIN_USERNAME).bind(hash).bind(&now).bind(&now).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO admin_users(id,account_id) VALUES(1,?)")
+            sqlx::query("INSERT INTO admin_users(id,account_id) VALUES(1,$1)")
                 .bind(account_id)
                 .execute(&mut *tx)
                 .await?;
@@ -242,7 +255,7 @@ impl Storage {
     pub async fn get_admin_by_username(&self, username: &str) -> Result<Option<AdminUser>> {
         let user = sqlx::query_as::<_, AdminUser>(
             "SELECT id, account_id, username, password_hash, created_at, updated_at
-             FROM admin_identities WHERE username = ?",
+             FROM admin_identities WHERE lower(username)=lower($1)",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -271,14 +284,19 @@ impl Storage {
         let Some(user) = self.verify_admin(username, password).await? else {
             return Ok(None);
         };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM accounts WHERE id=$1 FOR SHARE")
+            .bind(&user.account_id)
+            .execute(&mut *tx)
+            .await?;
         let now = now_rfc3339();
         let expires_at =
             (Utc::now() + duration_to_chrono(ttl)).to_rfc3339_opts(SecondsFormat::Millis, true);
         // Do not issue a session if credentials changed after password verification.
-        Ok(sqlx::query_as::<_, AdminSession>(
+        let session = sqlx::query_as::<_, AdminSession>(
             "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at, refresh_issued_at)
-             SELECT ?, id, ?, ?, unixepoch() FROM admin_identities
-             WHERE id = ? AND username = ? AND password_hash = ?
+             SELECT $1, id, $2, $3, floor(extract(epoch FROM clock_timestamp()))::bigint FROM admin_identities
+             WHERE id = $4 AND lower(username)=lower($5) AND password_hash = $6
              RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
@@ -287,8 +305,10 @@ impl Storage {
         .bind(user.id)
         .bind(user.username)
         .bind(user.password_hash)
-        .fetch_optional(&self.pool)
-        .await?)
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(session)
     }
 
     pub async fn require_admin(&self, username: &str, password: &str) -> Result<AdminUser> {
@@ -323,8 +343,8 @@ impl Storage {
         };
         let mut tx = self.pool.begin().await?;
         let changed = sqlx::query(
-            "UPDATE accounts SET username = ?, password_hash = ?, updated_at = ?
-             WHERE id = (SELECT account_id FROM admin_users WHERE id=?) AND account_type='admin' AND enabled=1 AND username = ? AND password_hash = ?",
+            "UPDATE accounts SET username=$1, password_hash = $2, updated_at = $3
+             WHERE id = (SELECT account_id FROM admin_users WHERE id=$4) AND account_type='admin' AND enabled=TRUE AND lower(username)=lower($5) AND password_hash = $6",
         )
         .bind(new_username)
         .bind(password_hash)
@@ -337,7 +357,7 @@ impl Storage {
         if changed.rows_affected() != 1 {
             return Err(StorageError::InvalidCredentials);
         }
-        sqlx::query("DELETE FROM admin_sessions WHERE admin_user_id = ?")
+        sqlx::query("DELETE FROM admin_sessions WHERE admin_user_id = $1")
             .bind(user.id)
             .execute(&mut *tx)
             .await?;
@@ -356,7 +376,7 @@ impl Storage {
         session: &AdminSession,
     ) -> Result<crate::WebSessionTokens> {
         let owner: String =
-            sqlx::query_scalar("SELECT account_id FROM admin_identities WHERE id=?")
+            sqlx::query_scalar("SELECT account_id FROM admin_identities WHERE id=$1")
                 .bind(session.admin_user_id)
                 .fetch_one(self.pool())
                 .await?;
@@ -384,7 +404,7 @@ impl Storage {
             Err(error) => return Err(error),
         };
         let session: Option<AdminSession> = sqlx::query_as(
-            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=? AND a.account_id=?"
+            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=$1 AND a.account_id=$2"
         ).bind(claims["jti"].as_str()).bind(claims["sub"].as_str()).fetch_optional(self.pool()).await?;
         Ok(session.filter(|s| !is_expired(&s.expires_at)))
     }
@@ -403,8 +423,8 @@ impl Storage {
         };
         let session: Option<AdminSession> = sqlx::query_as(
             "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id
-             WHERE s.id=? AND a.account_id=? AND (s.refresh_version=? OR
-             (s.refresh_version-1=? AND s.refresh_issued_at>?))",
+             WHERE s.id=$1 AND a.account_id=$2 AND (s.refresh_version=$3 OR
+             (s.refresh_version-1=$4 AND s.refresh_issued_at>$5))",
         )
         .bind(claims["jti"].as_str())
         .bind(claims["sub"].as_str())
@@ -427,11 +447,11 @@ impl Storage {
             .to_rfc3339_opts(SecondsFormat::Millis, true);
         Ok(sqlx::query_as(
             "UPDATE admin_sessions SET
-             expires_at=CASE WHEN refresh_issued_at<=? THEN ? ELSE expires_at END,
-             refresh_version=refresh_version+CASE WHEN refresh_issued_at<=? THEN 1 ELSE 0 END,
-             refresh_issued_at=CASE WHEN refresh_issued_at<=? THEN ? ELSE refresh_issued_at END
-             WHERE id = ? AND admin_user_id = ? AND expires_at > ?
-             AND (refresh_version=? OR (refresh_version-1=? AND refresh_issued_at>?))
+             expires_at=CASE WHEN refresh_issued_at<=$1 THEN $2 ELSE expires_at END,
+             refresh_version=refresh_version+CASE WHEN refresh_issued_at<=$3 THEN 1 ELSE 0 END,
+             refresh_issued_at=CASE WHEN refresh_issued_at<=$4 THEN $5 ELSE refresh_issued_at END
+             WHERE id = $6 AND admin_user_id = $7 AND expires_at > $8
+             AND (refresh_version=$9 OR (refresh_version-1=$10 AND refresh_issued_at>$11))
              AND EXISTS(SELECT 1 FROM admin_identities WHERE id = admin_user_id)
              RETURNING *",
         )
@@ -459,27 +479,30 @@ impl Storage {
         admin_user_id: i64,
         ttl: Duration,
     ) -> Result<AdminSession> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT a.id FROM accounts a JOIN admin_users u ON u.account_id=a.id WHERE u.id=$1 FOR SHARE OF a").bind(admin_user_id).execute(&mut *tx).await?;
         let id = Uuid::new_v4().to_string();
         let created_at = now_rfc3339();
         let expires_at =
             (Utc::now() + duration_to_chrono(ttl)).to_rfc3339_opts(SecondsFormat::Millis, true);
         let session = sqlx::query_as::<_, AdminSession>(
             "INSERT INTO admin_sessions (id, admin_user_id, created_at, expires_at, refresh_issued_at)
-             SELECT ?,id,?,?,unixepoch() FROM admin_identities WHERE id=?
+             SELECT $1,id,$2,$3,floor(extract(epoch FROM clock_timestamp()))::bigint FROM admin_identities WHERE id=$4
              RETURNING *",
         )
         .bind(&id)
         .bind(&created_at)
         .bind(&expires_at)
         .bind(admin_user_id)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(session)
     }
 
     pub async fn get_admin_session(&self, id: &str) -> Result<Option<AdminSession>> {
         let session = sqlx::query_as::<_, AdminSession>(
-            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=?",
+            "SELECT s.* FROM admin_sessions s JOIN admin_identities a ON a.id=s.admin_user_id WHERE s.id=$1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -501,7 +524,7 @@ impl Storage {
     }
 
     pub async fn delete_admin_session(&self, id: &str) -> Result<bool> {
-        let res = sqlx::query("DELETE FROM admin_sessions WHERE id = ?")
+        let res = sqlx::query("DELETE FROM admin_sessions WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -510,7 +533,7 @@ impl Storage {
 
     pub async fn expire_admin_sessions(&self) -> Result<u64> {
         let now = now_rfc3339();
-        let res = sqlx::query("DELETE FROM admin_sessions WHERE expires_at <= ?")
+        let res = sqlx::query("DELETE FROM admin_sessions WHERE expires_at <= $1")
             .bind(&now)
             .execute(&self.pool)
             .await?;
@@ -538,7 +561,7 @@ impl Storage {
                 provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                 installation_id, originator, user_agent, os_type, os_version, arch, home_dir,
                 http_fingerprint_json, created_at, updated_at, last_used_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NULL)",
         )
         .bind(&new.provider_id)
         .bind(&id)
@@ -595,7 +618,7 @@ impl Storage {
                 id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                 installation_id, originator, user_agent, os_type, os_version, arch, home_dir,
                 http_fingerprint_json, proxy_id, created_at, updated_at, provider_id
-             ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ) VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
              ON CONFLICT(provider_id,chatgpt_account_id,chatgpt_user_id) DO UPDATE SET
                 status = CASE WHEN supplier_accounts.status='pending' THEN 'active' ELSE supplier_accounts.status END,
                 display_name = COALESCE(excluded.display_name, supplier_accounts.display_name),
@@ -630,14 +653,14 @@ impl Storage {
             .await?;
         let account = SupplierAccount::try_from(row)?;
         let revision: i64 =
-            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
+            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=$1")
                 .bind(&account.id)
                 .fetch_one(&mut *tx)
                 .await?;
         sqlx::query(
             "INSERT INTO supplier_tokens (account_id, auth_mode, id_token, access_token,
                 refresh_token, last_refresh, raw_auth_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT(account_id) DO UPDATE SET
                 auth_mode = excluded.auth_mode, id_token = excluded.id_token,
                 access_token = excluded.access_token, refresh_token = excluded.refresh_token,
@@ -656,12 +679,15 @@ impl Storage {
         .await?;
         crate::supplier_health::complete_authorization(&mut tx, &account.id, revision).await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(account)
     }
 
     pub async fn get_account(&self, id: &str) -> Result<Option<SupplierAccount>> {
-        let sql = format!("SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE id = ?");
+        let sql = format!("SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE id = $1");
         let row = sqlx::query_as::<_, AccountRow>(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
@@ -681,7 +707,7 @@ impl Storage {
         chatgpt_user_id: &str,
     ) -> Result<Option<SupplierAccount>> {
         let sql = format!(
-            "SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE provider_id='chatgpt' AND chatgpt_account_id = ? AND chatgpt_user_id = ?"
+            "SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE provider_id='chatgpt' AND chatgpt_account_id = $1 AND chatgpt_user_id = $2"
         );
         let row = sqlx::query_as::<_, AccountRow>(&sql)
             .bind(chatgpt_account_id)
@@ -704,11 +730,11 @@ impl Storage {
     ) -> Result<Vec<SupplierAccount>> {
         let sql = format!(
             "SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts
-             WHERE (instr(lower(COALESCE(display_name,'')), lower(?)) > 0
-                OR instr(lower(COALESCE(email,'')), lower(?)) > 0)
-             AND (? IS NULL OR provider_id = ?)
-             AND (? = 0 OR NULLIF(chatgpt_account_id,'') IS NOT NULL)
-             ORDER BY created_at, id LIMIT ?"
+             WHERE (strpos(lower(COALESCE(display_name,'')),lower($1)) > 0
+                OR strpos(lower(COALESCE(email,'')),lower($2)) > 0)
+             AND ($3 IS NULL OR provider_id = $4)
+             AND (NOT $5 OR NULLIF(chatgpt_account_id,'') IS NOT NULL)
+             ORDER BY created_at, id LIMIT $6"
         );
         let rows = sqlx::query_as::<_, AccountRow>(&sql)
             .bind(search)
@@ -728,7 +754,7 @@ impl Storage {
     ) -> Result<Vec<SupplierAccount>> {
         let rows = if let Some(status) = status {
             let sql = format!(
-                "SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE status = ? ORDER BY created_at"
+                "SELECT {ACCOUNT_COLUMNS} FROM supplier_accounts WHERE status = $1 ORDER BY created_at"
             );
             sqlx::query_as::<_, AccountRow>(&sql)
                 .bind(status.as_str())
@@ -807,16 +833,20 @@ impl Storage {
         id: &str,
         status: SupplierStatus,
     ) -> Result<SupplierAccount> {
-        let changed = sqlx::query("UPDATE supplier_accounts SET status=?,updated_at=? WHERE id=?")
-            .bind(status.as_str())
-            .bind(now_rfc3339())
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let changed =
+            sqlx::query("UPDATE supplier_accounts SET status=$1,updated_at=$2 WHERE id=$3")
+                .bind(status.as_str())
+                .bind(now_rfc3339())
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
         if changed.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(id.to_owned()));
         }
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         self.require_account(id).await
     }
 
@@ -833,16 +863,19 @@ impl Storage {
 
     pub async fn delete_account(&self, id: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM oauth_pending WHERE account_id = ?")
+        sqlx::query("DELETE FROM oauth_pending WHERE account_id = $1")
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        let res = sqlx::query("DELETE FROM supplier_accounts WHERE id = ?")
+        let res = sqlx::query("DELETE FROM supplier_accounts WHERE id = $1")
             .bind(id)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.runtime.invalidate();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(res.rows_affected() > 0)
     }
 
@@ -850,11 +883,11 @@ impl Storage {
         let now = now_rfc3339();
         let res = sqlx::query(
             "UPDATE supplier_accounts SET
-                status = ?, display_name = ?, chatgpt_account_id = ?, chatgpt_user_id = ?,
-                email = ?, plan_type = ?, originator = ?, user_agent = ?, os_type = ?,
-                os_version = ?, arch = ?, home_dir = ?, http_fingerprint_json = ?,
-                updated_at = ?, last_used_at = ?
-             WHERE id = ?",
+                status = $1, display_name = $2, chatgpt_account_id = $3, chatgpt_user_id = $4,
+                email = $5, plan_type = $6, originator = $7, user_agent = $8, os_type = $9,
+                os_version = $10, arch = $11, home_dir = $12, http_fingerprint_json = $13,
+                updated_at = $14, last_used_at = $15
+             WHERE id = $16",
         )
         .bind(account.status.as_str())
         .bind(&account.display_name)
@@ -877,7 +910,10 @@ impl Storage {
         if res.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account.id.clone()));
         }
-        self.runtime.invalidate();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         self.get_account(&account.id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(account.id.clone()))
@@ -889,8 +925,8 @@ impl Storage {
         account: &SupplierAccount,
     ) -> Result<SupplierAccount> {
         let result = sqlx::query(
-            "UPDATE supplier_accounts SET originator = ?, user_agent = ?, os_type = ?, os_version = ?,
-             arch = ?, http_fingerprint_json = ?, proxy_id = ?, updated_at = ? WHERE id = ?",
+            "UPDATE supplier_accounts SET originator = $1, user_agent = $2, os_type = $3, os_version = $4,
+             arch = $5, http_fingerprint_json = $6, proxy_id = $7, updated_at = $8 WHERE id = $9",
         )
         .bind(&account.originator)
         .bind(&account.user_agent)
@@ -906,19 +942,23 @@ impl Storage {
         if result.rows_affected() == 0 {
             return Err(StorageError::AccountNotFound(account.id.clone()));
         }
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         self.require_account(&account.id).await
     }
 
     // --- account tokens ---
 
     pub async fn upsert_supplier_tokens(&self, tokens: SupplierTokens) -> Result<SupplierTokens> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let revision: i64 =
-            sqlx::query_scalar("SELECT auth_revision FROM supplier_accounts WHERE id=?")
-                .bind(&tokens.account_id)
-                .fetch_one(&mut *tx)
-                .await?;
+        let mut tx = self.pool.begin().await?;
+        let revision: i64 = sqlx::query_scalar(
+            "SELECT auth_revision FROM supplier_accounts WHERE id=$1 FOR UPDATE",
+        )
+        .bind(&tokens.account_id)
+        .fetch_one(&mut *tx)
+        .await?;
         let updated_at = if tokens.updated_at.is_empty() {
             now_rfc3339()
         } else {
@@ -928,7 +968,7 @@ impl Storage {
             "INSERT INTO supplier_tokens (
                 account_id, auth_mode, id_token, access_token, refresh_token,
                 last_refresh, raw_auth_json, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT(account_id) DO UPDATE SET
                 auth_mode = excluded.auth_mode,
                 id_token = excluded.id_token,
@@ -953,7 +993,10 @@ impl Storage {
         crate::supplier_health::complete_authorization(&mut tx, &tokens.account_id, revision)
             .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Suppliers,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(row)
     }
 
@@ -961,7 +1004,7 @@ impl Storage {
         let row = sqlx::query_as::<_, SupplierTokens>(
             "SELECT account_id, auth_mode, id_token, access_token, refresh_token,
                     last_refresh, raw_auth_json, updated_at
-             FROM supplier_tokens WHERE account_id = ?",
+             FROM supplier_tokens WHERE account_id = $1",
         )
         .bind(account_id)
         .fetch_optional(&self.pool)
@@ -984,7 +1027,7 @@ impl Storage {
             (Utc::now() + duration_to_chrono(ttl)).to_rfc3339_opts(SecondsFormat::Millis, true);
         let row = sqlx::query_as::<_, OAuthPending>(
             "INSERT INTO oauth_pending (state, code_verifier, redirect_uri, account_id, created_at, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING *",
         )
         .bind(state)
@@ -1001,7 +1044,7 @@ impl Storage {
     pub async fn get_oauth_pending(&self, state: &str) -> Result<Option<OAuthPending>> {
         let row = sqlx::query_as::<_, OAuthPending>(
             "SELECT *
-             FROM oauth_pending WHERE state = ?",
+             FROM oauth_pending WHERE state = $1",
         )
         .bind(state)
         .fetch_optional(&self.pool)
@@ -1024,7 +1067,7 @@ impl Storage {
 
     pub async fn set_oauth_flow(&self, state: &str, flow_data_json: &str) -> Result<OAuthPending> {
         let row = sqlx::query_as::<_, OAuthPending>(
-            "UPDATE oauth_pending SET flow_data_json = ? WHERE state = ? RETURNING *",
+            "UPDATE oauth_pending SET flow_data_json = $1 WHERE state = $2 RETURNING *",
         )
         .bind(flow_data_json)
         .bind(state)
@@ -1038,14 +1081,14 @@ impl Storage {
         let interval_ms = i64::try_from(interval_seconds)
             .unwrap_or(i64::MAX)
             .saturating_mul(1000);
-        let result = sqlx::query("UPDATE oauth_pending SET last_polled_at_ms = ? WHERE state = ? AND expires_at > ? AND (last_polled_at_ms IS NULL OR last_polled_at_ms <= ?)")
+        let result = sqlx::query("UPDATE oauth_pending SET last_polled_at_ms = $1 WHERE state = $2 AND expires_at > $3 AND (last_polled_at_ms IS NULL OR last_polled_at_ms <= $4)")
             .bind(now).bind(state).bind(now_rfc3339()).bind(now.saturating_sub(interval_ms))
             .execute(&self.pool).await?;
         Ok(result.rows_affected() > 0)
     }
 
     pub async fn delete_oauth_pending(&self, state: &str) -> Result<bool> {
-        let res = sqlx::query("DELETE FROM oauth_pending WHERE state = ?")
+        let res = sqlx::query("DELETE FROM oauth_pending WHERE state = $1")
             .bind(state)
             .execute(&self.pool)
             .await?;
@@ -1054,7 +1097,7 @@ impl Storage {
 
     pub async fn expire_oauth_pending(&self) -> Result<u64> {
         let now = now_rfc3339();
-        let res = sqlx::query("DELETE FROM oauth_pending WHERE expires_at <= ?")
+        let res = sqlx::query("DELETE FROM oauth_pending WHERE expires_at <= $1")
             .bind(&now)
             .execute(&self.pool)
             .await?;
@@ -1066,7 +1109,7 @@ impl Storage {
     pub async fn get_supplier_runtime(&self, account_id: &str) -> Result<Option<SupplierRuntime>> {
         let row = sqlx::query_as::<_, SupplierRuntime>(
             "SELECT account_id, session_id, extra_json, updated_at
-             FROM supplier_runtime WHERE account_id = ?",
+             FROM supplier_runtime WHERE account_id = $1",
         )
         .bind(account_id)
         .fetch_optional(&self.pool)
@@ -1083,7 +1126,7 @@ impl Storage {
         let updated_at = now_rfc3339();
         let row = sqlx::query_as::<_, SupplierRuntime>(
             "INSERT INTO supplier_runtime (account_id, session_id, extra_json, updated_at)
-             VALUES (?, ?, ?, ?)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT(account_id) DO UPDATE SET
                 session_id = excluded.session_id,
                 extra_json = excluded.extra_json,
@@ -1124,4 +1167,79 @@ fn empty_to_none(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+impl std::fmt::Debug for Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage")
+            .field("pool", &self.pool)
+            .finish_non_exhaustive()
+    }
+}
+
+// Lock the owning business row before reading mutable monetary state. Consistent
+// owner-first ordering permits unrelated users to transact concurrently.
+pub(crate) async fn lock_user(connection: &mut sqlx::PgConnection, owner: &str) -> Result<()> {
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(owner)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn lock_subscription(
+    connection: &mut sqlx::PgConnection,
+    owner: &str,
+) -> Result<()> {
+    sqlx::query("SELECT id FROM platform_accounts WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(owner)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+fn pool_setting(name: &str, default: u32) -> Result<u32> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.parse())
+        .transpose()
+        .map_err(|_| {
+            StorageError::InvalidAdminUpdate("PostgreSQL pool settings must be unsigned integers")
+        })
+        .map(|value| value.unwrap_or(default))
+}
+
+/// Credential checks and creation share the lock order used by identity edits.
+pub(crate) async fn lock_subscription_identity(
+    connection: &mut sqlx::PgConnection,
+    id: &str,
+) -> Result<()> {
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM platform_accounts WHERE id=$1")
+            .bind(id)
+            .fetch_optional(&mut *connection)
+            .await?;
+    if let Some(owner) = owner {
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR SHARE")
+            .bind(&owner)
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("SELECT id FROM accounts WHERE id=$1 FOR SHARE")
+            .bind(&owner)
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("SELECT id FROM platform_accounts WHERE id=$1 FOR SHARE")
+            .bind(id)
+            .execute(connection)
+            .await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn lock_supplier(connection: &mut sqlx::PgConnection, id: &str) -> Result<()> {
+    sqlx::query("SELECT id FROM supplier_accounts WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(id)
+        .execute(connection)
+        .await?;
+    Ok(())
 }

@@ -246,8 +246,8 @@ mod tests {
             OAuthDeviceIdentity, PlatformAccount, SupplierAccountUpdate, hash_token,
         };
         use serde_json::{Value, json};
-        let dir = tempfile::tempdir().unwrap();
-        let storage = codex2api_storage::Storage::open(dir.path().join("oauth-quota.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("oauth-quota-pg"))
             .await
             .unwrap();
         let accounts = SupplierAccountStore::open(storage.clone());

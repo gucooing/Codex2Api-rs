@@ -68,7 +68,7 @@ async fn web_refresh_recovers_expired_access_and_revokes_the_whole_login() {
         .status(),
         StatusCode::FORBIDDEN
     );
-    sqlx::query("UPDATE user_sessions SET refresh_issued_at=unixepoch()-31 WHERE id=?")
+    sqlx::query("UPDATE user_sessions SET refresh_issued_at=floor(extract(epoch FROM clock_timestamp()))::bigint-31 WHERE id=$1")
         .bind(&session.id)
         .execute(storage.pool())
         .await
@@ -172,7 +172,7 @@ async fn web_refresh_recovers_expired_access_and_revokes_the_whole_login() {
         .await
         .unwrap();
     assert_eq!(explicit.status(), StatusCode::UNAUTHORIZED);
-    sqlx::query("UPDATE user_sessions SET refresh_issued_at=unixepoch()-31 WHERE id=?")
+    sqlx::query("UPDATE user_sessions SET refresh_issued_at=floor(extract(epoch FROM clock_timestamp()))::bigint-31 WHERE id=$1")
         .bind(&session.id)
         .execute(storage.pool())
         .await
@@ -238,7 +238,7 @@ async fn web_refresh_recovers_expired_access_and_revokes_the_whole_login() {
         match change {
             "password" => {
                 sqlx::query(
-                    "UPDATE accounts SET password_hash=password_hash||'changed' WHERE id=?",
+                    "UPDATE accounts SET password_hash=password_hash||'changed' WHERE id=$1",
                 )
                 .bind(&user.id)
                 .execute(storage.pool())
@@ -246,14 +246,14 @@ async fn web_refresh_recovers_expired_access_and_revokes_the_whole_login() {
                 .unwrap();
             }
             "disable" => {
-                sqlx::query("UPDATE accounts SET enabled=0 WHERE id=?")
+                sqlx::query("UPDATE accounts SET enabled=FALSE WHERE id=$1")
                     .bind(&user.id)
                     .execute(storage.pool())
                     .await
                     .unwrap();
             }
             _ => {
-                sqlx::query("UPDATE user_sessions SET expires_at=unixepoch()-1 WHERE id=?")
+                sqlx::query("UPDATE user_sessions SET expires_at=floor(extract(epoch FROM clock_timestamp()))::bigint-1 WHERE id=$1")
                     .bind(&session.id)
                     .execute(storage.pool())
                     .await
@@ -274,7 +274,7 @@ async fn web_refresh_recovers_expired_access_and_revokes_the_whole_login() {
                 .unwrap()
                 .is_none()
         );
-        sqlx::query("UPDATE accounts SET enabled=1,password_hash=? WHERE id=?")
+        sqlx::query("UPDATE accounts SET enabled=TRUE,password_hash=$1 WHERE id=$2")
             .bind(&user.password_hash)
             .bind(&user.id)
             .execute(storage.pool())
@@ -323,9 +323,14 @@ fn cookie(response: &axum::response::Response) -> String {
         .unwrap()
         .into()
 }
-async fn setup() -> (tempfile::TempDir, Storage, Router, User) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("access.sqlite"))
+async fn setup() -> (
+    codex2api_storage::test_support::TestDirectory,
+    Storage,
+    Router,
+    User,
+) {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("access-pg"))
         .await
         .unwrap();
     let user = User {
@@ -384,7 +389,7 @@ async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amoun
         .await
         .unwrap();
     let plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    sqlx::query("UPDATE users SET wallet_cents=5000 WHERE id=?")
+    sqlx::query("UPDATE users SET wallet_cents=5000 WHERE id=$1")
         .bind(&user.id)
         .execute(storage.pool())
         .await
@@ -878,7 +883,7 @@ async fn user_usage_filters_every_query_by_owner_and_never_serializes_supplier_d
             ..Default::default()
         };
         storage.insert_usage(&record).await.unwrap();
-        sqlx::query("UPDATE usage_records SET status='completed',input_tokens=?,output_tokens=?,cached_tokens=20,cost_nano_usd=1000000,billing_status='priced' WHERE id=?")
+        sqlx::query("UPDATE usage_records SET status='completed',input_tokens=$1,output_tokens=$2,cached_tokens=20,cost_nano_usd=1000000,billing_status='priced' WHERE id=$3")
             .bind(input).bind(output).bind(id).execute(storage.pool()).await.unwrap();
     }
     let response = request(

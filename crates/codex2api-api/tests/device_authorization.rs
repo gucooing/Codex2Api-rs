@@ -13,7 +13,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use codex2api_storage::{PlatformAccount, Storage};
+use codex2api_storage::PlatformAccount;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -56,8 +56,8 @@ async fn payload(response: axum::response::Response) -> Value {
 
 #[tokio::test]
 async fn device_login_preserves_pkce_single_use_and_existing_device_revocation() {
-    let temporary = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temporary.path().join("device.sqlite"))
+    let temporary = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temporary.path().join("device-pg"))
         .await
         .unwrap();
     let account = PlatformAccount {
@@ -67,8 +67,8 @@ async fn device_login_preserves_pkce_single_use_and_existing_device_revocation()
         password_hash: codex2api_storage::hash_password("fixture-password").unwrap(),
         name: "Alice".into(),
         email: "alice@example.test".into(),
-        plan_type: "free".into(),
-        plan_id: "free".into(),
+        plan_type: "plus".into(),
+        plan_id: "plus".into(),
         subscription_expires_at: None,
         enabled: true,
         created_at: chrono::Utc::now().to_rfc3339(),

@@ -307,8 +307,8 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn native_stream_records_real_conversation_ownership_and_keeps_metadata_local() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = codex2api_storage::Storage::open(dir.path().join("conversation.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("conversation-pg"))
             .await
             .unwrap();
         let source = codex2api_accounts::SupplierAccountStore::open(storage.clone())

@@ -238,7 +238,7 @@ impl codex2api_upstream::HttpTransport for Mock {
     }
 }
 struct Fixture {
-    _directory: tempfile::TempDir,
+    _directory: codex2api_storage::test_support::TestDirectory,
     storage: Storage,
     state: codex2api_gateway::GatewayState,
     router: axum::Router,
@@ -247,8 +247,8 @@ struct Fixture {
     mock: Arc<Mock>,
 }
 async fn fixture(provider: &str) -> Fixture {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("gateway.sqlite"))
+    let directory = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(directory.path().join("gateway-pg"))
         .await
         .unwrap();
     let user = User {

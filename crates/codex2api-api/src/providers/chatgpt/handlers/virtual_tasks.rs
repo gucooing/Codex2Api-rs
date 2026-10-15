@@ -563,8 +563,8 @@ mod tests {
     #[tokio::test]
     async fn task_models_inherit_only_owned_same_supplier_execution_and_accept_explicit_selection()
     {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = codex2api_storage::Storage::open(dir.path().join("task-models.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("task-models-pg"))
             .await
             .unwrap();
         for id in ["owner", "other"] {

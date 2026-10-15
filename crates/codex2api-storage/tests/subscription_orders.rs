@@ -14,9 +14,13 @@ use codex2api_storage::{
 };
 use serde_json::json;
 
-async fn setup() -> (tempfile::TempDir, Storage, User) {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("orders.sqlite"))
+async fn setup() -> (
+    codex2api_storage::test_support::TestDirectory,
+    Storage,
+    User,
+) {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("orders-pg"))
         .await
         .unwrap();
     let user = User {
@@ -46,7 +50,7 @@ async fn setup() -> (tempfile::TempDir, Storage, User) {
             .await
             .unwrap();
     }
-    sqlx::query("UPDATE users SET wallet_cents=100000 WHERE id=?")
+    sqlx::query("UPDATE users SET wallet_cents=100000 WHERE id=$1")
         .bind(&user.id)
         .execute(storage.pool())
         .await
@@ -231,12 +235,12 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         Some("s1")
     );
     let anchor: String =
-        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=$1")
             .bind(&subscription.id)
             .fetch_one(storage.pool())
             .await
             .unwrap();
-    let pricing: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id,starts_at_ms,ends_at_ms FROM subscription_pricing_periods WHERE subscription_id=?")
+    let pricing: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id,starts_at_ms,ends_at_ms FROM subscription_pricing_periods WHERE subscription_id=$1")
         .bind(&subscription.id).fetch_all(storage.pool()).await.unwrap();
 
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
@@ -254,7 +258,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .unwrap();
     assert_eq!(route.tag_id.as_deref(), Some("replacement"));
     let persisted: Option<String> =
-        sqlx::query_scalar("SELECT tag_id FROM execution_routes WHERE virtual_account_id=?")
+        sqlx::query_scalar("SELECT tag_id FROM execution_routes WHERE virtual_account_id=$1")
             .bind(&subscription.id)
             .fetch_one(storage.pool())
             .await
@@ -331,7 +335,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .replace_supplier_tags(&["s2".into()], &["replacement".into()])
         .await
         .unwrap();
-    storage.invalidate_runtime_cache();
+    storage.invalidate_cached_snapshots();
     assert_eq!(
         storage
             .select_pool_supplier(&subscription.id, "chatgpt", &[])
@@ -386,13 +390,13 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         subscription.subscription_expires_at
     );
     let current_anchor: String =
-        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=$1")
             .bind(&subscription.id)
             .fetch_one(storage.pool())
             .await
             .unwrap();
     assert_eq!(current_anchor, anchor);
-    let current_pricing: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id,starts_at_ms,ends_at_ms FROM subscription_pricing_periods WHERE subscription_id=?")
+    let current_pricing: Vec<(String, i64, i64)> = sqlx::query_as("SELECT id,starts_at_ms,ends_at_ms FROM subscription_pricing_periods WHERE subscription_id=$1")
         .bind(&subscription.id).fetch_all(storage.pool()).await.unwrap();
     assert_eq!(current_pricing, pricing);
     assert_eq!(storage.wallet_entries(&user.id).await.unwrap().len(), 1);
@@ -404,13 +408,13 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
     assert_eq!(replay.balance_cents, paid.balance_cents);
 
     let expires = (Utc::now() - Duration::seconds(1)).to_rfc3339();
-    sqlx::query("UPDATE platform_accounts SET subscription_expires_at=? WHERE id=?")
+    sqlx::query("UPDATE platform_accounts SET subscription_expires_at=$1 WHERE id=$2")
         .bind(&expires)
         .bind(&subscription.id)
         .execute(storage.pool())
         .await
         .unwrap();
-    storage.invalidate_runtime_cache();
+    storage.invalidate_cached_snapshots();
     assert!(
         !storage
             .effective_entitlements(&subscription.id)
@@ -429,7 +433,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
     );
     assert!(storage.virtual_plan("free").await.unwrap().is_none());
     storage.close().await;
-    let reopened = Storage::open(dir.path().join("orders.sqlite"))
+    let reopened = codex2api_storage::test_support::open(dir.path().join("orders-pg"))
         .await
         .unwrap();
     assert!(
@@ -503,7 +507,7 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
         100000
     );
     assert!(storage.wallet_entries(&user.id).await.unwrap().is_empty());
-    sqlx::query("UPDATE users SET wallet_cents=0 WHERE id=?")
+    sqlx::query("UPDATE users SET wallet_cents=0 WHERE id=$1")
         .bind(&user.id)
         .execute(storage.pool())
         .await
@@ -524,7 +528,7 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
         "pending"
     );
     assert!(storage.wallet_entries(&user.id).await.unwrap().is_empty());
-    sqlx::query("UPDATE users SET wallet_cents=100000 WHERE id=?")
+    sqlx::query("UPDATE users SET wallet_cents=100000 WHERE id=$1")
         .bind(&user.id)
         .execute(storage.pool())
         .await
@@ -583,7 +587,7 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
             .is_err()
     );
     assert!(
-        sqlx::query("UPDATE subscription_orders SET amount_cents=1 WHERE id=?")
+        sqlx::query("UPDATE subscription_orders SET amount_cents=1 WHERE id=$1")
             .bind(&first.id)
             .execute(storage.pool())
             .await
@@ -613,7 +617,7 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
         .unwrap()
         .unwrap();
     let anchor: String =
-        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=$1")
             .bind(&account.id)
             .fetch_one(storage.pool())
             .await
@@ -651,7 +655,7 @@ async fn upgrade_uses_grant_snapshot_remaining_time_and_keeps_expiry_and_budget_
             .timestamp_millis()
     );
     let after_anchor: String =
-        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=?")
+        sqlx::query_scalar("SELECT subscription_started_at FROM platform_accounts WHERE id=$1")
             .bind(&account.id)
             .fetch_one(storage.pool())
             .await
@@ -801,7 +805,7 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
     let expiring = quote(&storage, &user, Some(&subscription_id), "pro")
         .await
         .unwrap();
-    sqlx::query("UPDATE subscription_orders SET quote_expires_at_ms=0 WHERE id=?")
+    sqlx::query("UPDATE subscription_orders SET quote_expires_at_ms=0 WHERE id=$1")
         .bind(&expiring.id)
         .execute(storage.pool())
         .await

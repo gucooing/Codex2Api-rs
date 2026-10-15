@@ -60,8 +60,6 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Sqlx(sqlx::Error),
-    #[error("migration failed: {0}")]
-    Migration(#[from] sqlx::migrate::MigrateError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
@@ -72,7 +70,7 @@ impl From<sqlx::Error> for StorageError {
             && db.is_unique_violation()
         {
             let msg = db.message().to_string();
-            if msg.contains("chatgpt_account_id") {
+            if db.constraint() == Some("supplier_account_identity") {
                 return StorageError::DuplicateChatgptIdentity;
             }
             return StorageError::Constraint(msg);

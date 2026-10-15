@@ -337,10 +337,7 @@ async fn completed(s: &AdminState, done: CompletedLogin) -> ApiResult {
     s.supplier_cache.invalidate_all(&done.account.id).await;
     match services::request(s, &done.account.id, E::Profile, &HashMap::new(), None, None).await {
         Ok(value) => {
-            let snapshot = codex2api_storage::QuotaSnapshot {
-                value,
-                observed_at: chrono::Utc::now(),
-            };
+            let snapshot = codex2api_storage::QuotaSnapshot::new(value, chrono::Utc::now());
             if let Err(error) = s
                 .storage
                 .store_supplier_info(&done.account.id, SupplierInfoSection::Usage, &snapshot)

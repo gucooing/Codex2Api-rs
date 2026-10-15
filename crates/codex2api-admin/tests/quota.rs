@@ -20,10 +20,7 @@ async fn subscription_expiry_survives_list_detail_quota_refresh_and_state_reset(
     f.storage
         .store_account_quota(
             &id,
-            &QuotaSnapshot {
-                value: json!({"rate_limit":{"allowed":true}}),
-                observed_at: chrono::Utc::now(),
-            },
+            &QuotaSnapshot::new(json!({"rate_limit":{"allowed":true}}), chrono::Utc::now()),
         )
         .await
         .unwrap();
@@ -143,11 +140,8 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
         })
         .await
         .unwrap();
-    let observed = chrono::Utc::now();
-    f.storage.store_account_quota(&first.id,&codex2api_storage::QuotaSnapshot {
-        observed_at:observed,
-        value:json!({"rate_limit":{"primary_window":{"used_percent":18,"limit_window_seconds":604800,"reset_after_seconds":3600},"secondary_window":{"used_percent":42,"limit_window_seconds":18000,"reset_at":2000000000}}})
-    }).await.unwrap();
+    let observed = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6);
+    f.storage.store_account_quota(&first.id,&codex2api_storage::QuotaSnapshot::new(json!({"rate_limit":{"primary_window":{"used_percent":18,"limit_window_seconds":604800,"reset_after_seconds":3600},"secondary_window":{"used_percent":42,"limit_window_seconds":18000,"reset_at":2000000000}}}), observed)).await.unwrap();
     for _ in 0..2 {
         let row = f
             .get(&format!("/admin/api/suppliers/{}/quota", first.id))
@@ -276,7 +270,7 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
 async fn supplier_quota_preserves_monthly_and_other_durations_without_absent_windows() {
     let f = Fixture::new().await;
     let account = f.state.accounts.create_pending().await.unwrap().account;
-    let observed = chrono::Utc::now();
+    let observed = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6);
     for (limits, expected) in [
         (
             json!({"primary_window":{"used_percent":0,"limit_window_seconds":2592000,"reset_after_seconds":2590527},"secondary_window":null}),
@@ -298,10 +292,7 @@ async fn supplier_quota_preserves_monthly_and_other_durations_without_absent_win
         f.storage
             .store_account_quota(
                 &account.id,
-                &codex2api_storage::QuotaSnapshot {
-                    observed_at: observed,
-                    value: json!({"rate_limit":limits}),
-                },
+                &codex2api_storage::QuotaSnapshot::new(json!({"rate_limit":limits}), observed),
             )
             .await
             .unwrap();
@@ -339,7 +330,7 @@ async fn supplier_cycles_sum_settled_prices_with_exact_boundaries_and_account_is
     let f = Fixture::new().await;
     let account = f.state.accounts.create_pending().await.unwrap().account;
     let other = f.state.accounts.create_pending().await.unwrap().account;
-    let observed = chrono::Utc::now();
+    let observed = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6);
     let until = (observed.timestamp() + 3600) * 1000;
     let inner_from = until - 18_000_000;
     let outer_from = until - 2_592_000_000;
@@ -357,13 +348,13 @@ async fn supplier_cycles_sum_settled_prices_with_exact_boundaries_and_account_is
         revision: 0,
     };
     assert!(f.storage.save_model_price(&price).await.unwrap());
-    let snapshot = QuotaSnapshot {
-        observed_at: observed,
-        value: json!({"rate_limit": {
+    let snapshot = QuotaSnapshot::new(
+        json!({"rate_limit": {
             "primary_window": {"limit_window_seconds":18000,"reset_at":until/1000,"used_percent":10},
             "secondary_window": {"limit_window_seconds":2592000,"reset_at":until/1000,"used_percent":20}
         }}),
-    };
+        observed,
+    );
     f.storage
         .store_account_quota(&account.id, &snapshot)
         .await
@@ -510,10 +501,10 @@ async fn supplier_cycles_sum_settled_prices_with_exact_boundaries_and_account_is
 async fn quota_reads_persisted_official_data_and_keeps_it_after_refresh_failure() {
     let f = Fixture::new().await;
     let a = f.state.accounts.create_pending().await.unwrap().account;
-    let snapshot = codex2api_storage::QuotaSnapshot {
-        value: json!({"rate_limit":{"primary_window":{"used_percent":58,"limit_window_seconds":604800,"reset_after_seconds":3600}}}),
-        observed_at: chrono::Utc::now() - chrono::TimeDelta::minutes(5),
-    };
+    let snapshot = codex2api_storage::QuotaSnapshot::new(
+        json!({"rate_limit":{"primary_window":{"used_percent":58,"limit_window_seconds":604800,"reset_after_seconds":3600}}}),
+        chrono::Utc::now() - chrono::TimeDelta::minutes(5),
+    );
     f.storage
         .store_account_quota(&a.id, &snapshot)
         .await

@@ -128,15 +128,18 @@ impl IntoResponse for GatewayError {
 }
 impl From<crate::runtime::LimitError> for GatewayError {
     fn from(value: crate::runtime::LimitError) -> Self {
+        let (code, retry_after) = match value {
+            crate::runtime::LimitError::Storage(error) => return error.into(),
+            crate::runtime::LimitError::Limited { code, retry_after } => (code, retry_after),
+        };
         let mut error = Self::new(
             StatusCode::TOO_MANY_REQUESTS,
-            value.code,
+            code,
             "The user has reached an API group or model rate limit.",
         );
-        error.headers.insert(
-            "retry-after",
-            value.retry_after.to_string().parse().unwrap(),
-        );
+        error
+            .headers
+            .insert("retry-after", retry_after.to_string().parse().unwrap());
         error
     }
 }

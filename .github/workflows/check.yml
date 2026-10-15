@@ -9,6 +9,15 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: codex2api
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: codex2api_test
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U codex2api -d codex2api_test" --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
         image: redis:7-alpine
         ports:
@@ -16,12 +25,14 @@ jobs:
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       CODEX2API_REDIS_URL: redis://127.0.0.1:6379/0
+      CODEX2API_TEST_DATABASE_URL: postgresql://codex2api:test@127.0.0.1:5432/codex2api_test
+      CODEX2API_DB_MIN_CONNECTIONS: 0
+      CODEX2API_DB_MAX_CONNECTIONS: 4
+      RUST_TEST_THREADS: 4
     steps:
       - uses: actions/checkout@v7
       - name: Check provider module boundaries
         run: python3 scripts/check-provider-boundaries.py
-      - name: Test account migration and database boundaries
-        run: python3 scripts/test-account-migration.py
       - uses: actions/setup-node@v6
         with:
           node-version: 24

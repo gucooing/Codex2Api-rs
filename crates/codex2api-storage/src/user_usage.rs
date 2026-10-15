@@ -2,7 +2,7 @@
 use crate::{Result, Storage, StorageError, UsageStatisticsRow, UsageTotals};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{FromRow, QueryBuilder, Sqlite};
+use sqlx::{FromRow, Postgres, QueryBuilder};
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -110,7 +110,7 @@ impl UserUsageRecord {
 }
 
 fn scope(
-    query: &mut QueryBuilder<'_, Sqlite>,
+    query: &mut QueryBuilder<'_, Postgres>,
     owner: &str,
     filter: &UserUsageFilter,
     from: i64,
@@ -148,7 +148,7 @@ fn scope(
     }
     if !filter.model.is_empty() {
         query
-            .push(" AND instr(lower(COALESCE(NULLIF(actual_model,''),model,'')),lower(")
+            .push(" AND strpos(lower(COALESCE(NULLIF(actual_model,''),model,'')),lower(")
             .push_bind(filter.model.trim().to_owned())
             .push("))>0");
     }
@@ -207,7 +207,10 @@ impl Storage {
             return Err(StorageError::InvalidAdminUpdate("使用记录时间范围无效"));
         }
         let totals = crate::usage_statistics::TOTALS;
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         let mut summary = QueryBuilder::new(format!("SELECT {totals} FROM usage_records"));
         scope(&mut summary, owner, filter, from, until);
@@ -219,8 +222,9 @@ impl Storage {
             .page
             .min(((summary.request_count.saturating_sub(1) / filter.limit) + 1).max(1));
         let offset = (page - 1) * filter.limit;
-        let bucket =
-            format!("strftime('%Y-%m-%d',(requested_at_ms - ({zone_ms}))/1000.0,'unixepoch')");
+        let bucket = format!(
+            "to_char(to_timestamp(((requested_at_ms - ({zone_ms}))/1000.0)::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD')"
+        );
         let mut series = QueryBuilder::new(format!(
             "SELECT {bucket} AS key,{bucket} AS label,{totals} FROM usage_records"
         ));
@@ -245,7 +249,7 @@ impl Storage {
             .fetch_all(&mut *tx)
             .await?;
         let pending: i64 = sqlx::query_scalar(
-            "SELECT COALESCE((SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id=?),0)",
+            "SELECT COALESCE((SELECT pending_nano_usd FROM usage_wallet_state WHERE user_id=$1),0)",
         )
         .bind(owner)
         .fetch_one(&mut *tx)

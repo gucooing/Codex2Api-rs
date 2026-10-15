@@ -40,14 +40,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 codex2api \
     && useradd --uid 10001 --gid codex2api --no-create-home --home-dir /app --shell /usr/sbin/nologin codex2api \
-    && install -d -o codex2api -g codex2api /app/data
+    && install -d -o codex2api -g codex2api /app
 WORKDIR /app
 COPY --from=builder /src/target/release/codex2api /usr/local/bin/codex2api
 ENV CODEX2API_API_BIND=0.0.0.0:8080 \
     CODEX2API_ADMIN_BIND=0.0.0.0:8081 \
     CODEX2API_USER_BIND=0.0.0.0:8082 \
-    CODEX2API_METERED_API_BIND=0.0.0.0:8083 \
-    CODEX2API_DB=/app/data/codex2api.sqlite
+    CODEX2API_METERED_API_BIND=0.0.0.0:8083
 USER 10001:10001
 EXPOSE 8080 8081 8082 8083
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

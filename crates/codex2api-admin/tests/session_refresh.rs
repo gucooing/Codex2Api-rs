@@ -59,7 +59,7 @@ async fn refresh_recovers_expired_access_and_reuses_concurrent_rotation() {
         .status(),
         StatusCode::FORBIDDEN
     );
-    sqlx::query("UPDATE admin_sessions SET refresh_issued_at=unixepoch()-31 WHERE id=?")
+    sqlx::query("UPDATE admin_sessions SET refresh_issued_at=floor(extract(epoch FROM clock_timestamp()))::bigint-31 WHERE id=$1")
         .bind(&session.id)
         .execute(f.storage.pool())
         .await
@@ -168,7 +168,7 @@ async fn refresh_recovers_expired_access_and_reuses_concurrent_rotation() {
         .await
         .unwrap();
     assert_eq!(cross_site.status(), StatusCode::FORBIDDEN);
-    sqlx::query("UPDATE admin_sessions SET refresh_issued_at=unixepoch()-31 WHERE id=?")
+    sqlx::query("UPDATE admin_sessions SET refresh_issued_at=floor(extract(epoch FROM clock_timestamp()))::bigint-31 WHERE id=$1")
         .bind(&session.id)
         .execute(f.storage.pool())
         .await

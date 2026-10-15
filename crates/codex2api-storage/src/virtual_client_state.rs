@@ -14,7 +14,7 @@ impl Storage {
         owner: &str,
         key: &str,
     ) -> Result<Option<VirtualClientState>> {
-        let row:Option<(String,i64,String,i64)>=sqlx::query_as("SELECT value_json,revision,write_origin,updated_at_ms FROM virtual_client_state WHERE virtual_account_id=? AND state_key=?")
+        let row:Option<(String,i64,String,i64)>=sqlx::query_as("SELECT value_json::text,revision,write_origin,updated_at_ms FROM virtual_client_state WHERE virtual_account_id=$1 AND state_key=$2")
             .bind(owner).bind(key).fetch_optional(self.pool()).await?;
         row.map(|(value, revision, write_origin, updated_at_ms)| {
             Ok(VirtualClientState {
@@ -51,10 +51,10 @@ impl Storage {
             ));
         }
         Ok(sqlx::query_scalar("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin,updated_at_ms)
-            SELECT id,?,?,1,'client',? FROM platform_principals WHERE id=? AND enabled=1 AND
-              (? IS NULL OR ?=0 OR EXISTS(SELECT 1 FROM virtual_client_state WHERE virtual_account_id=? AND state_key=?))
+            SELECT id,$1,$2::jsonb,1,'client',$3 FROM platform_principals WHERE id=$4 AND enabled=TRUE AND
+              ($5 IS NULL OR $6=0 OR EXISTS(SELECT 1 FROM virtual_client_state WHERE virtual_account_id=$7 AND state_key=$8))
             ON CONFLICT(virtual_account_id,state_key) DO UPDATE SET value_json=excluded.value_json,revision=virtual_client_state.revision+1,write_origin='client',updated_at_ms=excluded.updated_at_ms
-            WHERE (? IS NULL OR virtual_client_state.revision=?) RETURNING revision")
+            WHERE ($9 IS NULL OR virtual_client_state.revision=$10) RETURNING revision")
             .bind(key).bind(serde_json::to_string(value)?).bind(chrono::Utc::now().timestamp_millis()).bind(owner).bind(expected).bind(expected).bind(owner).bind(key).bind(expected).bind(expected)
             .fetch_optional(self.pool()).await?)
     }

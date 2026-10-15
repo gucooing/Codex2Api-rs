@@ -550,6 +550,7 @@ dependencies = [
  "base64",
  "chrono",
  "codex2api-core",
+ "codex2api-storage",
  "codex2api-version",
  "rand 0.9.5",
  "redis",
@@ -1585,7 +1586,6 @@ version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
 dependencies = [
- "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2695,6 +2695,8 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
+ "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2",

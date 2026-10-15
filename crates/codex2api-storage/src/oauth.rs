@@ -28,7 +28,7 @@ impl Storage {
         owner: &str,
         device: &str,
     ) -> Result<(i64, i64, Option<String>)> {
-        Ok(sqlx::query_as("SELECT COALESCE(d.authenticated_at_ms,unixepoch(d.created_at)*1000),COALESCE(d.requested_at_ms,unixepoch(d.created_at)*1000),COALESCE(a.subscription_started_at,a.created_at) FROM virtual_devices d JOIN platform_accounts a ON a.id=d.virtual_account_id WHERE a.id=? AND d.id=?")
+        Ok(sqlx::query_as("SELECT COALESCE(d.authenticated_at_ms,floor(extract(epoch FROM (d.created_at)::timestamptz))::bigint*1000),COALESCE(d.requested_at_ms,floor(extract(epoch FROM (d.created_at)::timestamptz))::bigint*1000),COALESCE(a.subscription_started_at,a.created_at) FROM virtual_devices d JOIN platform_accounts a ON a.id=d.virtual_account_id WHERE a.id=$1 AND d.id=$2")
             .bind(owner).bind(device).fetch_one(self.pool()).await?)
     }
 
@@ -42,10 +42,12 @@ impl Storage {
     }
 
     pub async fn persist_oauth_jwt_private_key(&self, pem: &str) -> Result<String> {
-        sqlx::query("INSERT OR IGNORE INTO meta(key,value) VALUES('oauth_jwt_private_key',?)")
-            .bind(pem)
-            .execute(self.pool())
-            .await?;
+        sqlx::query(
+            "INSERT INTO meta(key,value) VALUES('oauth_jwt_private_key',$1) ON CONFLICT DO NOTHING",
+        )
+        .bind(pem)
+        .execute(self.pool())
+        .await?;
         Ok(
             sqlx::query_scalar("SELECT value FROM meta WHERE key='oauth_jwt_private_key'")
                 .fetch_one(self.pool())
@@ -61,10 +63,12 @@ impl Storage {
         {
             return Ok(key);
         }
-        sqlx::query("INSERT OR IGNORE INTO meta(key,value) VALUES('oauth_signing_key',?)")
-            .bind(oauth_secret())
-            .execute(self.pool())
-            .await?;
+        sqlx::query(
+            "INSERT INTO meta(key,value) VALUES('oauth_signing_key',$1) ON CONFLICT DO NOTHING",
+        )
+        .bind(oauth_secret())
+        .execute(self.pool())
+        .await?;
         Ok(
             sqlx::query_scalar("SELECT value FROM meta WHERE key='oauth_signing_key'")
                 .fetch_one(self.pool())

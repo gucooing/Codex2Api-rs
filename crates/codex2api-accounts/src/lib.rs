@@ -1,6 +1,6 @@
 //! Per-account isolated Codex environments.
 //!
-//! Isolation is a SQLite account row plus `supplier_tokens`. Request headers
+//! Isolation is a PostgreSQL account row plus `supplier_tokens`. Request headers
 //! (`originator`, `User-Agent`, `x-codex-installation-id`) are built from that
 //! row so upstream behavior matches a logged-in Codex CLI. Official `$CODEX_HOME`
 //! files are not used.

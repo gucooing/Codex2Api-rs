@@ -1,7 +1,7 @@
 use crate::{Result, Storage, StorageError};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{FromRow, PgConnection};
 
 pub(crate) fn checkout_error(code: &'static str, message: &'static str) -> StorageError {
     StorageError::Checkout { code, message }
@@ -57,10 +57,16 @@ impl Storage {
                 },
             )
             .await?;
-        let mut items = Vec::new();
+        let ids: Vec<&str> = page.items.iter().map(|coupon| coupon.id.as_str()).collect();
+        let counts: Vec<(String, i64, i64)> = sqlx::query_as("SELECT coupon_id,COUNT(*) FILTER(WHERE status='paid'),COUNT(*) FILTER(WHERE status='pending' AND quote_expires_at_ms>$1) FROM subscription_orders WHERE coupon_id=ANY($2) GROUP BY coupon_id")
+            .bind(now).bind(ids).fetch_all(self.pool()).await?;
+        let counts: std::collections::HashMap<_, _> = counts
+            .into_iter()
+            .map(|(id, paid, reserved)| (id, (paid, reserved)))
+            .collect();
+        let mut items = Vec::with_capacity(page.items.len());
         for coupon in page.items {
-            let (paid, reserved): (i64,i64) = sqlx::query_as("SELECT COALESCE(SUM(status='paid'),0),COALESCE(SUM(status='pending' AND quote_expires_at_ms>?),0) FROM subscription_orders WHERE coupon_id=?")
-                .bind(now).bind(&coupon.id).fetch_one(self.pool()).await?;
+            let (paid, reserved) = counts.get(&coupon.id).copied().unwrap_or_default();
             let mut value = serde_json::to_value(coupon)?;
             value["used_count"] = paid.into();
             value["reserved_count"] = reserved.into();
@@ -103,10 +109,10 @@ impl Storage {
                 "请检查优惠券名称、金额、有效期和使用次数",
             ));
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         if let Some(plan) = &input.plan_id {
             let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=?)")
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_plans WHERE id=$1)")
                     .bind(plan)
                     .fetch_one(&mut *tx)
                     .await?;
@@ -118,7 +124,7 @@ impl Storage {
             }
         }
         let duplicate: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM coupons WHERE code=? AND (? IS NULL OR id!=?))",
+            "SELECT EXISTS(SELECT 1 FROM coupons WHERE lower(code)=lower($1) AND ($2 IS NULL OR id!=$3))",
         )
         .bind(&code)
         .bind(id)
@@ -132,7 +138,7 @@ impl Storage {
             .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if id.is_some() {
-            let rows = sqlx::query("UPDATE coupons SET code=?,name=?,enabled=?,discount_cents=?,minimum_cents=?,plan_id=?,starts_at_ms=?,ends_at_ms=?,max_uses=?,per_user_limit=?,revision=revision+1 WHERE id=? AND revision=?")
+            let rows = sqlx::query("UPDATE coupons SET code=$1,name=$2,enabled=$3,discount_cents=$4,minimum_cents=$5,plan_id=$6,starts_at_ms=$7,ends_at_ms=$8,max_uses=$9,per_user_limit=$10,revision=revision+1 WHERE id=$11 AND revision=$12")
                 .bind(&code).bind(input.name.trim()).bind(input.enabled).bind(input.discount_cents).bind(input.minimum_cents).bind(&input.plan_id).bind(input.starts_at_ms).bind(input.ends_at_ms).bind(input.max_uses).bind(input.per_user_limit).bind(&key).bind(input.revision).execute(&mut *tx).await?.rows_affected();
             if rows != 1 {
                 return Err(StorageError::ProxyChanged);
@@ -141,10 +147,10 @@ impl Storage {
             if input.revision.is_some() {
                 return Err(checkout_error("invalid_coupon", "新建优惠券不能指定版本"));
             }
-            sqlx::query("INSERT INTO coupons(id,code,name,enabled,discount_cents,minimum_cents,plan_id,starts_at_ms,ends_at_ms,max_uses,per_user_limit,created_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO coupons(id,code,name,enabled,discount_cents,minimum_cents,plan_id,starts_at_ms,ends_at_ms,max_uses,per_user_limit,created_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
                 .bind(&key).bind(&code).bind(input.name.trim()).bind(input.enabled).bind(input.discount_cents).bind(input.minimum_cents).bind(&input.plan_id).bind(input.starts_at_ms).bind(input.ends_at_ms).bind(input.max_uses).bind(input.per_user_limit).bind(Utc::now().timestamp_millis()).execute(&mut *tx).await?;
         }
-        let result = sqlx::query_as("SELECT * FROM coupons WHERE id=?")
+        let result = sqlx::query_as("SELECT * FROM coupons WHERE id=$1")
             .bind(key)
             .fetch_one(&mut *tx)
             .await?;
@@ -156,7 +162,7 @@ impl Storage {
 // A preview only reads availability. Confirmed unpaid orders reserve capacity;
 // cancellation and expiry release it without a cleanup job. Paid orders redeem it.
 pub(crate) async fn available_coupon(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     owner: &str,
     code: &str,
     plan: &str,
@@ -170,7 +176,7 @@ pub(crate) async fn available_coupon(
     if code.len() > 64 {
         return Err(checkout_error("coupon_invalid", "优惠码无效"));
     }
-    let coupon: Coupon = sqlx::query_as("SELECT * FROM coupons WHERE code=?")
+    let coupon: Coupon = sqlx::query_as("SELECT * FROM coupons WHERE lower(code)=lower($1)")
         .bind(code)
         .fetch_optional(&mut *connection)
         .await?
@@ -202,7 +208,7 @@ pub(crate) async fn available_coupon(
             "当前应付金额为零，无需使用优惠券",
         ));
     }
-    let (total, own): (i64,i64) = sqlx::query_as("SELECT COUNT(*),COALESCE(SUM(user_id=?),0) FROM subscription_orders WHERE coupon_id=? AND (status='paid' OR (status='pending' AND quote_expires_at_ms>?))")
+    let (total, own): (i64,i64) = sqlx::query_as("SELECT COUNT(*),COALESCE(SUM((user_id=$1)::int)::bigint,0) FROM subscription_orders WHERE coupon_id=$2 AND (status='paid' OR (status='pending' AND quote_expires_at_ms>$3))")
         .bind(owner).bind(&coupon.id).bind(now).fetch_one(connection).await?;
     if coupon.max_uses.is_some_and(|max| total >= max) {
         return Err(checkout_error(

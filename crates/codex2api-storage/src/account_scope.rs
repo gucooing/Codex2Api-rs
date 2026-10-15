@@ -26,12 +26,12 @@ impl Storage {
 
 /// Transactional writes use the exact same scope rule, including non-HTTP callers.
 pub(crate) async fn require_on(
-    connection: &mut sqlx::SqliteConnection,
+    connection: &mut sqlx::PgConnection,
     id: &str,
     scope: AccountScope,
 ) -> Result<()> {
     let exists: bool = sqlx::query_scalar(&format!(
-        "SELECT EXISTS(SELECT 1 FROM {} WHERE id=?)",
+        "SELECT EXISTS(SELECT 1 FROM {} WHERE id=$1)",
         scope.view()
     ))
     .bind(id)

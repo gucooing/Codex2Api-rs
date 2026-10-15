@@ -1,13 +1,15 @@
-//! SQLite persistence for administrators, provider accounts, virtual accounts and usage.
+//! PostgreSQL persistence for administrators, provider accounts, virtual accounts and usage.
 //!
 //! `Storage` is the repository entry point; `types` contains persisted records;
-//! `password` and `token` implement credential primitives. Migrations stay in
-//! migrations/. This crate does not register HTTP routes or call official services.
+//! `password` and `token` implement credential primitives. schema.sql defines fresh
+//! databases. This crate does not register HTTP routes or call official services.
 
 mod account_scope;
 pub use account_scope::AccountScope;
+mod admission_cache;
 mod api_access;
 mod api_admission;
+pub use admission_cache::{AdmissionError, ApiLimits, ApiPermit};
 mod api_groups;
 mod usage_wallet;
 pub use api_access::{ApiKeyView, ApiPrincipal, CreatedApiKey};
@@ -18,6 +20,7 @@ pub use api_groups::{
 #[cfg(test)]
 extern crate self as codex2api_storage;
 mod billing;
+mod billing_cache;
 mod dispatch;
 pub use dispatch::SupplierPool;
 mod operation_prices;
@@ -57,10 +60,16 @@ mod quota;
 mod remote_servers;
 mod reset_credits;
 pub use subscription_management::{ResetCardGrant, SubscriptionFilters, SubscriptionSelection};
+#[cfg(test)]
+mod cache_tests;
 mod public_urls;
+mod redis_store;
 mod request_limits;
 mod request_writer;
+mod routing_cache;
 mod runtime;
+mod snapshots;
+pub use routing_cache::RoutingKey;
 mod supplier_models;
 mod supplier_transfer;
 pub use supplier_transfer::{SupplierTransferAccount, SupplierTransferProxy};
@@ -145,7 +154,6 @@ pub use virtual_management::{VirtualConfigSpec, validate_virtual_config, virtual
 
 pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
 pub const DEFAULT_ADMIN_PASSWORD: &str = "admin";
-pub const DEFAULT_DB_PATH: &str = "data/codex2api.sqlite";
 
 mod virtual_contracts;
 pub use virtual_contracts::{
@@ -153,3 +161,8 @@ pub use virtual_contracts::{
 };
 
 pub use oauth_authorization::{BrowserAuthorization, CodeRedemption};
+
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
+mod pg_types;

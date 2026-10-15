@@ -20,10 +20,10 @@ fn auth_json_roundtrip_via_tokens_shape() {
 
 #[tokio::test]
 async fn upgrading_stored_user_agents_preserves_identity_and_is_idempotent() {
-    use codex2api_storage::{NewSupplierAccount, Storage};
-    let path =
-        std::env::temp_dir().join(format!("codex-ua-upgrade-{}.sqlite", uuid::Uuid::new_v4()));
-    let storage = Storage::open(&path).await.unwrap();
+    use codex2api_storage::NewSupplierAccount;
+    let directory = codex2api_storage::test_support::tempdir().unwrap();
+    let path = directory.path().join("fixture");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let mut identity =
         AccountIdentity::new("fixture", new_installation_id(), HostRuntime::generate());
     let old_ua =
@@ -71,7 +71,7 @@ async fn upgrading_stored_user_agents_preserves_identity_and_is_idempotent() {
         aligned.http_fingerprint_json
     );
     storage.close().await;
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(
         reopened
             .require_account(&account.id)
@@ -84,14 +84,4 @@ async fn upgrading_stored_user_agents_preserves_identity_and_is_idempotent() {
     drop(reopened);
     drop(store);
     drop(storage);
-    // Windows may release SQLite's worker handle just after pool close returns.
-    for attempt in 0..10 {
-        match std::fs::remove_file(&path) {
-            Ok(()) => break,
-            Err(error) if attempt < 9 && error.raw_os_error() == Some(32) => {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            Err(error) => panic!("remove fixture database: {error}"),
-        }
-    }
 }

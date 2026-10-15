@@ -81,7 +81,7 @@ impl Storage {
         self.jwt_keys[purpose.slot()]
             .get_or_try_init(|| async {
                 let existing: Option<String> = sqlx::query_scalar(
-                    "SELECT private_key FROM jwt_signing_keys WHERE account_type=?",
+                    "SELECT private_key FROM jwt_signing_keys WHERE account_type=$1",
                 )
                 .bind(purpose.account_type())
                 .fetch_optional(self.pool())
@@ -99,12 +99,12 @@ impl Storage {
                         })
                         .await
                         .map_err(|e| StorageError::Jwt(e.to_string()))??;
-                        sqlx::query("INSERT OR IGNORE INTO jwt_signing_keys(account_type,private_key) VALUES(?,?)")
+                        sqlx::query("INSERT INTO jwt_signing_keys(account_type,private_key) VALUES($1,$2) ON CONFLICT DO NOTHING")
                             .bind(purpose.account_type())
                             .bind(generated)
                             .execute(self.pool())
                             .await?;
-                        sqlx::query_scalar("SELECT private_key FROM jwt_signing_keys WHERE account_type=?")
+                        sqlx::query_scalar("SELECT private_key FROM jwt_signing_keys WHERE account_type=$1")
                             .bind(purpose.account_type())
                             .fetch_one(self.pool())
                             .await?

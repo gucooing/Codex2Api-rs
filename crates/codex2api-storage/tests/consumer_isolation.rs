@@ -30,8 +30,8 @@ async fn consumer(storage: &Storage, id: &str, provider: &str, plan: &str) -> Pl
 
 #[tokio::test]
 async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("separation.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("separation-pg"))
         .await
         .unwrap();
     let mut other_plan = storage.virtual_plan("plus").await.unwrap().unwrap();
@@ -82,8 +82,8 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     );
     new.provider_id = "grok".into();
     let supplier = storage.create_account(new).await.unwrap();
-    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'chatgpt',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
-    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES(?,'grok',?)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
+    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES($1,'chatgpt',$2)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
+    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES($1,'grok',$2)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
     storage
         .save_supplier_tag("other-pool", "grok", "Other pool")
         .await
@@ -92,7 +92,7 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         .edit_supplier_tags(&[supplier.id.clone()], &["other-pool".into()], false)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id) VALUES(?,'grok','other-pool') ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id").bind(&b.id).execute(storage.pool()).await.unwrap();
+    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id) VALUES($1,'grok','other-pool') ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id").bind(&b.id).execute(storage.pool()).await.unwrap();
     storage
         .save_virtual_resource(
             &b.id,
@@ -130,8 +130,8 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
 
 #[tokio::test]
 async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("revisions.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("revisions-pg"))
         .await
         .unwrap();
     let account = consumer(&storage, "consumer", "chatgpt", "plus").await;
@@ -221,11 +221,11 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
 
 #[tokio::test]
 async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("supplier-isolation.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("supplier-isolation-pg"))
         .await
         .unwrap();
-    sqlx::query("INSERT OR IGNORE INTO providers(id,name) VALUES('grok','Test')")
+    sqlx::query("INSERT INTO providers(id,name) VALUES('grok','Test') ON CONFLICT DO NOTHING")
         .execute(storage.pool())
         .await
         .unwrap();
@@ -257,7 +257,7 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
             .is_err()
     );
     // A corrupt legacy foreign identity still cannot be selected by ChatGPT login.
-    sqlx::query("UPDATE supplier_accounts SET chatgpt_account_id='official',chatgpt_user_id='official-user' WHERE id=?")
+    sqlx::query("UPDATE supplier_accounts SET chatgpt_account_id='official',chatgpt_user_id='official-user' WHERE id=$1")
         .bind(&supplier.id)
         .execute(storage.pool())
         .await
@@ -307,8 +307,8 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
 
 #[tokio::test]
 async fn consumer_writes_cannot_change_service_policy_or_another_consumers_state() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("permissions.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("permissions-pg"))
         .await
         .unwrap();
     let a = consumer(&storage, "a", "chatgpt", "plus").await;
@@ -369,8 +369,8 @@ async fn consumer_writes_cannot_change_service_policy_or_another_consumers_state
 
 #[tokio::test]
 async fn refresh_credentials_cannot_expand_oauth_scopes_or_revoke_other_providers() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("scopes.sqlite"))
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("scopes-pg"))
         .await
         .unwrap();
     let account = consumer(&storage, "consumer", "chatgpt", "plus").await;
@@ -379,7 +379,7 @@ async fn refresh_credentials_cannot_expand_oauth_scopes_or_revoke_other_provider
         .await
         .unwrap()
         .unwrap();
-    sqlx::query("UPDATE virtual_devices SET scopes='openid profile' WHERE id=?")
+    sqlx::query("UPDATE virtual_devices SET scopes='openid profile' WHERE id=$1")
         .bind(&device)
         .execute(storage.pool())
         .await

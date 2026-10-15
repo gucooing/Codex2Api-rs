@@ -1,7 +1,5 @@
 use super::*;
-use codex2api_storage::{
-    NewSupplierAccount, PlatformAccount, Storage, SupplierScheduling, SupplierTokens,
-};
+use codex2api_storage::{NewSupplierAccount, PlatformAccount, SupplierScheduling, SupplierTokens};
 
 mod account_fixture {
     include!(concat!(
@@ -11,15 +9,25 @@ mod account_fixture {
 }
 use account_fixture::AccountFixture;
 
-async fn fixture() -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleRequest) {
+async fn fixture() -> (
+    codex2api_storage::test_support::TestDirectory,
+    ApiState,
+    VirtualAccess,
+    ScheduleRequest,
+) {
     fixture_for("chatgpt").await
 }
 
 async fn fixture_for(
     provider: &str,
-) -> (tempfile::TempDir, ApiState, VirtualAccess, ScheduleRequest) {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("scheduler.sqlite"))
+) -> (
+    codex2api_storage::test_support::TestDirectory,
+    ApiState,
+    VirtualAccess,
+    ScheduleRequest,
+) {
+    let directory = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(directory.path().join("scheduler-pg"))
         .await
         .unwrap();
     let mut supplier = NewSupplierAccount::pending_identity(
@@ -224,7 +232,11 @@ async fn queued_requests_recheck_pool_and_token_before_using_a_supplier() {
                 .unwrap()
         );
         storage
-            .save_routing_affinity("sticky_session:chatgpt:pool:owner:session", "supplier", 60)
+            .save_routing_affinity(
+                &codex2api_storage::RoutingKey::session("owner", "chatgpt", "pool", "session"),
+                "supplier",
+                60,
+            )
             .await
             .unwrap();
         let occupied = storage
@@ -242,7 +254,7 @@ async fn queued_requests_recheck_pool_and_token_before_using_a_supplier() {
         .await
         .unwrap();
         if revoke_token {
-            sqlx::query("DELETE FROM virtual_access_tokens WHERE token_hash=?")
+            sqlx::query("DELETE FROM virtual_access_tokens WHERE token_hash=$1")
                 .bind(token_hash)
                 .execute(storage.pool())
                 .await

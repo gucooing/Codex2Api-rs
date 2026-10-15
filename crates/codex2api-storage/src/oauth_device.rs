@@ -59,12 +59,12 @@ impl Storage {
         };
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        sqlx::query("DELETE FROM virtual_device_authorizations WHERE expires_at<=?")
+        sqlx::query("DELETE FROM virtual_device_authorizations WHERE expires_at<=$1")
             .bind(now)
             .execute(&mut *tx)
             .await?;
         // Bound anonymous pending state without retaining plaintext user codes.
-        let inserted = sqlx::query("INSERT INTO virtual_device_authorizations(id_hash,user_code_hash,client_id,redirect_uri,code_verifier,code_challenge,created_at,expires_at,provider_id,requested_scopes) SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM virtual_device_authorizations)<10000")
+        let inserted = sqlx::query("INSERT INTO virtual_device_authorizations(id_hash,user_code_hash,client_id,redirect_uri,code_verifier,code_challenge,created_at,expires_at,provider_id,requested_scopes) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10 WHERE (SELECT count(*) FROM virtual_device_authorizations)<10000")
             .bind(hash_token(request.id)).bind(hash_token(request.user_code))
             .bind(request.client_id).bind(request.redirect_uri).bind(request.verifier)
             .bind(request.challenge).bind(now).bind(now+900).bind(provider).bind(scopes).execute(&mut *tx).await?;
@@ -79,7 +79,7 @@ impl Storage {
     ) -> Result<DeviceAuthorizationPoll> {
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        let row: Option<(i64,i64,Option<String>,String,String)> = sqlx::query_as("SELECT expires_at,last_poll_at,authorization_code,code_verifier,code_challenge FROM virtual_device_authorizations WHERE id_hash=? AND user_code_hash=?")
+        let row: Option<(i64,i64,Option<String>,String,String)> = sqlx::query_as("SELECT expires_at,last_poll_at,authorization_code,code_verifier,code_challenge FROM virtual_device_authorizations WHERE id_hash=$1 AND user_code_hash=$2 FOR UPDATE")
             .bind(hash_token(id)).bind(hash_token(user_code)).fetch_optional(&mut *tx).await?;
         let Some((expires, last_poll, code, verifier, challenge)) = row else {
             return Ok(DeviceAuthorizationPoll::Expired);
@@ -90,7 +90,7 @@ impl Storage {
         if now - last_poll < 5 {
             return Ok(DeviceAuthorizationPoll::Pending);
         }
-        sqlx::query("UPDATE virtual_device_authorizations SET last_poll_at=? WHERE id_hash=?")
+        sqlx::query("UPDATE virtual_device_authorizations SET last_poll_at=$1 WHERE id_hash=$2")
             .bind(now)
             .bind(hash_token(id))
             .execute(&mut *tx)
@@ -114,7 +114,8 @@ impl Storage {
         request: DeviceAuthorizationApproval<'_>,
     ) -> Result<bool> {
         let now = chrono::Utc::now().timestamp();
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription_identity(&mut tx, &request.account.id).await?;
         if !crate::users::confirmed_browser_identity(&mut tx, request.id, request.account).await? {
             return Ok(false);
         }
@@ -123,13 +124,13 @@ impl Storage {
         } else {
             "device"
         };
-        let flow: Option<String> = sqlx::query_scalar("DELETE FROM oauth_browser_flows WHERE id=? AND cookie_hash=? AND csrf_hash=? AND expires_at>? AND request_json=? RETURNING id")
+        let flow: Option<String> = sqlx::query_scalar("DELETE FROM oauth_browser_flows WHERE id=$1 AND cookie_hash=$2 AND csrf_hash=$3 AND expires_at>$4 AND request_json=$5 RETURNING id")
             .bind(request.id).bind(hash_token(request.cookie)).bind(hash_token(request.csrf))
             .bind(now).bind(flow_kind).fetch_optional(&mut *tx).await?;
         if flow.is_none() {
             return Ok(false);
         }
-        let row: Option<(String,String,String,i64,Option<String>)> = sqlx::query_as("UPDATE virtual_device_authorizations SET authorization_code=?,virtual_account_id=?,expires_at=min(expires_at,?) WHERE user_code_hash=? AND authorization_code IS NULL AND expires_at>? AND provider_id=? AND EXISTS(SELECT 1 FROM platform_principals WHERE id=? AND password_hash=? AND enabled=1 AND provider_id=?) RETURNING client_id,redirect_uri,code_challenge,created_at,requested_scopes")
+        let row: Option<(String,String,String,i64,Option<String>)> = sqlx::query_as("UPDATE virtual_device_authorizations SET authorization_code=$1,virtual_account_id=$2,expires_at=LEAST(expires_at,$3) WHERE user_code_hash=$4 AND authorization_code IS NULL AND expires_at>$5 AND provider_id=$6 AND EXISTS(SELECT 1 FROM platform_principals WHERE id=$7 AND password_hash=$8 AND enabled=TRUE AND provider_id=$9) RETURNING client_id,redirect_uri,code_challenge,created_at,requested_scopes")
             .bind(request.code).bind(&request.account.id).bind(now+120).bind(hash_token(user_code))
             .bind(now).bind(&request.account.provider_id).bind(&request.account.id).bind(&request.account.password_hash).bind(&request.account.provider_id).fetch_optional(&mut *tx).await?;
         let Some((client, redirect, challenge, created, scopes)) = row else {
@@ -142,7 +143,7 @@ impl Storage {
         {
             return Ok(false);
         }
-        sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO virtual_authorization_codes(code_hash,virtual_account_id,client_id,redirect_uri,code_challenge,expires_at,provider_id,scopes,authenticated_at_ms,requested_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
             .bind(hash_token(request.code)).bind(&request.account.id).bind(client).bind(redirect)
             .bind(challenge).bind(now+120).bind(&request.account.provider_id).bind(scopes).bind(now*1000).bind(created*1000)
             .execute(&mut *tx).await?;
@@ -152,8 +153,8 @@ impl Storage {
 
     pub async fn poll_grok_device(&self, id: &str) -> Result<GrokDevicePoll> {
         let now = chrono::Utc::now().timestamp();
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let row: Option<(i64,i64,i64,Option<String>,String,String)> = sqlx::query_as("SELECT expires_at,last_poll_at,poll_interval,authorization_code,code_verifier,code_challenge FROM virtual_device_authorizations WHERE id_hash=? AND provider_id='grok'")
+        let mut tx = self.pool().begin().await?;
+        let row: Option<(i64,i64,i64,Option<String>,String,String)> = sqlx::query_as("SELECT expires_at,last_poll_at,poll_interval,authorization_code,code_verifier,code_challenge FROM virtual_device_authorizations WHERE id_hash=$1 AND provider_id='grok' FOR UPDATE")
             .bind(hash_token(id)).fetch_optional(&mut *tx).await?;
         let Some((expiry, last, interval, code, verifier, challenge)) = row else {
             return Ok(GrokDevicePoll::Expired);
@@ -162,7 +163,7 @@ impl Storage {
             return Ok(GrokDevicePoll::Expired);
         }
         let fast = now - last < interval;
-        sqlx::query("UPDATE virtual_device_authorizations SET last_poll_at=?,poll_interval=poll_interval+? WHERE id_hash=? AND provider_id='grok'")
+        sqlx::query("UPDATE virtual_device_authorizations SET last_poll_at=$1,poll_interval=poll_interval+$2 WHERE id_hash=$3 AND provider_id='grok'")
             .bind(now).bind(if fast {5} else {0}).bind(hash_token(id)).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(if fast {

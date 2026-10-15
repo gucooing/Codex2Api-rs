@@ -161,9 +161,9 @@ mod tests {
 
     #[tokio::test]
     async fn rs256_tokens_use_persistent_local_keys_and_verify_after_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("jwt.sqlite");
-        let storage = codex2api_storage::Storage::open(&path).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let path = dir.path().join("jwt-pg");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let hmac = storage.oauth_signing_key().await.unwrap();
         let claims = json!({"sub":"local-user","aud":"local-client","exp":2000000000});
         let tokens = sign_tokens(&storage, vec![claims.clone()]).await.unwrap();
@@ -186,7 +186,7 @@ mod tests {
             .unwrap();
         assert!(verifier.verify(b"different payload", &signature).is_err());
         storage.close().await;
-        let reopened = codex2api_storage::Storage::open(&path).await.unwrap();
+        let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
         assert_eq!(reopened.oauth_signing_key().await.unwrap(), hmac);
         assert_eq!(sign_tokens(&reopened, vec![claims]).await.unwrap(), tokens);
     }

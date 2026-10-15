@@ -1,4 +1,4 @@
-//! Account-isolated SQLite snapshots for supplier information.
+//! Account-isolated PostgreSQL snapshots for supplier information.
 use chrono::{TimeDelta, Utc};
 use codex2api_storage::{QuotaSnapshot, Storage, SupplierInfoSection};
 use serde_json::{Value, json};
@@ -71,7 +71,7 @@ pub(crate) async fn summary(
 
 pub(crate) struct SupplierCache {
     storage: Storage,
-    // Only request locks live in memory; every snapshot is read from SQLite.
+    // Only request locks live in memory; every snapshot is read from PostgreSQL.
     refresh_locks: Mutex<HashMap<(String, SupplierInfoSection), Arc<Mutex<()>>>>,
 }
 
@@ -121,10 +121,7 @@ impl SupplierCache {
                 return Ok(snapshot);
             }
         }
-        let snapshot = QuotaSnapshot {
-            value: fetch().await?,
-            observed_at: Utc::now(),
-        };
+        let snapshot = QuotaSnapshot::new(fetch().await?, Utc::now());
         self.storage
             .store_supplier_info(account_id, section, &snapshot)
             .await
@@ -161,9 +158,15 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    async fn setup() -> (tempfile::TempDir, Storage, SupplierCache, String, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("quota.sqlite"))
+    async fn setup() -> (
+        codex2api_storage::test_support::TestDirectory,
+        Storage,
+        SupplierCache,
+        String,
+        String,
+    ) {
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("quota-pg"))
             .await
             .unwrap();
         let accounts = SupplierAccountStore::open(storage.clone());
@@ -174,7 +177,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshots_survive_restart_and_are_always_read_from_sqlite() {
+    async fn snapshots_survive_restart_and_are_always_read_from_postgresql() {
         let (_dir, storage, cache, a, _) = setup().await;
         let first = cache
             .get_or_fetch(&a, SupplierInfoSection::Quota, false, || async {
@@ -186,25 +189,22 @@ mod tests {
             storage.get_account_quota(&a).await.unwrap(),
             Some(first.clone())
         );
-        let path = storage.db_path().to_path_buf();
+        let reopened = storage.reopen().await.unwrap();
         storage.close().await;
         drop(cache);
         drop(storage);
 
-        let storage = Storage::open(path).await.unwrap();
+        let storage = reopened;
         let cache = SupplierCache::new(storage.clone());
         let cached = cache
             .get_or_fetch(&a, SupplierInfoSection::Quota, false, || async {
-                panic!("restart must reuse SQLite snapshot")
+                panic!("restart must reuse PostgreSQL snapshot")
             })
             .await
             .unwrap();
         assert_eq!(cached, first);
 
-        let updated = QuotaSnapshot {
-            value: json!(43),
-            observed_at: Utc::now(),
-        };
+        let updated = QuotaSnapshot::new(json!(43), Utc::now());
         storage.store_account_quota(&a, &updated).await.unwrap();
         let cached = cache
             .get_or_fetch(&a, SupplierInfoSection::Quota, false, || async {
@@ -227,7 +227,8 @@ mod tests {
             .get_or_fetch(&a, SupplierInfoSection::Quota, false, fetch)
             .await
             .unwrap();
-        first.observed_at = Utc::now() - TimeDelta::minutes(9);
+        first.observed_at =
+            chrono::SubsecRound::trunc_subsecs(Utc::now(), 6) - TimeDelta::minutes(9);
         storage.store_account_quota(&a, &first).await.unwrap();
         assert_eq!(
             cache
@@ -242,7 +243,8 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(other.value, first.value);
-        first.observed_at = Utc::now() - TimeDelta::minutes(10);
+        first.observed_at =
+            chrono::SubsecRound::trunc_subsecs(Utc::now(), 6) - TimeDelta::minutes(10);
         storage.store_account_quota(&a, &first).await.unwrap();
         assert_eq!(
             storage.get_account_quota(&a).await.unwrap(),
@@ -262,10 +264,7 @@ mod tests {
     #[tokio::test]
     async fn manual_refresh_persists_new_snapshot_and_failure_preserves_it() {
         let (_dir, storage, cache, a, _) = setup().await;
-        let first = QuotaSnapshot {
-            value: json!(42),
-            observed_at: Utc::now() - TimeDelta::minutes(9),
-        };
+        let first = QuotaSnapshot::new(json!(42), Utc::now() - TimeDelta::minutes(9));
         storage.store_account_quota(&a, &first).await.unwrap();
         let manual = cache
             .get_or_fetch(&a, SupplierInfoSection::Quota, true, || async {

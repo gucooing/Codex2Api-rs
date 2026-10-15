@@ -63,21 +63,21 @@ pub struct UsageStatistics {
 // some values are known their subtotal is returned with explicit missing counts.
 // Cache rate divides those reported subtotals; missing rows do not hide the ratio.
 pub(crate) const TOTALS: &str = "COUNT(*) AS request_count,
-    COALESCE(SUM(status IN ('completed','client_stopped')),0) AS completed_requests,
-    COALESCE(SUM(status IN ('failed','incomplete','interrupted')),0) AS failed_requests,
-    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(input_tokens) END AS input_tokens,
-    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(output_tokens) END AS output_tokens,
+    COALESCE(SUM((status IN ('completed','client_stopped'))::int)::bigint,0) AS completed_requests,
+    COALESCE(SUM((status IN ('failed','incomplete','interrupted'))::int)::bigint,0) AS failed_requests,
+    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(input_tokens)::bigint END AS input_tokens,
+    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(output_tokens)::bigint END AS output_tokens,
     CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(CASE
         WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-        THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) END AS total_tokens,
-    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cached_tokens) END AS cached_tokens,
-    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cache_write_tokens) END AS cache_write_tokens,
-    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(reasoning_tokens) END AS reasoning_tokens,
-    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cost_nano_usd) END AS cost_nano_usd,
-    CASE WHEN SUM(input_tokens)>0 THEN 100.0*SUM(cached_tokens)/SUM(input_tokens) END AS cache_rate,
-    COALESCE(SUM(input_tokens IS NULL OR output_tokens IS NULL),0) AS missing_token_requests,
-    COALESCE(SUM(input_tokens IS NULL OR (input_tokens>0 AND cached_tokens IS NULL)),0) AS missing_cache_requests,
-    COALESCE(SUM(cost_nano_usd IS NULL),0) AS unpriced_requests";
+        THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END)::bigint END AS total_tokens,
+    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cached_tokens)::bigint END AS cached_tokens,
+    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cache_write_tokens)::bigint END AS cache_write_tokens,
+    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(reasoning_tokens)::bigint END AS reasoning_tokens,
+    CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(cost_nano_usd)::bigint END AS cost_nano_usd,
+    CASE WHEN SUM(input_tokens)::bigint>0 THEN 100.0::double precision*SUM(cached_tokens)::bigint/SUM(input_tokens)::bigint END AS cache_rate,
+    COALESCE(SUM((input_tokens IS NULL OR output_tokens IS NULL)::int)::bigint,0) AS missing_token_requests,
+    COALESCE(SUM((input_tokens IS NULL OR (input_tokens>0 AND cached_tokens IS NULL))::int)::bigint,0) AS missing_cache_requests,
+    COALESCE(SUM((cost_nano_usd IS NULL)::int)::bigint,0) AS unpriced_requests";
 
 impl Storage {
     pub async fn usage_statistics(
@@ -105,8 +105,12 @@ impl Storage {
             i64::from(tz_offset) * 60_000
         );
         let key = match group_by {
-            UsageGroup::Hour => format!("strftime('%Y-%m-%dT%H:00', {local_time}, 'unixepoch')"),
-            UsageGroup::Day => format!("strftime('%Y-%m-%d', {local_time}, 'unixepoch')"),
+            UsageGroup::Hour => format!(
+                "to_char(to_timestamp(({local_time})::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:00')"
+            ),
+            UsageGroup::Day => format!(
+                "to_char(to_timestamp(({local_time})::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD')"
+            ),
             UsageGroup::Model => "COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'')".into(),
             UsageGroup::Subject => "subject_id".into(),
         };
@@ -116,7 +120,10 @@ impl Storage {
             }
             _ => &key,
         };
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let mut summary = QueryBuilder::new(format!("SELECT {TOTALS} FROM usage_records"));
         conditions(&mut summary, filter);
         let summary = summary
@@ -137,8 +144,8 @@ impl Storage {
             "SELECT {key} AS bucket,
              {model_key} AS model,
              SUM(CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-                 THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) AS total_tokens,
-             SUM(input_tokens IS NULL OR output_tokens IS NULL) AS missing_token_requests
+                 THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END)::bigint AS total_tokens,
+             SUM((input_tokens IS NULL OR output_tokens IS NULL)::int)::bigint AS missing_token_requests
              FROM usage_records"
         ));
         conditions(&mut model_usage, filter);

@@ -34,6 +34,9 @@ impl Observer {
     }
 }
 impl crate::usage::ProtocolObserver for Observer {
+    fn response_affinity(&self) -> bool {
+        false
+    }
     fn observe(&mut self, bytes: &[u8]) -> Vec<Value> {
         if self.finished {
             return vec![];

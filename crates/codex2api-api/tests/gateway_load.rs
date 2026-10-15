@@ -1,4 +1,4 @@
-//! In-process acceptance: real routers, policies, scheduling, encoding and SQLite.
+//! In-process acceptance: real routers, policies, scheduling, encoding and PostgreSQL.
 //! No sockets: only upstream network transmission is replaced with a memory transport.
 #[path = "../../codex2api-storage/test-support/accounts.rs"]
 mod account_fixture;
@@ -7,7 +7,7 @@ use axum::{
     body::{Body, Bytes},
     http::Request,
 };
-use codex2api_storage::{NewSupplierAccount, PlatformAccount, Storage};
+use codex2api_storage::{NewSupplierAccount, PlatformAccount};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::{
@@ -198,8 +198,10 @@ async fn thousand_suppliers_three_thousand_requests() {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(3000);
     let supplier_count = 1000;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("load.sqlite")).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("load-pg"))
+        .await
+        .unwrap();
     let mut free = storage.plan_fixture(provider).await.unwrap();
     free.config = json!({"rpm_limit":0,"concurrency_limit":0,"model_access":"all","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"1000"}]});
     storage
@@ -336,7 +338,7 @@ async fn thousand_suppliers_three_thousand_requests() {
             .len(),
         supplier_count
     );
-    storage.invalidate_runtime_cache();
+    storage.invalidate_cached_snapshots();
 
     let current = Arc::new(Mutex::new(Arc::new(Round::default())));
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
@@ -446,7 +448,7 @@ async fn thousand_suppliers_three_thousand_requests() {
         .await
         .is_ok();
         let (usage_records, completed_records): (i64, i64) = sqlx::query_as(
-            "SELECT COUNT(*),COALESCE(SUM(status='completed'),0) FROM usage_records",
+            "SELECT COUNT(*),COALESCE(SUM((status='completed')::int)::bigint,0) FROM usage_records",
         )
         .fetch_one(storage.pool())
         .await
@@ -456,7 +458,7 @@ async fn thousand_suppliers_three_thousand_requests() {
             settled && usage_records == expected_records && completed_records == expected_records;
         let (quota_snapshots, quota_complete) = if provider == "chatgpt" {
             let (snapshots, used): (i64, i64) = sqlx::query_as(
-                "SELECT COUNT(*),(SELECT COUNT(DISTINCT account_id) FROM usage_records WHERE requested_at_ms>=?) FROM account_quota_cache WHERE observed_at>=? AND json_extract(response_json,'$.rate_limit.primary_window.used_percent')=13 AND json_extract(response_json,'$.rate_limit.secondary_window.used_percent')=21",
+                "SELECT COUNT(*),(SELECT COUNT(DISTINCT account_id) FROM usage_records WHERE requested_at_ms>=$1) FROM account_quota_cache WHERE observed_at>=$2 AND (response_json::jsonb #>> '{rate_limit,primary_window,used_percent}')::numeric=13 AND (response_json::jsonb #>> '{rate_limit,secondary_window,used_percent}')::numeric=21",
             ).bind(phase_started_at.timestamp_millis()).bind(phase_started_at).fetch_one(storage.pool()).await.unwrap();
             (Some(snapshots), snapshots == used)
         } else {

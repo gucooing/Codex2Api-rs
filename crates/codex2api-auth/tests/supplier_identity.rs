@@ -4,7 +4,6 @@ use codex2api_accounts::{
 };
 use codex2api_auth::persist::{bind_completed_login, chatgpt_auth, pending_from_account};
 use codex2api_auth::{AuthError, AuthService, OAuthConfig, parse_chatgpt_jwt_claims};
-use codex2api_storage::Storage;
 use serde_json::json;
 
 fn identity() -> AccountIdentity {
@@ -35,9 +34,9 @@ fn credentials(user: Option<&str>, workspace: &str, plan: &str, marker: &str) ->
 
 #[tokio::test]
 async fn team_members_and_personal_subscriptions_keep_separate_credentials_and_fingerprints() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("owners.sqlite");
-    let storage = Storage::open(&path).await.unwrap();
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let path = dir.path().join("owners-pg");
+    let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let accounts = SupplierAccountStore::open(storage.clone());
     let mut originals = Vec::new();
     for (user, workspace, plan) in [
@@ -100,7 +99,7 @@ async fn team_members_and_personal_subscriptions_keep_separate_credentials_and_f
     assert!(!std::sync::Arc::ptr_eq(&a, &b));
     assert!(!std::sync::Arc::ptr_eq(&a, &personal));
     storage.close().await;
-    let reopened = Storage::open(&path).await.unwrap();
+    let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     for (original, _) in &originals {
         let saved = reopened.require_account(&original.id).await.unwrap();
         assert_eq!(saved.installation_id, original.installation_id);
@@ -121,8 +120,8 @@ async fn team_members_and_personal_subscriptions_keep_separate_credentials_and_f
 
 #[tokio::test]
 async fn reauthorization_rejects_a_different_member_or_workspace_before_saving_tokens() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("relogin.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("relogin-pg"))
         .await
         .unwrap();
     let accounts = SupplierAccountStore::open(storage.clone());
@@ -172,8 +171,8 @@ async fn reauthorization_rejects_a_different_member_or_workspace_before_saving_t
 async fn refresh_rejects_another_team_member_without_overwriting_credentials() {
     use axum::{Json, Router, routing::post};
     use std::sync::{Arc, Mutex};
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("refresh.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("refresh-pg"))
         .await
         .unwrap();
     let accounts = SupplierAccountStore::open(storage.clone());

@@ -4,7 +4,7 @@ use crate::{PlatformAccount, Result, Storage, StorageError, User, VirtualPlan};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{FromRow, PgConnection};
 
 const DAY_MS: i64 = 86_400_000;
 const QUOTE_TTL_MS: i64 = 300_000;
@@ -189,11 +189,11 @@ fn higher_daily_price(new_price: i64, new_days: i64, old_price: i64, old_days: i
     i128::from(new_price) * i128::from(old_days) > i128::from(old_price) * i128::from(new_days)
 }
 async fn price_periods(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     subscription: &str,
     now: i64,
 ) -> Result<Vec<PricePeriod>> {
-    Ok(sqlx::query_as("SELECT starts_at_ms,ends_at_ms,unit_price_cents,duration_days,credit_value_cents,credit_duration_ms FROM subscription_pricing_periods WHERE subscription_id=? AND superseded_at_ms IS NULL AND ends_at_ms>? ORDER BY starts_at_ms,id")
+    Ok(sqlx::query_as("SELECT starts_at_ms,ends_at_ms,unit_price_cents,duration_days,credit_value_cents,credit_duration_ms FROM subscription_pricing_periods WHERE subscription_id=$1 AND superseded_at_ms IS NULL AND ends_at_ms>$2 ORDER BY starts_at_ms,id")
         .bind(subscription).bind(now).fetch_all(connection).await?)
 }
 fn remaining_credit(periods: &[PricePeriod], now: i64, end: i64) -> Result<(i64, Vec<Value>)> {
@@ -235,12 +235,12 @@ fn remaining_credit(periods: &[PricePeriod], now: i64, end: i64) -> Result<(i64,
 }
 
 async fn find_order(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     owner: Option<&str>,
     id: &str,
 ) -> Result<Option<SubscriptionOrder>> {
     Ok(sqlx::query_as(&format!(
-        "{SELECT_ORDER} WHERE o.id=? AND (? IS NULL OR o.user_id=?)"
+        "{SELECT_ORDER} WHERE o.id=$1 AND ($2 IS NULL OR o.user_id=$3)"
     ))
     .bind(id)
     .bind(owner)
@@ -250,7 +250,7 @@ async fn find_order(
 }
 
 async fn quote_on(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     owner: &str,
     input: &CheckoutInput,
     now: i64,
@@ -262,12 +262,13 @@ async fn quote_on(
             "所选支付方式不可用，请选择钱包余额",
         ));
     }
-    let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=? AND revision=?")
-        .bind(&input.plan_id)
-        .bind(input.plan_revision)
-        .fetch_optional(&mut *connection)
-        .await?
-        .ok_or_else(|| checkout_error("plan_changed", "套餐信息已变化，请重新预览"))?;
+    let plan: VirtualPlan =
+        sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1 AND revision=$2")
+            .bind(&input.plan_id)
+            .bind(input.plan_revision)
+            .fetch_optional(&mut *connection)
+            .await?
+            .ok_or_else(|| checkout_error("plan_changed", "套餐信息已变化，请重新预览"))?;
     if !plan.allow_purchase {
         return Err(checkout_error("plan_not_for_sale", "该套餐已关闭购买"));
     }
@@ -337,7 +338,7 @@ async fn quote_on(
     rfc3339(end)?;
     let subtotal = gross.saturating_sub(credit).max(0);
     let previous_name: Option<String> =
-        sqlx::query_scalar("SELECT name FROM virtual_plans WHERE id=?")
+        sqlx::query_scalar("SELECT name FROM virtual_plans WHERE id=$1")
             .bind(current.as_ref().map(|(a, _)| &a.plan_id))
             .fetch_optional(&mut *connection)
             .await?;
@@ -416,7 +417,7 @@ impl Storage {
         self.orders_page(Some(user), filter, false).await
     }
     pub async fn order_plan_options(&self, owner: Option<&str>) -> Result<Vec<Value>> {
-        let rows: Vec<(String,String,String)> = sqlx::query_as("SELECT plan_id,provider_id,plan_name FROM (SELECT plan_id,provider_id,plan_name,ROW_NUMBER() OVER(PARTITION BY plan_id ORDER BY created_at_ms DESC,id DESC) AS rank FROM subscription_orders WHERE (? IS NULL OR user_id=?)) WHERE rank=1 ORDER BY plan_name,plan_id")
+        let rows: Vec<(String,String,String)> = sqlx::query_as("SELECT plan_id,provider_id,plan_name FROM (SELECT plan_id,provider_id,plan_name,ROW_NUMBER() OVER(PARTITION BY plan_id ORDER BY created_at_ms DESC,id DESC) AS rank FROM subscription_orders WHERE ($1 IS NULL OR user_id=$2)) WHERE rank=1 ORDER BY plan_name,plan_id")
             .bind(owner).bind(owner).fetch_all(self.pool()).await?;
         Ok(rows
             .into_iter()
@@ -443,11 +444,11 @@ impl Storage {
             .ok_or_else(|| invalid("订单页码超出范围"))?;
         let now = Utc::now().timestamp_millis();
         let search = filter.search.trim();
-        let condition = " WHERE (? IS NULL OR o.user_id=?) AND (?='' OR o.plan_id=?) AND (?='' OR CASE WHEN o.status='pending' AND o.quote_expires_at_ms<=? THEN 'expired' ELSE o.status END=?) AND instr(lower(o.id),lower(?))>0";
+        let condition = " WHERE ($1 IS NULL OR o.user_id=$2) AND ($3='' OR o.plan_id=$4) AND ($5='' OR CASE WHEN o.status='pending' AND o.quote_expires_at_ms<=$6 THEN 'expired' ELSE o.status END=$7) AND strpos(lower(o.id),lower($8))>0";
         let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM subscription_orders o JOIN regular_users u ON u.id=o.user_id{condition}"))
             .bind(owner).bind(owner).bind(&filter.plan_id).bind(&filter.plan_id).bind(&filter.status).bind(now).bind(&filter.status).bind(search).fetch_one(self.pool()).await?;
         let orders: Vec<SubscriptionOrder> = sqlx::query_as(&format!(
-            "{SELECT_ORDER}{condition} ORDER BY o.created_at_ms DESC,o.id DESC LIMIT ? OFFSET ?"
+            "{SELECT_ORDER}{condition} ORDER BY o.created_at_ms DESC,o.id DESC LIMIT $9 OFFSET $10"
         ))
         .bind(owner)
         .bind(owner)
@@ -469,13 +470,17 @@ impl Storage {
     }
     /// Read-only business preview: no order, reservation, entitlement or wallet write.
     pub async fn checkout_preview(&self, owner: &str, input: CheckoutInput) -> Result<Value> {
-        let mut tx = self.pool().begin().await?;
-        let balance: i64 =
-            sqlx::query_scalar("SELECT wallet_cents FROM regular_users WHERE id=? AND enabled=1")
-                .bind(owner)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(StorageError::InvalidCredentials)?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
+        let balance: i64 = sqlx::query_scalar(
+            "SELECT wallet_cents FROM regular_users WHERE id=$1 AND enabled=TRUE",
+        )
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StorageError::InvalidCredentials)?;
         let now = Utc::now().timestamp_millis();
         let quote = quote_on(&mut tx, owner, &input, now, now).await?;
         tx.commit().await?;
@@ -521,9 +526,24 @@ impl Storage {
             .as_str()
             .ok_or_else(|| invalid("预览标识无效"))?;
         let signature = crate::hash_token(input.preview_token);
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_user(&mut tx, input.user_id).await?;
+        sqlx::query("SELECT id FROM virtual_plans WHERE id=$1 FOR SHARE")
+            .bind(&selection.plan_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT id FROM coupons WHERE lower(code)=lower($1) FOR UPDATE")
+            .bind(&selection.coupon_code)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(id) = selection.subscription_id.as_deref() {
+            sqlx::query("SELECT id FROM platform_accounts WHERE id=$1 FOR SHARE")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         let enabled: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM regular_users WHERE id=? AND enabled=1)",
+            "SELECT EXISTS(SELECT 1 FROM regular_users WHERE id=$1 AND enabled=TRUE)",
         )
         .bind(input.user_id)
         .fetch_one(&mut *tx)
@@ -532,7 +552,7 @@ impl Storage {
             return Err(StorageError::InvalidCredentials);
         }
         let previous: Option<(String, String)> = sqlx::query_as(
-            "SELECT id,request_signature FROM subscription_orders WHERE user_id=? AND request_id=?",
+            "SELECT id,request_signature FROM subscription_orders WHERE user_id=$1 AND request_id=$2",
         )
         .bind(input.user_id)
         .bind(request_id)
@@ -558,7 +578,7 @@ impl Storage {
             ));
         }
         let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO subscription_orders(id,user_id,request_id,request_signature,provider_id,plan_id,plan_name,plan_revision,kind,subscription_id,subscription_revision,previous_plan_id,previous_plan_name,unit_price_cents,duration_days,period_start_ms,period_end_ms,gross_cents,credit_cents,subtotal_cents,pricing_json,created_at_ms,quote_expires_at_ms,discount_cents,coupon_id,coupon_code,payment_method) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO subscription_orders(id,user_id,request_id,request_signature,provider_id,plan_id,plan_name,plan_revision,kind,subscription_id,subscription_revision,previous_plan_id,previous_plan_name,unit_price_cents,duration_days,period_start_ms,period_end_ms,gross_cents,credit_cents,subtotal_cents,pricing_json,created_at_ms,quote_expires_at_ms,discount_cents,coupon_id,coupon_code,payment_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)")
             .bind(&id).bind(input.user_id).bind(request_id).bind(signature).bind(&quote.provider_id).bind(&quote.input.plan_id).bind(&quote.plan_name).bind(quote.input.plan_revision).bind(&quote.kind)
             .bind(&quote.subscription_id).bind(quote.input.subscription_revision).bind(&quote.previous_plan_id).bind(&quote.previous_plan_name)
             .bind(quote.unit_price_cents).bind(quote.duration_days).bind(quote.period_start_ms).bind(quote.period_end_ms).bind(quote.gross_cents).bind(quote.credit_cents).bind(quote.gross_cents.saturating_sub(quote.credit_cents).max(0))
@@ -570,8 +590,14 @@ impl Storage {
         Ok(order)
     }
     pub async fn pay_subscription_order(&self, owner: &str, id: &str) -> Result<SubscriptionOrder> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let user: User = sqlx::query_as("SELECT * FROM regular_users WHERE id=? AND enabled=1")
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_user(&mut tx, owner).await?;
+        sqlx::query("SELECT id FROM subscription_orders WHERE id=$1 AND user_id=$2 FOR UPDATE")
+            .bind(id)
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+        let user: User = sqlx::query_as("SELECT * FROM regular_users WHERE id=$1 AND enabled=TRUE")
             .bind(owner)
             .fetch_optional(&mut *tx)
             .await?
@@ -592,10 +618,14 @@ impl Storage {
                 "订单已过期，请重新预览并确认订单",
             ));
         }
-        let plan: Option<VirtualPlan> = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")
-            .bind(&order.plan_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        let plan: Option<VirtualPlan> =
+            sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1 FOR SHARE")
+                .bind(&order.plan_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some(id) = order.subscription_id.as_deref() {
+            crate::storage::lock_subscription(&mut tx, id).await?;
+        }
         let current = crate::user_subscriptions::subscription_account(
             &mut tx,
             owner,
@@ -644,13 +674,13 @@ impl Storage {
             None
         };
         if let Some((code, message)) = failure {
-            sqlx::query("UPDATE subscription_orders SET status='cancelled',cancelled_at_ms=?,cancel_reason=? WHERE id=? AND status='pending'")
+            sqlx::query("UPDATE subscription_orders SET status='cancelled',cancelled_at_ms=$1,cancel_reason=$2 WHERE id=$3 AND status='pending'")
                 .bind(now).bind(message).bind(id).execute(&mut *tx).await?;
             tx.commit().await?;
             return Err(checkout_error(code, message));
         }
         let plan = plan.ok_or_else(|| checkout_error("plan_not_for_sale", "套餐不存在"))?;
-        let balance:i64=sqlx::query_scalar("UPDATE users SET wallet_cents=wallet_cents-? WHERE id=? AND wallet_cents-?>=COALESCE((SELECT pending_nano_usd/10000000+(pending_nano_usd%10000000!=0) FROM usage_wallet_state WHERE user_id=users.id),0) RETURNING wallet_cents")
+        let balance:i64=sqlx::query_scalar("UPDATE users SET wallet_cents=wallet_cents-$1 WHERE id=$2 AND wallet_cents-$3>=COALESCE((SELECT pending_nano_usd/10000000+((pending_nano_usd%10000000!=0)::int) FROM usage_wallet_state WHERE user_id=users.id),0) RETURNING wallet_cents")
             .bind(order.amount_cents).bind(owner).bind(order.amount_cents).fetch_optional(&mut *tx).await?.ok_or_else(||checkout_error("insufficient_balance", "钱包余额不足，订单保留待支付状态"))?;
         let (start, end) = if order.kind == "purchase" {
             (
@@ -702,17 +732,19 @@ impl Storage {
             )),
         )
         .await?;
-        sqlx::query("INSERT INTO wallet_entries(id,user_id,request_id,signature,plan_id,plan_revision,plan_name,provider_id,amount_cents,balance_cents,duration_days,expires_at,created_at,order_id,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'order_payment')")
+        sqlx::query("INSERT INTO wallet_entries(id,user_id,request_id,signature,plan_id,plan_revision,plan_name,provider_id,amount_cents,balance_cents,duration_days,expires_at,created_at,order_id,kind) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'order_payment')")
             .bind(uuid::Uuid::new_v4().to_string()).bind(owner).bind(format!("order:{}",order.id)).bind(&order.request_signature)
             .bind(&order.plan_id).bind(order.plan_revision).bind(&order.plan_name).bind(&order.provider_id).bind(-order.amount_cents).bind(balance)
             .bind(order.duration_days).bind(&expires).bind(rfc3339(now)?).bind(&order.id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE subscription_orders SET status='paid',paid_at_ms=?,balance_cents=?,period_start_ms=?,period_end_ms=?,subscription_id=COALESCE(subscription_id,?) WHERE id=? AND status='pending'")
+        sqlx::query("UPDATE subscription_orders SET status='paid',paid_at_ms=$1,balance_cents=$2,period_start_ms=$3,period_end_ms=$4,subscription_id=COALESCE(subscription_id,$5) WHERE id=$6 AND status='pending'")
             .bind(now).bind(balance).bind(start).bind(end).bind(&subscription).bind(id).execute(&mut *tx).await?;
         let paid = find_order(&mut tx, Some(owner), id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(id.into()))?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(paid)
     }
     pub async fn cancel_subscription_order(
@@ -720,7 +752,11 @@ impl Storage {
         owner: Option<&str>,
         id: &str,
     ) -> Result<SubscriptionOrder> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        sqlx::query("SELECT id FROM subscription_orders WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         let order = find_order(&mut tx, owner, id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(id.into()))?;
@@ -728,7 +764,7 @@ impl Storage {
             return Err(invalid("已支付订单不能取消"));
         }
         if order.status == "pending" && order.quote_expires_at_ms > Utc::now().timestamp_millis() {
-            sqlx::query("UPDATE subscription_orders SET status='cancelled',cancelled_at_ms=?,cancel_reason=? WHERE id=?")
+            sqlx::query("UPDATE subscription_orders SET status='cancelled',cancelled_at_ms=$1,cancel_reason=$2 WHERE id=$3")
                 .bind(Utc::now().timestamp_millis()).bind(if owner.is_some(){"用户取消"}else{"管理员取消"}).bind(id).execute(&mut *tx).await?;
         }
         let result = find_order(&mut tx, owner, id)
@@ -739,14 +775,14 @@ impl Storage {
     }
 }
 
-async fn supersede(connection: &mut SqliteConnection, id: &str, now: i64) -> Result<()> {
-    sqlx::query("UPDATE subscription_pricing_periods SET superseded_at_ms=? WHERE subscription_id=? AND superseded_at_ms IS NULL")
+async fn supersede(connection: &mut PgConnection, id: &str, now: i64) -> Result<()> {
+    sqlx::query("UPDATE subscription_pricing_periods SET superseded_at_ms=$1 WHERE subscription_id=$2 AND superseded_at_ms IS NULL")
         .bind(now).bind(id).execute(connection).await?;
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
 async fn insert_period(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     id: &str,
     plan: &VirtualPlan,
     start: i64,
@@ -761,13 +797,13 @@ async fn insert_period(
     }
     let value = credit.map(|c| c.0).or(plan.sale_price_cents()?);
     let duration = credit.map_or(plan.duration_days()? * DAY_MS, |c| c.1);
-    sqlx::query("INSERT INTO subscription_pricing_periods(user_id,id,subscription_id,plan_id,starts_at_ms,ends_at_ms,unit_price_cents,duration_days,source,order_id,created_at_ms,credit_value_cents,credit_duration_ms) VALUES((SELECT user_id FROM platform_accounts WHERE id=?),?,?,?,?,?,?,?,?,?,?,?,?)")
+    sqlx::query("INSERT INTO subscription_pricing_periods(user_id,id,subscription_id,plan_id,starts_at_ms,ends_at_ms,unit_price_cents,duration_days,source,order_id,created_at_ms,credit_value_cents,credit_duration_ms) VALUES((SELECT user_id FROM platform_accounts WHERE id=$1),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
         .bind(id).bind(uuid::Uuid::new_v4().to_string()).bind(id).bind(&plan.id).bind(start).bind(end).bind(plan.sale_price_cents()?).bind(plan.duration_days()?).bind(source).bind(order).bind(now).bind(value).bind(duration).execute(connection).await?;
     Ok(())
 }
 
 pub(crate) async fn record_admin_pricing(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     id: &str,
     plan: &VirtualPlan,
     previous: Option<&PlatformAccount>,
@@ -794,8 +830,8 @@ pub(crate) async fn record_admin_pricing(
             return insert_period(connection, id, plan, old_end, end, "admin", None, now, None)
                 .await;
         }
-        sqlx::query("UPDATE subscription_pricing_periods SET superseded_at_ms=? WHERE subscription_id=? AND superseded_at_ms IS NULL AND starts_at_ms>=?").bind(now).bind(id).bind(end).execute(&mut *connection).await?;
-        sqlx::query("UPDATE subscription_pricing_periods SET ends_at_ms=? WHERE subscription_id=? AND superseded_at_ms IS NULL AND ends_at_ms>?").bind(end).bind(id).bind(end).execute(connection).await?;
+        sqlx::query("UPDATE subscription_pricing_periods SET superseded_at_ms=$1 WHERE subscription_id=$2 AND superseded_at_ms IS NULL AND starts_at_ms>=$3").bind(now).bind(id).bind(end).execute(&mut *connection).await?;
+        sqlx::query("UPDATE subscription_pricing_periods SET ends_at_ms=$1 WHERE subscription_id=$2 AND superseded_at_ms IS NULL AND ends_at_ms>$3").bind(end).bind(id).bind(end).execute(connection).await?;
         return Ok(());
     }
     supersede(connection, id, now).await?;

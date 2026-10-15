@@ -31,10 +31,12 @@ impl Storage {
             return Ok(serde_json::from_str(&raw)?);
         }
         let default = serde_json::to_string(&DesktopSupportSettings::default())?;
-        sqlx::query("INSERT OR IGNORE INTO meta(key,value) VALUES('desktop_support',?)")
-            .bind(default)
-            .execute(self.pool())
-            .await?;
+        sqlx::query(
+            "INSERT INTO meta(key,value) VALUES('desktop_support',$1) ON CONFLICT DO NOTHING",
+        )
+        .bind(default)
+        .execute(self.pool())
+        .await?;
         let raw: String = sqlx::query_scalar("SELECT value FROM meta WHERE key='desktop_support'")
             .fetch_one(self.pool())
             .await?;
@@ -44,12 +46,12 @@ impl Storage {
         &self,
         value: &DesktopSupportSettings,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO meta(key,value) VALUES('desktop_support',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(value)?).execute(self.pool()).await?;
+        sqlx::query("INSERT INTO meta(key,value) VALUES('desktop_support',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(serde_json::to_string(value)?).execute(self.pool()).await?;
         Ok(())
     }
     pub async fn desktop_resource(&self, path: &str) -> Result<Option<DesktopResource>> {
         let row: Option<(Vec<u8>, String, i64)> = sqlx::query_as(
-            "SELECT content,headers_json,fetched_at_ms FROM desktop_public_resources WHERE path=?",
+            "SELECT content,headers_json,fetched_at_ms FROM desktop_public_resources WHERE path=$1",
         )
         .bind(path)
         .fetch_optional(self.pool())
@@ -69,7 +71,7 @@ impl Storage {
         content: &[u8],
         headers: &Value,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO desktop_public_resources(path,content,headers_json,fetched_at_ms) VALUES(?,?,?,?) ON CONFLICT(path) DO UPDATE SET content=excluded.content,headers_json=excluded.headers_json,fetched_at_ms=excluded.fetched_at_ms")
+        sqlx::query("INSERT INTO desktop_public_resources(path,content,headers_json,fetched_at_ms) VALUES($1,$2,$3,$4) ON CONFLICT(path) DO UPDATE SET content=excluded.content,headers_json=excluded.headers_json,fetched_at_ms=excluded.fetched_at_ms")
             .bind(path).bind(content).bind(headers.to_string()).bind(chrono::Utc::now().timestamp_millis()).execute(self.pool()).await?;
         Ok(())
     }

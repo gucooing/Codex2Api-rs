@@ -3,7 +3,7 @@ use crate::{PlatformAccount, Result, Storage, StorageError, User, VirtualPlan};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::json;
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{FromRow, PgConnection};
 
 #[derive(Clone, FromRow, Serialize)]
 pub struct UserSubscription {
@@ -114,12 +114,12 @@ impl Storage {
         if user.is_some_and(|id| id.len() > 128) || plan.is_some_and(|id| id.len() > 128) {
             return Err(StorageError::InvalidAdminUpdate("订阅筛选条件无效"));
         }
-        Ok(sqlx::query_as(&format!("{SUBSCRIPTIONS} WHERE (? IS NULL OR v.user_id=?) AND (? IS NULL OR v.plan_id=?) AND (? OR v.subscription_expires_at IS NULL OR unixepoch(v.subscription_expires_at)>?) ORDER BY v.created_at DESC,v.user_id,v.provider_id"))
+        Ok(sqlx::query_as(&format!("{SUBSCRIPTIONS} WHERE ($1 IS NULL OR v.user_id=$2) AND ($3 IS NULL OR v.plan_id=$4) AND ($5 OR v.subscription_expires_at IS NULL OR floor(extract(epoch FROM (v.subscription_expires_at)::timestamptz))::bigint>$6) ORDER BY v.created_at DESC,v.user_id,v.provider_id"))
             .bind(user).bind(user).bind(plan).bind(plan).bind(include_expired).bind(Utc::now().timestamp()).fetch_all(self.pool()).await?)
     }
     pub async fn wallet_entries(&self, user: &str) -> Result<Vec<WalletEntry>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM wallet_entries WHERE user_id=? AND kind IN ('order_payment','system_adjustment') ORDER BY created_at DESC,id",
+            "SELECT * FROM wallet_entries WHERE user_id=$1 AND kind IN ('order_payment','system_adjustment') ORDER BY created_at DESC,id",
         )
         .bind(user)
         .fetch_all(self.pool())
@@ -131,17 +131,21 @@ impl Storage {
             .map(|v| DateTime::parse_from_rfc3339(v).map(|v| v.to_rfc3339()))
             .transpose()
             .map_err(|_| StorageError::InvalidAdminUpdate("订阅到期时间无效"))?;
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let user: User = sqlx::query_as("SELECT * FROM regular_users WHERE id=?")
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_user(&mut tx, input.user_id).await?;
+        let user: User = sqlx::query_as("SELECT * FROM regular_users WHERE id=$1")
             .bind(input.user_id)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(input.user_id.into()))?;
-        let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")
+        let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1 FOR SHARE")
             .bind(input.plan_id)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(StorageError::InvalidAdminUpdate("请选择可用套餐"))?;
+        if let Some(id) = input.subscription_id {
+            crate::storage::lock_subscription(&mut tx, id).await?;
+        }
         let current =
             subscription_account(&mut tx, &user.id, &plan.provider_id, input.subscription_id)
                 .await?;
@@ -176,12 +180,14 @@ impl Storage {
         )
         .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(account_id)
     }
 }
 pub(crate) async fn subscription_account(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     user: &str,
     provider: &str,
     subscription_id: Option<&str>,
@@ -190,7 +196,7 @@ pub(crate) async fn subscription_account(
         return Ok(None);
     };
     let row: Option<(String, i64)> = sqlx::query_as(
-        "SELECT id,revision FROM platform_accounts WHERE user_id=? AND provider_id=? AND id=?",
+        "SELECT id,revision FROM platform_accounts WHERE user_id=$1 AND provider_id=$2 AND id=$3",
     )
     .bind(user)
     .bind(provider)
@@ -200,7 +206,7 @@ pub(crate) async fn subscription_account(
     let (id, revision) =
         row.ok_or_else(|| StorageError::AccountNotFound(subscription_id.into()))?;
     Ok(Some((
-        sqlx::query_as("SELECT p.*,a.username,a.password_hash,u.name,u.email FROM platform_accounts p JOIN users u ON u.id=p.user_id JOIN accounts a ON a.id=u.id WHERE p.id=?")
+        sqlx::query_as("SELECT p.*,a.username,a.password_hash,u.name,u.email FROM platform_accounts p JOIN users u ON u.id=p.user_id JOIN accounts a ON a.id=u.id WHERE p.id=$1")
             .bind(id)
             .fetch_one(connection)
             .await?,
@@ -208,7 +214,7 @@ pub(crate) async fn subscription_account(
     )))
 }
 pub(crate) async fn write_subscription(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     user: &User,
     plan: &VirtualPlan,
     previous: Option<&PlatformAccount>,
@@ -235,30 +241,30 @@ pub(crate) async fn write_subscription(
                     })
             }));
     if previous.is_none() {
-        sqlx::query("INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,subscription_expires_at,subscription_started_at,enabled,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,subscription_expires_at,subscription_started_at,enabled,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
             .bind(&id).bind(&user.id).bind(&plan.provider_id).bind(&plan.id).bind(&plan.plan_type)
             .bind(expires).bind(now.to_rfc3339())
             .bind(enabled).bind(now.to_rfc3339()).execute(&mut *connection).await?;
     } else {
-        sqlx::query("UPDATE platform_accounts SET plan_id=?,plan_type=?,subscription_expires_at=?,enabled=?,subscription_started_at=CASE WHEN ? THEN ? ELSE subscription_started_at END WHERE id=?")
+        sqlx::query("UPDATE platform_accounts SET plan_id=$1,plan_type=$2,subscription_expires_at=$3,enabled=$4,subscription_started_at=CASE WHEN $5 THEN $6 ELSE subscription_started_at END WHERE id=$7")
             .bind(&plan.id).bind(&plan.plan_type).bind(expires).bind(enabled).bind(restart).bind(now.to_rfc3339()).bind(&id).execute(&mut *connection).await?;
     }
     if !enabled {
-        sqlx::query("DELETE FROM virtual_devices WHERE virtual_account_id=?")
+        sqlx::query("DELETE FROM virtual_devices WHERE virtual_account_id=$1")
             .bind(&id)
             .execute(&mut *connection)
             .await?;
-        sqlx::query("DELETE FROM virtual_authorization_codes WHERE virtual_account_id=?")
+        sqlx::query("DELETE FROM virtual_authorization_codes WHERE virtual_account_id=$1")
             .bind(&id)
             .execute(&mut *connection)
             .await?;
-        sqlx::query("DELETE FROM oauth_browser_identities WHERE virtual_account_id=?")
+        sqlx::query("DELETE FROM oauth_browser_identities WHERE virtual_account_id=$1")
             .bind(&id)
             .execute(&mut *connection)
             .await?;
     }
     if previous.is_none() || restart || plan_changed {
-        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES(?,?) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET revision=revision+1")
+        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES($1,$2) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET revision=execution_routes.revision+1")
             .bind(&id).bind(&plan.provider_id).execute(&mut *connection).await?;
     }
     let operation = if origin == "admin_reissue" {
@@ -282,22 +288,22 @@ pub(crate) async fn write_subscription(
         "change_expiry"
     };
     let previous_name: Option<String> =
-        sqlx::query_scalar("SELECT name FROM virtual_plans WHERE id=?")
+        sqlx::query_scalar("SELECT name FROM virtual_plans WHERE id=$1")
             .bind(previous.map(|account| &account.plan_id))
             .fetch_optional(&mut *connection)
             .await?;
     let value = json!({"operation":operation,"origin":origin,"plan_type":plan.plan_type,"plan_id":plan.id,"plan_name":plan.name,
         "previous_plan":previous.map(|a|&a.plan_type),"previous_plan_id":previous.map(|a|&a.plan_id),"previous_plan_name":previous_name,"previous_expires_at":previous.and_then(|a|a.subscription_expires_at.as_ref()),"expires_at":expires,"created_at_ms":now.timestamp_millis()});
-    sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) VALUES(?,'subscription_operation',?,?,?,?)")
+    sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) VALUES($1,'subscription_operation',$2,$3::jsonb,$4,$5)")
         .bind(&id).bind(uuid::Uuid::new_v4().to_string()).bind(value.to_string()).bind(now.timestamp_millis()).bind(now.timestamp_millis()).execute(connection).await?;
     Ok(id)
 }
 
-pub(crate) async fn delete_on(connection: &mut SqliteConnection, id: &str) -> Result<()> {
+pub(crate) async fn delete_on(connection: &mut PgConnection, id: &str) -> Result<()> {
     crate::account_scope::require_on(connection, id, crate::AccountScope::UserPlatform).await?;
-    sqlx::query("UPDATE subscription_orders SET status='cancelled',cancelled_at_ms=?,cancel_reason='订阅已删除' WHERE subscription_id=? AND status='pending'")
+    sqlx::query("UPDATE subscription_orders SET status='cancelled',cancelled_at_ms=$1,cancel_reason='订阅已删除' WHERE subscription_id=$2 AND status='pending'")
         .bind(Utc::now().timestamp_millis()).bind(id).execute(&mut *connection).await?;
-    sqlx::query("DELETE FROM platform_accounts WHERE id=?")
+    sqlx::query("DELETE FROM platform_accounts WHERE id=$1")
         .bind(id)
         .execute(connection)
         .await?;
@@ -305,10 +311,12 @@ pub(crate) async fn delete_on(connection: &mut SqliteConnection, id: &str) -> Re
 }
 impl Storage {
     pub async fn delete_user_subscription(&self, id: &str) -> Result<()> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
         delete_on(&mut tx, id).await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(())
     }
 }

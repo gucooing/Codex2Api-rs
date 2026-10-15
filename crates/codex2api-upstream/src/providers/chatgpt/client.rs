@@ -575,9 +575,9 @@ mod tests {
     #[tokio::test]
     async fn request_failures_never_disable_credentials_and_only_401_is_persisted() {
         use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
-        let path =
-            std::env::temp_dir().join(format!("supplier-health-{}.sqlite", uuid::Uuid::new_v4()));
-        let storage = codex2api_storage::Storage::open(&path).await.unwrap();
+        let directory = codex2api_storage::test_support::tempdir().unwrap();
+        let path = directory.path().join("fixture");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         let accounts = SupplierAccountStore::open(storage.clone());
         let account = accounts.create_pending().await.unwrap().account;
         accounts
@@ -679,7 +679,7 @@ mod tests {
         );
         drop(client);
         storage.close().await;
-        let reopened = codex2api_storage::Storage::open(&path).await.unwrap();
+        let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
         assert!(
             reopened
                 .supplier_health(&account.id)
@@ -689,14 +689,6 @@ mod tests {
                 .is_some()
         );
         reopened.close().await;
-        // SQLite can briefly retain its final file handle on Windows after pool close.
-        for _ in 0..10 {
-            if std::fs::remove_file(&path).is_ok() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        std::fs::remove_file(path).unwrap();
     }
 
     #[tokio::test]

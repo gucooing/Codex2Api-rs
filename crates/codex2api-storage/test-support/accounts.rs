@@ -121,11 +121,11 @@ impl AccountFixture for Storage {
                 .await?;
             }
         } else {
-            sqlx::query("INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,subscription_expires_at,subscription_started_at,enabled,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,subscription_expires_at,subscription_started_at,enabled,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
             .bind(&account.id).bind(&user.id).bind(&account.provider_id).bind(&account.plan_id).bind(&account.plan_type).bind(&account.subscription_expires_at).bind(&account.created_at).bind(account.enabled).bind(&account.created_at).execute(self.pool()).await?;
         }
-        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES(?,?) ON CONFLICT DO NOTHING").bind(&account.id).bind(&account.provider_id).execute(self.pool()).await?;
-        self.invalidate_runtime_cache();
+        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(&account.id).bind(&account.provider_id).execute(self.pool()).await?;
+        self.invalidate_cached_snapshots();
         Ok(())
     }
     async fn grant_subscription_fixture(

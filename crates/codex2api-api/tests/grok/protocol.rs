@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use codex2api_storage::{PlatformAccount, Storage};
+use codex2api_storage::PlatformAccount;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -113,8 +113,8 @@ async fn authorize(app: &Router) -> Value {
 
 #[tokio::test]
 async fn subscription_names_match_grok_build_readers_and_expiry() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("subscription-names.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("subscription-names-pg"))
         .await
         .unwrap();
     let mut plan = storage.plan_fixture("grok").await.unwrap();
@@ -229,8 +229,8 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
 
 #[tokio::test]
 async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isolation() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("protocol.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("protocol-pg"))
         .await
         .unwrap();
     let mut free = storage.plan_fixture("grok").await.unwrap();
@@ -430,7 +430,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     let mut charged = None;
     for _ in 0..40 {
         charged = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT cost_nano_usd FROM usage_records WHERE subject_id=? AND status='completed'",
+            "SELECT cost_nano_usd FROM usage_records WHERE subject_id=$1 AND status='completed'",
         )
         .bind(&account.id)
         .fetch_optional(storage.pool())

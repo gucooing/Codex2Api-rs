@@ -550,8 +550,8 @@ async fn reject(
 mod tests {
     use super::*;
     use codex2api_storage::{
-        ApiGroup, ModelConfig, ModelPrice, NewSupplierAccount, Storage, SupplierTokens, User,
-        UserKind, WalletAdjustment,
+        ApiGroup, ModelConfig, ModelPrice, NewSupplierAccount, SupplierTokens, User, UserKind,
+        WalletAdjustment,
     };
     use serde_json::json;
 
@@ -559,8 +559,8 @@ mod tests {
     async fn api_rewrite_native_socket_reuses_two_generations_settles_before_delivery_and_closes_on_error()
      {
         tokio::time::timeout(std::time::Duration::from_secs(20), async {
-            let directory = tempfile::tempdir().unwrap();
-            let storage = Storage::open(directory.path().join("native-ws.sqlite")).await.unwrap();
+            let directory = codex2api_storage::test_support::tempdir().unwrap();
+            let storage = codex2api_storage::test_support::open(directory.path().join("native-ws-pg")).await.unwrap();
             storage.save_user(&User {
                 id: "consumer".into(), username: "consumer".into(), password_hash: "fixture".into(),
                 name: "Consumer".into(), email: "consumer@example.test".into(), enabled: true, wallet_cents: 0,

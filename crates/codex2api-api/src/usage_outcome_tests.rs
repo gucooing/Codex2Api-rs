@@ -24,8 +24,8 @@ async fn rows(storage: &Storage, count: usize) -> Vec<UsageRecord> {
 
 #[tokio::test]
 async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("outcomes.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("outcomes-pg"))
         .await
         .unwrap();
     let cases = [
@@ -168,8 +168,8 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
 
 #[tokio::test]
 async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_available() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("transport.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("transport-pg"))
         .await
         .unwrap();
     let supplier = codex2api_accounts::SupplierAccountStore::open(storage.clone())
@@ -251,8 +251,8 @@ async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_ava
 async fn local_internal_failures_keep_private_diagnostics_and_replay_the_public_response() {
     use axum::response::IntoResponse;
     use codex2api_upstream::RequestFailureLog;
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("internal.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("internal-pg"))
         .await
         .unwrap();
     let attempt = RequestFailureLog::new(UsageRecord {
@@ -303,8 +303,8 @@ async fn local_internal_failures_keep_private_diagnostics_and_replay_the_public_
 
 #[tokio::test]
 async fn old_rejection_cannot_disable_new_credentials_and_legacy_network_faults_do_not_gate() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("credentials.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("credentials-pg"))
         .await
         .unwrap();
     let supplier = codex2api_accounts::SupplierAccountStore::open(storage.clone())
@@ -312,7 +312,7 @@ async fn old_rejection_cannot_disable_new_credentials_and_legacy_network_faults_
         .await
         .unwrap()
         .account;
-    sqlx::query("INSERT INTO supplier_health(account_id,error_message,error_at,revision) VALUES(?,'与 ChatGPT 官方连接失败或超时','old',1)")
+    sqlx::query("INSERT INTO supplier_health(account_id,error_message,error_at,revision) VALUES($1,'与 ChatGPT 官方连接失败或超时','old',1)")
         .bind(&supplier.id).execute(storage.pool()).await.unwrap();
     let health = storage.supplier_health(&supplier.id).await.unwrap();
     assert!(health.error_message.is_some());
@@ -365,8 +365,8 @@ async fn installed_desktop_reads_actual_sse_failure_events() {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("desktop.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("desktop-pg"))
         .await
         .unwrap();
     let hits = Arc::new(AtomicUsize::new(0));
@@ -436,8 +436,8 @@ async fn installed_desktop_search_completes_with_one_snapshotted_charge() {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Storage::open(dir.path().join("search.sqlite"))
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("search-pg"))
         .await
         .unwrap();
     storage

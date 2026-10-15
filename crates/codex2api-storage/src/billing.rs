@@ -496,81 +496,18 @@ impl Storage {
         model: &str,
         requirement: PriceRequirement<'_>,
     ) -> Result<bool> {
-        if matches!(requirement, PriceRequirement::Tokens(None)) {
-            return Ok(false);
-        }
-        let key = format!(
-            "price-available:{}",
-            serde_json::to_string(&(provider, model, &requirement))?
-        );
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let value: bool = match requirement {
-            PriceRequirement::Tokens(tier) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_prices WHERE provider_id=? AND model=? AND tier=? AND min_input_tokens=0)")
-                .bind(provider).bind(model).bind(tier).fetch_one(self.pool()).await?,
-            PriceRequirement::Image(size) => {
-                let size = size.filter(|size| *size != "auto");
-                let tier = size.and_then(crate::image_resolution_tier);
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_image_prices WHERE provider_id=? AND model=? AND (resolution=? OR ? IS NULL OR resolution=? OR resolution=?))")
-                    .bind(provider).bind(model).bind(crate::IMAGE_UNIFORM_RESOLUTION).bind(size).bind(size).bind(tier).fetch_one(self.pool()).await?
-            }
-            PriceRequirement::Operation(operation) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operation_prices WHERE provider_id=? AND operation=? AND price_nano_usd IS NOT NULL)")
-                .bind(provider).bind(operation).fetch_one(self.pool()).await?,
-            PriceRequirement::ReadOnly => true,
-        };
-        self.runtime
-            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
-        Ok(value)
+        Ok(self
+            .billing_catalog(provider)
+            .await?
+            .available(model, requirement))
     }
 
     pub(crate) async fn billing_snapshot(&self, provider: &str) -> Result<std::sync::Arc<String>> {
-        let key = format!("billing-snapshot:{provider}");
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached(&key) {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let mut tx = self.pool().begin().await?;
-        let tokens = sqlx::query_as(
-            "SELECT * FROM model_prices WHERE provider_id=? ORDER BY model,tier,min_input_tokens",
-        )
-        .bind(provider)
-        .fetch_all(&mut *tx)
-        .await?;
-        let images = sqlx::query_as(
-            "SELECT * FROM model_image_prices WHERE provider_id=? ORDER BY model,resolution",
-        )
-        .bind(provider)
-        .fetch_all(&mut *tx)
-        .await?;
-        let operations =
-            sqlx::query_as("SELECT * FROM operation_prices WHERE provider_id=? ORDER BY operation")
-                .bind(provider)
-                .fetch_all(&mut *tx)
-                .await?;
-        tx.commit().await?;
-        let value = std::sync::Arc::new(serde_json::to_string(&BillingSnapshot::Current {
-            tokens,
-            images,
-            operations,
-            cost_operations: None,
-        })?);
-        self.runtime
-            .cache(key, &value, epoch, std::time::Duration::from_secs(30));
-        Ok(value)
+        Ok(self.billing_catalog(provider).await?.journal.clone())
     }
     pub async fn model_prices(&self, provider: &str) -> Result<Vec<ModelPrice>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM model_prices WHERE provider_id=? ORDER BY model,tier,min_input_tokens",
+            "SELECT * FROM model_prices WHERE provider_id=$1 ORDER BY model,tier,min_input_tokens",
         )
         .bind(provider)
         .fetch_all(self.pool())
@@ -580,14 +517,14 @@ impl Storage {
         validate_model_price(price)?;
         let mut tx = self.pool().begin().await?;
         sqlx::query(
-            "INSERT OR IGNORE INTO model_catalog(provider_id,model,kind) VALUES(?,?,'text')",
+            "INSERT INTO model_catalog(provider_id,model,kind) VALUES($1,$2,'text') ON CONFLICT DO NOTHING",
         )
         .bind(&price.provider_id)
         .bind(&price.model)
         .execute(&mut *tx)
         .await?;
         let usable: bool = sqlx::query_scalar(
-            "SELECT kind='text' AND deleted=0 FROM model_catalog WHERE provider_id=? AND model=?",
+            "SELECT kind='text' AND deleted=FALSE FROM model_catalog WHERE provider_id=$1 AND model=$2",
         )
         .bind(&price.provider_id)
         .bind(&price.model)
@@ -598,26 +535,30 @@ impl Storage {
                 "请在计费配置中恢复模型或选择正确的计费方式",
             ));
         }
-        let mut affected=sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,max_input_tokens,source,revision) SELECT ?,?,?,?,?,?,?,?,?,'custom',1 WHERE ?=0 ON CONFLICT(provider_id,model,tier,min_input_tokens) DO NOTHING")
+        let mut affected=sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,max_input_tokens,source,revision) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,'custom',1 WHERE $10=0 ON CONFLICT(provider_id,model,tier,min_input_tokens) DO NOTHING")
             .bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
         if affected == 0 {
-            affected=sqlx::query("UPDATE model_prices SET input_rate=?,cached_rate=?,cache_write_rate=?,output_rate=?,max_input_tokens=?,source='custom',revision=revision+1 WHERE provider_id=? AND model=? AND tier=? AND min_input_tokens=? AND revision=?")
+            affected=sqlx::query("UPDATE model_prices SET input_rate=$1,cached_rate=$2,cache_write_rate=$3,output_rate=$4,max_input_tokens=$5,source='custom',revision=revision+1 WHERE provider_id=$6 AND model=$7 AND tier=$8 AND min_input_tokens=$9 AND revision=$10")
                 .bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
         }
         if affected == 0 {
             return Ok(false);
         }
-        sqlx::query("UPDATE model_catalog SET revision=revision+1 WHERE provider_id=? AND model=?")
-            .bind(&price.provider_id)
-            .bind(&price.model)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE model_catalog SET revision=revision+1 WHERE provider_id=$1 AND model=$2",
+        )
+        .bind(&price.provider_id)
+        .bind(&price.model)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Billing]);
         Ok(true)
     }
     pub async fn billing_summary(&self, owner: &str) -> Result<serde_json::Value> {
-        let (used,pending,unknown,legacy):(i64,i64,i64,i64)=sqlx::query_as("SELECT COALESCE(SUM(cost_nano_usd),0),COALESCE(SUM(billing_status='pending'),0),COALESCE(SUM(billing_status NOT IN ('priced','pending','legacy','not_charged')),0),COALESCE(SUM(billing_status='legacy'),0) FROM usage_records WHERE subject_id=?")
+        let (used,pending,unknown,legacy):(i64,i64,i64,i64)=sqlx::query_as("SELECT COALESCE(SUM(cost_nano_usd)::bigint,0),COALESCE(SUM((billing_status='pending')::int)::bigint,0),COALESCE(SUM((billing_status NOT IN ('priced','pending','legacy','not_charged'))::int)::bigint,0),COALESCE(SUM((billing_status='legacy')::int)::bigint,0) FROM usage_records WHERE subject_id=$1")
             .bind(owner).fetch_one(self.pool()).await?;
         let since: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key='billing_started_at'")
@@ -628,7 +569,7 @@ impl Storage {
         )
     }
     pub async fn unpriced_models(&self, provider: &str) -> Result<Vec<String>> {
-        Ok(sqlx::query_scalar("SELECT DISTINCT COALESCE(actual_model,model) FROM usage_records WHERE provider_id=? AND COALESCE(actual_model,model) IS NOT NULL AND NOT EXISTS(SELECT 1 FROM model_prices p WHERE p.provider_id=usage_records.provider_id AND p.model=COALESCE(usage_records.actual_model,usage_records.model)) ORDER BY 1").bind(provider).fetch_all(self.pool()).await?)
+        Ok(sqlx::query_scalar("SELECT DISTINCT COALESCE(actual_model,model) FROM usage_records WHERE provider_id=$1 AND COALESCE(actual_model,model) IS NOT NULL AND NOT EXISTS(SELECT 1 FROM model_prices p WHERE p.provider_id=usage_records.provider_id AND p.model=COALESCE(usage_records.actual_model,usage_records.model)) ORDER BY 1").bind(provider).fetch_all(self.pool()).await?)
     }
 }
 
@@ -679,9 +620,9 @@ mod tests {
     #[tokio::test]
     async fn spending_windows_reset_independently_and_preserve_usage_and_owner() {
         use serde_json::json;
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("windows.sqlite");
-        let storage = Storage::open(&db).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let db = dir.path().join("windows-pg");
+        let storage = codex2api_storage::test_support::open(&db).await.unwrap();
         let account = crate::PlatformAccount {
             provider_id: "chatgpt".into(),
             id: "a".into(),
@@ -778,7 +719,7 @@ mod tests {
             true
         );
         storage.close().await;
-        let reopened = Storage::open(&db).await.unwrap();
+        let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
         assert_eq!(
             reopened
                 .virtual_quota_at("a", boundary + 604800)
@@ -794,9 +735,9 @@ mod tests {
     }
     #[tokio::test]
     async fn prices_snapshot_actual_model_cache_buckets_and_idempotent_charges() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("billing.sqlite");
-        let storage = Storage::open(&db).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let db = dir.path().join("billing-pg");
+        let storage = codex2api_storage::test_support::open(&db).await.unwrap();
         let prices = storage.model_prices("chatgpt").await.unwrap();
         let mut record = UsageRecord {
             id: "one".into(),
@@ -860,7 +801,7 @@ mod tests {
         record.input_tokens = None;
         assert_eq!(charge(&record, &prices).1, "missing_usage");
         storage.close().await;
-        let reopened = Storage::open(&db).await.unwrap();
+        let reopened = codex2api_storage::test_support::open(&db).await.unwrap();
         assert_eq!(
             reopened.billing_summary("virtual-a").await.unwrap()["used_usd"],
             "0.1395"

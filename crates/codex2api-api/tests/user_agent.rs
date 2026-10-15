@@ -11,13 +11,15 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use codex2api_storage::{GatewaySettings, Storage, UaMode, UsageFilter};
+use codex2api_storage::{GatewaySettings, UaMode, UsageFilter};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn policy_covers_billable_http_websocket_and_aliases_before_account_use() {
-    let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::open(temp.path().join("ua.sqlite")).await.unwrap();
+    let temp = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(temp.path().join("ua-pg"))
+        .await
+        .unwrap();
     let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
     let account = accounts.create_pending().await.unwrap().account;
     let consumer = codex2api_storage::PlatformAccount {

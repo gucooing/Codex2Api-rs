@@ -261,13 +261,13 @@ pub(super) async fn observe_request_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex2api_storage::{Storage, SupplierStatus, SupplierTokens};
+    use codex2api_storage::{SupplierStatus, SupplierTokens};
     use serde_json::json;
 
     #[tokio::test]
     async fn billing_rejection_is_persisted_and_fresh_quota_does_not_restore_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("billing-check.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("billing-check-pg"))
             .await
             .unwrap();
         let state = AdminState::new(storage.clone()).unwrap();
@@ -322,8 +322,8 @@ mod tests {
     #[tokio::test]
     async fn failed_checks_follow_execution_auth_and_quota_classification() {
         use codex2api_upstream::UpstreamError;
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("quota-errors.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("quota-errors-pg"))
             .await
             .unwrap();
         let state = AdminState::new(storage.clone()).unwrap();
@@ -471,8 +471,8 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_official_reset_recovers_but_cached_unknown_failed_and_late_checks_do_not() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("quota-recovery.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("quota-recovery-pg"))
             .await
             .unwrap();
         let state = AdminState::new(storage.clone()).unwrap();

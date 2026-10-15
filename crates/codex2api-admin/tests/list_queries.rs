@@ -50,7 +50,7 @@ async fn supplier_filters_pages_and_bulk_selection_share_database_membership() {
             })
             .await
             .unwrap();
-        sqlx::query("UPDATE supplier_accounts SET created_at='2026-10-01T00:00:00Z' WHERE id=?")
+        sqlx::query("UPDATE supplier_accounts SET created_at='2026-10-01T00:00:00Z' WHERE id=$1")
             .bind(&id)
             .execute(f.storage.pool())
             .await

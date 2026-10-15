@@ -359,10 +359,7 @@ impl GrokAuthService {
             .store_supplier_info(
                 id,
                 codex2api_storage::SupplierInfoSection::Details,
-                &codex2api_storage::QuotaSnapshot {
-                    value: profile.clone(),
-                    observed_at: Utc::now(),
-                },
+                &codex2api_storage::QuotaSnapshot::new(profile.clone(), Utc::now()),
             )
             .await?;
         Ok(profile)
@@ -502,10 +499,7 @@ impl GrokAuthService {
             .store_supplier_info(
                 &account.id,
                 codex2api_storage::SupplierInfoSection::Details,
-                &codex2api_storage::QuotaSnapshot {
-                    value: profile,
-                    observed_at: Utc::now(),
-                },
+                &codex2api_storage::QuotaSnapshot::new(profile, Utc::now()),
             )
             .await?;
         self.evict_account_http(&account.id).await;

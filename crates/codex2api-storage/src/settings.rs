@@ -81,44 +81,30 @@ impl GatewaySettings {
 
 impl Storage {
     pub async fn gateway_settings(&self) -> Result<GatewaySettings> {
-        if let Some(value) = self.runtime.cached("gateway-settings") {
-            return Ok(value);
-        }
-        let _fill = self.runtime.cache_fill("gateway-settings").await;
-        if let Some(value) = self.runtime.cached("gateway-settings") {
-            return Ok(value);
-        }
-        let epoch = self.runtime.epoch();
-        let value: Option<String> =
-            sqlx::query_scalar("SELECT value FROM meta WHERE key = 'gateway_settings'")
-                .fetch_optional(self.pool())
-                .await?;
-        let value = match value {
-            Some(value) => serde_json::from_str(&value)?,
-            None => GatewaySettings::default(),
-        };
-        self.runtime.affinity_ttl.store(
-            value.sticky_ttl_seconds,
-            std::sync::atomic::Ordering::Release,
-        );
-        self.runtime.cache(
-            "gateway-settings".into(),
-            &value,
-            epoch,
-            std::time::Duration::from_secs(30),
-        );
-        Ok(value)
+        self.runtime
+            .snapshots
+            .read("gateway-settings".into(), async {
+                let stored: Option<String> =
+                    sqlx::query_scalar("SELECT value FROM meta WHERE key='gateway_settings'")
+                        .fetch_optional(self.pool())
+                        .await?;
+                let value = stored
+                    .map(|v| serde_json::from_str(&v))
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok((value, std::time::Duration::from_secs(30)))
+            })
+            .await
     }
 
     pub async fn save_gateway_settings(&self, settings: &GatewaySettings) -> Result<()> {
-        sqlx::query("INSERT INTO meta (key, value) VALUES ('gateway_settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        sqlx::query("INSERT INTO meta (key, value) VALUES ('gateway_settings', $1) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             .bind(serde_json::to_string(settings)?)
             .execute(self.pool()).await?;
-        self.runtime.affinity_ttl.store(
-            settings.sticky_ttl_seconds,
-            std::sync::atomic::Ordering::Release,
-        );
-        self.invalidate_runtime_cache();
+        self.runtime.snapshots.invalidate(&[
+            crate::snapshots::Domain::Settings,
+            crate::snapshots::Domain::Pools,
+        ]);
         Ok(())
     }
 }

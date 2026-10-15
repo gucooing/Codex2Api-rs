@@ -8,7 +8,7 @@ mod account_fixture {
 use crate::{Result, Storage};
 #[cfg(test)]
 use account_fixture::AccountFixture;
-use sqlx::{FromRow, QueryBuilder, Sqlite};
+use sqlx::{FromRow, Postgres, QueryBuilder};
 
 #[derive(Clone, Debug, FromRow, serde::Serialize)]
 pub struct UsageRecord {
@@ -212,7 +212,7 @@ pub struct VirtualDailyModelTokens {
     pub tokens: i64,
 }
 
-pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFilter) {
+pub(crate) fn conditions(query: &mut QueryBuilder<'_, Postgres>, filter: &UsageFilter) {
     query.push(" WHERE 1=1");
     match filter.source {
         Some(UsageSource::Api) => {
@@ -231,7 +231,7 @@ pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFil
     }
     if let Some(account) = filter.account.as_deref().filter(|s| !s.is_empty()) {
         query
-            .push(" AND instr(lower(account_name), lower(")
+            .push(" AND strpos(lower(account_name), lower(")
             .push_bind(account.to_string())
             .push(")) > 0");
     }
@@ -240,9 +240,9 @@ pub(crate) fn conditions(query: &mut QueryBuilder<'_, Sqlite>, filter: &UsageFil
     }
     if let Some(model) = filter.model.as_deref().filter(|s| !s.is_empty()) {
         query
-            .push(" AND (instr(lower(model), lower(")
+            .push(" AND (strpos(lower(model), lower(")
             .push_bind(model.to_string())
-            .push(")) > 0 OR instr(lower(actual_model), lower(")
+            .push(")) > 0 OR strpos(lower(actual_model), lower(")
             .push_bind(model.to_string())
             .push(")) > 0)");
     }
@@ -332,14 +332,13 @@ impl Storage {
         until_ms: i64,
     ) -> Result<SupplierCycleUsage> {
         Ok(sqlx::query_as(
-            "SELECT ? AS from_ms, ? AS until_ms, COUNT(*) AS request_count,
-             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(base_cost_nano_usd) END AS cost_nano_usd,
-             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(
-                 CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-                 THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) END AS tokens,
-             COALESCE(SUM(base_cost_nano_usd IS NULL),0) AS unpriced_requests,
-             COALESCE(SUM(input_tokens IS NULL OR output_tokens IS NULL),0) AS missing_token_requests
-             FROM usage_records WHERE account_id=? AND requested_at_ms>=? AND requested_at_ms<?",
+            "SELECT $1 AS from_ms, $2 AS until_ms, COUNT(*) AS request_count,
+             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(base_cost_nano_usd)::bigint END AS cost_nano_usd,
+             CASE WHEN COUNT(*)=0 THEN 0 ELSE SUM(CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+                 THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END)::bigint END AS tokens,
+             COALESCE(SUM((base_cost_nano_usd IS NULL)::int)::bigint,0) AS unpriced_requests,
+             COALESCE(SUM((input_tokens IS NULL OR output_tokens IS NULL)::int)::bigint,0) AS missing_token_requests
+             FROM usage_records WHERE account_id=$3 AND requested_at_ms>=$4 AND requested_at_ms<$5",
         )
         .bind(from_ms)
         .bind(until_ms)
@@ -353,10 +352,10 @@ impl Storage {
     /// Profile statistics from reported consumption belonging to a virtual identity.
     pub async fn virtual_usage_summary(&self, id: &str) -> Result<AccountUsageSummary> {
         let days: Vec<AccountDailyUsage> = sqlx::query_as(
-            "SELECT date(requested_at_ms / 1000, 'unixepoch') AS start_date,
-             SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)) AS tokens,
+            "SELECT (to_timestamp((requested_at_ms / 1000)::double precision) AT TIME ZONE 'UTC')::date AS start_date,
+             SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0))::bigint AS tokens,
              NULL AS longest_running_turn_ms
-             FROM usage_records WHERE subject_id=?
+             FROM usage_records WHERE subject_id=$1
              AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
              GROUP BY start_date ORDER BY start_date",
         )
@@ -374,10 +373,10 @@ impl Storage {
         until_ms: i64,
     ) -> Result<Vec<VirtualDailyModelTokens>> {
         Ok(sqlx::query_as(
-            "SELECT date(requested_at_ms / 1000, 'unixepoch') AS date,
+            "SELECT (to_timestamp((requested_at_ms / 1000)::double precision) AT TIME ZONE 'UTC')::date AS date,
              COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'other') AS model,
-             SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)) AS tokens
-             FROM usage_records WHERE subject_id=? AND requested_at_ms>=? AND requested_at_ms<?
+             SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0))::bigint AS tokens
+             FROM usage_records WHERE subject_id=$1 AND requested_at_ms>=$2 AND requested_at_ms<$3
              AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)
              GROUP BY date, COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'other')
              ORDER BY date, model",
@@ -392,11 +391,11 @@ impl Storage {
     /// SupplierAccount-wide local usage, grouped by UTC date without splitting request sources.
     pub async fn account_usage_summary(&self, id: &str) -> Result<AccountUsageSummary> {
         let days: Vec<AccountDailyUsage> = sqlx::query_as(
-            "SELECT date(requested_at_ms / 1000, 'unixepoch') AS start_date,
+            "SELECT (to_timestamp((requested_at_ms / 1000)::double precision) AT TIME ZONE 'UTC')::date AS start_date,
             SUM(CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-                THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END) AS tokens,
+                THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END)::bigint AS tokens,
             MAX(total_ms) AS longest_running_turn_ms
-            FROM usage_records WHERE account_id=? GROUP BY start_date ORDER BY start_date",
+            FROM usage_records WHERE account_id=$1 GROUP BY start_date ORDER BY start_date",
         )
         .bind(id)
         .fetch_all(self.pool())
@@ -405,7 +404,7 @@ impl Storage {
     }
     /// Called once by the process at startup; a prior process cannot still own these requests.
     pub async fn recover_interrupted_usage(&self) -> Result<u64> {
-        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(unixepoch('subsec')*1000 AS INTEGER),status='interrupted',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
+        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(extract(epoch FROM clock_timestamp())*1000 AS BIGINT),status='interrupted',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
             .execute(self.pool())
             .await?.rows_affected())
     }
@@ -436,7 +435,10 @@ impl Storage {
     }
     pub async fn query_usage(&self, filter: &UsageFilter) -> Result<UsagePage> {
         let page_size = table_page_size(filter.page_size)?;
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let mut count = QueryBuilder::new("SELECT COUNT(*) FROM usage_records");
         conditions(&mut count, filter);
         let total: i64 = count.build_query_scalar().fetch_one(&mut *tx).await?;
@@ -518,9 +520,9 @@ mod tests {
     }
     #[tokio::test]
     async fn usage_history_persists_filters_paginates_and_keeps_snapshot_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("usage.sqlite");
-        let storage = Storage::open(&path).await.unwrap();
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let path = dir.path().join("usage-pg");
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         for n in 0..53 {
             let record = UsageRecord {
                 id: format!("row-{n:03}"),
@@ -619,7 +621,7 @@ mod tests {
         assert_eq!(completed.total, 1);
         assert_eq!(completed.records[0].id, record.id);
         storage.close().await;
-        let storage = Storage::open(&path).await.unwrap();
+        let storage = codex2api_storage::test_support::open(&path).await.unwrap();
         storage.recover_interrupted_usage().await.unwrap();
         let page = storage
             .query_usage(&UsageFilter {
@@ -664,8 +666,8 @@ mod tests {
 
     #[tokio::test]
     async fn deleted_consumers_keep_inspectable_usage_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("history.sqlite"))
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("history-pg"))
             .await
             .unwrap();
         let consumer = crate::PlatformAccount {

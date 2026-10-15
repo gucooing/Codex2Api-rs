@@ -38,7 +38,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
         "excluded_ids":["batch-001"],"filters":{"search":"match-","status":"enabled","subscription":"active"},
         "quantity":1,"activate_at":future,"duration_days":30});
     // A storage error after the first account must roll back the entire operation.
-    sqlx::query("CREATE TRIGGER fail_batch BEFORE INSERT ON virtual_reset_grants WHEN NEW.virtual_account_id='batch-002' BEGIN SELECT RAISE(ABORT,'fixture failure'); END")
+    sqlx::raw_sql("CREATE FUNCTION fail_batch_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.virtual_account_id='batch-002' THEN RAISE EXCEPTION 'fixture failure'; END IF; RETURN NEW; END; $$; CREATE TRIGGER fail_batch BEFORE INSERT ON virtual_reset_grants FOR EACH ROW EXECUTE FUNCTION fail_batch_fn();")
         .execute(f.storage.pool()).await.unwrap();
     assert_eq!(
         f.request("POST", "/admin/api/subscriptions/batch", batch.clone())
@@ -53,7 +53,7 @@ async fn paged_selection_exclusions_atomic_failure_and_retry_preserve_exact_targ
             .unwrap()["items"],
         json!([])
     );
-    sqlx::query("DROP TRIGGER fail_batch")
+    sqlx::query("DROP TRIGGER fail_batch ON virtual_reset_grants")
         .execute(f.storage.pool())
         .await
         .unwrap();
@@ -277,7 +277,7 @@ async fn administrators_issue_and_inspect_account_owned_reset_cards_with_csrf() 
 }
 
 #[tokio::test]
-async fn batch_operations_resolve_all_matching_accounts_in_sqlite_and_use_same_card_policy() {
+async fn batch_operations_resolve_all_matching_accounts_in_postgresql_and_use_same_card_policy() {
     let f = Fixture::new().await;
     let first = f.consumer("batch-owner-a").await;
     let second = f.consumer("batch-owner-b").await;

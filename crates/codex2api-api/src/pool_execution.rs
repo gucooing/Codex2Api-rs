@@ -197,8 +197,7 @@ pub(crate) mod tests {
     use super::*;
     use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
     use codex2api_storage::{
-        OAuthDeviceIdentity, PlatformAccount, Storage, SupplierAccountUpdate, SupplierStatus,
-        UsageRecord,
+        OAuthDeviceIdentity, PlatformAccount, SupplierAccountUpdate, SupplierStatus, UsageRecord,
     };
     use serde_json::json;
 
@@ -420,9 +419,14 @@ pub(crate) mod tests {
         assert_eq!(result.text().await.unwrap(), body);
     }
 
-    pub(crate) async fn setup_pool() -> (tempfile::TempDir, ApiState, VirtualAccess, Vec<String>) {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("http-pool.sqlite"))
+    pub(crate) async fn setup_pool() -> (
+        codex2api_storage::test_support::TestDirectory,
+        ApiState,
+        VirtualAccess,
+        Vec<String>,
+    ) {
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("http-pool-pg"))
             .await
             .unwrap();
         storage

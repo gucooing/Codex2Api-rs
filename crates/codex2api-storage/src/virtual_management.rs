@@ -520,11 +520,11 @@ impl Storage {
         let local = format!("c2ct_{}", crate::oauth_secret());
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.pool().begin().await?;
-        sqlx::query("DELETE FROM virtual_conduits WHERE expires_at<=?")
+        sqlx::query("DELETE FROM virtual_conduits WHERE expires_at<=$1")
             .bind(now)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO virtual_conduits(token_hash,virtual_account_id,upstream_account_id,upstream_token,expires_at) VALUES(?,?,?,?,?)")
+        sqlx::query("INSERT INTO virtual_conduits(token_hash,virtual_account_id,upstream_account_id,upstream_token,expires_at) VALUES($1,$2,$3,$4,$5)")
             .bind(crate::hash_token(&local)).bind(owner).bind(source).bind(token).bind(now+900).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(local)
@@ -535,7 +535,7 @@ impl Storage {
         source: &str,
         token: &str,
     ) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar("SELECT upstream_token FROM virtual_conduits WHERE token_hash=? AND virtual_account_id=? AND upstream_account_id=? AND expires_at>?")
+        Ok(sqlx::query_scalar("SELECT upstream_token FROM virtual_conduits WHERE token_hash=$1 AND virtual_account_id=$2 AND upstream_account_id=$3 AND expires_at>$4")
             .bind(crate::hash_token(token)).bind(owner).bind(source).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
     /// An owned preparation credential selects its recorded supplier before a new conversation exists.
@@ -544,7 +544,7 @@ impl Storage {
         owner: &str,
         token: &str,
     ) -> Result<Option<(String, String)>> {
-        Ok(sqlx::query_as("SELECT upstream_account_id,upstream_token FROM virtual_conduits WHERE token_hash=? AND virtual_account_id=? AND expires_at>?")
+        Ok(sqlx::query_as("SELECT upstream_account_id,upstream_token FROM virtual_conduits WHERE token_hash=$1 AND virtual_account_id=$2 AND expires_at>$3")
             .bind(crate::hash_token(token)).bind(owner).bind(chrono::Utc::now().timestamp()).fetch_optional(self.pool()).await?)
     }
     pub async fn record_virtual_analytics(&self, owner: &str, events: &[Value]) -> Result<()> {
@@ -599,7 +599,7 @@ impl Storage {
                 metadata["product_client_id"] = v.into();
             }
             let id = crate::hash_token(&event.to_string());
-            sqlx::query("INSERT OR IGNORE INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) VALUES(?,'analytics',?,?,?,?)")
+            sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) VALUES($1,'analytics',$2,$3::jsonb,$4,$5) ON CONFLICT DO NOTHING")
                 .bind(owner).bind(id).bind(metadata.to_string()).bind(now).bind(now).execute(&mut *tx).await?;
         }
         tx.commit().await?;
@@ -607,7 +607,7 @@ impl Storage {
     }
 
     pub async fn virtual_analytics(&self, owner: &str, start: i64, end: i64) -> Result<Vec<Value>> {
-        let rows:Vec<String>=sqlx::query_scalar("SELECT value_json FROM virtual_resources WHERE virtual_account_id=? AND kind='analytics' AND created_at_ms>=? AND created_at_ms<? ORDER BY created_at_ms,id")
+        let rows:Vec<String>=sqlx::query_scalar("SELECT value_json::text FROM virtual_resources WHERE virtual_account_id=$1 AND kind='analytics' AND created_at_ms>=$2 AND created_at_ms<$3 ORDER BY created_at_ms,id")
             .bind(owner).bind(start).bind(end).fetch_all(self.pool()).await?;
         rows.into_iter()
             .map(|s| Ok(serde_json::from_str(&s)?))
@@ -668,7 +668,7 @@ impl Storage {
         if let Some(saved) = self.virtual_client_state(owner, key).await? {
             return Ok(saved);
         }
-        sqlx::query("INSERT OR IGNORE INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin) SELECT id,?,?,0,'system' FROM platform_accounts WHERE id=?")
+        sqlx::query("INSERT INTO virtual_client_state(virtual_account_id,state_key,value_json,revision,write_origin) SELECT id,$1,$2::jsonb,0,'system' FROM platform_accounts WHERE id=$3 ON CONFLICT DO NOTHING")
             .bind(key).bind(spec.default.to_string()).bind(owner).execute(self.pool()).await?;
         self.virtual_client_state(owner, key)
             .await?
@@ -789,7 +789,7 @@ impl Storage {
             .map(|s| s.value)
             .unwrap_or(Value::Null);
         let mut tx = self.pool().begin().await?;
-        let changed:Option<i64>=sqlx::query_scalar("UPDATE virtual_client_state SET value_json=?,revision=revision+1,write_origin=?,updated_at_ms=? WHERE virtual_account_id=? AND state_key=? AND revision=? RETURNING revision")
+        let changed:Option<i64>=sqlx::query_scalar("UPDATE virtual_client_state SET value_json=$1::jsonb,revision=revision+1,write_origin=$2,updated_at_ms=$3 WHERE virtual_account_id=$4 AND state_key=$5 AND revision=$6 RETURNING revision")
             .bind(value.to_string()).bind(origin).bind(chrono::Utc::now().timestamp_millis()).bind(owner).bind(key).bind(revision).fetch_optional(&mut *tx).await?;
         if changed.is_some() {
             if key == "notifications" {
@@ -804,13 +804,13 @@ impl Storage {
                         continue;
                     }
                     let payload = json!({"notification_id":item["id"],"type":item["notification_type"],"payload":item["payload"]});
-                    sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES(?,'app_notifications',?,?)")
+                    sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES($1,'app_notifications',$2::jsonb,$3)")
                         .bind(owner).bind(payload.to_string()).bind(chrono::Utc::now().timestamp_millis()).execute(&mut *tx).await?;
                 }
             }
             let topic = "settings";
             let payload = json!({"type":"setting-updated","payload":{"setting":key}});
-            sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES(?,?,?,?)")
+            sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES($1,$2,$3::jsonb,$4)")
                 .bind(owner).bind(topic).bind(payload.to_string()).bind(chrono::Utc::now().timestamp_millis()).execute(&mut *tx).await?;
         }
         tx.commit().await?;
@@ -828,13 +828,13 @@ impl Storage {
         validate_virtual_config("profile", &private.value).map_err(StorageError::Constraint)?;
         let mut tx = self.pool().begin().await?;
         for (key, state) in [("profile_page", page), ("profile", private)] {
-            let changed=sqlx::query("UPDATE virtual_client_state SET value_json=?,revision=revision+1,write_origin='client',updated_at_ms=unixepoch()*1000 WHERE virtual_account_id=? AND state_key=? AND revision=?")
+            let changed=sqlx::query("UPDATE virtual_client_state SET value_json=$1::jsonb,revision=revision+1,write_origin='client',updated_at_ms=floor(extract(epoch FROM clock_timestamp()))::bigint*1000 WHERE virtual_account_id=$2 AND state_key=$3 AND revision=$4")
                 .bind(state.value.to_string()).bind(owner).bind(key).bind(state.revision).execute(&mut *tx).await?.rows_affected();
             if changed != 1 {
                 tx.rollback().await?;
                 return Ok(false);
             }
-            sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES(?,'settings',?,?)")
+            sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES($1,'settings',$2::jsonb,$3)")
                 .bind(owner).bind(json!({"type":"setting-updated","payload":{"setting":key}}).to_string()).bind(chrono::Utc::now().timestamp_millis()).execute(&mut *tx).await?;
         }
         tx.commit().await?;
@@ -842,7 +842,7 @@ impl Storage {
     }
 
     pub async fn virtual_resources(&self, owner: &str, kind: &str) -> Result<Vec<Value>> {
-        let rows:Vec<String>=sqlx::query_scalar("SELECT value_json FROM virtual_resources WHERE virtual_account_id=? AND kind=? ORDER BY updated_at_ms DESC,id")
+        let rows:Vec<String>=sqlx::query_scalar("SELECT value_json::text FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 ORDER BY updated_at_ms DESC,id")
             .bind(owner).bind(kind).fetch_all(self.pool()).await?;
         rows.into_iter()
             .map(|s| Ok(serde_json::from_str(&s)?))
@@ -855,7 +855,7 @@ impl Storage {
         kind: &str,
         id: &str,
     ) -> Result<Option<(Option<String>, Value)>> {
-        let row:Option<(Option<String>,String)>=sqlx::query_as("SELECT upstream_account_id,value_json FROM virtual_resources WHERE virtual_account_id=? AND kind=? AND id=?")
+        let row:Option<(Option<String>,String)>=sqlx::query_as("SELECT upstream_account_id,value_json::text FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 AND id=$3")
             .bind(owner).bind(kind).bind(id).fetch_optional(self.pool()).await?;
         row.map(|(source, s)| Ok((source, serde_json::from_str(&s)?)))
             .transpose()
@@ -871,15 +871,24 @@ impl Storage {
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
         if kind != "conversation" {
-            sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,upstream_account_id,value_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(virtual_account_id,kind,id) DO UPDATE SET value_json=excluded.value_json,updated_at_ms=excluded.updated_at_ms")
+            sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,upstream_account_id,value_json,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) ON CONFLICT(virtual_account_id,kind,id) DO UPDATE SET value_json=excluded.value_json,updated_at_ms=excluded.updated_at_ms")
                 .bind(owner).bind(kind).bind(id).bind(source).bind(value.to_string()).bind(now).bind(now).execute(self.pool()).await?;
             return Ok(());
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let old:Option<String>=sqlx::query_scalar("SELECT value_json FROM virtual_resources WHERE virtual_account_id=? AND kind=? AND id=?").bind(owner).bind(kind).bind(id).fetch_optional(&mut *tx).await?;
-        sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,upstream_account_id,value_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(virtual_account_id,kind,id) DO UPDATE SET value_json=excluded.value_json,updated_at_ms=excluded.updated_at_ms")
+        let mut tx = self.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':resource:' || $1 || ':' || $2 || ':' || $3,0))")
+            .bind(owner).bind(kind).bind(id).execute(&mut *tx).await?;
+        let old:Option<String>=sqlx::query_scalar("SELECT value_json::text FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 AND id=$3").bind(owner).bind(kind).bind(id).fetch_optional(&mut *tx).await?;
+        sqlx::query("INSERT INTO virtual_resources(virtual_account_id,kind,id,upstream_account_id,value_json,created_at_ms,updated_at_ms) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) ON CONFLICT(virtual_account_id,kind,id) DO UPDATE SET value_json=excluded.value_json,updated_at_ms=excluded.updated_at_ms")
             .bind(owner).bind(kind).bind(id).bind(source).bind(value.to_string()).bind(now).bind(now).execute(&mut *tx).await?;
-        if kind == "conversation" && old.as_deref() != Some(value.to_string().as_str()) {
+        if kind == "conversation"
+            && old
+                .as_deref()
+                .map(serde_json::from_str::<Value>)
+                .transpose()?
+                .as_ref()
+                != Some(value)
+        {
             let previous: Value = old
                 .as_deref()
                 .map(serde_json::from_str)
@@ -900,7 +909,7 @@ impl Storage {
             for event_type in types {
                 let event = json!({"type":event_type,"payload":{"conversation_id":id}});
                 for topic in ["conversations", "alder-conversations"] {
-                    sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES(?,?,?,?)").bind(owner).bind(topic).bind(event.to_string()).bind(now).execute(&mut *tx).await?;
+                    sqlx::query("INSERT INTO virtual_events(virtual_account_id,topic,value_json,created_at_ms) VALUES($1,$2,$3::jsonb,$4)").bind(owner).bind(topic).bind(event.to_string()).bind(now).execute(&mut *tx).await?;
                 }
             }
         }
@@ -913,14 +922,14 @@ impl Storage {
     pub async fn save_virtual_connector_catalog(&self, owner: &str, apps: &[Value]) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
         for batch in apps.chunks(64) {
-            let mut insert = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            let mut insert = sqlx::QueryBuilder::<sqlx::Postgres>::new(
                 "INSERT INTO virtual_resources(virtual_account_id,kind,id,value_json,created_at_ms,updated_at_ms) ",
             );
             insert.push_values(batch, |mut row, app| {
                 row.push_bind(owner)
                     .push_bind("connector_catalog")
                     .push_bind(app["id"].as_str().unwrap_or(""))
-                    .push_bind(app.to_string())
+                    .push_bind(sqlx::types::Json(app))
                     .push_bind(now)
                     .push_bind(now);
             });
@@ -931,12 +940,12 @@ impl Storage {
     }
 
     pub async fn virtual_resource_records(&self, owner: &str, kind: &str) -> Result<Vec<Value>> {
-        let rows:Vec<(String,Option<String>,String,i64,i64)>=sqlx::query_as("SELECT id,upstream_account_id,value_json,created_at_ms,updated_at_ms FROM virtual_resources WHERE virtual_account_id=? AND kind=? ORDER BY updated_at_ms DESC,id").bind(owner).bind(kind).fetch_all(self.pool()).await?;
+        let rows:Vec<(String,Option<String>,String,i64,i64)>=sqlx::query_as("SELECT id,upstream_account_id,value_json::text,created_at_ms,updated_at_ms FROM virtual_resources WHERE virtual_account_id=$1 AND kind=$2 ORDER BY updated_at_ms DESC,id").bind(owner).bind(kind).fetch_all(self.pool()).await?;
         rows.into_iter().map(|(id,source,text,created,updated)|Ok(json!({"id":id,"owner":owner,"source":source,"value":serde_json::from_str::<Value>(&text)?,"created_at_ms":created,"updated_at_ms":updated}))).collect()
     }
 
     pub async fn virtual_events(&self, owner: &str, after: i64) -> Result<Vec<Value>> {
-        let rows:Vec<(i64,String,String)>=sqlx::query_as("SELECT id,topic,value_json FROM virtual_events WHERE virtual_account_id=? AND id>? ORDER BY id LIMIT 100")
+        let rows:Vec<(i64,String,String)>=sqlx::query_as("SELECT id,topic,value_json::text FROM virtual_events WHERE virtual_account_id=$1 AND id>$2 ORDER BY id LIMIT 100")
             .bind(owner).bind(after).fetch_all(self.pool()).await?;
         rows.into_iter()
             .map(|(id, topic, s)| {
@@ -968,7 +977,7 @@ impl Storage {
     }
 
     pub async fn virtual_request_logs(&self, owner: &str, before: i64) -> Result<Vec<Value>> {
-        let rows:Vec<(i64,String,String,String,i64,i64,i64)>=sqlx::query_as("SELECT id,device_id,method,path,status,duration_ms,created_at_ms FROM virtual_request_logs WHERE virtual_account_id=? AND id<? ORDER BY id DESC LIMIT 50")
+        let rows:Vec<(i64,String,String,String,i64,i64,i64)>=sqlx::query_as("SELECT id,device_id,method,path,status,duration_ms,created_at_ms FROM virtual_request_logs WHERE virtual_account_id=$1 AND id<$2 ORDER BY id DESC LIMIT 50")
             .bind(owner).bind(before).fetch_all(self.pool()).await?;
         Ok(rows.into_iter().map(|(id,device,method,path,status,duration,at)|json!({"id":id,"device_id":device,"method":method,"path":path,"status":status,"duration_ms":duration,"created_at_ms":at})).collect())
     }
@@ -984,7 +993,7 @@ impl Storage {
     ) -> Result<Value> {
         let page_size = crate::table_page_size(page_size)?;
         let mut tx = self.pool().begin().await?;
-        let predicate = "virtual_account_id=? AND instr(lower(path),lower(?))>0 AND (?='' OR method=?) AND (?='' OR (?='success' AND status>=200 AND status<400) OR (?='failed' AND status>=400))";
+        let predicate = "virtual_account_id=$1 AND strpos(lower(path),lower($2))>0 AND ($3='' OR method=$4) AND ($5='' OR ($6='success' AND status>=200 AND status<400) OR ($7='failed' AND status>=400))";
         let total: i64 = sqlx::query_scalar(&format!(
             "SELECT COUNT(*) FROM virtual_request_logs WHERE {predicate}"
         ))
@@ -998,7 +1007,7 @@ impl Storage {
         .fetch_one(&mut *tx)
         .await?;
         let page = i64::from(page).clamp(1, ((total + page_size - 1) / page_size).max(1));
-        let rows: Vec<(i64,String,String,String,i64,i64,i64)> = sqlx::query_as(&format!("SELECT id,device_id,method,path,status,duration_ms,created_at_ms FROM virtual_request_logs WHERE {predicate} ORDER BY id DESC LIMIT ? OFFSET ?"))
+        let rows: Vec<(i64,String,String,String,i64,i64,i64)> = sqlx::query_as(&format!("SELECT id,device_id,method,path,status,duration_ms,created_at_ms FROM virtual_request_logs WHERE {predicate} ORDER BY id DESC LIMIT $8 OFFSET $9"))
             .bind(owner).bind(path.trim()).bind(method).bind(method).bind(result).bind(result).bind(result).bind(page_size).bind((page-1)*page_size)
             .fetch_all(&mut *tx).await?;
         tx.commit().await?;

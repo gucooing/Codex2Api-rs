@@ -1,13 +1,12 @@
-"""Print JWT protocol metadata and claim types from one selected SQLite file.
+"""Print JWT protocol metadata and claim types from the configured PostgreSQL database.
 
 Read-only; never print token strings, signatures, email addresses, subject IDs,
-account IDs or signing keys. No network requests or credential refreshes.
+account IDs or signing keys. No supplier requests or credential refreshes.
 """
 import base64
 import json
-from pathlib import Path
-import sqlite3
-import sys
+import os
+import psycopg
 
 
 def decode(part):
@@ -22,10 +21,9 @@ def shape(value):
     return {str: "string", int: "integer", float: "number", bool: "boolean", type(None): "null"}.get(type(value), "unknown")
 
 
-path = Path(sys.argv[1]).resolve(strict=True)
-with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as connection:
-    connection.execute("PRAGMA query_only=ON")
-    report = {"database": str(path), "supplier_token_rows": connection.execute("SELECT COUNT(*) FROM supplier_tokens").fetchone()[0], "jwt_shapes": []}
+with psycopg.connect(os.environ["CODEX2API_DATABASE_URL"]) as connection:
+    connection.execute("SET TRANSACTION READ ONLY")
+    report = {"database": connection.info.dbname, "supplier_token_rows": connection.execute("SELECT COUNT(*) FROM supplier_tokens").fetchone()[0], "jwt_shapes": []}
     seen = set()
     for row in connection.execute("SELECT access_token,id_token FROM supplier_tokens"):
         for kind, token in zip(("access_token", "id_token"), row):

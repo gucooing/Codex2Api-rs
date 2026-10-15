@@ -100,12 +100,12 @@ async fn overview_counts_all_subscription_health_and_distinct_active_users() {
     let healthy = f.consumer("healthy").await;
     let disabled = f.consumer("disabled").await;
     let expired = f.consumer("expired").await;
-    sqlx::query("UPDATE platform_accounts SET enabled=0 WHERE id=?")
+    sqlx::query("UPDATE platform_accounts SET enabled=FALSE WHERE id=$1")
         .bind(disabled["id"].as_str().unwrap())
         .execute(f.storage.pool())
         .await
         .unwrap();
-    sqlx::query("UPDATE platform_accounts SET subscription_expires_at=? WHERE id=?")
+    sqlx::query("UPDATE platform_accounts SET subscription_expires_at=$1 WHERE id=$2")
         .bind((chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339())
         .bind(expired["id"].as_str().unwrap())
         .execute(f.storage.pool())

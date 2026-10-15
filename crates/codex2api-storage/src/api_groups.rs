@@ -1,7 +1,7 @@
 //! API product policy and public prices. Supplier routing never enters user DTOs.
 use crate::{ImagePrice, ListPage, ModelConfig, ModelPrice, Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, QueryBuilder, Sqlite, SqliteConnection};
+use sqlx::{FromRow, PgConnection, Postgres, QueryBuilder};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -117,13 +117,15 @@ struct GroupRow {
     description: String,
     provider_id: String,
     enabled: bool,
-    tag_ids: String,
-    allowed_models: String,
+    tag_ids: sqlx::types::Json<Vec<String>>,
+    allowed_models: sqlx::types::Json<Vec<String>>,
     multiplier_micros: i64,
     search_price_nano_usd: Option<i64>,
+    #[sqlx(try_from = "i64")]
     concurrency_limit: u32,
+    #[sqlx(try_from = "i64")]
     rpm_limit: u32,
-    model_rules: String,
+    model_rules: sqlx::types::Json<Vec<ApiModelRule>>,
     revision: i64,
 }
 impl TryFrom<GroupRow> for ApiGroup {
@@ -135,20 +137,20 @@ impl TryFrom<GroupRow> for ApiGroup {
             description: row.description,
             provider_id: row.provider_id,
             enabled: row.enabled,
-            tag_ids: serde_json::from_str(&row.tag_ids)?,
-            allowed_models: serde_json::from_str(&row.allowed_models)?,
+            tag_ids: row.tag_ids.0,
+            allowed_models: row.allowed_models.0,
             multiplier: crate::format_units(row.multiplier_micros, 6),
             search_price_usd: row
                 .search_price_nano_usd
                 .map(|price| crate::format_units(price, 9)),
             concurrency_limit: row.concurrency_limit,
             rpm_limit: row.rpm_limit,
-            model_rules: serde_json::from_str(&row.model_rules)?,
+            model_rules: row.model_rules.0,
             revision: row.revision,
         })
     }
 }
-const GROUP_COLUMNS: &str = "g.*,COALESCE((SELECT json_group_array(tag_id) FROM (SELECT tag_id FROM api_group_tags WHERE group_id=g.id ORDER BY tag_id)),'[]') AS tag_ids";
+const GROUP_COLUMNS: &str = "g.*,COALESCE((SELECT jsonb_agg(tag_id ORDER BY tag_id) FROM api_group_tags WHERE group_id=g.id),'[]'::jsonb) AS tag_ids";
 
 pub(crate) fn multiplier_micros(value: &str) -> Result<i64> {
     crate::decimal_units(value, 6)
@@ -181,12 +183,9 @@ impl ApiGroup {
     }
 }
 
-pub(crate) async fn group_on(
-    connection: &mut SqliteConnection,
-    id: &str,
-) -> Result<Option<ApiGroup>> {
+pub(crate) async fn group_on(connection: &mut PgConnection, id: &str) -> Result<Option<ApiGroup>> {
     sqlx::query_as::<_, GroupRow>(&format!(
-        "SELECT {GROUP_COLUMNS} FROM api_groups g WHERE g.id=? AND g.deleted=0"
+        "SELECT {GROUP_COLUMNS} FROM api_groups g WHERE g.id=$1 AND g.deleted=FALSE"
     ))
     .bind(id)
     .fetch_optional(connection)
@@ -196,12 +195,35 @@ pub(crate) async fn group_on(
 }
 
 impl Storage {
+    pub(crate) async fn api_group_snapshot_on(
+        &self,
+        conn: &mut PgConnection,
+        id: &str,
+        revision: i64,
+    ) -> Result<Option<ApiGroup>> {
+        let key = format!("api-group:{id}");
+        let group: Option<ApiGroup> = self
+            .runtime
+            .snapshots
+            .read(key.clone(), async {
+                Ok((
+                    group_on(conn, id).await?,
+                    std::time::Duration::from_secs(300),
+                ))
+            })
+            .await?;
+        if group.as_ref().is_some_and(|g| g.revision == revision) {
+            return Ok(group);
+        }
+        self.runtime.snapshots.invalidate_key(&key);
+        group_on(conn, id).await
+    }
     pub async fn api_group(&self, id: &str) -> Result<Option<ApiGroup>> {
         group_on(&mut *self.pool().acquire().await?, id).await
     }
     pub async fn api_groups(&self) -> Result<Vec<ApiGroup>> {
         sqlx::query_as::<_, GroupRow>(&format!(
-            "SELECT {GROUP_COLUMNS} FROM api_groups g WHERE g.deleted=0 ORDER BY g.name,g.id"
+            "SELECT {GROUP_COLUMNS} FROM api_groups g WHERE g.deleted=FALSE ORDER BY g.name,g.id"
         ))
         .fetch_all(self.pool())
         .await?
@@ -211,8 +233,11 @@ impl Storage {
     }
     pub async fn api_group_page(&self, query: &ApiListQuery) -> Result<ListPage<ApiGroup>> {
         query.validate()?;
-        let condition = "g.deleted=0 AND (?='' OR g.provider_id=?) AND (?='' OR instr(lower(g.name||' '||g.description),lower(?))>0)";
-        let mut tx = self.pool().begin().await?;
+        let condition = "g.deleted=FALSE AND ($1='' OR g.provider_id=$2) AND ($3='' OR strpos(lower(g.name||' '||g.description),lower($4))>0)";
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let total: i64 = sqlx::query_scalar(&format!(
             "SELECT COUNT(*) FROM api_groups g WHERE {condition}"
         ))
@@ -222,7 +247,7 @@ impl Storage {
         .bind(&query.search)
         .fetch_one(&mut *tx)
         .await?;
-        let items=sqlx::query_as::<_, GroupRow>(&format!("SELECT {GROUP_COLUMNS} FROM api_groups g WHERE {condition} ORDER BY g.name,g.id LIMIT ? OFFSET ?"))
+        let items=sqlx::query_as::<_, GroupRow>(&format!("SELECT {GROUP_COLUMNS} FROM api_groups g WHERE {condition} ORDER BY g.name,g.id LIMIT $5 OFFSET $6"))
             .bind(&query.provider_id).bind(&query.provider_id).bind(&query.search).bind(&query.search)
             .bind(i64::from(query.page_size)).bind(query.offset_for(total)).fetch_all(&mut *tx).await?.into_iter().map(TryInto::try_into).collect::<Result<Vec<_>>>()?;
         tx.commit().await?;
@@ -285,13 +310,15 @@ impl Storage {
                 multiplier_micros(value)?;
             }
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':api-group:' || $1,0))")
+            .bind(&group.id).execute(&mut *tx).await?;
         let current = group_on(&mut tx, &group.id).await?;
         if current.as_ref().map(|g| g.revision) != expected {
             return Ok(false);
         }
         if expected.is_none()
-            && sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM api_groups WHERE id=?)")
+            && sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM api_groups WHERE id=$1)")
                 .bind(&group.id)
                 .fetch_one(&mut *tx)
                 .await?
@@ -305,7 +332,7 @@ impl Storage {
             return Err(StorageError::InvalidAdminUpdate("API 组的平台不可更改"));
         }
         let valid_provider: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?)")
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM providers WHERE id=$1)")
                 .bind(&group.provider_id)
                 .fetch_one(&mut *tx)
                 .await?;
@@ -314,7 +341,7 @@ impl Storage {
         }
         for tag in &group.tag_ids {
             let valid: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=? AND provider_id=?)",
+                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=$1 AND provider_id=$2)",
             )
             .bind(tag)
             .bind(&group.provider_id)
@@ -329,47 +356,54 @@ impl Storage {
             .iter()
             .chain(group.model_rules.iter().map(|r| &r.model))
         {
-            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_catalog WHERE provider_id=? AND model=? AND deleted=0)").bind(&group.provider_id).bind(model).fetch_one(&mut *tx).await?;
+            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_catalog WHERE provider_id=$1 AND model=$2 AND deleted=FALSE)").bind(&group.provider_id).bind(model).fetch_one(&mut *tx).await?;
             if !valid {
                 return Err(StorageError::InvalidAdminUpdate(
                     "请先在计费配置中添加同平台模型",
                 ));
             }
         }
-        sqlx::query("INSERT INTO api_groups(id,name,description,provider_id,enabled,allowed_models,multiplier_micros,search_price_nano_usd,concurrency_limit,rpm_limit,model_rules,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,enabled=excluded.enabled,allowed_models=excluded.allowed_models,multiplier_micros=excluded.multiplier_micros,search_price_nano_usd=excluded.search_price_nano_usd,concurrency_limit=excluded.concurrency_limit,rpm_limit=excluded.rpm_limit,model_rules=excluded.model_rules,revision=api_groups.revision+1")
+        sqlx::query("INSERT INTO api_groups(id,name,description,provider_id,enabled,allowed_models,multiplier_micros,search_price_nano_usd,concurrency_limit,rpm_limit,model_rules,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,enabled=excluded.enabled,allowed_models=excluded.allowed_models,multiplier_micros=excluded.multiplier_micros,search_price_nano_usd=excluded.search_price_nano_usd,concurrency_limit=excluded.concurrency_limit,rpm_limit=excluded.rpm_limit,model_rules=excluded.model_rules,revision=api_groups.revision+1")
             .bind(&group.id).bind(group.name.trim()).bind(group.description.trim()).bind(&group.provider_id).bind(group.enabled)
-            .bind(serde_json::to_string(&group.allowed_models)?).bind(multiplier).bind(search_price).bind(group.concurrency_limit).bind(group.rpm_limit)
+            .bind(serde_json::to_string(&group.allowed_models)?).bind(multiplier).bind(search_price).bind(i64::from(group.concurrency_limit)).bind(i64::from(group.rpm_limit))
             .bind(serde_json::to_string(&group.model_rules)?).bind(chrono::Utc::now().to_rfc3339()).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM api_group_tags WHERE group_id=?")
+        sqlx::query("DELETE FROM api_group_tags WHERE group_id=$1")
             .bind(&group.id)
             .execute(&mut *tx)
             .await?;
         for tag in group.tag_ids.iter().collect::<BTreeSet<_>>() {
-            sqlx::query("INSERT INTO api_group_tags(group_id,tag_id) VALUES(?,?)")
+            sqlx::query("INSERT INTO api_group_tags(group_id,tag_id) VALUES($1,$2)")
                 .bind(&group.id)
                 .bind(tag)
                 .execute(&mut *tx)
                 .await?;
         }
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::ApiGroups]);
         Ok(true)
     }
     pub async fn delete_api_group(&self, id: &str, revision: i64) -> Result<bool> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let changed=sqlx::query("UPDATE api_groups SET deleted=1,enabled=0,revision=revision+1 WHERE id=? AND revision=? AND deleted=0").bind(id).bind(revision).execute(&mut *tx).await?.rows_affected()==1;
+        let mut tx = self.pool().begin().await?;
+        let changed=sqlx::query("UPDATE api_groups SET deleted=TRUE,enabled=FALSE,revision=revision+1 WHERE id=$1 AND revision=$2 AND deleted=FALSE").bind(id).bind(revision).execute(&mut *tx).await?.rows_affected()==1;
         if changed {
-            sqlx::query("DELETE FROM api_group_tags WHERE group_id=?")
+            sqlx::query("DELETE FROM api_group_tags WHERE group_id=$1")
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
         }
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::ApiGroups]);
         Ok(changed)
     }
     pub async fn api_group_models(&self, id: &str) -> Result<Vec<ApiCatalogModel>> {
-        let mut tx = self.pool().begin().await?;
+        let mut tx = self
+            .pool()
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await?;
         let group =
             group_on(&mut tx, id)
                 .await?
@@ -491,9 +525,9 @@ pub(crate) fn model_catalog_query<'a>(
     projection: &'static str,
     group: Option<&'a ApiGroup>,
     filters: Option<&'a ApiListQuery>,
-) -> Result<QueryBuilder<'a, Sqlite>> {
+) -> Result<QueryBuilder<'a, Postgres>> {
     let mut query = QueryBuilder::new(format!(
-        "SELECT {projection} FROM model_catalog m WHERE m.enabled=1 AND m.deleted=0"
+        "SELECT {projection} FROM model_catalog m WHERE m.enabled=TRUE AND m.deleted=FALSE"
     ));
     if let Some(group) = group {
         query
@@ -501,9 +535,9 @@ pub(crate) fn model_catalog_query<'a>(
             .push_bind(&group.provider_id);
         if !group.allowed_models.is_empty() {
             query
-                .push(" AND m.model IN (SELECT value FROM json_each(")
-                .push_bind(serde_json::to_string(&group.allowed_models)?)
-                .push("))");
+                .push(" AND m.model = ANY(")
+                .push_bind(&group.allowed_models)
+                .push(")");
         }
     }
     if let Some(filters) = filters {
@@ -514,7 +548,7 @@ pub(crate) fn model_catalog_query<'a>(
         }
         if !filters.search.is_empty() {
             query
-                .push(" AND instr(lower(m.model),lower(")
+                .push(" AND strpos(lower(m.model),lower(")
                 .push_bind(&filters.search)
                 .push("))>0");
         }
@@ -523,7 +557,7 @@ pub(crate) fn model_catalog_query<'a>(
 }
 
 pub(crate) async fn catalog_on(
-    connection: &mut SqliteConnection,
+    connection: &mut PgConnection,
     group: Option<&ApiGroup>,
     query: Option<&ApiListQuery>,
 ) -> Result<(i64, Vec<ApiCatalogModel>)> {
@@ -533,7 +567,7 @@ pub(crate) async fn catalog_on(
         .await?;
     let configs: Vec<ModelConfig> = model_catalog_query("m.*", group, query)?
         .push(" ORDER BY m.provider_id,m.model LIMIT ")
-        .push_bind(query.map_or(-1, |q| i64::from(q.page_size)))
+        .push_bind(query.map(|q| i64::from(q.page_size)))
         .push(" OFFSET ")
         .push_bind(query.map_or(0, |q| q.offset_for(total)))
         .build_query_as()
@@ -545,8 +579,8 @@ pub(crate) async fn catalog_on(
             .map(|m| (&m.provider_id, &m.model))
             .collect::<Vec<_>>(),
     )?;
-    let prices:Vec<ModelPrice>=sqlx::query_as("SELECT p.* FROM model_prices p JOIN json_each(?) j ON p.provider_id=json_extract(j.value,'$[0]') AND p.model=json_extract(j.value,'$[1]') ORDER BY p.provider_id,p.model,p.tier,p.min_input_tokens").bind(&selected).fetch_all(&mut *connection).await?;
-    let images:Vec<ImagePrice>=sqlx::query_as("SELECT p.* FROM model_image_prices p JOIN json_each(?) j ON p.provider_id=json_extract(j.value,'$[0]') AND p.model=json_extract(j.value,'$[1]') ORDER BY p.provider_id,p.model,p.resolution").bind(&selected).fetch_all(&mut *connection).await?;
+    let prices:Vec<ModelPrice>=sqlx::query_as("SELECT p.* FROM model_prices p JOIN jsonb_array_elements($1::jsonb) j ON p.provider_id=(j.value::jsonb #>> '{0}') AND p.model=(j.value::jsonb #>> '{1}') ORDER BY p.provider_id,p.model,p.tier,p.min_input_tokens").bind(&selected).fetch_all(&mut *connection).await?;
+    let images:Vec<ImagePrice>=sqlx::query_as("SELECT p.* FROM model_image_prices p JOIN jsonb_array_elements($1::jsonb) j ON p.provider_id=(j.value::jsonb #>> '{0}') AND p.model=(j.value::jsonb #>> '{1}') ORDER BY p.provider_id,p.model,p.resolution").bind(&selected).fetch_all(&mut *connection).await?;
     let mut items = Vec::new();
     for config in configs {
         let multiplier = group.map_or("1", |g| g.model_multiplier(&config.model));

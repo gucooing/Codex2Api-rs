@@ -57,9 +57,9 @@ mod tests {
     use super::*;
     use crate::UsageRecord;
 
-    async fn fixture() -> (tempfile::TempDir, Storage, i64) {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::open(dir.path().join("reset.sqlite"))
+    async fn fixture() -> (codex2api_storage::test_support::TestDirectory, Storage, i64) {
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("reset-pg"))
             .await
             .unwrap();
         let now = Utc::now().timestamp();
@@ -196,7 +196,7 @@ mod tests {
             "no_credit"
         );
         storage.close().await;
-        let storage = Storage::open(dir.path().join("reset.sqlite"))
+        let storage = codex2api_storage::test_support::open(dir.path().join("reset-pg"))
             .await
             .unwrap();
         assert_eq!(
@@ -326,24 +326,16 @@ mod tests {
         // to the reset transaction determines which quota generation they use.
         // Only this fixture adjusts the clock after observing the generated reset time.
         // Restore the production immutability guard before executing either request.
-        sqlx::query("DROP TRIGGER usage_identity_immutable")
+        sqlx::query("ALTER TABLE usage_records DISABLE TRIGGER usage_identity_immutable")
             .execute(storage.pool())
             .await
             .unwrap();
-        sqlx::query("UPDATE usage_records SET requested_at_ms=? WHERE id='in-flight'")
+        sqlx::query("UPDATE usage_records SET requested_at_ms=$1 WHERE id='in-flight'")
             .bind(reset_at)
             .execute(storage.pool())
             .await
             .unwrap();
-        let migration = include_str!("../migrations/0077_unified_usage.sql");
-        let start = migration
-            .find("CREATE TRIGGER usage_identity_immutable")
-            .unwrap();
-        let end = migration[start..]
-            .find("CREATE TRIGGER usage_no_delete")
-            .unwrap()
-            + start;
-        sqlx::raw_sql(&migration[start..end])
+        sqlx::query("ALTER TABLE usage_records ENABLE TRIGGER usage_identity_immutable")
             .execute(storage.pool())
             .await
             .unwrap();
@@ -523,7 +515,7 @@ mod tests {
             json!({"code":"no_credit","credit":null,"windows_reset":0})
         );
         // At the exact activation timestamp a card is visible and selectable.
-        sqlx::query("UPDATE virtual_reset_credits SET available_at_ms=? WHERE id=?")
+        sqlx::query("UPDATE virtual_reset_credits SET available_at_ms=$1 WHERE id=$2")
             .bind(Utc::now().timestamp_millis())
             .bind(id)
             .execute(storage.pool())
@@ -534,7 +526,7 @@ mod tests {
             storage.virtual_reset_credits("a").await.unwrap()["credits"][0]["status"],
             "available"
         );
-        sqlx::query("UPDATE virtual_reset_credits SET expires_at_ms=? WHERE id=?")
+        sqlx::query("UPDATE virtual_reset_credits SET expires_at_ms=$1 WHERE id=$2")
             .bind(Utc::now().timestamp_millis())
             .bind(id)
             .execute(storage.pool())
@@ -579,14 +571,14 @@ pub(crate) fn request_id(value: &str) -> Result<()> {
 impl Storage {
     pub async fn virtual_reset_credit_count(&self, owner: &str) -> Result<i64> {
         let now = Utc::now().timestamp_millis();
-        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM virtual_reset_credits WHERE virtual_account_id=? AND redeemed_at_ms IS NULL AND available_at_ms<=? AND (expires_at_ms IS NULL OR expires_at_ms>?) AND source='card'")
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM virtual_reset_credits WHERE virtual_account_id=$1 AND redeemed_at_ms IS NULL AND available_at_ms<=$2 AND (expires_at_ms IS NULL OR expires_at_ms>$3) AND source='card'")
             .bind(owner).bind(now).bind(now).fetch_one(self.pool()).await?)
     }
 
     /// The official list has no pagination; return the account's complete history.
     pub async fn virtual_reset_credits(&self, owner: &str) -> Result<Value> {
         let now = Utc::now().timestamp_millis();
-        let credits: Vec<Credit> = sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=? AND source='card' AND available_at_ms<=? AND (expires_at_ms IS NULL OR expires_at_ms>?) ORDER BY granted_at_ms,id")
+        let credits: Vec<Credit> = sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=$1 AND source='card' AND available_at_ms<=$2 AND (expires_at_ms IS NULL OR expires_at_ms>$3) ORDER BY granted_at_ms,id")
             .bind(owner).bind(now).bind(now).fetch_all(self.pool()).await?;
         Ok(
             json!({"available_count":credits.iter().filter(|c|c.redeemed_at_ms.is_none() && c.available_at_ms<=now && c.expires_at_ms.is_none_or(|at|at>now)).count(),
@@ -615,7 +607,7 @@ impl Storage {
             "virtual_reset_credits c JOIN virtual_reset_grants g ON g.virtual_account_id=c.virtual_account_id AND g.request_id=c.grant_request_id",
             "c.granted_at_ms DESC,c.id", |q| { q.push(" AND c.virtual_account_id=").push_bind(owner.to_owned()); }).await?;
         let now = Utc::now().timestamp_millis();
-        let available:i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_reset_credits WHERE virtual_account_id=? AND redeemed_at_ms IS NULL AND available_at_ms<=? AND (expires_at_ms IS NULL OR expires_at_ms>?) AND source='card'")
+        let available:i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_reset_credits WHERE virtual_account_id=$1 AND redeemed_at_ms IS NULL AND available_at_ms<=$2 AND (expires_at_ms IS NULL OR expires_at_ms>$3) AND source='card'")
             .bind(owner).bind(now).bind(now).fetch_one(self.pool()).await?;
         let mut value = serde_json::to_value(page.map(|(id,granted,redeemed,actor,windows,note,active,expires,source)|json!({
             "id":id,"status":if redeemed.is_some(){"redeemed"}else if source=="admin_reset"{"not_applied"}else if expires.is_some_and(|at|at<=now){"expired"}else if active>now{"pending"}else{"available"},
@@ -655,7 +647,8 @@ impl Storage {
         grant.validate()?;
         let scope = format!("grant:{owner}");
         let signature = serde_json::to_string(grant)?;
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription(&mut tx, owner).await?;
         if crate::subscription_management::replay(&mut tx, &scope, grant_id, &signature)
             .await?
             .is_some()
@@ -666,7 +659,7 @@ impl Storage {
         let now = Utc::now().timestamp_millis();
         let (start, end) = grant.times(now)?;
         // Pre-0041 grants have no request signature. Refuse an ambiguous replay.
-        let exists: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_reset_grants WHERE virtual_account_id=? AND request_id=?)")
+        let exists: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM virtual_reset_grants WHERE virtual_account_id=$1 AND request_id=$2)")
             .bind(owner).bind(grant_id).fetch_one(&mut *tx).await?;
         if exists {
             return Err(StorageError::InvalidAdminUpdate(
@@ -708,8 +701,9 @@ impl Storage {
         if let Some(id) = credit_id {
             request_id(id)?;
         }
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let previous: Option<String> = sqlx::query_scalar("SELECT response_json FROM virtual_reset_requests WHERE virtual_account_id=? AND request_id=?")
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription(&mut tx, owner).await?;
+        let previous: Option<String> = sqlx::query_scalar("SELECT response_json FROM virtual_reset_requests WHERE virtual_account_id=$1 AND request_id=$2")
             .bind(owner).bind(redeem_id).fetch_optional(&mut *tx).await?;
         if let Some(previous) = previous {
             let mut response: Value = serde_json::from_str(&previous)?;
@@ -722,16 +716,16 @@ impl Storage {
         }
         let now = Utc::now().timestamp_millis();
         let account: PlatformAccount =
-            sqlx::query_as("SELECT * FROM platform_principals WHERE id=?")
+            sqlx::query_as("SELECT * FROM platform_principals WHERE id=$1")
                 .bind(owner)
                 .fetch_optional(&mut *tx)
                 .await?
                 .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
         let mut credit: Option<Credit> = if let Some(id) = credit_id {
-            sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=? AND id=? AND source='card' AND available_at_ms<=?")
+            sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=$1 AND id=$2 AND source='card' AND available_at_ms<=$3")
                 .bind(owner).bind(id).bind(now).fetch_optional(&mut *tx).await?
         } else {
-            sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=? AND redeemed_at_ms IS NULL AND available_at_ms<=? AND (expires_at_ms IS NULL OR expires_at_ms>?) AND source='card' ORDER BY granted_at_ms,id LIMIT 1")
+            sqlx::query_as("SELECT id,granted_at_ms,redeemed_at_ms,available_at_ms,expires_at_ms,source FROM virtual_reset_credits WHERE virtual_account_id=$1 AND redeemed_at_ms IS NULL AND available_at_ms<=$2 AND (expires_at_ms IS NULL OR expires_at_ms>$3) AND source='card' ORDER BY granted_at_ms,id LIMIT 1")
                 .bind(owner).bind(now).bind(now).fetch_optional(&mut *tx).await?
         };
         let mut response = json!({"code":"no_credit","windows_reset":0,"credit":null});
@@ -746,13 +740,15 @@ impl Storage {
                 response["code"] = json!("no_credit");
             } else {
                 if let Some(count) = resettable_windows(&mut tx, &account, now).await? {
-                    sqlx::query("UPDATE virtual_reset_credits SET redeemed_at_ms=?,redeemed_by=?,windows_reset=? WHERE virtual_account_id=? AND id=? AND redeemed_at_ms IS NULL")
+                    sqlx::query("UPDATE virtual_reset_credits SET redeemed_at_ms=$1,redeemed_by=$2,windows_reset=$3 WHERE virtual_account_id=$4 AND id=$5 AND redeemed_at_ms IS NULL")
                         .bind(now).bind(actor).bind(count).bind(owner).bind(&credit.id).execute(&mut *tx).await?;
-                    sqlx::query("UPDATE platform_accounts SET quota_reset_credit_id=? WHERE id=?")
-                        .bind(&credit.id)
-                        .bind(owner)
-                        .execute(&mut *tx)
-                        .await?;
+                    sqlx::query(
+                        "UPDATE platform_accounts SET quota_reset_credit_id=$1 WHERE id=$2",
+                    )
+                    .bind(&credit.id)
+                    .bind(owner)
+                    .execute(&mut *tx)
+                    .await?;
                     credit.redeemed_at_ms = Some(now);
                     response =
                         json!({"code":"reset","windows_reset":count,"credit":credit.protocol(now)});
@@ -762,7 +758,7 @@ impl Storage {
             }
         }
 
-        sqlx::query("INSERT INTO virtual_reset_requests VALUES(?,?,?,?)")
+        sqlx::query("INSERT INTO virtual_reset_requests VALUES($1,$2,$3,$4)")
             .bind(owner)
             .bind(redeem_id)
             .bind(response.to_string())
@@ -770,22 +766,27 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(response)
     }
 
     /// Administrative reset without issuing a client-visible card.
     pub async fn admin_reset_virtual_quota(&self, owner: &str, actor: &str) -> Result<Value> {
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_subscription(&mut tx, owner).await?;
         let result = admin_reset_on(&mut tx, owner, actor, Utc::now().timestamp_millis()).await?;
         tx.commit().await?;
-        self.invalidate_runtime_cache();
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Subscriptions]);
         Ok(result)
     }
 }
 
 pub(crate) async fn grant_on(
-    connection: &mut sqlx::SqliteConnection,
+    connection: &mut sqlx::PgConnection,
     owner: &str,
     grant_id: &str,
     quantity: i64,
@@ -795,14 +796,14 @@ pub(crate) async fn grant_on(
     now: i64,
 ) -> Result<()> {
     let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_accounts WHERE id=?)")
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_accounts WHERE id=$1)")
             .bind(owner)
             .fetch_one(&mut *connection)
             .await?;
     if !exists {
         return Err(StorageError::AccountNotFound(owner.into()));
     }
-    sqlx::query("INSERT INTO virtual_reset_grants VALUES(?,?,?,?,?,?,?)")
+    sqlx::query("INSERT INTO virtual_reset_grants VALUES($1,$2,$3,$4,$5,$6,$7)")
         .bind(owner)
         .bind(grant_id)
         .bind(quantity)
@@ -813,26 +814,26 @@ pub(crate) async fn grant_on(
         .execute(&mut *connection)
         .await?;
     for _ in 0..quantity {
-        sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,expires_at_ms) VALUES($1,$2,$3,$4,$5,$6)")
             .bind(uuid::Uuid::new_v4().to_string()).bind(owner).bind(grant_id).bind(now).bind(start).bind(end).execute(&mut *connection).await?;
     }
     Ok(())
 }
 
 async fn resettable_windows(
-    connection: &mut sqlx::SqliteConnection,
+    connection: &mut sqlx::PgConnection,
     account: &PlatformAccount,
     now: i64,
 ) -> Result<Option<i64>> {
     if !account.subscription_active_at(now / 1000) {
         return Ok(None);
     }
-    let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=?")
+    let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1")
         .bind(&account.plan_id)
         .fetch_one(&mut *connection)
         .await?;
     let rules = crate::plan_spending_windows(&plan.config)?;
-    let anchor:i64=sqlx::query_scalar("SELECT COALESCE(unixepoch(subscription_started_at),unixepoch(created_at)) FROM platform_accounts WHERE id=?")
+    let anchor:i64=sqlx::query_scalar("SELECT COALESCE(floor(extract(epoch FROM (subscription_started_at)::timestamptz))::bigint,floor(extract(epoch FROM (created_at)::timestamptz))::bigint) FROM platform_accounts WHERE id=$1")
         .bind(&account.id).fetch_one(&mut *connection).await?;
     let windows = crate::spending_windows::windows_on(
         connection,
@@ -854,12 +855,12 @@ async fn resettable_windows(
 }
 
 pub(crate) async fn admin_reset_on(
-    connection: &mut sqlx::SqliteConnection,
+    connection: &mut sqlx::PgConnection,
     owner: &str,
     actor: &str,
     now: i64,
 ) -> Result<Value> {
-    let account: PlatformAccount = sqlx::query_as("SELECT * FROM platform_principals WHERE id=?")
+    let account: PlatformAccount = sqlx::query_as("SELECT * FROM platform_principals WHERE id=$1")
         .bind(owner)
         .fetch_optional(&mut *connection)
         .await?
@@ -871,7 +872,7 @@ pub(crate) async fn admin_reset_on(
     let reset = uuid::Uuid::new_v4().to_string();
     // Only record a successful reset. No unredeemed internal card can be left
     // behind, and consumers can never select this source by ID.
-    sqlx::query("INSERT INTO virtual_reset_grants VALUES(?,?,?,?,?,?,?)")
+    sqlx::query("INSERT INTO virtual_reset_grants VALUES($1,$2,$3,$4,$5,$6,$7)")
         .bind(owner)
         .bind(&request)
         .bind(1_i64)
@@ -881,9 +882,9 @@ pub(crate) async fn admin_reset_on(
         .bind(None::<i64>)
         .execute(&mut *connection)
         .await?;
-    sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,source,redeemed_at_ms,redeemed_by,windows_reset) VALUES(?,?,?,?,?,'admin_reset',?,?,?)")
+    sqlx::query("INSERT INTO virtual_reset_credits(id,virtual_account_id,grant_request_id,granted_at_ms,available_at_ms,source,redeemed_at_ms,redeemed_by,windows_reset) VALUES($1,$2,$3,$4,$5,'admin_reset',$6,$7,$8)")
         .bind(&reset).bind(owner).bind(request).bind(now).bind(now).bind(now).bind(actor).bind(count).execute(&mut *connection).await?;
-    sqlx::query("UPDATE platform_accounts SET quota_reset_credit_id=? WHERE id=?")
+    sqlx::query("UPDATE platform_accounts SET quota_reset_credit_id=$1 WHERE id=$2")
         .bind(reset)
         .bind(owner)
         .execute(connection)

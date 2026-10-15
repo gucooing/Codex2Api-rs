@@ -66,8 +66,8 @@ async fn user(storage: &Storage, id: &str) -> String {
 
 #[tokio::test]
 async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = Storage::open(directory.path().join("metered.sqlite"))
+    let directory = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(directory.path().join("metered-pg"))
         .await
         .unwrap();
     let apps = codex2api::routers_with_metered_api_origin(

@@ -43,8 +43,10 @@ impl Storage {
                 });
             }
         };
-        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let current = crate::api_access::principal_on(&mut tx, &principal.key_id, false)
+        let prices = self.billing_catalog(&record.provider_id).await?;
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_user(&mut tx, &principal.user_id).await?;
+        let current = crate::api_access::principal_on(self, &mut tx, &principal.key_id, false)
             .await?
             .filter(|p| p.user_id == principal.user_id && p.group.id == principal.group.id)
             .ok_or(StorageError::Api {
@@ -63,20 +65,21 @@ impl Storage {
                 message: "模型平台与 API 组不一致",
             });
         }
-        let supported: i64 =
-            crate::api_groups::model_catalog_query("COUNT(*)", Some(&current.group), None)?
-                .push(" AND m.model=")
-                .push_bind(model)
-                .push(" AND m.kind=")
-                .push_bind(if matches!(requirement, PriceRequirement::Image(_)) {
-                    "image"
-                } else {
-                    "text"
-                })
-                .build_query_scalar()
-                .fetch_one(&mut *tx)
-                .await?;
-        if supported == 0 {
+        let prices = self
+            .billing_catalog_on(&mut tx, &record.provider_id, prices)
+            .await?;
+        let kind = if matches!(requirement, PriceRequirement::Image(_)) {
+            "image"
+        } else {
+            "text"
+        };
+        let supported = prices
+            .models
+            .iter()
+            .any(|m| m.model == model && m.kind == kind && m.enabled && !m.deleted)
+            && (current.group.allowed_models.is_empty()
+                || current.group.allowed_models.iter().any(|m| m == model));
+        if !supported {
             return Err(StorageError::Api {
                 code: "model_not_available",
                 message: "该 API 组不支持此模型",
@@ -87,31 +90,15 @@ impl Storage {
             _ => current.group.model_multiplier(model),
         };
         let multiplier_micros = crate::api_groups::multiplier_micros(&multiplier)?;
-        let mut tokens: Vec<crate::ModelPrice> = Vec::new();
-        let mut images: Vec<crate::ImagePrice> = Vec::new();
         let mut operations: Vec<crate::OperationPrice> = Vec::new();
         let mut cost_operations = None;
         let has_price = match requirement {
-            PriceRequirement::Tokens(tier) => {
-                tokens = sqlx::query_as(
-                    "SELECT * FROM model_prices WHERE provider_id=? ORDER BY model,tier,min_input_tokens",
-                )
-                .bind(&current.group.provider_id)
-                .fetch_all(&mut *tx)
-                .await?;
-                tokens.iter().any(|p| {
-                    p.model == model && Some(p.tier.as_str()) == tier && p.min_input_tokens == 0
-                })
-            }
+            PriceRequirement::Tokens(tier) => prices.tokens.iter().any(|p| {
+                p.model == model && Some(p.tier.as_str()) == tier && p.min_input_tokens == 0
+            }),
             PriceRequirement::Image(size) => {
-                images = sqlx::query_as(
-                    "SELECT * FROM model_image_prices WHERE provider_id=? ORDER BY model,resolution",
-                )
-                .bind(&current.group.provider_id)
-                .fetch_all(&mut *tx)
-                .await?;
                 let size = size.filter(|size| *size != "auto");
-                images.iter().any(|p| {
+                prices.images.iter().any(|p| {
                     p.model == model
                         && size.is_none_or(|size| {
                             p.resolution == crate::IMAGE_UNIFORM_RESOLUTION
@@ -123,13 +110,12 @@ impl Storage {
             }
             PriceRequirement::Operation(operation) => {
                 cost_operations = Some(
-                    sqlx::query_as(
-                        "SELECT * FROM operation_prices WHERE provider_id=? AND operation=?",
-                    )
-                    .bind(&current.group.provider_id)
-                    .bind(operation)
-                    .fetch_all(&mut *tx)
-                    .await?,
+                    prices
+                        .operations
+                        .iter()
+                        .filter(|p| p.operation == operation)
+                        .cloned()
+                        .collect(),
                 );
                 operations.push(crate::OperationPrice {
                     provider_id: current.group.provider_id.clone(),
@@ -168,7 +154,7 @@ impl Storage {
         };
         if !matches!(requirement, PriceRequirement::ReadOnly) {
             crate::usage_wallet::settle_usage_debt_on(&mut tx, &current.user_id).await?;
-            let (balance,pending):(i64,i64)=sqlx::query_as("SELECT u.wallet_cents,COALESCE(s.pending_nano_usd,0) FROM regular_users u LEFT JOIN usage_wallet_state s ON s.user_id=u.id WHERE u.id=?")
+            let (balance,pending):(i64,i64)=sqlx::query_as("SELECT u.wallet_cents,COALESCE(s.pending_nano_usd,0) FROM regular_users u LEFT JOIN usage_wallet_state s ON s.user_id=u.id WHERE u.id=$1")
                 .bind(&current.user_id).fetch_one(&mut *tx).await?;
             if requires_balance
                 && i128::from(balance) * i128::from(NANO_PER_CENT) <= i128::from(pending)
@@ -182,17 +168,21 @@ impl Storage {
                 });
             }
         }
-        let snapshot = serde_json::to_string(&BillingSnapshot::Current {
-            tokens,
-            images,
-            operations,
-            cost_operations,
-        })?;
+        let snapshot = if matches!(requirement, PriceRequirement::Operation(_)) {
+            std::sync::Arc::new(serde_json::to_string(&BillingSnapshot::Current {
+                tokens: Vec::new(),
+                images: Vec::new(),
+                operations,
+                cost_operations,
+            })?)
+        } else {
+            prices.journal.clone()
+        };
         let mut record = record.clone();
         record.status = "in_progress".into();
         record.subject_kind = "api_key".into();
         record.subject_id = current.key_id.clone();
-        record.subject_name = sqlx::query_scalar("SELECT name FROM api_keys WHERE id=?")
+        record.subject_name = sqlx::query_scalar("SELECT name FROM api_keys WHERE id=$1")
             .bind(&current.key_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -203,11 +193,16 @@ impl Storage {
         record.group_name = Some(current.group.name.clone());
         record.multiplier_micros = multiplier_micros;
         crate::request_writer::insert_usage_on(&mut tx, &record, Some(&snapshot)).await?;
-        sqlx::query("UPDATE api_keys SET last_used_at=? WHERE id=?")
-            .bind(chrono::Utc::now().to_rfc3339())
-            .bind(&current.key_id)
-            .execute(&mut *tx)
-            .await?;
+        if self
+            .runtime
+            .claim_touch(&format!("touch-api-key:{}", current.key_id))
+        {
+            sqlx::query("UPDATE api_keys SET last_used_at=$1 WHERE id=$2")
+                .bind(chrono::Utc::now().to_rfc3339())
+                .bind(&current.key_id)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(())
     }
