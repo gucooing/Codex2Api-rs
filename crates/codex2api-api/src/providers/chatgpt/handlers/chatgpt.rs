@@ -443,17 +443,3 @@ fn invalid_service_response() -> crate::ApiError {
         Some("invalid_upstream_response"),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    #[test]
-    fn desktop_site_policy_follows_client_contract() {
-        let denied = json!({"feature_status":{"agent":true,"page_content":false}});
-        assert_eq!(site_features(&denied).unwrap()["agent"], true);
-        assert_eq!(site_features(&denied).unwrap()["page_content"], false);
-        assert!(site_features(&json!({"feature_status":{"agent":"false"}})).is_err());
-        assert!(site_features(&json!({})).is_err());
-    }
-}

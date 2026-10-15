@@ -3,9 +3,31 @@ use crate::{PoolCandidate, Result, RuntimeMetrics, Storage};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    sync::{Arc, Mutex},
-    time::Duration,
+    sync::{Arc, Mutex, OnceLock},
 };
+
+/// An immutable candidate set owns its lazily built scheduling index.
+/// Replacing the pool releases both after its last in-flight reader finishes.
+#[derive(Default)]
+pub struct SupplierPool {
+    candidates: Arc<Vec<Arc<PoolCandidate>>>,
+    ready: OnceLock<Mutex<ReadyIndex>>,
+}
+impl SupplierPool {
+    pub(crate) fn new(candidates: Vec<Arc<PoolCandidate>>) -> Self {
+        Self {
+            candidates: Arc::new(candidates),
+            ready: OnceLock::new(),
+        }
+    }
+}
+impl std::ops::Deref for SupplierPool {
+    type Target = [Arc<PoolCandidate>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.candidates
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Number(f64);
@@ -271,7 +293,7 @@ impl ReadyIndex {
 impl Storage {
     pub async fn acquire_ready_supplier(
         &self,
-        pool: Arc<Vec<Arc<PoolCandidate>>>,
+        pool: Arc<SupplierPool>,
         traditional: bool,
         top_k: usize,
         previous: Option<&str>,
@@ -280,16 +302,9 @@ impl Storage {
         random: f64,
         reserve: bool,
     ) -> Result<Option<(Arc<PoolCandidate>, Option<crate::RuntimePermit>)>> {
-        let key = format!("dispatch:{:p}", Arc::as_ptr(&pool));
-        let index: Arc<Mutex<ReadyIndex>> = self
-            .runtime
-            .snapshot(key, async {
-                Ok::<_, crate::StorageError>((
-                    Arc::new(Mutex::new(ReadyIndex::new(self, pool))),
-                    Duration::from_secs(30),
-                ))
-            })
-            .await?;
+        let index = pool
+            .ready
+            .get_or_init(|| Mutex::new(ReadyIndex::new(self, pool.candidates.clone())));
         let (candidate, lease) = {
             let mut index = index.lock().unwrap();
             loop {

@@ -126,20 +126,11 @@ cargo build --release -p codex2api --locked
 
 Windows 导出后，将 Next 预加载片段中误生成的子目录规范为客户端约定的点分文件名（例如 `usage/__next.usage.__PAGE__.txt`），避免内嵌静态服务的导航预加载返回 404。Linux 已正确导出的文件保持原路径。
 
-## 浏览器验证
+## 验证
 
-业务浏览器测试调用真实隔离服务。读取失败验收在独立测试浏览器中注入 500 响应，延迟响应验收暂缓接口返回，以检查固定页面结构、同一控件填值与禁用保存；成功读取、管理写入和 OAuth 授权仍使用真实后端。必须先给 `CODEX2API_DB` 配置全新的临时 SQLite，使用随机 localhost 端口启动当前编译产物；禁止指向生产数据目录或重启生产服务。测试数据库可以使用 `review_fixture` 的明确本地验收记录，供应 OAuth 与真实上游推理不属于这轮 UI 验证。
+自动化测试集中在精确计价、价格区间换算、用量聚合和并发会话刷新等关键算法。普通页面、文案、控件数量、简单字段映射和配置改动使用 lint、类型检查及独立静态构建验证，不为这些改动增加测试或整页快照。
 
-```powershell
-cargo run -p codex2api-admin --example review_fixture --locked -- D:/codex-proxy-rs/target/review-next-ui-redesign-20260923/review.sqlite
-# 在独立工作目录启动最终二进制，设置 CODEX2API_DB 和四个独立的随机监听端口。
-cd frontend
-$env:CODEX2API_TEST_BASE_URL = 'http://127.0.0.1:<临时端口>'
-$env:CODEX2API_TEST_OUTPUT_DIR = '../target/review-next-ui-redesign-20260923'
-npm run test:e2e
-```
-
-测试覆盖实际管理写入、具名表单、套餐模型范围、消费账户隔离、只读客户端记录、OAuth PKCE 回调和 scope，以及重设计后的导航、视图切换、筛选、确认操作、长弹窗和响应式布局。主题验证使用两个独立浏览器上下文，检查刷新保留、互不影响、跟随系统、旧强调色清理、清除后恢复默认及没有后台写入。截图保存在隔离输出目录的 `screenshots/`，Playwright 失败记录保存在 `playwright-results/`。验证结束后停止本次临时服务。
+需要检查实际交互时，使用本地临时 SQLite、独立 Redis 前缀和 localhost 端口启动服务，在浏览器中核对；不使用生产数据或重启生产服务。
 
 ## 动态表单选项与用量筛选
 

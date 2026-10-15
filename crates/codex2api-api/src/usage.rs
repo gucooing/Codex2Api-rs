@@ -82,6 +82,7 @@ pub(crate) struct RequestLog {
     auth_revision: Option<i64>,
     authoritative_model: bool,
     supplier_failure: Option<codex2api_upstream::SupplierFailure>,
+    response_owner: Option<(String, String)>,
 }
 impl RequestLog {
     pub(crate) fn set_supplier_permit(&mut self, permit: codex2api_storage::RuntimePermit) {
@@ -220,6 +221,7 @@ impl RequestLog {
             auth_revision,
             authoritative_model: false,
             supplier_failure: None,
+            response_owner: None,
         })
     }
 }
@@ -465,14 +467,12 @@ impl RequestLog {
             if event.kind.as_deref() == Some("response.completed")
                 || (event.kind.is_none() && value.get("output").is_some())
             {
-                self.storage.remember_response_owner(
-                    crate::pool_scheduler::previous_key(
-                        &record.subject_id,
-                        &record.provider_id,
-                        id,
-                    ),
-                    record.account_id.clone(),
+                let key = crate::pool_scheduler::previous_key(
+                    &record.subject_id,
+                    &record.provider_id,
+                    id,
                 );
+                self.response_owner = Some((key, record.account_id.clone()));
             }
         }
         self.supplier_failure = codex2api_upstream::classify_provider_failure(
@@ -745,6 +745,12 @@ impl RequestLog {
     pub fn wrap(self, response: reqwest::Response) -> Body {
         self.wrap_with(response, |body| body)
     }
+    async fn persist_response_owner(&mut self) -> codex2api_storage::Result<()> {
+        if let Some((key, supplier)) = self.response_owner.take() {
+            self.storage.remember_response_owner(key, supplier).await?;
+        }
+        Ok(())
+    }
     pub fn wrap_with(
         mut self,
         response: reqwest::Response,
@@ -790,6 +796,19 @@ impl RequestLog {
         if expected_bytes == Some(0) {
             stream.finish_body();
         }
+        let stream = futures::stream::try_unfold(Box::new(stream), |mut stream| async move {
+            let chunk = stream.next().await;
+            // The client may immediately continue this response on another connection.
+            stream
+                .log
+                .persist_response_owner()
+                .await
+                .map_err(std::io::Error::other)?;
+            chunk
+                .transpose()
+                .map_err(std::io::Error::other)
+                .map(|chunk| chunk.map(|bytes| (bytes, stream)))
+        });
         Body::from_stream(ClientBody {
             inner: Some(transform(Body::from_stream(stream)).into_data_stream()),
             ended: false,
@@ -1234,6 +1253,7 @@ impl WsLedger {
         }
         if let Some(log) = &mut slot.log {
             log.observe(&event, &value);
+            log.persist_response_owner().await?;
             log.persist_auth_rejection().await?;
         }
         let outcome = ResponseOutcome::from_value(&value, None);

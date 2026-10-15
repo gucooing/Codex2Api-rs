@@ -14,8 +14,11 @@ $env:CODEX2API_PUBLIC_ADMIN_URL = 'http://127.0.0.1:8081'
 $env:CODEX2API_PUBLIC_USER_URL = 'http://127.0.0.1:8082'
 $env:CODEX2API_PUBLIC_METERED_API_URL = 'http://127.0.0.1:8083'
 $env:CODEX2API_DB = 'data/codex2api-test.sqlite'
+$env:CODEX2API_REDIS_URL = 'redis://127.0.0.1:6379/0'
 .\codex2api.exe
 ```
+
+启动前需要准备可访问的测试 Redis；缺少配置或连接失败时服务不会启动。默认键前缀由 SQLite 绝对路径生成，自动化用例的不同临时数据库不要共用手工指定的前缀。
 
 测试库首次管理员为 admin/admin。通过管理页授权供应账户、配置模型和套餐、创建用户、发放订阅并配置套餐号池。
 已有人工价格、停用和删除状态应保留；有完整预设的新支持模型应自动出现并启用。
@@ -35,9 +38,7 @@ ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录�
 检查用量记录中的实际模型、错误、上游 request ID 和费用快照。未知价格、未报告用量及
 [未实现能力](ARCHITECTURE.md#client-routes-and-capability-boundaries)不能用假成功代替。
 
-本地执行两个前端的 lint、typecheck、test 和 build，再执行 `cargo test --workspace --locked`。Windows 可使用已安装的 MSVC 工具链，或同版本 Rust GNU 工具链加 MinGW。浏览器回归必须分别访问管理端与用户端，并验证另一端接口返回不可访问、用户令牌不能进入管理端、确认前不发放授权码、跨账户读写被拒绝及购买重放不重复扣款。
-
-用户前端浏览器测试使用 `CODEX2API_TEST_USER_URL`、`CODEX2API_TEST_ADMIN_URL` 和 `CODEX2API_TEST_API_URL` 指定三个本地入口。钱包测试通过管理端余额调整接口在独立测试库准备，不能对正式库制造测试流水。
+普通改动执行两个前端的 lint、typecheck、build 和 `cargo check --workspace --locked`。自动化测试集中于精确计价、鉴权隔离、并发调度和协议解析等关键算法，按改动运行已有用例。Windows 可使用已安装的 MSVC 工具链，或同版本 Rust GNU 工具链加 MinGW。浏览器交互按实际改动人工核对，钱包数据只在独立测试库通过管理端余额调整准备。
 迁移 SQL 使用 LF，不能修改已应用的迁移或手工改写校验记录。
 
 ## 前后端开发启动
@@ -61,7 +62,7 @@ Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p
 
 用量记录统一在 `/admin/usage/` 和 `/user/usage/`，API 与 OAuth 请求共用列表、详情和统计。按量 API 页面为管理端 `/admin/api-groups/`、`/admin/api-keys/`，用户端 `/user/model-market/`、`/user/api-keys/`。配置同平台标签与模型后，核对空模型列表表示该平台全部已启用模型、模型列表不随标签支持范围变化、执行仍限定在所选标签号池、模型倍率覆盖组倍率、组与模型的每用户并发和 RPM 同时生效，多把 Key 不能增加同一用户的限额。模型广场默认展示基础目录，横向切换组后展示精确计费价格和两层限制。密钥只在创建时返回一次，撤销后调用立即失效；钱包 API 扣款不能改变 OAuth 订阅额度。
 
-管理前端的 `tests/browser/api-service.spec.ts` 在含 `review_fixture` 的独立测试库上验收组编辑、模型价格、手机布局、密钥和读取失败后的状态保留。设置 `CODEX2API_TEST_BASE_URL` 为本地管理入口、`CODEX2API_TEST_USER_BASE_URL` 为本地用户入口、`CODEX2API_TEST_OUTPUT_DIR` 为测试输出目录，然后在 `frontend/` 执行 `npx playwright test api-service.spec.ts public-urls.spec.ts`。测试只准备本地假供应账户，不调用真实上游；真实平台授权、订阅权限及生成行为仍需使用获准的供应账户单独验证。
+管理前端的布局、表单与失败反馈在隔离服务上按需人工检查。真实平台授权、订阅权限及生成行为使用获准的供应账户单独验证。
 
 购买与订单检查：关闭套餐的“允许购买”后，用户目录移除该套餐，管理员仍能在订阅管理中直接分配。仅开启且已配置售价的套餐展示，未定价或关闭购买的套餐不得出现在用户列表和总数中；直接调用预览、沿用旧预览确认、支付旧待付款订单也必须被拒绝且不扣款。点击下单只打开预览，关闭或反复计算后订单数、钱包、订阅和优惠券预留数均不变。“使用优惠码”在空输入或全空格时禁用，填写后才可提交；移除优惠码恢复原价。支付方式直接显示钱包可用余额。预览过期时使用独立的“刷新预览”，不能自动下单；确认前展示最终费用、支付方式、套餐和有效期。点击“确认订单”才产生一条待支付订单，重试确认复用原单，然后单独执行钱包支付，最后显示完成状态。支付成功后订单、余额、订阅和钱包记录一致。按原价 $30/30 天、剩余 15 天升级至 $60/30 天的报价应为新剩余费用 $30、抵扣 $15、应付 $15，原到期时间不变。核对不同时期续费价格、管理员发放快照、改价后抵扣不重算、降级在到期前被拒绝，以及重复支付、跨用户订单、过期报价和取消订单不扣款。管理端 `/admin/orders/` 查看相同的费用快照与支付状态。
 

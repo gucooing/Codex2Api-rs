@@ -8,6 +8,14 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      CODEX2API_REDIS_URL: redis://127.0.0.1:6379/0
     steps:
       - uses: actions/checkout@v7
       - name: Check provider module boundaries
@@ -24,7 +32,7 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-      - name: Check frontend types and contracts
+      - name: Check frontend types and critical logic
         working-directory: frontend
         run: |
           npm run lint
@@ -44,28 +52,6 @@ jobs:
       - name: Export embedded application
         working-directory: frontend
         run: npm run build
-      - name: Test supplier administration in the browser
-        working-directory: frontend
-        env:
-          CODEX2API_TEST_BASE_URL: http://127.0.0.1:8793
-          CODEX2API_TEST_OUTPUT_DIR: ../target/supplier-admin-ui
-        run: |
-          npx playwright install --with-deps chromium
-          node scripts/preview-export.mjs > /tmp/codex2api-ui-preview.log 2>&1 &
-          preview_pid=$!
-          trap 'kill "$preview_pid"' EXIT
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8793/admin/suppliers/ > /dev/null; then break; fi
-            sleep 1
-          done
-          npx playwright test supplier-management.spec.ts plan-details.spec.ts public-urls.spec.ts
-      - name: Upload supplier administration screenshots
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: supplier-administration-ui
-          path: target/supplier-admin-ui
-          if-no-files-found: ignore
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Check workspace

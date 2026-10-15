@@ -8,8 +8,6 @@ WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
-# The administrator contract tests read the server's checked-in fixtures.
-COPY crates/codex2api-admin/tests/contracts.json /src/crates/codex2api-admin/tests/contracts.json
 RUN npm run lint && npm run format:check && npm run typecheck && npm test && npm run build \
     && rm -rf node_modules .next
 

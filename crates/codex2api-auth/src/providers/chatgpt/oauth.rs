@@ -690,20 +690,4 @@ mod tests {
         let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
         assert_eq!(pkce.code_challenge, expected);
     }
-
-    #[test]
-    fn redirect_uri_matches_official_path() {
-        assert_eq!(redirect_uri(1455), "http://127.0.0.1:1455/auth/callback");
-    }
-
-    #[test]
-    fn default_config_uses_pinned_constants() {
-        let cfg = OAuthConfig::default();
-        assert_eq!(cfg.client_id, "app_EMoamEEZ73f0CkXaXp7hrann");
-        assert_eq!(cfg.issuer, "https://auth.openai.com");
-        assert_eq!(cfg.token_url, "https://auth.openai.com/oauth/token");
-        assert_eq!(cfg.revoke_url, "https://auth.openai.com/oauth/revoke");
-        assert_eq!(cfg.callback_port, 1455);
-        assert_eq!(cfg.callback_fallback_port, 1457);
-    }
 }

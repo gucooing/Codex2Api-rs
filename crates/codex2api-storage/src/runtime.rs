@@ -52,7 +52,6 @@ pub struct RuntimeMetrics {
 #[derive(Default, Debug)]
 struct Live {
     metrics: RuntimeMetrics,
-    rpm: VecDeque<i64>,
     touched: Option<Instant>,
     available: Arc<tokio::sync::Notify>,
     version: u64,
@@ -72,10 +71,9 @@ struct SupplierUpdates {
     entries: VecDeque<(u64, String)>,
 }
 pub(crate) struct Runtime {
-    redis: Option<redis::aio::ConnectionManager>,
+    redis: redis::aio::ConnectionManager,
     prefix: String,
     live: [Mutex<HashMap<String, Live>>; 64],
-    values: Mutex<HashMap<String, (Instant, String)>>,
     cache: Mutex<HashMap<String, Cached>>,
     fills: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
     generation: AtomicU64,
@@ -86,24 +84,18 @@ pub(crate) struct Runtime {
 impl Runtime {
     pub async fn new(path: &std::path::Path) -> Result<Arc<Self>> {
         use sha2::{Digest, Sha256};
-        let redis = match std::env::var("CODEX2API_REDIS_URL")
+        let url = std::env::var("CODEX2API_REDIS_URL")
             .ok()
             .filter(|v| !v.trim().is_empty())
-        {
-            Some(url) => {
-                let client = redis::Client::open(url).map_err(|_| StorageError::Runtime)?;
-                Some(
-                    tokio::time::timeout(
-                        Duration::from_secs(5),
-                        redis::aio::ConnectionManager::new(client),
-                    )
-                    .await
-                    .map_err(|_| StorageError::Runtime)?
-                    .map_err(|_| StorageError::Runtime)?,
-                )
-            }
-            None => None,
-        };
+            .ok_or(StorageError::RedisNotConfigured)?;
+        let client = redis::Client::open(url).map_err(|_| StorageError::Runtime)?;
+        let redis = tokio::time::timeout(
+            Duration::from_secs(5),
+            redis::aio::ConnectionManager::new(client),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)?;
         let absolute = std::path::absolute(path)?;
         let namespace = format!(
             "{:x}",
@@ -117,7 +109,6 @@ impl Runtime {
             redis,
             prefix,
             live: std::array::from_fn(|_| Mutex::new(HashMap::new())),
-            values: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
             fills: Mutex::new(HashMap::new()),
             generation: AtomicU64::new(0),
@@ -286,88 +277,51 @@ impl Runtime {
         );
     }
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
-        if key.starts_with("response_owner:")
-            && let Some((expiry, value)) = self.values.lock().unwrap().get(key)
-            && *expiry > Instant::now()
-        {
-            return Ok(Some(value.clone()));
-        }
-        if let Some(mut conn) = self.redis.clone() {
-            return tokio::time::timeout(
-                Duration::from_secs(2),
-                redis::cmd("GET").arg(self.key(key)).query_async(&mut conn),
-            )
-            .await
-            .map_err(|_| StorageError::Runtime)?
-            .map_err(|_| StorageError::Runtime);
-        }
-        let mut values = self.values.lock().unwrap();
-        if values
-            .get(key)
-            .is_some_and(|(expiry, _)| *expiry <= Instant::now())
-        {
-            values.remove(key);
-        }
-        Ok(values.get(key).map(|(_, v)| v.clone()))
+        let mut conn = self.redis.clone();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            redis::cmd("GET").arg(self.key(key)).query_async(&mut conn),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)
     }
     pub async fn set(&self, key: &str, value: &str, ttl: u64) -> Result<()> {
-        if let Some(mut conn) = self.redis.clone() {
-            return tokio::time::timeout(
-                Duration::from_secs(2),
-                redis::cmd("SET")
-                    .arg(self.key(key))
-                    .arg(value)
-                    .arg("EX")
-                    .arg(ttl)
-                    .query_async(&mut conn),
-            )
-            .await
-            .map_err(|_| StorageError::Runtime)?
-            .map_err(|_| StorageError::Runtime);
-        }
-        let mut values = self.values.lock().unwrap();
-        if values.len() >= CAPACITY
-            && !values.contains_key(key)
-            && let Some(old) = values.keys().next().cloned()
-        {
-            values.remove(&old);
-        }
-        values.insert(
-            key.into(),
-            (Instant::now() + Duration::from_secs(ttl), value.into()),
-        );
-        Ok(())
+        let mut conn = self.redis.clone();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            redis::cmd("SET")
+                .arg(self.key(key))
+                .arg(value)
+                .arg("EX")
+                .arg(ttl)
+                .query_async(&mut conn),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)
     }
     /// Renew only the mapping that was actually selected, without overwriting a newer one.
     pub async fn refresh(&self, key: &str, id: &str, ttl: u64) -> Result<()> {
-        if let Some(mut conn) = self.redis.clone() {
-            let _: i64 = tokio::time::timeout(
-                Duration::from_secs(2),
-                redis::Script::new(
-                    r#"
+        let mut conn = self.redis.clone();
+        let _: i64 = tokio::time::timeout(
+            Duration::from_secs(2),
+            redis::Script::new(
+                r#"
                     if redis.call('GET', KEYS[1]) == ARGV[1] then
                         return redis.call('EXPIRE', KEYS[1], ARGV[2])
                     end
                     return 0
                     "#,
-                )
-                .key(self.key(key))
-                .arg(id)
-                .arg(ttl)
-                .invoke_async(&mut conn),
             )
-            .await
-            .map_err(|_| StorageError::Runtime)?
-            .map_err(|_| StorageError::Runtime)?;
-        } else {
-            let mut values = self.values.lock().unwrap();
-            if let Some((expiry, value)) = values.get_mut(key)
-                && value == id
-                && *expiry > Instant::now()
-            {
-                *expiry = Instant::now() + Duration::from_secs(ttl);
-            }
-        }
+            .key(self.key(key))
+            .arg(id)
+            .arg(ttl)
+            .invoke_async(&mut conn),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)?;
         Ok(())
     }
     /// Debounce last-used timestamps only. Authorization/revocation remain live reads.
@@ -393,30 +347,24 @@ impl Runtime {
     }
     /// Compare-and-delete protects a newer selection from an older failed attempt.
     pub async fn forget(&self, key: &str, expected: &str) -> Result<()> {
-        if let Some(mut conn) = self.redis.clone() {
-            let _: i64 = tokio::time::timeout(
-                Duration::from_secs(2),
-                redis::Script::new(
-                    r#"
+        let mut conn = self.redis.clone();
+        let _: i64 = tokio::time::timeout(
+            Duration::from_secs(2),
+            redis::Script::new(
+                r#"
                     if redis.call('GET', KEYS[1]) == ARGV[1] then
                         return redis.call('DEL', KEYS[1])
                     end
                     return 0
                     "#,
-                )
-                .key(self.key(key))
-                .arg(expected)
-                .invoke_async(&mut conn),
             )
-            .await
-            .map_err(|_| StorageError::Runtime)?
-            .map_err(|_| StorageError::Runtime)?;
-        } else {
-            let mut values = self.values.lock().unwrap();
-            if values.get(key).is_some_and(|(_, v)| v == expected) {
-                values.remove(key);
-            }
-        }
+            .key(self.key(key))
+            .arg(expected)
+            .invoke_async(&mut conn),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)?;
         Ok(())
     }
     pub async fn rpm(
@@ -430,46 +378,21 @@ impl Runtime {
             return Ok(None);
         }
         let key = format!("rpm:{owner}");
-        if let Some(mut conn) = self.redis.clone() {
-            let delay: i64 = tokio::time::timeout(
-                Duration::from_secs(2),
-                redis::Script::new(RPM)
-                    .key(self.key(&key))
-                    .arg(now)
-                    .arg(limit)
-                    .arg(u8::from(consume))
-                    .arg(uuid::Uuid::new_v4().to_string())
-                    .invoke_async(&mut conn),
-            )
-            .await
-            .map_err(|_| StorageError::Runtime)?
-            .map_err(|_| StorageError::Runtime)?;
-            return Ok((delay > 0).then_some(delay as u32));
-        }
-        let mut map = self.shard(&key).lock().unwrap();
-        if map.len() > CAPACITY / 64 {
-            map.retain(|_, v| {
-                v.metrics.active > 0
-                    || v.metrics.waiting > 0
-                    || v.touched
-                        .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
-            });
-        }
-        let live = map.entry(key).or_default();
-        live.touched = Some(Instant::now());
-        while live.rpm.front().is_some_and(|v| *v <= now - 60_000) {
-            live.rpm.pop_front();
-        }
-        if live.rpm.len() >= limit as usize {
-            return Ok(Some(
-                ((live.rpm[live.rpm.len() - limit as usize] + 60_000 - now + 999) / 1000)
-                    .clamp(1, 60) as u32,
-            ));
-        }
-        if consume {
-            live.rpm.push_back(now);
-        }
-        Ok(None)
+        let mut conn = self.redis.clone();
+        let delay: i64 = tokio::time::timeout(
+            Duration::from_secs(2),
+            redis::Script::new(RPM)
+                .key(self.key(&key))
+                .arg(now)
+                .arg(limit)
+                .arg(u8::from(consume))
+                .arg(uuid::Uuid::new_v4().to_string())
+                .invoke_async(&mut conn),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)?;
+        Ok((delay > 0).then_some(delay as u32))
     }
     pub fn metrics(&self, key: &str) -> RuntimeMetrics {
         self.shard(key)
@@ -525,11 +448,7 @@ impl Runtime {
         Some(Arc::new(Lease {
             runtime: self.clone(),
             key: key.into(),
-            id: if self.redis.is_some() {
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                String::new()
-            },
+            id: uuid::Uuid::new_v4().to_string(),
             renew: Mutex::new(None),
             acquired: AtomicBool::new(false),
         }))
@@ -539,48 +458,47 @@ impl Runtime {
         lease: Arc<Lease>,
         limit: u32,
     ) -> Result<Option<RuntimePermit>> {
-        if let Some(mut conn) = self.redis.clone() {
-            let acquired: i64 = tokio::time::timeout(
-                Duration::from_secs(2),
-                redis::Script::new(ACQUIRE)
-                    .key(self.key(&lease.key))
-                    .arg(limit)
-                    .arg(&lease.id)
-                    .arg(LEASE_MS)
-                    .invoke_async(&mut conn),
-            )
-            .await
-            .map_err(|_| StorageError::Runtime)?
-            .map_err(|_| StorageError::Runtime)?;
-            if acquired == 0 {
-                return Ok(None);
-            }
-            let weak = Arc::downgrade(&lease);
-            let handle = tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(20)).await;
-                    let Some(lease) = weak.upgrade() else { break };
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        redis::Script::new(
-                            r#"
+        let mut conn = self.redis.clone();
+        let acquired: i64 = tokio::time::timeout(
+            Duration::from_secs(2),
+            redis::Script::new(ACQUIRE)
+                .key(self.key(&lease.key))
+                .arg(limit)
+                .arg(&lease.id)
+                .arg(LEASE_MS)
+                .invoke_async(&mut conn),
+        )
+        .await
+        .map_err(|_| StorageError::Runtime)?
+        .map_err(|_| StorageError::Runtime)?;
+        if acquired == 0 {
+            return Ok(None);
+        }
+        let weak = Arc::downgrade(&lease);
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                let Some(lease) = weak.upgrade() else { break };
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    redis::Script::new(
+                        r#"
                             local t = redis.call('TIME')
                             local now = t[1] * 1000 + math.floor(t[2] / 1000)
                             redis.call('ZADD', KEYS[1], now + ARGV[2], ARGV[1])
                             redis.call('PEXPIRE', KEYS[1], ARGV[2])
                             return 1
                             "#,
-                        )
-                        .key(lease.runtime.key(&lease.key))
-                        .arg(&lease.id)
-                        .arg(LEASE_MS)
-                        .invoke_async::<i64>(&mut conn),
                     )
-                    .await;
-                }
-            });
-            *lease.renew.lock().unwrap() = Some(handle.abort_handle());
-        }
+                    .key(lease.runtime.key(&lease.key))
+                    .arg(&lease.id)
+                    .arg(LEASE_MS)
+                    .invoke_async::<i64>(&mut conn),
+                )
+                .await;
+            }
+        });
+        *lease.renew.lock().unwrap() = Some(handle.abort_handle());
         lease.acquired.store(true, Ordering::Release);
         Ok(Some(RuntimePermit { _lease: lease }))
     }
@@ -602,27 +520,24 @@ impl Drop for Lease {
         if let Some(handle) = self.renew.lock().unwrap().take() {
             handle.abort();
         }
-        if let Some(live) = self
+        let available = self
             .runtime
             .shard(&self.key)
             .lock()
             .unwrap()
             .get_mut(&self.key)
-        {
-            live.metrics.active = live.metrics.active.saturating_sub(1);
-            self.runtime.supplier_changed(&self.key);
-            if self.acquired.load(Ordering::Acquire) {
-                live.available.notify_waiters();
-            }
-        }
-        if let (Some(mut conn), Ok(handle)) = (
-            self.runtime.redis.clone(),
-            tokio::runtime::Handle::try_current(),
-        ) {
+            .map(|live| {
+                live.metrics.active = live.metrics.active.saturating_sub(1);
+                self.runtime.supplier_changed(&self.key);
+                live.available.clone()
+            });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let mut conn = self.runtime.redis.clone();
             let key = self.runtime.key(&self.key);
             let id = self.id.clone();
+            let acquired = self.acquired.load(Ordering::Acquire);
             handle.spawn(async move {
-                let _ = tokio::time::timeout(
+                let released = tokio::time::timeout(
                     Duration::from_secs(2),
                     redis::cmd("ZREM")
                         .arg(key)
@@ -630,6 +545,12 @@ impl Drop for Lease {
                         .query_async::<i64>(&mut conn),
                 )
                 .await;
+                if acquired
+                    && matches!(released, Ok(Ok(_)))
+                    && let Some(available) = available
+                {
+                    available.notify_waiters();
+                }
             });
         }
     }
@@ -655,29 +576,9 @@ impl Drop for RuntimeWait {
 }
 
 impl crate::Storage {
-    pub fn remember_response_owner(&self, key: String, id: String) {
+    pub async fn remember_response_owner(&self, key: String, id: String) -> Result<()> {
         let ttl = self.runtime.affinity_ttl.load(Ordering::Acquire);
-        {
-            let mut values = self.runtime.values.lock().unwrap();
-            if values.len() >= CAPACITY
-                && !values.contains_key(&key)
-                && let Some(old) = values.keys().next().cloned()
-            {
-                values.remove(&old);
-            }
-            values.insert(
-                key.clone(),
-                (Instant::now() + Duration::from_secs(ttl), id.clone()),
-            );
-        }
-        let runtime = self.runtime.clone();
-        if runtime.redis.is_some() {
-            tokio::spawn(async move {
-                if runtime.set(&key, &id, ttl).await.is_err() {
-                    tracing::warn!("Response affinity persistence unavailable");
-                }
-            });
-        }
+        self.runtime.set(&key, &id, ttl).await
     }
     pub fn invalidate_runtime_cache(&self) {
         self.runtime.invalidate();
@@ -769,7 +670,7 @@ impl crate::Storage {
                 _ = &mut available => {},
                 _ = tokio::time::sleep_until(deadline) => return Ok(None),
                 // Other processes do not signal our local Notify.
-                _ = tokio::time::sleep(Duration::from_millis(50)), if self.runtime.redis.is_some() => {},
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {},
             }
         }
     }
@@ -777,9 +678,7 @@ impl crate::Storage {
 
 impl std::fmt::Debug for Runtime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Runtime")
-            .field("redis_enabled", &self.redis.is_some())
-            .finish_non_exhaustive()
+        f.debug_struct("Runtime").finish_non_exhaustive()
     }
 }
 
@@ -853,57 +752,5 @@ mod tests {
         drop(wait);
         assert_eq!(runtime.metrics("supplier:a").active, 0);
         assert_eq!(runtime.metrics("supplier:a").waiting, 0);
-    }
-
-    #[tokio::test]
-    #[ignore = "manual cache performance comparison"]
-    async fn benchmark_candidate_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = Runtime::new(&dir.path().join("cache.sqlite"))
-            .await
-            .unwrap();
-        let candidates: Vec<_> = (0..10_000)
-            .map(|i| crate::PoolCandidate {
-                id: format!("supplier-{i}"),
-                concurrency: 5,
-                priority: i % 10,
-                load_factor: None,
-                runtime_key: String::new(),
-                runtime_shard: 0,
-            })
-            .collect();
-        runtime.cache(
-            "pool".into(),
-            &candidates,
-            runtime.epoch(),
-            Duration::from_secs(600),
-        );
-        let start = Instant::now();
-        for _ in 0..200 {
-            std::hint::black_box(runtime.cached::<Vec<crate::PoolCandidate>>("pool").unwrap());
-        }
-        eprintln!(
-            "candidate cache: 10000 accounts x 200 reads = {:?}",
-            start.elapsed()
-        );
-        let candidates = Arc::new(candidates);
-        runtime.cache(
-            "shared-pool".into(),
-            &candidates,
-            runtime.epoch(),
-            Duration::from_secs(600),
-        );
-        let start = Instant::now();
-        for _ in 0..200 {
-            std::hint::black_box(
-                runtime
-                    .cached::<Arc<Vec<crate::PoolCandidate>>>("shared-pool")
-                    .unwrap(),
-            );
-        }
-        eprintln!(
-            "shared candidate cache: 10000 accounts x 200 reads = {:?}",
-            start.elapsed()
-        );
     }
 }

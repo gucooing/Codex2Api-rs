@@ -507,14 +507,6 @@ mod tests {
     use codex2api_accounts::HostRuntime;
     use http::HeaderValue;
 
-    #[test]
-    fn responses_url_is_official() {
-        assert_eq!(
-            responses_url(),
-            "https://chatgpt.com/backend-api/codex/responses"
-        );
-    }
-
     #[tokio::test]
     async fn transient_http_failures_are_forwarded_once_for_the_client_to_retry() {
         use std::sync::atomic::{AtomicUsize, Ordering};

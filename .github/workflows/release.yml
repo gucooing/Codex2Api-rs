@@ -84,7 +84,7 @@ jobs:
         working-directory: frontend
         run: npm run format:check
 
-      - name: Test frontend contracts
+      - name: Test frontend critical logic
         working-directory: frontend
         run: npm test
 

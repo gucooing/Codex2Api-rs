@@ -19,6 +19,7 @@ pub use api_groups::{
 extern crate self as codex2api_storage;
 mod billing;
 mod dispatch;
+pub use dispatch::SupplierPool;
 mod operation_prices;
 pub use operation_prices::OperationPrice;
 mod list_query;

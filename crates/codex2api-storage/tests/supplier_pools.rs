@@ -1158,7 +1158,7 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
 }
 
 #[tokio::test]
-async fn rpm_is_atomic_sliding_and_process_local_and_honors_policy() {
+async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rpm.sqlite");
     let storage = Storage::open(&path).await.unwrap();
@@ -1196,7 +1196,7 @@ async fn rpm_is_atomic_sliding_and_process_local_and_honors_policy() {
             .admit_virtual_request("v", true, 159_999)
             .await
             .unwrap(),
-        None
+        Some(1)
     );
     assert!(
         storage

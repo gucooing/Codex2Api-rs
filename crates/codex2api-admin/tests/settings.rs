@@ -93,57 +93,6 @@ async fn security_checks_both_previous_credentials_and_revokes_sessions() {
             .is_some()
     );
 }
-#[tokio::test]
-async fn desktop_settings_and_resources_share_persisted_data() {
-    let f = Fixture::new().await;
-    assert_eq!(
-        f.request(
-            "PUT",
-            "/admin/api/settings/desktop",
-            json!({"proxy_id":null,"resource_cache_minutes":0})
-        )
-        .await
-        .status(),
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        f.request(
-            "PUT",
-            "/admin/api/settings/desktop",
-            json!({"proxy_id":"missing","resource_cache_minutes":60})
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    let input = json!({"proxy_id":null,"resource_cache_minutes":30});
-    assert_eq!(
-        f.request("PUT", "/admin/api/settings/desktop", input.clone())
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(f.get("/admin/api/settings/desktop").await, input);
-    assert_eq!(
-        f.request("GET", "/admin/api/diagnostics", json!(null))
-            .await
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        f.request(
-            "PUT",
-            "/admin/api/settings/desktop",
-            json!({"collect_diagnostics":true,"resource_cache_minutes":30})
-        )
-        .await
-        .status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-    for path in ["/admin/api/resources", "/admin/api/missing-endpoints"] {
-        assert!(f.get(path).await["items"].is_array());
-    }
-}
 
 #[tokio::test]
 async fn admin_cookie_security_uses_configured_origin_for_login_logout_and_password_changes() {

@@ -422,21 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn openai_json_shape() {
-        let value = openai_json(
-            "authentication_error",
-            "Invalid or expired virtual account access token.",
-            Some("invalid_token"),
-        );
-        assert_eq!(value["error"]["type"], "authentication_error");
-        assert_eq!(value["error"]["code"], "invalid_token");
-        assert_eq!(
-            value["error"]["message"],
-            "Invalid or expired virtual account access token."
-        );
-    }
-
-    #[test]
     fn preserves_upstream_error_object() {
         let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
         let response = map_upstream_status_body(StatusCode::SERVICE_UNAVAILABLE, body);

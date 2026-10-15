@@ -7,24 +7,6 @@ use axum::{
 };
 use ring::signature::KeyPair;
 
-#[test]
-fn official_subscription_display_takes_precedence_over_internal_tier() {
-    assert_eq!(
-        subscription_display(
-            &json!({"subscriptionTier":"SuperGrokHeavy","subscriptionTierDisplay":"SuperGrok Heavy"})
-        ),
-        Some("SuperGrok Heavy")
-    );
-    assert_eq!(
-        subscription_display(&json!({"subscriptionTier":null,"subscriptionTierDisplay":"Free"})),
-        Some("Free")
-    );
-    assert_eq!(
-        subscription_display(&json!({"subscriptionTierDisplay":"New official name"})),
-        Some("New official name")
-    );
-}
-
 async fn fixture() -> (
     tempfile::TempDir,
     GrokAuthService,

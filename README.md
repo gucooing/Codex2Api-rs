@@ -28,13 +28,13 @@ Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授
 
 ## Docker Compose 部署
 
-需要 Docker Engine 与 Docker Compose（`docker compose`）。镜像地址为 `ghcr.io/gucooing/codex2api-rs`，支持 `linux/amd64` 和 `linux/arm64`；两个前端已经嵌入镜像内的 Rust 可执行文件，服务器不需要安装 Node.js 或 Rust。
+需要 Docker Engine、Docker Compose（`docker compose`）和容器可访问的 Redis。Compose 不创建 Redis 服务，必须在 `.env` 中填写 `CODEX2API_REDIS_URL`。镜像地址为 `ghcr.io/gucooing/codex2api-rs`，支持 `linux/amd64` 和 `linux/arm64`；两个前端已经嵌入镜像内的 Rust 可执行文件，服务器不需要安装 Node.js 或 Rust。
 
 下载仓库中的 `docker-compose.yml` 和 `.env.example` 到同一目录，或在仓库根目录执行：
 
 ```bash
 cp .env.example .env
-# 按部署环境编辑 .env 中的端口和对外访问地址。
+# 填写 .env 中必需的 Redis 地址，并按部署环境编辑端口和对外访问地址。
 mkdir -p data
 # Linux：让容器运行用户能够读写此目录；已有数据库文件也需要相同权限。
 sudo chown -R 10001:10001 ./data
@@ -88,12 +88,12 @@ docker compose up -d --wait --pull never
 
 现有 `Check` 和 `Release` 工作流调用 `.github/workflows/docker.yml`：
 
-- PR 先通过现有检查，再在原生 amd64、arm64 runner 上构建镜像并验证 Compose，不登录 GHCR、不发布。
+- PR 先通过现有检查，再在原生 amd64、arm64 runner 上构建镜像，不登录 GHCR、不发布。
 - `main` 推送在 `Check` 通过后发布 `edge` 和 `sha-<完整提交哈希>`。
 - Git 标签推送在现有多平台二进制构建通过后发布同名镜像标签及提交哈希标签；正式 `vX.Y.Z` / `X.Y.Z` 标签同时更新 `latest`，预发布标签不更新 `latest`。GitHub Release 在镜像成功发布后创建。
 - `Container` 支持手动运行：`main` 和已合入 `main` 的标签允许发布，其他分支仅验证。标签必须满足 Docker 标签格式。
 
-每个平台发布前映射全新的临时目录启动 Compose，检查四个入口隔离、两个嵌入页面及静态资源、非 root 运行、管理员登录，并重建容器验证宿主机目录中的 SQLite、签名密钥及会话仍然有效；两个平台均通过后才发布多架构标签。镜像名从当前 GitHub 仓库名自动转为小写，Fork 仓库部署时同步修改 `.env` 中的镜像地址。
+两个平台构建均通过后才发布多架构标签。镜像名从当前 GitHub 仓库名自动转为小写，Fork 仓库部署时同步修改 `.env` 中的镜像地址。
 
 CI 使用自动提供的 `GITHUB_TOKEN` 及 `packages: write` 权限推送，无需另设 GHCR 密码。首次发布后，如需匿名拉取，在 GitHub Packages 中将该包的可见性设为 Public；私有包须先使用有 `read:packages` 权限的凭据执行 `docker login ghcr.io`。详见 [GitHub Container Registry 文档](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 
@@ -136,6 +136,8 @@ bash scripts/build.sh --release
 | `CODEX2API_PUBLIC_ADMIN_URL` | `http://127.0.0.1:8081` | 对外管理端 origin；HTTPS 时登录、退出和改密 Cookie 都带 `Secure`，不采信请求中的转发协议头。 |
 | `CODEX2API_PUBLIC_METERED_API_URL` | `http://127.0.0.1:8083` | 按量 API 公开 origin；用户 API Key 页显示此地址加 `/v1`。 |
 | `CODEX2API_DB` | `data/codex2api.sqlite` | SQLite 数据库文件路径；相对路径以程序启动目录为基准。 |
+| `CODEX2API_REDIS_URL` | 必填 | Redis 连接地址，例如 `redis://127.0.0.1:6379/0`；未配置或连接失败时启动报错。 |
+| `CODEX2API_REDIS_PREFIX` | 数据库绝对路径的哈希 | 共享 Redis 的独立部署使用不同且固定的键前缀。 |
 | `CODEX_CA_CERTIFICATE` | 未设置 | 可选的 PEM 格式自定义 CA 证书文件路径。 |
 | `SSL_CERT_FILE` | 未设置 | 未配置 `CODEX_CA_CERTIFICATE` 时使用的自定义 CA 证书文件路径。 |
 | `RUST_LOG` | `codex2api=info` | 日志过滤规则；`codex2api=debug` 启用完整 AI 请求输入输出日志。 |
@@ -144,16 +146,17 @@ bash scripts/build.sh --release
 
 通过 HTTPS 反向代理提供管理端时，将 `CODEX2API_PUBLIC_ADMIN_URL` 设置为浏览器访问的 HTTPS origin。该配置不启动 TLS 监听器。
 
-直接使用默认配置启动：
+先设置必填的 `CODEX2API_REDIS_URL`，再启动程序：
 
 ```bash
-./codex2api
+CODEX2API_REDIS_URL=redis://127.0.0.1:6379/0 ./codex2api
 ```
 
 Linux 或 macOS 自定义监听地址和数据库路径：
 
 ```bash
 CODEX2API_API_BIND=0.0.0.0:8080 \
+CODEX2API_REDIS_URL=redis://127.0.0.1:6379/0 \
 CODEX2API_DB=/var/lib/codex2api/codex2api.sqlite \
 ./codex2api
 ```
@@ -162,6 +165,7 @@ Windows PowerShell：
 
 ```powershell
 $env:CODEX2API_API_BIND = "0.0.0.0:8080"
+$env:CODEX2API_REDIS_URL = "redis://127.0.0.1:6379/0"
 $env:CODEX2API_DB = "D:\data\codex2api.sqlite"
 .\codex2api.exe
 ```
@@ -194,7 +198,7 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 套餐设置 RPM 和并发限制，默认 40 和 10；订阅可覆盖或留空继承，0 表示无限。系统设置中没有这两项全局默认值。供应账户调度仍有独立并发上限、优先级和负载容量。HTTP 与 WebSocket 共用每份订阅的限制，内部换号不重复计算 RPM 或并发。
 
-运行态可通过 `CODEX2API_REDIS_URL` 接入 Redis，存放会话粘连、响应归属、RPM 和并发租约。`CODEX2API_REDIS_PREFIX` 用于隔离共享 Redis 的不同部署；留空时按数据库绝对路径生成。容器内数据库路径相同的独立部署应设置不同前缀。不配置 Redis 时使用进程内有界状态，重启后清空；已配置 Redis 不可用时拒绝新的调度请求。SQLite 保留身份、配置和真实计费账本；候选与价格快照使用主动失效缓存，最近使用时间合并写入。
+运行态必须通过 `CODEX2API_REDIS_URL` 接入 Redis，存放会话粘连、响应归属、RPM 和并发租约。`CODEX2API_REDIS_PREFIX` 用于隔离共享 Redis 的不同部署；留空时按数据库绝对路径生成。容器内数据库路径相同的独立部署应设置不同前缀。未配置 Redis 或初始连接失败时启动报错；运行中 Redis 不可用时拒绝新的调度请求，不使用本地替代。响应归属写入 Redis 后才交付完成响应。SQLite 保留身份、配置和真实计费账本；候选与价格快照使用主动失效缓存，最近使用时间合并写入。
 
 语音通话功能已移除。原 Realtime、Live、通话创建、侧边 WebSocket、语音目录及语音选择 API 返回 `501 voice_calls_unavailable`，不会调用供应账号。客户端设置明确关闭语音入口，独立听写功能保留。
 

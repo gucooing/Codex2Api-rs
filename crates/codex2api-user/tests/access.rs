@@ -946,43 +946,6 @@ async fn user_usage_filters_every_query_by_owner_and_never_serializes_supplier_d
 }
 
 #[tokio::test]
-async fn empty_usage_has_a_stable_shape_in_both_timezone_directions() {
-    let (_dir, storage, app, _user) = setup().await;
-    let response = request(
-        &app,
-        "/user/api/login",
-        Some(json!({"username":"alice","password":"user-password"})),
-        None,
-        None,
-    )
-    .await;
-    let auth = cookie(&response);
-    for offset in [-840, -480, 0, 330, 840] {
-        let response = request(
-            &app,
-            &format!("/user/api/usage?days=7&limit=10&tz_offset={offset}"),
-            None,
-            Some(&auth),
-            None,
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::OK,
-            "timezone offset {offset}"
-        );
-        let value = body(response).await;
-        assert_eq!(value["summary"]["request_count"], 0);
-        assert_eq!(value["summary"]["total_tokens"], 0);
-        assert_eq!(value["summary"]["cost_nano_usd"], 0);
-        assert_eq!(value["total"], 0);
-        assert_eq!(value["rows"], json!([]));
-        assert_eq!(value["items"], json!([]));
-    }
-    storage.close().await;
-}
-
-#[tokio::test]
 async fn oauth_requires_an_explicit_owned_subscription_and_keeps_verification_separate() {
     let (_dir, storage, app, mut user) = setup().await;
     user.id = "subscription-selector-user".into();

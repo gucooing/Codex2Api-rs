@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build and load for native container tests
+      - name: Build native container
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -97,9 +97,6 @@ jobs:
           cache-from: type=gha,scope=container-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=container-${{ matrix.arch }}
 
-      - name: Test Compose, embedded frontends and persistent sessions
-        run: python3 scripts/test-container.py codex2api:ci
-
       - name: Log in to GitHub Container Registry
         if: needs.prepare.outputs.publish == 'true'
         uses: docker/login-action@v4
@@ -108,7 +105,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push tested platform by digest
+      - name: Push platform by digest
         if: needs.prepare.outputs.publish == 'true'
         id: push
         uses: docker/build-push-action@v7

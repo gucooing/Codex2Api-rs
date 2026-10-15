@@ -48,6 +48,9 @@ validation are complete.
 
 - One process.
 - SQLite storage (`data/codex2api.sqlite`).
+- Redis is required for affinity, response ownership, RPM and concurrency leases.
+  Missing configuration or failed initial connection must stop startup. Do not add
+  in-process substitutes when Redis is absent or unavailable.
 - Isolated persistent per-account identity and HTTP fingerprint in SQLite (no `$CODEX_HOME` files).
 - HTTP fingerprint: official header names/formula; originator + UA version are constants; OS/terminal are random per account then frozen. Do not use the proxy host. Do not forge TLS/JA3.
 - Admin web: one user, username/password, default `admin` / `admin`.
@@ -327,6 +330,12 @@ Before changing subscription client endpoints, read
   baseline update. Implement each requested repair through its data and UI path.
 
 - Match existing crate boundaries.
+- Keep tests focused on critical algorithms such as billing, authorization,
+  scheduling and protocol parsing. Do not add tests for constant repetition,
+  ordinary UI structure, trivial field mappings or simple CRUD. Use compilation,
+  lint and type checks for routine changes.
+- Give derived caches stable business keys or tie them to their owning object.
+  Do not add periodic cache scans to compensate for retained obsolete objects.
 - Remove superseded routes, fields and runtime branches when replacing behavior.
   Migrate persisted data with SQL only; do not retain legacy aliases, dual reads,
   dual writes or compatibility fallbacks.

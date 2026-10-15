@@ -240,13 +240,14 @@ mapping. An unmigratable `previous_response_id` requires its original supplier,
 including after reconnecting; a missing or unavailable owner returns
 `supplier_context_required`. Known full WS context permits safe supplier changes.
 
-`CODEX2API_REDIS_URL` optionally moves affinity, response ownership, rolling RPM
-and renewable concurrency leases to Redis. `CODEX2API_REDIS_PREFIX` isolates
+`CODEX2API_REDIS_URL` is required. Redis owns affinity, response ownership, rolling
+RPM and renewable concurrency leases. Missing configuration or a failed initial
+connection prevents startup; no local substitute is used. `CODEX2API_REDIS_PREFIX` isolates
 independent deployments sharing a Redis database; the default hashes the absolute
 SQLite path. In containers with the same internal SQLite path, explicitly use
 different prefixes for independent installations. A configured Redis outage fails
-new admissions closed. Without a URL, bounded process-local state implements the
-same policy and is cleared at restart. Concurrency leases last ninety seconds and
+new admissions closed. Response ownership is written before completion reaches
+the client. Concurrency leases last ninety seconds and
 renew every twenty seconds; release and expiry cover both normal completion and
 process loss. A local slot guard also prevents a Redis restart from admitting
 more than the single process's configured capacity.
@@ -255,7 +256,11 @@ SQLite remains authoritative for identity, credentials, entitlements, model
 configuration and immutable accounting. Shared scheduling, model catalogs,
 supplier model membership, frozen transport fields and price snapshots use
 bounded native in-process caches. Immutable lists are shared through `Arc`;
-cache reads do not encode/decode JSON. Concurrent misses for one key share a
+each candidate pool owns its scheduling index, so replacing a pool releases the
+old index when its last reader finishes. Multi-tag unions use stable provider,
+tag-set and model keys and weak source references; changed sources replace the
+same cache entry without retaining old source pools. Cache reads do not
+encode/decode JSON. Concurrent misses for one key share a
 loader, cancellation releases that loader, and generation fencing prevents a
 pre-edit read from repopulating an invalidated cache. Administrator and supplier
 state writes invalidate snapshots, including fingerprint edits, proxy URL changes
@@ -544,7 +549,7 @@ Subscription administration uses a User column, account/expiry/status filters, q
 ### Request admission and subscription names
 
 RPM is a per-subscription sliding sixty-second window across devices and HTTP/WS,
-admitted atomically in Redis or the single-process runtime. Plans default to 40
+admitted atomically in Redis. Plans default to 40
 RPM and 10 concurrent generations. Subscription overrides inherit the plan when
 unset; zero explicitly means unlimited. Gateway settings have no RPM/concurrency
 defaults. Plan edits invalidate policy caches and user-facing catalogs show plan

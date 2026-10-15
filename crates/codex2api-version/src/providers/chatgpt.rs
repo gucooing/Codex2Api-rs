@@ -132,17 +132,3 @@ pub fn reference() -> CodexReference {
         oauth_client_id: OAUTH_CLIENT_ID,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn commit_is_pinned() {
-        assert_eq!(CODEX_REF_COMMIT.len(), 40);
-        assert_eq!(CODEX_PACKAGE_VERSION, "0.162.1");
-        assert_eq!(CODEX_RELEASE_TAG, "rust-v0.162.1");
-        assert_eq!(DEFAULT_ORIGINATOR, "codex_cli_rs");
-        assert_eq!(OAUTH_CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
-    }
-}

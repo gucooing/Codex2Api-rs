@@ -11,6 +11,8 @@ pub enum StorageError {
     },
     #[error("Runtime cache is unavailable")]
     Runtime,
+    #[error("CODEX2API_REDIS_URL is required")]
+    RedisNotConfigured,
     #[error("Request journal is unavailable")]
     LedgerUnavailable,
     #[error("{message}")]

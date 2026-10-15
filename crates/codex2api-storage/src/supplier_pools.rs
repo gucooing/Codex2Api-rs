@@ -1,6 +1,9 @@
-use crate::{Result, Storage, StorageError};
+use crate::{Result, Storage, StorageError, SupplierPool};
 use sqlx::FromRow;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 #[derive(Clone, Debug, FromRow, serde::Serialize)]
 pub struct SupplierTag {
@@ -34,29 +37,39 @@ struct CandidateRow {
 
 #[derive(Default)]
 struct PoolIndex {
-    all: Arc<Vec<Arc<PoolCandidate>>>,
+    all: Arc<SupplierPool>,
     by_id: std::collections::HashMap<String, Arc<PoolCandidate>>,
-    by_model: std::collections::HashMap<String, Arc<Vec<Arc<PoolCandidate>>>>,
+    by_model: std::collections::HashMap<String, Arc<SupplierPool>>,
     models: std::collections::HashMap<String, Arc<std::collections::HashSet<String>>>,
-    empty: Arc<Vec<Arc<PoolCandidate>>>,
+    empty: Arc<SupplierPool>,
 }
 
 #[derive(Clone)]
 struct PoolUnion {
-    candidates: Arc<Vec<Arc<PoolCandidate>>>,
-    // Retain source allocations while their pointer identities form a cache key.
-    _sources: Vec<Arc<Vec<Arc<PoolCandidate>>>>,
+    candidates: Arc<SupplierPool>,
+    sources: Vec<Weak<SupplierPool>>,
+}
+impl PoolUnion {
+    fn matches(&self, sources: &[Arc<SupplierPool>]) -> bool {
+        self.sources.len() == sources.len()
+            && self.sources.iter().zip(sources).all(|(old, current)| {
+                // A weak reference preserves allocation identity without owning
+                // the obsolete source pool or its scheduling index.
+                old.as_ptr() == Arc::as_ptr(current)
+            })
+    }
 }
 
 impl Storage {
     /// API group tags expand into the same scheduler candidates as subscription pools.
-    /// The source Arc identities change when membership/health snapshots change.
+    /// One stable cache slot per provider, tag set and model; source changes replace it.
     pub async fn pool_candidates_for_tags(
         &self,
         tags: &[String],
         provider: &str,
         model: Option<&str>,
-    ) -> Result<Arc<Vec<Arc<PoolCandidate>>>> {
+    ) -> Result<Arc<SupplierPool>> {
+        let model = model.filter(|model| !model.is_empty());
         let tags = tags.iter().collect::<std::collections::BTreeSet<_>>();
         if tags.len() == 1 {
             return self
@@ -68,35 +81,37 @@ impl Storage {
         for tag in &tags {
             sources.push(self.pool_candidates(tag, provider, model).await?);
         }
-        let identities = sources
-            .iter()
-            .map(|source| Arc::as_ptr(source) as usize)
-            .collect::<Vec<_>>();
         let key = format!(
             "pool-union:{}",
-            serde_json::to_string(&(provider, tags, model, identities))?
+            serde_json::to_string(&(provider, tags, model))?
         );
-        if let Some(value) = self.runtime.cached::<PoolUnion>(&key) {
-            return Ok(value.candidates);
+        let cached = || {
+            self.runtime
+                .cached::<PoolUnion>(&key)
+                .filter(|value| value.matches(&sources))
+                .map(|value| value.candidates)
+        };
+        if let Some(value) = cached() {
+            return Ok(value);
         }
         let _fill = self.runtime.cache_fill(&key).await;
-        if let Some(value) = self.runtime.cached::<PoolUnion>(&key) {
-            return Ok(value.candidates);
+        if let Some(value) = cached() {
+            return Ok(value);
         }
         let mut seen = std::collections::BTreeSet::new();
-        let candidates = Arc::new(
+        let candidates = Arc::new(SupplierPool::new(
             sources
                 .iter()
                 .flat_map(|source| source.iter())
                 .filter(|candidate| seen.insert(candidate.id.clone()))
                 .cloned()
                 .collect::<Vec<_>>(),
-        );
+        ));
         self.runtime.cache(
             key,
             &PoolUnion {
                 candidates: candidates.clone(),
-                _sources: sources,
+                sources: sources.iter().map(Arc::downgrade).collect(),
             },
             epoch,
             Duration::from_secs(30),
@@ -176,10 +191,10 @@ impl Storage {
                 Arc::make_mut(index.models.entry(id).or_default()).insert(model);
             }
         }
-        index.all = Arc::new(all);
+        index.all = Arc::new(SupplierPool::new(all));
         index.by_model = models
             .into_iter()
-            .map(|(model, values)| (model, Arc::new(values)))
+            .map(|(model, values)| (model, Arc::new(SupplierPool::new(values))))
             .collect();
         for (id, models) in &index.models {
             self.runtime.cache(
@@ -201,7 +216,7 @@ impl Storage {
         tag: &str,
         provider: &str,
         model: Option<&str>,
-    ) -> Result<Arc<Vec<Arc<PoolCandidate>>>> {
+    ) -> Result<Arc<SupplierPool>> {
         let index = self.pool_index(tag, provider).await?;
         Ok(match model.filter(|model| !model.is_empty()) {
             Some(model) => index.by_model.get(model).unwrap_or(&index.empty).clone(),
