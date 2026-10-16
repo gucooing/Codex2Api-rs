@@ -169,7 +169,7 @@ impl Storage {
         filter: &ListQuery,
     ) -> Result<ListPage<MissingEndpoint>> {
         self.read_list(filter, "m.*,to_char(to_timestamp((s.at/1000.0)::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS+00:00') AS last_success_at",
-            "oauth_missing_endpoints m LEFT JOIN (SELECT method,path,MAX(at) AS at FROM (SELECT method,path,created_at_ms AS at FROM virtual_request_logs WHERE status BETWEEN 200 AND 299 UNION ALL SELECT 'GET','/api/oauth/chatgpt'||path,fetched_at_ms FROM desktop_public_resources) GROUP BY method,path) s ON s.method=m.method AND s.path=m.path",
+            "oauth_missing_endpoints m LEFT JOIN (SELECT method,path,MAX(at) AS at FROM (SELECT method,path,created_at_ms AS at FROM virtual_request_logs WHERE status BETWEEN 200 AND 299 UNION ALL SELECT 'GET','/v1/chatgpt'||path,fetched_at_ms FROM desktop_public_resources) GROUP BY method,path) s ON s.method=m.method AND s.path=m.path",
             "m.last_seen_at DESC,m.method,m.path", |_| {}).await
     }
 }

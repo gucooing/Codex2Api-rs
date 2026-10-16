@@ -7,7 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiPrice, apiRange, apiTier } from "@/lib/metered-api";
+import { apiPrice, apiRange, apiTier } from "@/lib/api-access";
 
 export function ModelPriceTable({ item }: { item: ModelMarketItem | undefined }) {
   const explicit = [

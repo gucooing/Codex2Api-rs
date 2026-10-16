@@ -46,16 +46,16 @@ impl VirtualPlan {
         self.config["description"].as_str().unwrap_or("")
     }
 
-    pub fn model_access(&self) -> Result<codex2api_core::ModelAccess> {
+    pub fn model_access(&self) -> Result<codex2api_common::ModelAccess> {
         let (mode, items) = ("model_access", "models");
         let models = self.config[items]
             .as_array()
             .ok_or_else(|| StorageError::Constraint("模型权限配置无效".into()))?;
-        let models: Option<Vec<codex2api_core::ModelRef>> = models
+        let models: Option<Vec<codex2api_common::ModelRef>> = models
             .iter()
             .map(|v| serde_json::from_value(v.clone()).ok())
             .collect();
-        codex2api_core::ModelAccess::from_config(
+        codex2api_common::ModelAccess::from_config(
             self.config[mode].as_str().unwrap_or(""),
             models.ok_or_else(|| StorageError::Constraint("模型权限配置无效".into()))?,
         )
@@ -79,10 +79,10 @@ impl VirtualPlan {
             ));
         }
         let valid_tier =
-            codex2api_core::valid_subscription_tier(&self.provider_id, &self.plan_type);
+            codex2api_common::valid_subscription_tier(&self.provider_id, &self.plan_type);
         if !valid_tier || self.plan_type == "free" {
             return Err(StorageError::InvalidAdminUpdate(
-                "Invalid client subscription compatibility value",
+                "Invalid client subscription tier",
             ));
         }
         let value = &self.config;
@@ -93,8 +93,10 @@ impl VirtualPlan {
             || !value["models"].as_array().is_some_and(|a| {
                 a.len() <= 256
                     && a.iter().all(|v| {
-                        serde_json::from_value::<codex2api_core::ModelRef>(v.clone()).is_ok_and(
-                            |m| codex2api_core::valid_model(&m.model) && !m.provider_id.is_empty(),
+                        serde_json::from_value::<codex2api_common::ModelRef>(v.clone()).is_ok_and(
+                            |m| {
+                                codex2api_common::valid_model(&m.model) && !m.provider_id.is_empty()
+                            },
                         )
                     })
             })

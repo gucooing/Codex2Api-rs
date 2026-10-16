@@ -108,7 +108,7 @@ async fn remove(
 async fn sync(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     let account = s.storage.require_account(&id).await?;
     match account.provider_id.as_str() {
-        codex2api_core::CHATGPT => crate::providers::chatgpt::sync_models(&s, &id)
+        codex2api_common::CHATGPT => crate::providers::chatgpt::sync_models(&s, &id)
             .await
             .map_err(ApiError::upstream)?,
         _ => s

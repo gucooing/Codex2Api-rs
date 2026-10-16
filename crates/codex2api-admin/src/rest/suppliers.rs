@@ -177,7 +177,7 @@ pub async fn options(
 pub async fn detail(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     let a = s.storage.require_account(&id).await?;
     let mut v = display(&s, &a).await?;
-    v["fingerprint"] = crate::providers::fingerprint_view(&a);
+    v["fingerprint"] = crate::providers::fingerprint_view(&a)?;
     v["usage"] = json!(s.storage.account_usage_summary(&id).await?);
     Ok(Json(v))
 }

@@ -1,495 +1,271 @@
-use axum::Json;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use axum::{
+    Json,
+    response::{IntoResponse, Response},
+};
+use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
-
-use codex2api_accounts::AccountError;
-use codex2api_storage::StorageError;
-use codex2api_upstream::UpstreamError;
 
 pub type Result<T> = std::result::Result<T, ApiError>;
 
-impl From<codex2api_scheduler::SchedulerError> for ApiError {
-    fn from(error: codex2api_scheduler::SchedulerError) -> Self {
-        use codex2api_scheduler::SchedulerError as E;
-        match error {
-            E::Storage(error) => Self::Storage(error),
-            E::Upstream(error) => Self::Upstream(error),
-            E::ConsumerInvalid => Self::invalid_token(),
-            E::Rejected {
-                status,
-                error_type,
-                message,
-                code,
-            } => Self::openai(status, error_type, message, code),
-        }
-    }
+#[derive(Debug)]
+pub struct ApiError {
+    pub(crate) status: StatusCode,
+    pub(crate) body: Value,
+    pub(crate) headers: HeaderMap,
+    pub(crate) diagnostic: Option<String>,
 }
 
-/// Public API failure mapped to OpenAI-style `{ "error": { ... } }` JSON.
-#[derive(Debug, thiserror::Error)]
-pub enum ApiError {
-    #[error(transparent)]
-    Service(#[from] codex2api_service::ServiceError),
-    #[error("{message}")]
-    OpenAi {
-        status: StatusCode,
-        error_type: &'static str,
-        message: String,
-        code: Option<&'static str>,
-    },
-    #[error(transparent)]
-    Upstream(#[from] UpstreamError),
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-    #[error(transparent)]
-    SupplierAccount(#[from] AccountError),
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "API request failed: {}", self.status)
+    }
 }
+impl std::error::Error for ApiError {}
 
 impl ApiError {
-    pub fn openai(
-        status: StatusCode,
-        error_type: &'static str,
-        message: impl Into<String>,
-        code: Option<&'static str>,
-    ) -> Self {
-        Self::OpenAi {
-            status,
-            error_type,
-            message: message.into(),
-            code,
-        }
-    }
-
-    pub fn missing_token() -> Self {
-        Self::openai(
-            StatusCode::UNAUTHORIZED,
-            "authentication_error",
-            "Provide a virtual account access token using Authorization: Bearer.",
-            Some("missing_token"),
-        )
-    }
-
-    pub fn invalid_token() -> Self {
-        Self::openai(
-            StatusCode::UNAUTHORIZED,
-            "authentication_error",
-            "Invalid or expired virtual account access token.",
-            Some("invalid_token"),
-        )
-    }
-
-    pub fn account_disabled() -> Self {
-        Self::openai(
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "This account is disabled.",
-            Some("account_disabled"),
-        )
-    }
-
-    pub fn account_not_ready() -> Self {
-        Self::openai(
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "This account is not ready. Complete ChatGPT login before using the API.",
-            Some("account_not_ready"),
-        )
-    }
-
-    pub fn account_not_authenticated() -> Self {
-        Self::openai(
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "This account is not authenticated with ChatGPT.",
-            Some("account_not_authenticated"),
-        )
-    }
-
-    pub fn bad_request(message: impl Into<String>) -> Self {
-        Self::openai(
-            StatusCode::BAD_REQUEST,
-            "invalid_request_error",
-            message,
-            None,
-        )
-    }
-
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self::openai(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "api_error",
-            message,
-            None,
-        )
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct OpenAiErrorBody {
-    pub error: OpenAiError,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OpenAiError {
-    pub message: String,
-    #[serde(rename = "type")]
-    pub error_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub param: Option<String>,
-}
-
-impl OpenAiErrorBody {
-    pub fn new(error_type: &str, message: impl Into<String>, code: Option<&str>) -> Self {
+    pub(crate) fn new(status: StatusCode, code: &str, message: impl Into<String>) -> Self {
+        let kind = match status.as_u16() {
+            401 => "authentication_error",
+            403 => "permission_error",
+            429 => "rate_limit_error",
+            400..=499 => "invalid_request_error",
+            _ => "server_error",
+        };
         Self {
-            error: OpenAiError {
-                message: message.into(),
-                error_type: error_type.to_string(),
-                code: code.map(str::to_string),
-                param: None,
-            },
+            status,
+            body: json!({"error":{"type":kind,"code":code,"message":message.into(),"param":null}}),
+            headers: HeaderMap::new(),
+            diagnostic: None,
+        }
+    }
+    pub(crate) fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "invalid_request_error", message)
+    }
+    pub(crate) fn invalid_key() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_api_key",
+            "A valid API key is required in Authorization: Bearer.",
+        )
+    }
+    pub(crate) fn internal() -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "The service could not complete this request.",
+        )
+    }
+    pub(crate) fn with_diagnostic(mut self, message: &str) -> Self {
+        let message = codex2api_upstream::request_failure::diagnostic_text(message, 512);
+        codex2api_upstream::RequestFailureLog::diagnostic(&message);
+        self.diagnostic = Some(message);
+        self
+    }
+    pub(crate) fn upstream_incomplete() -> Self {
+        Self::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_incomplete",
+            "The upstream stream ended without a complete response.",
+        )
+    }
+    pub(crate) fn upstream_value(value: &Value) -> Self {
+        let failure = codex2api_upstream::ResponseFailure::from_error(None, value);
+        let raw = value
+            .pointer("/response/error")
+            .filter(|v| !v.is_null())
+            .or_else(|| value.get("error").filter(|v| !v.is_null()))
+            .unwrap_or(value);
+        let mut headers = HeaderMap::new();
+        for source in [
+            value.get("headers"),
+            value.pointer("/response/headers"),
+            raw.get("headers"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(values) = source.as_object() {
+                for (name, value) in values {
+                    let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) else {
+                        continue;
+                    };
+                    if !matches!(name.as_str(), "retry-after" | "retry-after-ms") {
+                        continue;
+                    }
+                    let text = match value {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        _ => continue,
+                    };
+                    if let Ok(value) = http::HeaderValue::from_str(&text) {
+                        headers.insert(name, value);
+                    }
+                }
+            }
+        }
+        Self {
+            status: StatusCode::from_u16(failure.status.unwrap_or(502))
+                .unwrap_or(StatusCode::BAD_GATEWAY),
+            body: json!({"error":codex2api_upstream::public_output::error(raw)}),
+            headers,
+            diagnostic: None,
         }
     }
 }
-
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        codex2api_upstream::RequestFailureLog::error(&self);
-        match self {
-            Self::Service(error) => service_error_response(error),
-            Self::OpenAi {
-                status,
-                error_type,
-                message,
-                code,
-            } => {
-                let mut response = openai_response(status, error_type, message, code);
-                if code == Some("supplier_concurrency_exceeded") {
-                    response
-                        .headers_mut()
-                        .insert("retry-after", axum::http::HeaderValue::from_static("1"));
-                }
-                response
-            }
-            Self::Upstream(err) => upstream_error_response(err),
-            Self::Storage(StorageError::AccountNotFound(_)) => {
-                ApiError::invalid_token().into_response()
-            }
-            Self::Storage(StorageError::Runtime) => openai_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "server_error",
-                "Request scheduling is temporarily unavailable.",
-                Some("runtime_state_unavailable"),
-            ),
-            Self::Storage(err) => {
-                tracing::error!(error = %err, "storage error");
-                openai_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "api_error",
-                    "Internal server error.",
-                    None,
-                )
-            }
-            Self::SupplierAccount(AccountError::NotFound(_)) => {
-                ApiError::invalid_token().into_response()
-            }
-            Self::SupplierAccount(err) => {
-                tracing::error!(error = %err, "account error");
-                openai_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "api_error",
-                    "Internal server error.",
-                    None,
-                )
-            }
-        }
+        let mut response = (self.status, Json(self.body)).into_response();
+        response.headers_mut().extend(self.headers);
+        response.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        response
+            .headers_mut()
+            .insert("cache-control", "no-store".parse().unwrap());
+        response
     }
 }
-
-pub fn openai_response(
-    status: StatusCode,
-    error_type: &str,
-    message: impl Into<String>,
-    code: Option<&str>,
-) -> Response {
-    (
-        status,
-        Json(OpenAiErrorBody::new(error_type, message, code)),
-    )
-        .into_response()
-}
-
-pub fn openai_json(error_type: &str, message: impl Into<String>, code: Option<&str>) -> Value {
-    serde_json::to_value(OpenAiErrorBody::new(error_type, message, code)).unwrap_or_else(
-        |_| json!({ "error": { "message": "Internal server error.", "type": "api_error" } }),
-    )
-}
-
-/// Map an upstream HTTP error body to OpenAI-style JSON, preserving upstream
-/// `{ "error": ... }` payloads when present.
-pub fn map_upstream_status_body(status: StatusCode, body: &str) -> Response {
-    if let Ok(value) = serde_json::from_str::<Value>(body) {
-        let error = value
-            .pointer("/response/error")
-            .filter(|value| !value.is_null())
-            .or_else(|| value.get("error").filter(|value| !value.is_null()))
-            .or_else(|| value.get("detail"))
-            .unwrap_or(&value);
-        return (
-            status,
-            Json(json!({"error":crate::public_output::error(error)})),
-        )
-            .into_response();
-    }
-    let message = default_message_for_status(status).to_string();
-    openai_response(status, error_type_for_status(status), message, None)
-}
-
-pub fn upstream_error_response(err: UpstreamError) -> Response {
-    if let UpstreamError::Status {
-        status,
-        body,
-        mut headers,
-        ..
-    } = err
-    {
-        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-        let mut response = map_upstream_status_body(status, &body);
-        codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
-        for name in [
-            "x-request-id",
-            "x-oai-request-id",
-            "cf-ray",
-            "retry-after",
-            "retry-after-ms",
-            "openai-model",
-            "x-openai-model",
-        ] {
-            for value in headers.get_all(name) {
-                response.headers_mut().append(name, value.clone());
-            }
-        }
-        return response;
-    }
-    let failure = err.failure();
-    let status =
-        StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY);
-    let message = match &err {
-        UpstreamError::InvalidRequest(message) => message.clone(),
-        _ => "The service could not complete this request.".into(),
-    };
-    openai_response(
-        status,
-        error_type_for_status(status),
-        message,
-        failure.code.as_deref(),
-    )
-}
-
-pub fn error_type_for_status(status: StatusCode) -> &'static str {
-    match status.as_u16() {
-        400 | 404 | 409 | 413 | 415 | 422 => "invalid_request_error",
-        401 => "authentication_error",
-        403 => "permission_error",
-        429 => "rate_limit_error",
-        _ => "api_error",
-    }
-}
-
-fn default_message_for_status(status: StatusCode) -> &'static str {
-    match status.as_u16() {
-        400 => "Bad request.",
-        401 => "Unauthorized.",
-        402 => "Payment Required.",
-        403 => "Forbidden.",
-        404 => "Not found.",
-        409 => "Conflict.",
-        429 => "Rate limit exceeded.",
-        500..=599 => "Upstream server error.",
-        _ => "Request failed.",
-    }
-}
-
-fn service_error_response(error: codex2api_service::ServiceError) -> Response {
-    use codex2api_core::PolicyError;
-    use codex2api_service::ServiceError;
-    let (status, kind, code) = match &error {
-        ServiceError::RpmExceeded { retry_after } => {
-            let mut response = openai_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limit_error",
-                error.to_string(),
-                Some("virtual_rpm_exceeded"),
-            );
-            if let Ok(value) = retry_after.to_string().parse() {
-                response.headers_mut().insert("retry-after", value);
-            }
-            return response;
-        }
-        ServiceError::ConcurrencyExceeded => {
-            let mut response = openai_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limit_error",
-                error.to_string(),
-                Some("virtual_concurrency_exceeded"),
-            );
-            response
-                .headers_mut()
-                .insert("retry-after", http::HeaderValue::from_static("1"));
-            return response;
-        }
-        ServiceError::Storage(_) => {
-            return match error {
-                ServiceError::Storage(e) => ApiError::Storage(e).into_response(),
-                _ => unreachable!(),
-            };
-        }
-        ServiceError::BudgetExceeded => (
+impl From<crate::runtime::LimitError> for ApiError {
+    fn from(value: crate::runtime::LimitError) -> Self {
+        let (code, retry_after) = match value {
+            crate::runtime::LimitError::Storage(error) => return error.into(),
+            crate::runtime::LimitError::Limited { code, retry_after } => (code, retry_after),
+        };
+        let mut error = Self::new(
             StatusCode::TOO_MANY_REQUESTS,
-            "rate_limit_error",
-            "virtual_quota_exceeded",
-        ),
-        ServiceError::PricingUnavailable => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "server_error",
-            "model_pricing_unavailable",
-        ),
-        ServiceError::Policy(PolicyError::InvalidModel) => (
-            StatusCode::BAD_REQUEST,
-            "invalid_request_error",
-            "invalid_model",
-        ),
-        ServiceError::Policy(PolicyError::InvalidModelScope) => (
-            StatusCode::CONFLICT,
-            "configuration_error",
-            "invalid_model_policy",
-        ),
-        ServiceError::Policy(PolicyError::UnsupportedProvider) => (
-            StatusCode::NOT_IMPLEMENTED,
-            "server_error",
-            "provider_unavailable",
-        ),
-        ServiceError::Policy(PolicyError::ProviderMismatch) => (
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "provider_mismatch",
-        ),
-        ServiceError::Policy(PolicyError::SubscriptionRequired) => (
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "subscription_required",
-        ),
-        ServiceError::Policy(PolicyError::ModelNotEntitled) => (
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "model_not_entitled",
-        ),
-        ServiceError::Policy(PolicyError::ModelUnavailable) => (
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            "model_unavailable",
-        ),
-    };
-    openai_response(status, kind, error.to_string(), Some(code))
+            code,
+            "The user has reached an API group or model rate limit.",
+        );
+        error
+            .headers
+            .insert("retry-after", retry_after.to_string().parse().unwrap());
+        error
+    }
+}
+impl From<codex2api_upstream::scheduler::SchedulerError> for ApiError {
+    fn from(value: codex2api_upstream::scheduler::SchedulerError) -> Self {
+        use codex2api_upstream::scheduler::SchedulerError as E;
+        match value {
+            E::Storage(error) => error.into(),
+            E::Upstream(error) => error.into(),
+            E::ConsumerInvalid => Self::invalid_key(),
+            E::Rejected {
+                status,
+                code,
+                message,
+                ..
+            } => {
+                let mut error = Self::new(status, code.unwrap_or("supplier_unavailable"), message);
+                if status == StatusCode::TOO_MANY_REQUESTS {
+                    error.headers.insert("retry-after", "1".parse().unwrap());
+                }
+                error
+            }
+        }
+    }
+}
+impl From<codex2api_storage::StorageError> for ApiError {
+    fn from(value: codex2api_storage::StorageError) -> Self {
+        let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&value);
+        use codex2api_storage::StorageError as E;
+        let error = match value {
+            E::Api { code, message } => {
+                let status = match code.as_ref() {
+                    "invalid_api_key" | "api_key_revoked" => StatusCode::UNAUTHORIZED,
+                    "insufficient_balance" | "api_wallet_insufficient" => {
+                        StatusCode::PAYMENT_REQUIRED
+                    }
+                    "api_model_unavailable" | "model_not_available" | "api_group_disabled" => {
+                        StatusCode::FORBIDDEN
+                    }
+                    "pricing_unavailable"
+                    | "model_price_unavailable"
+                    | "operation_price_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                    "api_group_changed" => StatusCode::CONFLICT,
+                    _ => StatusCode::BAD_REQUEST,
+                };
+                Self::new(status, code.as_ref(), message)
+            }
+            E::Runtime => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "runtime_state_unavailable",
+                "Request scheduling is temporarily unavailable.",
+            ),
+            other => {
+                tracing::error!(error=%other,"API gateway storage failure");
+                Self::internal()
+            }
+        };
+        error.with_diagnostic(&diagnostic)
+    }
+}
+impl From<codex2api_upstream::UpstreamError> for ApiError {
+    fn from(value: codex2api_upstream::UpstreamError) -> Self {
+        use codex2api_upstream::UpstreamError as E;
+        match value {
+            E::InvalidRequest(message) => Self::bad_request(message),
+            E::RequestTooLarge => Self::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_too_large",
+                "Request body exceeds the size limit.",
+            ),
+            E::UnsupportedEncoding => Self::new(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_encoding",
+                "Unsupported request Content-Encoding.",
+            ),
+            E::Status {
+                status,
+                body,
+                headers,
+                ..
+            } => {
+                let value: Value = serde_json::from_str(&body).unwrap_or_default();
+                let mut error = Self::upstream_value(&value);
+                if let Ok(status) = StatusCode::from_u16(status)
+                    && (status.is_client_error() || status.is_server_error())
+                {
+                    error.status = status;
+                }
+                for name in ["retry-after", "retry-after-ms"] {
+                    if let Some(value) = headers.get(name) {
+                        error.headers.insert(name, value.clone());
+                    }
+                }
+                error
+            }
+            other => {
+                let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&other);
+                let failure = other.failure();
+                Self::new(
+                    StatusCode::from_u16(failure.status.unwrap_or(502))
+                        .unwrap_or(StatusCode::BAD_GATEWAY),
+                    failure.code.as_deref().unwrap_or("upstream_error"),
+                    "The upstream service could not complete this request.",
+                )
+                .with_diagnostic(&diagnostic)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn refresh_errors_keep_their_status_instead_of_becoming_unauthorized() {
-        for status in [400, 401, 403, 429, 503] {
-            let error = UpstreamError::Refresh(codex2api_auth::AuthError::RefreshRejected {
-                status,
-                code: Some(
-                    if status == 429 {
-                        "rate_limit_exceeded"
-                    } else {
-                        "refresh_rejected"
-                    }
-                    .into(),
-                ),
-                message: "fixture refresh failure".into(),
-            });
-            let failure = error.failure();
-            assert_eq!(failure.authentication_invalid(), status == 401);
-            assert_eq!(upstream_error_response(error).status().as_u16(), status);
-        }
-    }
-
     #[test]
-    fn preserves_upstream_error_object() {
-        let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
-        let response = map_upstream_status_body(StatusCode::SERVICE_UNAVAILABLE, body);
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[tokio::test]
-    async fn payment_errors_keep_the_status_and_detail_code_without_private_diagnostics() {
-        use axum::body::to_bytes;
-        let response = map_upstream_status_body(
-            StatusCode::PAYMENT_REQUIRED,
-            r#"{"detail":{"code":"deactivated_workspace","message":"private supplier billing details"}}"#,
-        );
-        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
-        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
-        let value: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["error"]["code"], "deactivated_workspace");
-        assert!(!String::from_utf8_lossy(&bytes).contains("private supplier"));
-        let response = map_upstream_status_body(StatusCode::PAYMENT_REQUIRED, "Payment Required");
-        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
-        let value: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["error"]["message"], "Payment Required.");
-    }
-
-    #[tokio::test]
-    async fn handshake_errors_preserve_classification_and_retry_headers_without_supplier_state() {
-        use axum::body::to_bytes;
-        use axum::http::{HeaderMap, HeaderValue};
-        let body = json!({"error":{"code":"invalid_prompt", "message":"中文🦀".repeat(700)}});
-        for status in [400, 401, 403, 426, 429, 503] {
-            let mut headers = HeaderMap::new();
-            for (key, value) in [
-                ("x-error-json", r#"{"error":{"code":"invalid_prompt"}}"#),
-                ("x-openai-authorization-error", "access_denied"),
-                ("x-request-id", "request-fixture"),
-                ("retry-after", "7"),
-                ("connection", "x-oai-request-id"),
-                ("x-oai-request-id", "connection-local"),
-                ("set-cookie", "account=private"),
-                ("authorization", "Bearer supplier-fixture"),
-                ("x-codex-primary-used-percent", "65"),
-                ("content-length", "999999"),
-            ] {
-                headers.insert(key, HeaderValue::from_static(value));
-            }
-            let response = upstream_error_response(UpstreamError::status_with_headers(
-                StatusCode::from_u16(status).unwrap(),
-                body.to_string(),
-                headers,
-            ));
-            assert_eq!(response.status().as_u16(), status);
-            assert_eq!(response.headers()["retry-after"], "7");
-            assert_eq!(response.headers()["x-request-id"], "request-fixture");
-            for key in [
-                "x-error-json",
-                "x-openai-authorization-error",
-                "x-oai-request-id",
-                "set-cookie",
-                "authorization",
-                "x-codex-primary-used-percent",
-                "content-length",
-            ] {
-                assert!(!response.headers().contains_key(key), "{key}");
-            }
-            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            let value = serde_json::from_slice::<Value>(&bytes).unwrap();
-            assert_eq!(value["error"]["code"], "invalid_prompt");
-            assert!(!value.to_string().contains("中文"));
-        }
+    fn api_rewrite_errors_keep_status_and_retry_headers() {
+        let value = json!({"type":"error","status":429,"headers":{"Retry-After":"7","Authorization":"private"},"error":{"code":"rate_limit_exceeded","message":"private supplier"}});
+        let error = ApiError::from(codex2api_upstream::UpstreamError::Status {
+            status: 200,
+            body: value.to_string(),
+            headers: HeaderMap::new(),
+            auth_revision: None,
+        });
+        assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(error.headers["retry-after"], "7");
+        assert!(!error.headers.contains_key("authorization"));
+        assert_eq!(error.body["error"]["code"], "rate_limit_exceeded");
+        assert!(!error.body.to_string().contains("private"));
     }
 }

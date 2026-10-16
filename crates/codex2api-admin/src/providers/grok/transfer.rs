@@ -2,9 +2,9 @@ use crate::rest::{
     error::ApiError,
     supplier_transfer::{Sub2apiAccount, credential, sub2api_record},
 };
-use codex2api_accounts::providers::grok::GrokIdentity;
-use codex2api_auth::providers::grok::GrokCredentials;
 use codex2api_storage::{NewSupplierAccount, SupplierStatus, SupplierTransferAccount};
+use codex2api_suppliers::providers::grok::GrokCredentials;
+use codex2api_suppliers::providers::grok::GrokIdentity;
 use serde_json::{Value, json};
 
 pub(crate) fn to_sub2api(item: &SupplierTransferAccount) -> Result<Value, ApiError> {
@@ -25,7 +25,7 @@ pub(crate) fn to_sub2api(item: &SupplierTransferAccount) -> Result<Value, ApiErr
     let mut value = json!({"access_token":auth.access_token,"refresh_token":auth.refresh_token,"id_token":auth.id_token,
         "expires_at":auth.expires_at,"sub":item.account.chatgpt_user_id,"team_id":team,"email":item.account.email,
         "subscription_tier":credential(&auth.profile, "subscriptionTier").or_else(||item.account.plan_type.clone()),
-        "client_id":codex2api_version::grok::CLIENT_ID});
+        "client_id":codex2api_common::version::grok::CLIENT_ID});
     value
         .as_object_mut()
         .expect("credential object")
@@ -65,12 +65,11 @@ pub(crate) fn from_sub2api(source: &Sub2apiAccount) -> Result<SupplierTransferAc
         &identity.os_type,
         &identity.os_version,
         &identity.arch,
-        "",
         identity
             .fingerprint_json()
             .map_err(|_| ApiError::bad("指纹无效"))?,
     );
-    account.provider_id = codex2api_core::GROK.into();
+    account.provider_id = codex2api_common::GROK.into();
     account.id = Some(identity.account_id.clone());
     account.status = SupplierStatus::Active;
     account.display_name = Some(source.name.clone());

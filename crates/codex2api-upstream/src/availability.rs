@@ -18,14 +18,14 @@ pub fn classify_provider_failure(
     now: i64,
 ) -> Option<SupplierFailure> {
     match provider {
-        codex2api_core::CHATGPT => classify_supplier_failure(status, value, headers, now),
-        codex2api_core::GROK => crate::grok::classify_failure(status, value, headers, now),
+        codex2api_common::CHATGPT => classify_supplier_failure(status, value, headers, now),
+        codex2api_common::GROK => crate::grok::classify_failure(status, value, headers, now),
         _ => None,
     }
 }
 impl crate::UpstreamError {
     pub fn supplier_failure(&self, now: i64) -> Option<SupplierFailure> {
-        self.supplier_failure_for(codex2api_core::CHATGPT, now)
+        self.supplier_failure_for(codex2api_common::CHATGPT, now)
     }
     pub fn supplier_failure_for(&self, provider: &str, now: i64) -> Option<SupplierFailure> {
         match self {

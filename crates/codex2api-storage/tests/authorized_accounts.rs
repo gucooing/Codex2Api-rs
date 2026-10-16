@@ -12,7 +12,6 @@ async fn authorized_account_and_credentials_commit_together() {
         "Linux",
         "6",
         "aarch64",
-        "",
         "{}",
     );
     account.id = Some("draft".into());
@@ -87,7 +86,6 @@ async fn concurrent_logins_deduplicate_only_the_same_user_and_workspace() {
             "Linux",
             "6",
             "aarch64",
-            "",
             "{}",
         );
         account.id = Some(id.into());

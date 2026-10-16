@@ -226,7 +226,7 @@ pub(super) async fn observe_request_failure(
     };
     // Share ChatGPT execution's classification; a probe has no separate failure counter
     // or blanket "keep state" rule. Transient failures are not auth rejection.
-    match error.supplier_failure_for(codex2api_core::CHATGPT, chrono::Utc::now().timestamp()) {
+    match error.supplier_failure_for(codex2api_common::CHATGPT, chrono::Utc::now().timestamp()) {
         Some(codex2api_upstream::SupplierFailure::Authentication) => {
             state
                 .storage
@@ -359,7 +359,7 @@ mod tests {
             ),
             UpstreamError::status(reqwest::StatusCode::SERVICE_UNAVAILABLE, "{}"),
             UpstreamError::StreamIdleTimeout,
-            UpstreamError::Refresh(codex2api_auth::AuthError::RefreshRejected {
+            UpstreamError::Refresh(codex2api_suppliers::AuthError::RefreshRejected {
                 status: 503,
                 code: None,
                 message: "temporary outage".into(),
@@ -372,7 +372,7 @@ mod tests {
             assert!(!health.authentication_invalid);
             assert_eq!(health.cooldown_revision, generation);
         }
-        let revoked = UpstreamError::Refresh(codex2api_auth::AuthError::RefreshRejected {
+        let revoked = UpstreamError::Refresh(codex2api_suppliers::AuthError::RefreshRejected {
             status: 400,
             code: Some("invalid_grant".into()),
             message: "refresh token revoked".into(),

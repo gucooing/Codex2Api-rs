@@ -196,25 +196,25 @@ async fn finish_usage_on(
     {
         return Err(StorageError::Constraint("用量结算与原始请求不一致".into()));
     }
-    let snapshot = match saved.pricing_snapshot_json {
-        Some(json) => {
-            let mut prices = prices.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(value) = prices.get(&json) {
-                Some(value.clone())
-            } else {
-                let value = Arc::new(serde_json::from_str::<crate::billing::BillingSnapshot>(
-                    &json,
-                )?);
-                if prices.len() >= 32
-                    && let Some(key) = prices.keys().next().cloned()
-                {
-                    prices.remove(&key);
-                }
-                prices.insert(json, value.clone());
-                Some(value)
+    let json = saved
+        .pricing_snapshot_json
+        .ok_or_else(|| StorageError::Constraint("用量记录缺少价格快照".into()))?;
+    let snapshot = {
+        let mut prices = prices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(value) = prices.get(&json) {
+            value.clone()
+        } else {
+            let value = Arc::new(serde_json::from_str::<crate::billing::BillingSnapshot>(
+                &json,
+            )?);
+            if prices.len() >= 32
+                && let Some(key) = prices.keys().next().cloned()
+            {
+                prices.remove(&key);
             }
+            prices.insert(json, value.clone());
+            value
         }
-        None => None,
     };
     let mut billable = record.clone();
     billable.subject_kind = saved.subject_kind;
@@ -240,16 +240,9 @@ async fn finish_usage_on(
     let (base, cost, billing_status, billing_model, billing_tier) = if unused {
         (Some(0), Some(0), "not_charged", record.model.clone(), None)
     } else {
-        let (base, _, _, _) = snapshot
-            .as_ref()
-            .map_or((None, "legacy", None, None), |prices| {
-                prices.base_charge(&billable)
-            });
-        let (cost, status, model, tier) = snapshot
-            .as_ref()
-            .map_or((None, "legacy", None, None), |prices| {
-                prices.charge_scaled(&billable, saved.multiplier_micros)
-            });
+        let (base, _, _, _) = snapshot.base_charge(&billable);
+        let (cost, status, model, tier) =
+            snapshot.charge_scaled(&billable, saved.multiplier_micros);
         (base, cost, status, model, tier)
     };
     let debit = if let Some(owner) = saved.wallet_user_id {

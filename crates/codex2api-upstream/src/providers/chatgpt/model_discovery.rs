@@ -41,7 +41,7 @@ impl UpstreamClient {
             .map(|row| {
                 let model = row["slug"]
                     .as_str()
-                    .filter(|v| codex2api_core::valid_model(v))
+                    .filter(|v| codex2api_common::valid_model(v))
                     .ok_or_else(|| {
                         UpstreamError::InvalidRequest("Invalid model identifier".into())
                     })?;

@@ -1,0 +1,10 @@
+//! ChatGPT consumer protocol and supplier transport integration.
+pub(crate) mod access;
+pub(crate) mod handlers;
+pub(crate) mod identity;
+mod model_tiers;
+mod routes;
+pub(crate) mod scheduling;
+pub(crate) use routes::router;
+
+pub(crate) mod execution;

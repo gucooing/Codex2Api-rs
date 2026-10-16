@@ -47,18 +47,8 @@ pub fn prepare_virtual_contract(key: &str, value: &mut Value) {
                     continue;
                 }
                 id(version, "id");
-                if version["display_text"].is_null() {
-                    version["display_text"] = version["name"].clone();
-                }
-                if version["slugs"].is_null() {
-                    version["slugs"] = version.get("models").cloned().unwrap_or(json!([]));
-                }
                 if version["intelligence_presets"].is_null() {
                     version["intelligence_presets"] = json!([]);
-                }
-                if let Some(o) = version.as_object_mut() {
-                    o.remove("name");
-                    o.remove("models");
                 }
             }
         }
@@ -88,9 +78,6 @@ pub fn prepare_virtual_contract(key: &str, value: &mut Value) {
 
 pub fn editable_virtual_contract(key: &str, value: &Value) -> Value {
     let mut value = value.clone();
-    if key == "models" {
-        prepare_virtual_contract(key, &mut value);
-    }
     if key == "system_hints" {
         for hint in value["system_hints"].as_array_mut().into_iter().flatten() {
             if hint["hint_kind"].is_null() {

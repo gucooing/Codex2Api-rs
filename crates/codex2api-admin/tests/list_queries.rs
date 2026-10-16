@@ -441,7 +441,6 @@ async fn supplier_models_read_only_their_own_snapshot() {
         "Windows",
         "test",
         "x64",
-        "",
         "{}",
     );
     input.provider_id = "grok".into();

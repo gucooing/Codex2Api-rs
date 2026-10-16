@@ -287,7 +287,6 @@ export type AccountUsage = {
       used_usd: string;
       pending_requests: number;
       unpriced_requests: number;
-      legacy_requests: number;
     };
   };
 };
@@ -302,8 +301,8 @@ export type GatewaySettings = {
   pool_wait_ms: number;
 };
 export type PublicUrlSettings = {
+  oauth_url: string;
   api_url: string;
-  metered_api_url: string;
   user_url: string;
   admin_url: string;
   revision: number;

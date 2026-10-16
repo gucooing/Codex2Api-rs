@@ -24,11 +24,13 @@ impl BillingCatalog {
                 self.images.iter().any(|p| {
                     p.model == model
                         && (p.resolution == crate::IMAGE_UNIFORM_RESOLUTION
-                            || size.is_none_or(|s| {
-                                p.resolution == s
-                                    || crate::image_resolution_tier(s).as_deref()
+                            || (crate::IMAGE_RESOLUTION_TIERS
+                                .iter()
+                                .any(|(tier, _)| *tier == p.resolution)
+                                && size.is_none_or(|s| {
+                                    crate::image_resolution_tier(s).as_deref()
                                         == Some(p.resolution.as_str())
-                            }))
+                                })))
                 })
             }
             Operation(operation) => self
@@ -72,14 +74,12 @@ async fn load_on(conn: &mut sqlx::PgConnection, provider: &str) -> Result<Arc<Bi
             .bind(provider)
             .fetch_all(&mut *conn)
             .await?;
-    let journal = Arc::new(serde_json::to_string(
-        &crate::billing::BillingSnapshot::Current {
-            tokens: tokens.clone(),
-            images: images.clone(),
-            operations: operations.clone(),
-            cost_operations: None,
-        },
-    )?);
+    let journal = Arc::new(serde_json::to_string(&crate::billing::BillingSnapshot {
+        tokens: tokens.clone(),
+        images: images.clone(),
+        operations: operations.clone(),
+        cost_operations: None,
+    })?);
     Ok(Arc::new(BillingCatalog {
         revision,
         models,

@@ -1,0 +1,519 @@
+use super::*;
+use serde_json::json;
+
+async fn rows(storage: &Storage, count: usize) -> Vec<UsageRecord> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let rows = storage
+                .query_usage(&codex2api_storage::UsageFilter {
+                    page_size: Some(50),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .records;
+            if rows.len() == count && rows.iter().all(|r| r.status != "in_progress") {
+                return rows;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("outcomes-pg"))
+        .await
+        .unwrap();
+    let cases = [
+        (
+            "billing",
+            json!({"type":"error","status":402,"error":{"message":"Payment Required"}}),
+            "payment_required",
+            Some(402),
+        ),
+        (
+            "rate",
+            json!({"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"retry later"}}}),
+            "rate_limit",
+            None,
+        ),
+        (
+            "quota",
+            json!({"type":"response.failed","response":{"error":{"code":"insufficient_quota","message":"exhausted"}}}),
+            "quota_exhausted",
+            None,
+        ),
+        (
+            "usage",
+            json!({"type":"error","status":429,"error":{"type":"usage_limit_reached","resets_at":2000000000}}),
+            "quota_exhausted",
+            Some(429),
+        ),
+        (
+            "unknown429",
+            json!({"type":"error","status":429,"error":{"message":"rate quota token expired"}}),
+            "limit_unknown",
+            Some(429),
+        ),
+        (
+            "auth",
+            json!({"type":"error","status":401,"error":{"code":"invalid_token"}}),
+            "authentication",
+            Some(401),
+        ),
+        (
+            "permission",
+            json!({"type":"error","status":403,"error":{"code":"policy_denied"}}),
+            "permission",
+            Some(403),
+        ),
+        (
+            "overloaded",
+            json!({"type":"response.failed","response":{"error":{"status_code":"503","code":"server_is_overloaded","message":"Keep the original reason"}}}),
+            "upstream",
+            Some(503),
+        ),
+        (
+            "overloaded-without-status",
+            json!({"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Keep the original reason"}}}),
+            "upstream",
+            None,
+        ),
+        (
+            "unknown",
+            json!({"type":"response.failed","response":{"error":{"code":"new_failure"}}}),
+            "upstream",
+            None,
+        ),
+        (
+            "incomplete",
+            json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}),
+            "incomplete",
+            None,
+        ),
+        (
+            "content-filter",
+            json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}),
+            "incomplete",
+            None,
+        ),
+    ];
+    let mut count = 0;
+    for (name, event, kind, status) in cases {
+        let failure = ResponseOutcome::from_value(&event, None).unwrap();
+        assert_eq!(failure.failure().unwrap().kind.as_str(), kind, "{name}");
+        assert_eq!(failure.failure().unwrap().status, status, "{name}");
+        for transport in ["http", "websocket"] {
+            let id = format!("{name}-{transport}");
+            let mut log = RequestLog::begin(
+                storage.clone(),
+                UsageRecord {
+                    id: id.clone(),
+                    endpoint: "/v1/responses".into(),
+                    transport: transport.into(),
+                    status: "in_progress".into(),
+                    ..Default::default()
+                },
+                Instant::now(),
+            )
+            .await
+            .unwrap();
+            if transport == "http" {
+                let body = format!(
+                    ": heartbeat\r\n\r\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"r\"}}}}\r\n\r\ndata: {event}\r\n\r\n"
+                );
+                let chunks = body
+                    .as_bytes()
+                    .chunks(3)
+                    .map(|v| Ok::<_, std::io::Error>(Bytes::copy_from_slice(v)))
+                    .collect::<Vec<_>>();
+                let response = reqwest::Response::from(
+                    http::Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(reqwest::Body::wrap_stream(futures::stream::iter(chunks)))
+                        .unwrap(),
+                );
+                let output = axum::body::to_bytes(log.wrap(response), usize::MAX)
+                    .await
+                    .unwrap();
+                assert_eq!(output.as_ref(), body.as_bytes());
+            } else {
+                log.parse(&serde_json::to_vec(&event).unwrap());
+                log.finish("completed");
+            }
+            count += 1;
+            let result = rows(&storage, count).await;
+            let record = result.iter().find(|r| r.id == id).unwrap();
+            assert_eq!(
+                record.status,
+                if kind == "incomplete" {
+                    "incomplete"
+                } else {
+                    "failed"
+                }
+            );
+            if name == "content-filter" {
+                assert_eq!(record.error_code.as_deref(), Some("content_filter"));
+            }
+            assert_eq!(record.http_status, (transport == "http").then_some(200));
+        }
+    }
+    storage.close().await;
+}
+
+#[tokio::test]
+async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_available() {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("transport-pg"))
+        .await
+        .unwrap();
+    let supplier = codex2api_suppliers::SupplierAccountStore::open(storage.clone())
+        .create_pending()
+        .await
+        .unwrap()
+        .account;
+    for (index, completed, reset) in [(0, false, false), (1, false, true), (2, true, true)] {
+        let log = RequestLog::begin(
+            storage.clone(),
+            UsageRecord {
+                id: index.to_string(),
+                account_id: supplier.id.clone(),
+                status: "in_progress".into(),
+                endpoint: "/v1/responses".into(),
+                transport: "http".into(),
+                ..Default::default()
+            },
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+        let event = if completed {
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":7,"output_tokens":3}}})
+        } else {
+            json!({"type":"response.created","response":{"id":"r"}})
+        };
+        let mut chunks = vec![Ok(Bytes::from(format!("data: {event}\n\n")))];
+        if reset {
+            chunks.push(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "unexpected EOF during chunk size line",
+            )));
+        }
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(200)
+                .header("content-type", "text/event-stream")
+                .body(reqwest::Body::wrap_stream(futures::stream::iter(chunks)))
+                .unwrap(),
+        );
+        let output = axum::body::to_bytes(log.wrap(response), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output).contains("response.failed"),
+            !completed
+        );
+        let result = rows(&storage, index + 1).await;
+        let record = result.iter().find(|r| r.id == index.to_string()).unwrap();
+        assert_eq!(
+            record.status,
+            if completed { "completed" } else { "failed" }
+        );
+        if completed {
+            assert_eq!(record.input_tokens, Some(7));
+            assert_eq!(record.output_tokens, Some(3));
+        } else if reset {
+            assert!(
+                record
+                    .error_message
+                    .as_deref()
+                    .unwrap()
+                    .contains("unexpected EOF during chunk size line")
+            );
+        }
+        assert!(
+            !storage
+                .supplier_health(&supplier.id)
+                .await
+                .unwrap()
+                .authentication_invalid
+        );
+    }
+    storage.close().await;
+}
+
+#[tokio::test]
+async fn local_internal_failures_keep_private_diagnostics_and_replay_the_public_response() {
+    use axum::response::IntoResponse;
+    use codex2api_upstream::RequestFailureLog;
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("internal-pg"))
+        .await
+        .unwrap();
+    let attempt = RequestFailureLog::new(UsageRecord {
+        endpoint: "/v1/responses/compact".into(),
+        transport: "http".into(),
+        user_agent: Some("diagnostic-client/1".into()),
+        ..Default::default()
+    });
+    let response = attempt
+        .scope(async {
+            let error = tokio::spawn(RequestFailureLog::inherit(async {
+                RequestFailureLog::metadata(&RequestMetadata {
+                    model: Some("gpt-test".into()),
+                    ..Default::default()
+                });
+                crate::OAuthError::Storage(codex2api_storage::StorageError::Constraint(
+                    "fixture database error Bearer secret-value https://private.example/token"
+                        .into(),
+                ))
+            }))
+            .await
+            .unwrap();
+            error.into_response()
+        })
+        .await;
+    assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(attempt.needs_record(response.status()));
+    let (parts, body) = response.into_parts();
+    let body = attempt
+        .capture(&storage, parts.status, body.into_data_stream())
+        .await;
+    let body = axum::body::to_bytes(Body::from_stream(body), 8192)
+        .await
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&body).contains("fixture database error"));
+    let page = storage.query_usage(&Default::default()).await.unwrap();
+    assert_eq!(page.total, 1);
+    let row = &page.records[0];
+    assert_eq!(row.http_status, Some(500));
+    assert_eq!(row.model.as_deref(), Some("gpt-test"));
+    assert_eq!(row.user_agent.as_deref(), Some("diagnostic-client/1"));
+    assert_eq!(row.billing_status, "not_charged");
+    let detail = row.error_message.as_deref().unwrap();
+    assert!(detail.contains("fixture database error"));
+    assert!(!detail.contains("secret-value") && !detail.contains("private.example"));
+    storage.close().await;
+}
+
+#[tokio::test]
+async fn stale_rejection_cannot_disable_new_credentials_and_network_faults_do_not_gate() {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("credentials-pg"))
+        .await
+        .unwrap();
+    let supplier = codex2api_suppliers::SupplierAccountStore::open(storage.clone())
+        .create_pending()
+        .await
+        .unwrap()
+        .account;
+    sqlx::query("INSERT INTO supplier_health(account_id,error_message,error_at,revision) VALUES($1,'与 ChatGPT 官方连接失败或超时','old',1)")
+        .bind(&supplier.id).execute(storage.pool()).await.unwrap();
+    let health = storage.supplier_health(&supplier.id).await.unwrap();
+    assert!(health.error_message.is_some());
+    assert!(!health.authentication_invalid);
+    let revision = storage
+        .supplier_auth_revision(&supplier.id)
+        .await
+        .unwrap()
+        .unwrap();
+    storage
+        .reject_supplier_auth(&supplier.id, revision)
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .supplier_health(&supplier.id)
+            .await
+            .unwrap()
+            .authentication_invalid
+    );
+    storage
+        .upsert_supplier_tokens(codex2api_storage::SupplierTokens {
+            account_id: supplier.id.clone(),
+            access_token: Some("new-fixture".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    storage
+        .reject_supplier_auth(&supplier.id, revision)
+        .await
+        .unwrap();
+    assert!(
+        !storage
+            .supplier_health(&supplier.id)
+            .await
+            .unwrap()
+            .authentication_invalid
+    );
+    storage.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_desktop_reads_actual_sse_failure_events() {
+    if std::env::var_os("CODEX2API_TEST_CLI").is_none() {
+        return;
+    }
+    use axum::{Router, extract::Path, routing::post};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("desktop-pg"))
+        .await
+        .unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = hits.clone();
+    let saved = storage.clone();
+    let app = Router::new().route("/{kind}/responses", post(move |Path(kind): Path<String>| {
+        let storage = saved.clone(); let hits = counted.clone();
+        async move {
+            let id = hits.fetch_add(1, Ordering::SeqCst).to_string();
+            let log = RequestLog::begin(storage, UsageRecord { id, status:"in_progress".into(),
+                endpoint:"/v1/responses".into(), transport:"http".into(), ..Default::default() }, Instant::now()).await.unwrap();
+            let code = match kind.as_str() { "quota" => "insufficient_quota", "context" => "context_length_exceeded", _ => "rate_limit_exceeded" };
+            let body = format!("data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"fixture\"}}}}\n\ndata: {}\n\n",
+                json!({"type":"response.failed","response":{"id":"fixture","status":"failed","error":{"code":code,"message":format!("fixture {code}")}}}));
+            let response = reqwest::Response::from(http::Response::builder().status(200).header("content-type","text/event-stream").body(body).unwrap());
+            crate::response::forward_response(http::StatusCode::OK, response.headers().clone(), log.wrap(response))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    for (kind, expected) in [
+        ("quota", "usageLimitExceeded"),
+        ("context", "contextWindowExceeded"),
+        ("rate", "rate_limit_exceeded"),
+    ] {
+        let url = format!("http://{address}/{kind}");
+        let result = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("python")
+                .args(["-X", "utf8"])
+                .arg(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../scripts/windows/Test-DesktopResponseOutcomes.py"),
+                )
+                .arg(url)
+                .arg(expected)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        println!("{}", String::from_utf8_lossy(&result.stdout));
+    }
+    assert!(
+        hits.load(Ordering::SeqCst) >= 3,
+        "Native runtime must actually send inference requests"
+    );
+    server.abort();
+    storage.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_desktop_search_completes_with_one_snapshotted_charge() {
+    if std::env::var_os("CODEX2API_TEST_CLI").is_none() {
+        return;
+    }
+    use axum::{Json, Router, routing::post};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("search-pg"))
+        .await
+        .unwrap();
+    storage
+        .save_operation_price(
+            &codex2api_storage::OperationPrice {
+                provider_id: "chatgpt".into(),
+                operation: "search".into(),
+                price_nano_usd: Some(5_000_000),
+                revision: 0,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let search_requests = Arc::new(AtomicUsize::new(0));
+    let counted = requests.clone();
+    let search_counted = search_requests.clone();
+    let saved = storage.clone();
+    let app = Router::new().route("/v1/responses", post(move |Json(body):Json<serde_json::Value>| {
+        let requests = counted.clone();
+        async move {
+            let n = requests.fetch_add(1, Ordering::SeqCst);
+            let output = if n == 0 {
+                json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"search-1","namespace":"web","name":"run","arguments":json!({"search_query":[{"q":"fixture query"}]}).to_string()}})
+            } else {
+                assert!(body.to_string().contains("Search billing fixture result"), "native reader must pass the search result into the next generation");
+                json!({"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Search completed"}]}})
+            };
+            let events = [json!({"type":"response.created","response":{"id":format!("r-{n}")}}),output,json!({"type":"response.completed","response":{"id":format!("r-{n}"),"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}})];
+            ([("content-type","text/event-stream")],events.into_iter().map(|e|format!("data: {e}\n\n")).collect::<String>())
+        }
+    })).route("/v1/alpha/search", post(move |Json(body):Json<serde_json::Value>| {
+        let storage = saved.clone(); let search_requests = search_counted.clone();
+        async move {
+            assert_eq!(body["model"],"gpt-test");
+            assert_eq!(body["commands"]["search_query"][0]["q"],"fixture query");
+            assert!(body["id"].is_string());
+            assert_eq!(body["settings"]["allowed_callers"],json!(["direct"]));
+            let id = search_requests.fetch_add(1, Ordering::SeqCst).to_string();
+            let log = RequestLog::begin(storage, UsageRecord {id,model:Some("gpt-test".into()),endpoint:"/v1/alpha/search".into(),status:"in_progress".into(),..Default::default()},Instant::now()).await.unwrap();
+            let response = reqwest::Response::from(http::Response::builder().header("content-type","application/json").body(Bytes::from(json!({"output":"Search billing fixture result","encrypted_output":null,"results":[]}).to_string())).unwrap());
+            http::Response::builder().header("content-type","application/json").body(log.wrap(response)).unwrap()
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("python")
+            .args(["-X", "utf8"])
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/windows/Test-DesktopResponseOutcomes.py"),
+            )
+            .arg(format!("http://{address}/v1"))
+            .arg("search-billing")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        result.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    println!("{}", String::from_utf8_lossy(&result.stdout));
+    assert_eq!(search_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    let record = rows(&storage, 1).await.pop().unwrap();
+    assert_eq!(record.status, "completed");
+    assert_eq!(record.cost_nano_usd, Some(5_000_000));
+    assert_eq!(record.billing_tier.as_deref(), Some("request"));
+    assert_eq!(record.input_tokens, None);
+    server.abort();
+    storage.close().await;
+}

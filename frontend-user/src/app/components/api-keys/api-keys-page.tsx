@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiCost, apiDate, apiKeyStatus, apiPlatform } from "@/lib/metered-api";
+import { apiCost, apiDate, apiKeyStatus, apiPlatform } from "@/lib/api-access";
 import { tokens } from "@/lib/usage";
 import {
   ChevronLeft,

@@ -30,7 +30,7 @@ internal sealed class AddressPolicy(string server)
                 return Uri.UnescapeDataString(pieces[0]) == "authorize_url" && pieces.Length == 2
                     ? pieces[0] + "=" + Uri.EscapeDataString(Map(Uri.UnescapeDataString(pieces[1]))) : part;
             });
-            result = service.GetLeftPart(UriPartial.Authority) + "/codex/desktop-auth?" + string.Join('&', query);
+            result = service.GetLeftPart(UriPartial.Authority) + prefix + "/codex/desktop-auth?" + string.Join('&', query);
         }
         return result;
     }

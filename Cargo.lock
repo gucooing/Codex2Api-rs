@@ -327,16 +327,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "codex2api-accounts",
  "codex2api-admin",
  "codex2api-api",
- "codex2api-auth",
- "codex2api-gateway",
+ "codex2api-common",
+ "codex2api-oauth",
  "codex2api-storage",
+ "codex2api-suppliers",
  "codex2api-upstream",
  "codex2api-user",
- "codex2api-version",
- "codex2api-web",
  "futures",
  "http-body-util",
  "serde_json",
@@ -351,24 +349,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex2api-accounts"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "codex2api-core",
- "codex2api-storage",
- "codex2api-version",
- "rand 0.9.5",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "codex2api-admin"
 version = "0.1.0"
 dependencies = [
@@ -377,12 +357,10 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
- "codex2api-accounts",
- "codex2api-auth",
- "codex2api-core",
+ "codex2api-common",
  "codex2api-storage",
+ "codex2api-suppliers",
  "codex2api-upstream",
- "codex2api-version",
  "reqwest",
  "serde",
  "serde_json",
@@ -401,21 +379,59 @@ dependencies = [
 name = "codex2api-api"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64",
+ "bytes",
+ "chrono",
+ "codex2api-common",
+ "codex2api-storage",
+ "codex2api-suppliers",
+ "codex2api-upstream",
+ "eventsource-stream",
+ "futures",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.28.0",
+ "tower",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "codex2api-common"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "codex2api-oauth"
+version = "0.1.0"
+dependencies = [
  "anyhow",
  "axum",
  "base64",
  "bytes",
  "chrono",
- "codex2api-accounts",
  "codex2api-admin",
- "codex2api-auth",
- "codex2api-core",
- "codex2api-scheduler",
- "codex2api-service",
+ "codex2api-common",
  "codex2api-storage",
+ "codex2api-suppliers",
  "codex2api-upstream",
  "codex2api-user",
- "codex2api-version",
  "eventsource-stream",
  "flate2",
  "futures",
@@ -440,17 +456,39 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex2api-auth"
+name = "codex2api-storage"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "base64",
+ "chrono",
+ "codex2api-common",
+ "codex2api-storage",
+ "rand 0.9.5",
+ "redis",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "codex2api-suppliers"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "base64",
  "chrono",
- "codex2api-accounts",
- "codex2api-core",
+ "codex2api-common",
  "codex2api-storage",
- "codex2api-version",
  "rand 0.9.5",
  "reqwest",
  "ring",
@@ -471,103 +509,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex2api-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "codex2api-gateway"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64",
- "bytes",
- "chrono",
- "codex2api-accounts",
- "codex2api-auth",
- "codex2api-core",
- "codex2api-scheduler",
- "codex2api-storage",
- "codex2api-upstream",
- "eventsource-stream",
- "futures",
- "http",
- "reqwest",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite 0.28.0",
- "tower",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "codex2api-scheduler"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "chrono",
- "codex2api-storage",
- "codex2api-upstream",
- "futures",
- "http",
- "rand 0.9.5",
- "reqwest",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "codex2api-service"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "codex2api-core",
- "codex2api-storage",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "codex2api-storage"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "base64",
- "chrono",
- "codex2api-core",
- "codex2api-storage",
- "codex2api-version",
- "rand 0.9.5",
- "redis",
- "rsa",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "codex2api-upstream"
 version = "0.1.0"
 dependencies = [
@@ -578,17 +519,17 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
- "codex2api-accounts",
- "codex2api-auth",
- "codex2api-core",
+ "codex2api-common",
  "codex2api-storage",
- "codex2api-version",
+ "codex2api-suppliers",
  "eventsource-stream",
  "futures",
  "http",
+ "rand 0.9.5",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tokio-rustls",
@@ -607,9 +548,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
- "codex2api-core",
+ "codex2api-common",
  "codex2api-storage",
- "codex2api-version",
  "serde",
  "serde_json",
  "sqlx",
@@ -619,23 +559,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "codex2api-version"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "codex2api-web"
-version = "0.1.0"
-dependencies = [
- "axum",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

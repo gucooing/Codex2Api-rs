@@ -9,8 +9,8 @@ use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
 };
-use codex2api_accounts::providers::grok::GrokIdentity;
 use codex2api_storage::{QuotaSnapshot, SupplierAccount, SupplierInfoSection};
+use codex2api_suppliers::providers::grok::GrokIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -26,9 +26,12 @@ pub struct Fingerprint {
     #[serde(default)]
     timezone: String,
 }
-pub fn fingerprint_view(account: &SupplierAccount) -> Value {
-    let identity = GrokIdentity::from_account(account);
-    json!({"os_type":identity.os_type,"os_version":identity.os_version,"arch":identity.arch,"terminal":"grok-pager","timezone":identity.timezone.unwrap_or_default(),"proxy_id":account.proxy_id})
+pub fn fingerprint_view(account: &SupplierAccount) -> Result<Value, ApiError> {
+    let identity =
+        GrokIdentity::from_account(account).map_err(|_| ApiError::bad("账户指纹无效"))?;
+    Ok(
+        json!({"os_type":identity.os_type,"os_version":identity.os_version,"arch":identity.arch,"terminal":"grok-pager","timezone":identity.timezone.unwrap_or_default(),"proxy_id":account.proxy_id}),
+    )
 }
 impl Fingerprint {
     fn identity(
@@ -76,7 +79,7 @@ pub async fn fingerprint(
     Json(f): Json<Fingerprint>,
 ) -> ApiResult {
     let mut account = s.storage.require_account(&id).await?;
-    if account.provider_id != codex2api_core::GROK {
+    if account.provider_id != codex2api_common::GROK {
         return Err(ApiError::bad("提供商不匹配"));
     }
     if let Some(proxy) = f.proxy_id.as_deref().filter(|v| !v.is_empty()) {
@@ -99,7 +102,7 @@ pub async fn fingerprint(
         .account_http(&id)
         .await
         .map_err(|_| ApiError::upstream("指纹已保存，Grok 连接重建失败"))?;
-    Ok(Json(fingerprint_view(&account)))
+    Ok(Json(fingerprint_view(&account)?))
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -159,11 +162,12 @@ pub async fn relogin(
     Json(f): Json<Relogin>,
 ) -> ApiResult {
     let account = s.storage.require_account(&id).await?;
-    if account.provider_id != codex2api_core::GROK {
+    if account.provider_id != codex2api_common::GROK {
         return Err(ApiError::bad("提供商不匹配"));
     }
     let auth = s.upstream.grok().auth();
-    let identity = GrokIdentity::from_account(&account);
+    let identity =
+        GrokIdentity::from_account(&account).map_err(|_| ApiError::bad("账户指纹无效"))?;
     if matches!(f.method, Method::RefreshToken) {
         auth.grok_login_rt(
             identity,

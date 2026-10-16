@@ -1,5 +1,5 @@
-import type { ApiGroup } from "@/lib/metered-api";
-import { apiLimit } from "@/lib/metered-api";
+import type { ApiGroup } from "@/lib/api-access";
+import { apiLimit } from "@/lib/api-access";
 
 export function ModelGroupLimits({ group }: { group: ApiGroup | null | undefined }) {
   return (

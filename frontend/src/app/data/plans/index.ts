@@ -13,11 +13,7 @@ import { useColumnVisibility } from "@/lib/columns";
 import { planWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
 import { useListResource } from "@/lib/pagination";
-import {
-  grokSubscriptionChoices,
-  subscriptionChoices,
-  subscriptionValue,
-} from "@/lib/subscriptions";
+import { grokSubscriptionChoices, subscriptionChoices } from "@/lib/subscriptions";
 import { useId, useState } from "react";
 
 export const emptyPlan: Plan = {
@@ -57,7 +53,7 @@ export function usePlanEditor({
   const [value, setValue] = useState(() => ({
     ...plan,
     description: plan.description ?? "",
-    plan_type: subscriptionValue(plan.plan_type, plan.provider_id),
+    plan_type: plan.plan_type,
   }));
   const [rpmText, setRpmText] = useState(String(plan.rpm_limit));
   const [concurrencyText, setConcurrencyText] = useState(String(plan.concurrency_limit));

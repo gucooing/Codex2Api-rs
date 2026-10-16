@@ -65,6 +65,7 @@ fn apps(storage: Storage) -> codex2api::ApplicationRouters {
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8082",
         "http://127.0.0.1:8081",
+        "http://127.0.0.1:8083",
     )
     .unwrap()
 }
@@ -109,18 +110,33 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
     .await;
     assert_eq!(
         initial,
-        json!({"api_url":"http://127.0.0.1:8080", "user_url":"http://127.0.0.1:8082", "admin_url":"http://127.0.0.1:8081", "metered_api_url":"http://127.0.0.1:8083", "revision":0})
+        json!({"oauth_url":"http://127.0.0.1:8080", "user_url":"http://127.0.0.1:8082", "admin_url":"http://127.0.0.1:8081", "api_url":"http://127.0.0.1:8083", "revision":0})
     );
 
     let grok_query = query(
-        codex2api_version::grok::CLIENT_ID,
+        codex2api_common::version::grok::CLIENT_ID,
         "http://127.0.0.1:43210/callback",
     );
     let codex_query = query(
-        codex2api_version::OAUTH_CLIENT_ID,
+        codex2api_common::version::OAUTH_CLIENT_ID,
         "http://localhost:1455/auth/callback",
     );
-    for (revision, api_url, user_url, admin_url) in [
+    for (root, foreign_query) in [
+        ("/v1/chatgpt/oauth/authorize", &grok_query),
+        ("/v1/grok/oauth2/authorize", &codex_query),
+    ] {
+        let response = send(
+            &routers.oauth,
+            "GET",
+            &format!("{root}?{foreign_query}"),
+            Value::Null,
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!response.headers().contains_key("location"));
+    }
+    for (revision, oauth_url, user_url, admin_url) in [
         (
             0,
             "https://api.example.test:9443",
@@ -134,7 +150,7 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
             "http://admin.example.test:9081",
         ),
     ] {
-        let settings = json!({"api_url":api_url,"user_url":user_url,"admin_url":admin_url,"metered_api_url":"https://metered.example.test","revision":revision});
+        let settings = json!({"oauth_url":oauth_url,"user_url":user_url,"admin_url":admin_url,"api_url":"https://metered.example.test","revision":revision});
         let saved = send(
             &routers.admin,
             "PUT",
@@ -173,9 +189,9 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
             StatusCode::CONFLICT
         );
 
-        for root in ["/api/oauth/grok", "/grok"] {
+        for root in ["/v1/grok"] {
             let discovery = send(
-                &routers.api,
+                &routers.oauth,
                 "GET",
                 &format!("{root}/.well-known/openid-configuration"),
                 Value::Null,
@@ -194,10 +210,10 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
                 ("userinfo_endpoint", "/oauth2/userinfo"),
                 ("jwks_uri", "/.well-known/jwks.json"),
             ] {
-                assert_eq!(discovery[field], format!("{api_url}{root}{suffix}"));
+                assert_eq!(discovery[field], format!("{oauth_url}{root}{suffix}"));
             }
             let redirect = send(
-                &routers.api,
+                &routers.oauth,
                 "GET",
                 &format!("{root}/oauth2/authorize?{grok_query}"),
                 Value::Null,
@@ -211,10 +227,10 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
             );
             let device = payload(
                 send(
-                    &routers.api,
+                    &routers.oauth,
                     "POST",
                     &format!("{root}/oauth2/device/code"),
-                    json!({"client_id":codex2api_version::grok::CLIENT_ID}),
+                    json!({"client_id":codex2api_common::version::grok::CLIENT_ID}),
                     &[],
                 )
                 .await,
@@ -233,9 +249,9 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
             );
         }
         let redirect = send(
-            &routers.api,
+            &routers.oauth,
             "GET",
-            &format!("/api/oauth/chatgpt/oauth/authorize?{codex_query}"),
+            &format!("/v1/chatgpt/oauth/authorize?{codex_query}"),
             Value::Null,
             &[],
         )
@@ -248,13 +264,13 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
         let desktop = url::form_urlencoded::Serializer::new(String::new())
             .append_pair(
                 "authorize_url",
-                &format!("{api_url}/api/oauth/chatgpt/oauth/authorize?{codex_query}"),
+                &format!("{oauth_url}/v1/chatgpt/oauth/authorize?{codex_query}"),
             )
             .finish();
         let redirect = send(
-            &routers.api,
+            &routers.oauth,
             "GET",
-            &format!("/codex/desktop-auth?{desktop}"),
+            &format!("/v1/chatgpt/codex/desktop-auth?{desktop}"),
             Value::Null,
             &[],
         )
@@ -265,9 +281,9 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
             format!("{user_url}/user/authorize/?{codex_query}")
         );
         let redirect = send(
-            &routers.api,
+            &routers.oauth,
             "GET",
-            "/api/oauth/chatgpt/codex/device",
+            "/v1/chatgpt/codex/device",
             Value::Null,
             &[],
         )
@@ -278,9 +294,9 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
         );
         let metadata = payload(
             send(
-                &routers.api,
+                &routers.oauth,
                 "GET",
-                "/api/oauth/chatgpt/backend-api/ps/mcp/.well-known/oauth-protected-resource",
+                "/v1/chatgpt/backend-api/ps/mcp/.well-known/oauth-protected-resource",
                 Value::Null,
                 &[],
             )
@@ -289,7 +305,7 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
         .await;
         assert_eq!(
             metadata["resource"],
-            format!("{api_url}/api/oauth/chatgpt/backend-api/ps/mcp")
+            format!("{oauth_url}/v1/chatgpt/backend-api/ps/mcp")
         );
 
         let bootstrap = send(
@@ -345,19 +361,16 @@ async fn administrator_addresses_apply_to_existing_routers_and_survive_restart()
     let routers = apps(reopened);
     let discovery = payload(
         send(
-            &routers.api,
+            &routers.oauth,
             "GET",
-            "/api/oauth/grok/.well-known/openid-configuration",
+            "/v1/grok/.well-known/openid-configuration",
             Value::Null,
             &[],
         )
         .await,
     )
     .await;
-    assert_eq!(
-        discovery["issuer"],
-        "http://api.example.test:9080/api/oauth/grok"
-    );
+    assert_eq!(discovery["issuer"], "http://api.example.test:9080/v1/grok");
 }
 
 #[tokio::test]
@@ -367,7 +380,7 @@ async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
         .await
         .unwrap();
     let routers = apps(storage.clone());
-    let settings = json!({"api_url":"https://api.example.test/","user_url":"http://user.example.test:8082/","admin_url":"https://admin.example.test/","metered_api_url":"https://metered.example.test/","revision":0});
+    let settings = json!({"oauth_url":"https://api.example.test/","user_url":"http://user.example.test:8082/","admin_url":"https://admin.example.test/","api_url":"https://metered.example.test/","revision":0});
     assert_eq!(
         send(
             &routers.admin,
@@ -412,7 +425,7 @@ async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
         .status(),
         StatusCode::FORBIDDEN
     );
-    for field in ["api_url", "user_url", "admin_url", "metered_api_url"] {
+    for field in ["oauth_url", "user_url", "admin_url", "api_url"] {
         for invalid in [
             "",
             "api.example.test",
@@ -460,8 +473,8 @@ async fn public_addresses_require_admin_csrf_and_atomic_valid_settings() {
         .await,
     )
     .await;
-    assert_eq!(saved["api_url"], "https://api.example.test");
+    assert_eq!(saved["oauth_url"], "https://api.example.test");
     assert_eq!(saved["user_url"], "http://user.example.test:8082");
     assert_eq!(saved["admin_url"], "https://admin.example.test");
-    assert_eq!(saved["metered_api_url"], "https://metered.example.test");
+    assert_eq!(saved["api_url"], "https://metered.example.test");
 }

@@ -192,7 +192,7 @@ impl UpstreamClient {
         let mut metadata = serde_json::json!({});
         let extra =
             normalize_response_identity(&mut metadata, &self.identity().installation_id, &inbound)?;
-        let tls = tokio::task::spawn_blocking(codex2api_auth::transport::websocket_tls_config)
+        let tls = tokio::task::spawn_blocking(codex2api_suppliers::transport::websocket_tls_config)
             .await
             .map_err(|e| UpstreamError::Stream(e.to_string()))??;
         let mut retried = false;
@@ -322,7 +322,7 @@ impl UpstreamClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex2api_accounts::{AccountIdentity, HostRuntime};
+    use codex2api_suppliers::{AccountIdentity, HostRuntime};
     use futures::{SinkExt, StreamExt};
 
     #[tokio::test]
@@ -331,7 +331,7 @@ mod tests {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "websocket::tests::failed_secure_handshake_updates_only_the_current_accounts_infrastructure_cookies", "--nocapture"])
                 .env("CODEX2API_WS_COOKIE_CHILD", "1")
-                .env("CODEX_CA_CERTIFICATE", concat!(env!("CARGO_MANIFEST_DIR"), "/../codex2api-auth/tests/fixtures/proxy-chatgpt-ca.pem"))
+                .env("CODEX_CA_CERTIFICATE", concat!(env!("CARGO_MANIFEST_DIR"), "/../codex2api-suppliers/tests/fixtures/proxy-chatgpt-ca.pem"))
                 .output().unwrap();
             assert!(
                 output.status.success(),
@@ -346,13 +346,13 @@ mod tests {
             self,
             pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
         };
-        codex2api_auth::transport::ensure_tls_provider();
+        codex2api_suppliers::transport::ensure_tls_provider();
         let cert = CertificateDer::from_pem_slice(include_bytes!(
-            "../../../../codex2api-auth/tests/fixtures/proxy-chatgpt-server.pem"
+            "../../../../codex2api-suppliers/tests/fixtures/proxy-chatgpt-server.pem"
         ))
         .unwrap();
         let key = PrivateKeyDer::from_pem_slice(include_bytes!(
-            "../../../../codex2api-auth/tests/fixtures/proxy-server-key.pem"
+            "../../../../codex2api-suppliers/tests/fixtures/proxy-server-key.pem"
         ))
         .unwrap();
         let config = rustls::ServerConfig::builder()
@@ -398,7 +398,7 @@ mod tests {
             )
             .unwrap();
             client.use_account_http(std::sync::Arc::new(
-                codex2api_auth::transport::AccountHttpClients::with_proxy(
+                codex2api_suppliers::transport::AccountHttpClients::with_proxy(
                     &identity,
                     Some(&format!("http://user:pass@{address}")),
                 )
@@ -456,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_rebuilds_handshake_and_negotiates_official_compression() {
-        codex2api_auth::transport::ensure_tls_provider();
+        codex2api_suppliers::transport::ensure_tls_provider();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = tokio::sync::oneshot::channel();

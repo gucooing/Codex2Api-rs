@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use codex2api_auth::AuthService;
+use codex2api_suppliers::AuthService;
 
 use crate::client::UpstreamClient;
 use crate::error::Result;
@@ -17,7 +17,7 @@ use crate::stream::SseForwardStream;
 pub struct UpstreamPool {
     auth: AuthService,
     grok: crate::grok::GrokUpstream,
-    clients: Arc<codex2api_auth::account_cache::AccountCache<Arc<UpstreamClient>>>,
+    clients: Arc<codex2api_suppliers::account_cache::AccountCache<Arc<UpstreamClient>>>,
     stream_idle_timeout: Option<Duration>,
     transport: Arc<dyn crate::HttpTransport>,
 }
@@ -28,7 +28,7 @@ impl UpstreamPool {
         account: &codex2api_storage::SupplierAccount,
     ) -> Result<()> {
         match account.provider_id.as_str() {
-            codex2api_core::CHATGPT => {
+            codex2api_common::CHATGPT => {
                 let (models, revision) = self
                     .get(&account.id)
                     .await?
@@ -43,7 +43,7 @@ impl UpstreamPool {
                     return Err(crate::UpstreamError::WorkspaceChanged);
                 }
             }
-            codex2api_core::GROK => {
+            codex2api_common::GROK => {
                 self.grok.discover_supplier_models(&account.id).await?;
             }
             _ => {
@@ -56,7 +56,7 @@ impl UpstreamPool {
     }
     pub fn new(auth: AuthService) -> Self {
         Self {
-            grok: crate::grok::GrokUpstream::new(codex2api_auth::grok::GrokAuthService::new(
+            grok: crate::grok::GrokUpstream::new(codex2api_suppliers::grok::GrokAuthService::new(
                 auth.storage().ok().cloned(),
             )),
             auth,
@@ -94,12 +94,12 @@ impl UpstreamPool {
         rejected: &str,
     ) -> Result<()> {
         match account.provider_id.as_str() {
-            codex2api_core::CHATGPT => {
+            codex2api_common::CHATGPT => {
                 self.auth
                     .refresh_rejected_token(&account.id, rejected)
                     .await?;
             }
-            codex2api_core::GROK => {
+            codex2api_common::GROK => {
                 self.grok
                     .auth()
                     .refresh_grok(&account.id, true, Some(rejected))

@@ -60,12 +60,6 @@ pub fn virtual_config_specs() -> Vec<VirtualConfigSpec> {
             json!({"picture":null,"bio":""}),
         ),
         (
-            "desktop_preferences",
-            "旧版协议配置",
-            "兼容能力由已实现的协议自动提供，此历史记录不再控制客户端语言和个人页。",
-            json!({"localized_interface":true,"profile_enabled":true}),
-        ),
-        (
             "profile_page",
             "个人信息页",
             "客户端显示名称和用户名留空时使用账号资料；统计来自本账号实际记录。",

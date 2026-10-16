@@ -184,8 +184,8 @@ async fn sub2api_import_skips_unsupported_types_preserves_identity_and_never_ech
         .await
         .unwrap()
         .unwrap();
-    let auth =
-        codex2api_auth::providers::grok::GrokCredentials::from_supplier_tokens(&tokens).unwrap();
+    let auth = codex2api_suppliers::providers::grok::GrokCredentials::from_supplier_tokens(&tokens)
+        .unwrap();
     assert_eq!(auth.expires_at, Some(2000000000));
     assert_eq!(auth.profile["userId"], "grok-user");
     f.storage

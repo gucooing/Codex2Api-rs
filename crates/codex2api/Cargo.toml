@@ -7,23 +7,21 @@ rust-version.workspace = true
 description = "Codex subscription to Codex-compatible Responses API proxy"
 
 [features]
-dev-frontend = ["codex2api-web/dev-frontend"]
+dev-frontend = ["codex2api-admin/dev-frontend", "codex2api-user/dev-frontend"]
 
 [dependencies]
+codex2api-common.workspace = true
 codex2api-user.workspace = true
-codex2api-web.workspace = true
 anyhow.workspace = true
 url.workspace = true
 axum.workspace = true
 http-body-util = "0.1"
-codex2api-accounts.workspace = true
 codex2api-admin.workspace = true
+codex2api-oauth.workspace = true
 codex2api-api.workspace = true
-codex2api-gateway.workspace = true
-codex2api-auth.workspace = true
+codex2api-suppliers.workspace = true
 codex2api-storage.workspace = true
 codex2api-upstream.workspace = true
-codex2api-version.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true

@@ -1,4 +1,4 @@
-import type { ApiCatalogModel, ApiTokenPrice } from "@/lib/metered-api";
+import type { ApiCatalogModel, ApiTokenPrice } from "@/lib/api-access";
 
 type InputRange = Pick<ApiTokenPrice, "min_input_tokens" | "max_input_tokens">;
 export type ModelTokenPrice = InputRange & {

@@ -11,7 +11,7 @@ impl AdminState {
     /// account clients and quota cache. Router construction never starts tasks.
     pub async fn monitor_supplier_quota(self) {
         loop {
-            match self.storage.supplier_quota_probe_candidates(codex2api_core::CHATGPT).await {
+            match self.storage.supplier_quota_probe_candidates(codex2api_common::CHATGPT).await {
                 Ok(ids) => probe_candidates(ids, |id| {
                     let state = self.clone();
                     async move {

@@ -1,5 +1,5 @@
-import type { ApiCatalogModel } from "@/lib/metered-api";
-import { apiLimit } from "@/lib/metered-api";
+import type { ApiCatalogModel } from "@/lib/api-access";
+import { apiLimit } from "@/lib/api-access";
 
 export function ModelCallLimits({ model }: { model: ApiCatalogModel }) {
   return (

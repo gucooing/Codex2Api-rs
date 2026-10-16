@@ -68,7 +68,6 @@ impl Storage {
                 os_type: a.os_type,
                 os_version: a.os_version,
                 arch: a.arch,
-                home_dir: String::new(),
                 http_fingerprint_json: a.http_fingerprint_json,
             },
         })
@@ -79,10 +78,10 @@ impl Storage {
     pub async fn import_supplier(&self, item: &SupplierTransferAccount) -> Result<bool> {
         let a = &item.account;
         let scheduling = &item.scheduling;
-        if !codex2api_core::supported_provider(&a.provider_id)
+        if !codex2api_common::supported_provider(&a.provider_id)
             || item.models.len() > 2048
             || item.models.iter().any(|m| {
-                !codex2api_core::valid_model(&m.model)
+                !codex2api_common::valid_model(&m.model)
                     || !["custom", "upstream"].contains(&m.source.as_str())
             })
             || item.tags.len() > 1000
@@ -148,8 +147,8 @@ impl Storage {
             None
         };
         sqlx::query("INSERT INTO supplier_accounts(id,provider_id,status,display_name,chatgpt_account_id,chatgpt_user_id,
-            email,plan_type,installation_id,originator,user_agent,os_type,os_version,arch,home_dir,http_fingerprint_json,
-            proxy_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'',$15,$16,$17,$18)")
+            email,plan_type,installation_id,originator,user_agent,os_type,os_version,arch,http_fingerprint_json,
+            proxy_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)")
             .bind(&id).bind(&a.provider_id).bind(a.status.as_str()).bind(&a.display_name)
             .bind(&a.chatgpt_account_id).bind(&a.chatgpt_user_id).bind(&a.email).bind(&a.plan_type)
             .bind(&a.installation_id).bind(&a.originator).bind(&a.user_agent).bind(&a.os_type)

@@ -77,7 +77,6 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         "fixture",
         "fixture",
         "fixture",
-        "",
         "{}",
     );
     new.provider_id = "grok".into();
@@ -142,7 +141,6 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
         "os",
         "version",
         "arch",
-        "",
         "{}",
     );
     supplier.chatgpt_account_id = Some("official".into());
@@ -236,7 +234,6 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
         "os",
         "version",
         "arch",
-        "",
         "{}",
     );
     other.provider_id = "grok".into();
@@ -256,7 +253,7 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
             .await
             .is_err()
     );
-    // A corrupt legacy foreign identity still cannot be selected by ChatGPT login.
+    // A corrupt foreign identity still cannot be selected by ChatGPT login.
     sqlx::query("UPDATE supplier_accounts SET chatgpt_account_id='official',chatgpt_user_id='official-user' WHERE id=$1")
         .bind(&supplier.id)
         .execute(storage.pool())
@@ -269,7 +266,6 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
         "os",
         "version",
         "arch",
-        "",
         "{}",
     );
     official.chatgpt_account_id = Some("official".into());

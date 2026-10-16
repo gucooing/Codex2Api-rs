@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 #[derive(Clone)]
 pub struct GrokUpstream {
-    auth: codex2api_auth::grok::GrokAuthService,
+    auth: codex2api_suppliers::grok::GrokAuthService,
     transport: std::sync::Arc<dyn crate::HttpTransport>,
 }
 
@@ -62,7 +62,7 @@ pub fn quota_snapshot(mut value: Value) -> Result<Value> {
 }
 
 impl GrokUpstream {
-    pub fn new(auth: codex2api_auth::grok::GrokAuthService) -> Self {
+    pub fn new(auth: codex2api_suppliers::grok::GrokAuthService) -> Self {
         Self {
             auth,
             transport: std::sync::Arc::new(crate::ReqwestTransport),
@@ -72,7 +72,7 @@ impl GrokUpstream {
         self.transport = transport;
         self
     }
-    pub fn auth(&self) -> &codex2api_auth::grok::GrokAuthService {
+    pub fn auth(&self) -> &codex2api_suppliers::grok::GrokAuthService {
         &self.auth
     }
     pub async fn grok_request(
@@ -117,7 +117,7 @@ impl GrokUpstream {
             ));
         }
         let account = self.auth().storage()?.supplier_account_snapshot(id).await?;
-        if account.provider_id != codex2api_core::GROK {
+        if account.provider_id != codex2api_common::GROK {
             return Err(UpstreamError::InvalidRequest(
                 "Supplier provider mismatch".into(),
             ));
@@ -135,7 +135,7 @@ impl GrokUpstream {
             .access_token
             .as_deref()
             .ok_or_else(|| UpstreamError::MissingAccessToken(id.into()))?;
-        let mut headers = codex2api_auth::grok::headers(&http.identity, Some(access))?;
+        let mut headers = codex2api_suppliers::grok::headers(&http.identity, Some(access))?;
         if let Some(user) = &account.chatgpt_user_id {
             let user = HeaderValue::from_str(user)
                 .map_err(|_| UpstreamError::InvalidRequest("Invalid Grok identity".into()))?;
@@ -278,8 +278,10 @@ impl GrokUpstream {
             let error = UpstreamError::status_with_headers(status, response.text().await?, headers);
             if let Some(revision) = revision
                 && matches!(
-                    error
-                        .supplier_failure_for(codex2api_core::GROK, chrono::Utc::now().timestamp()),
+                    error.supplier_failure_for(
+                        codex2api_common::GROK,
+                        chrono::Utc::now().timestamp()
+                    ),
                     Some(crate::SupplierFailure::Authentication)
                 )
             {

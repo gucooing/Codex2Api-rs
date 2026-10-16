@@ -5,7 +5,7 @@ pub(crate) async fn catalog_operation_prices(
     connection: &mut sqlx::PgConnection,
     group: Option<&crate::ApiGroup>,
 ) -> Result<Vec<crate::api_groups::ApiOperationPrice>> {
-    use codex2api_core::{CHATGPT, providers::chatgpt::SEARCH_OPERATION};
+    use codex2api_common::{CHATGPT, providers::chatgpt::SEARCH_OPERATION};
     let price_usd = if let Some(group) = group {
         group.search_price_usd.clone()
     } else {

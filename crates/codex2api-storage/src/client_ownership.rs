@@ -56,7 +56,6 @@ pub fn client_state_only(key: &str) -> bool {
         key,
         "cloud_preferences"
             | "profile_page"
-            | "desktop_preferences"
             | "payment_methods"
             | "referral_tracking"
             | "family"

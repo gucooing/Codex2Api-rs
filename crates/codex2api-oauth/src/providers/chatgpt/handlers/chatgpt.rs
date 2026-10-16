@@ -1,0 +1,445 @@
+use crate::{OAuthState, Result};
+use axum::{
+    body::{Body, Bytes},
+    extract::Path,
+    extract::{Extension, OriginalUri, State},
+    http::HeaderMap,
+    response::Response,
+};
+use codex2api_storage::VirtualAccess;
+use codex2api_upstream::ChatgptEndpoint;
+
+pub async fn virtual_profile(
+    State(state): State<OAuthState>,
+    Extension(access): Extension<VirtualAccess>,
+) -> Result<Response> {
+    let account = state
+        .storage
+        .platform_account(&access.virtual_account_id)
+        .await?
+        .ok_or_else(crate::OAuthError::invalid_token)?;
+    let mut profile = crate::providers::chatgpt::identity::identity(&account);
+    profile["id"] = format!("user-{}", account.id).into();
+    let private = state
+        .storage
+        .virtual_config(&account.id, "profile")
+        .await?
+        .value;
+    profile["picture"] = private["picture"].clone();
+    profile["bio"] = private["bio"].clone();
+    Ok(crate::providers::chatgpt::identity::json_response(profile))
+}
+
+pub async fn optimized_account_check(
+    State(state): State<OAuthState>,
+    Extension(access): Extension<VirtualAccess>,
+) -> Result<Response> {
+    let account = state
+        .storage
+        .platform_account(&access.virtual_account_id)
+        .await?
+        .ok_or_else(crate::OAuthError::invalid_token)?;
+    let mut value = crate::providers::chatgpt::identity::optimized_account_check(&account);
+    let settings = state
+        .storage
+        .virtual_config(&account.id, "account_settings")
+        .await?
+        .value;
+    value["permissions"] = settings["permissions"].clone();
+    Ok(crate::providers::chatgpt::identity::json_response(value))
+}
+
+pub async fn virtual_settings(
+    State(state): State<OAuthState>,
+    Extension(access): Extension<VirtualAccess>,
+) -> Result<Response> {
+    let mut value = state
+        .storage
+        .virtual_config(&access.virtual_account_id, "user_settings")
+        .await?
+        .value;
+    value["settings"]["voice_enabled"] = false.into();
+    if let Some(settings) = value["settings"].as_object_mut() {
+        for key in [
+            "voice_name",
+            "voice_mode",
+            "voice_main_language",
+            "wingman_thinking_effort",
+        ] {
+            settings.remove(key);
+        }
+    }
+    Ok(crate::providers::chatgpt::identity::json_response(value))
+}
+pub async fn virtual_auto_top_up(
+    State(state): State<OAuthState>,
+    Extension(access): Extension<VirtualAccess>,
+) -> Result<Response> {
+    Ok(crate::providers::chatgpt::identity::json_response(
+        state
+            .storage
+            .virtual_config(&access.virtual_account_id, "auto_top_up")
+            .await?
+            .value,
+    ))
+}
+pub async fn virtual_discount_offer(
+    State(state): State<OAuthState>,
+    Extension(access): Extension<VirtualAccess>,
+) -> Result<Response> {
+    Ok(crate::providers::chatgpt::identity::json_response(
+        state
+            .storage
+            .virtual_config(&access.virtual_account_id, "discount_offer")
+            .await?
+            .value,
+    ))
+}
+
+pub async fn forward(
+    State(state): State<OAuthState>,
+    Extension(endpoint): Extension<ChatgptEndpoint>,
+    oauth: Extension<VirtualAccess>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response> {
+    let id = oauth.virtual_account_id.clone();
+    let account = state
+        .storage
+        .platform_account(&id)
+        .await?
+        .ok_or_else(crate::OAuthError::invalid_token)?;
+    let query: Vec<_> = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).collect();
+    if query.iter().any(|(k, v)| k == "account_id" && v != &id) {
+        return Err(crate::OAuthError::bad_request(
+            "SupplierAccount does not match virtual identity.",
+        ));
+    }
+    if endpoint == ChatgptEndpoint::Privacy {
+        let features: Vec<_> = query.iter().filter(|(k, _)| k == "feature").collect();
+        let values: Vec<_> = query.iter().filter(|(k, _)| k == "value").collect();
+        if features.len() != 1 || values.len() != 1 {
+            return Err(crate::OAuthError::bad_request(
+                "Expected one feature and value.",
+            ));
+        }
+        let feature = features[0].1.as_ref();
+        let raw = values[0].1.as_ref();
+        if matches!(
+            feature,
+            "voice_name"
+                | "voice_enabled"
+                | "voice_mode"
+                | "voice_main_language"
+                | "wingman_thinking_effort"
+        ) {
+            return super::realtime::unavailable().await;
+        } else {
+            if feature.is_empty() || feature.len() > 128 {
+                return Err(crate::OAuthError::bad_request("Invalid user preference."));
+            }
+            let saved = state.storage.virtual_config(&id, "user_settings").await?;
+            let mut value = saved.value;
+            let spec = codex2api_storage::client_fields("user_settings")
+                .into_iter()
+                .find(|spec| spec.path == ["settings", feature]);
+            value["settings"][feature] = match spec.as_ref().map(|spec| spec.kind) {
+                Some("select" | "date" | "text" | "string") => raw.into(),
+                _ if matches!(raw, "true" | "false") => (raw == "true").into(),
+                _ => {
+                    return Err(crate::OAuthError::bad_request(
+                        "Invalid user preference value.",
+                    ));
+                }
+            };
+            codex2api_storage::validate_client_fields("user_settings", &value)
+                .map_err(crate::OAuthError::bad_request)?;
+            super::virtual_data::save_config(
+                &state,
+                &oauth.0,
+                "user_settings",
+                &value,
+                saved.revision,
+            )
+            .await?;
+        }
+        return Ok(crate::providers::chatgpt::identity::json_response(
+            serde_json::json!({"success":true}),
+        ));
+    }
+    if matches!(
+        endpoint,
+        ChatgptEndpoint::Plugins | ChatgptEndpoint::InstalledPlugins
+    ) {
+        return super::plugins::list(
+            &state,
+            &oauth.0,
+            uri.query(),
+            endpoint == ChatgptEndpoint::InstalledPlugins,
+        )
+        .await;
+    }
+    if endpoint == ChatgptEndpoint::StatsigBootstrap {
+        let request = if body.is_empty() {
+            serde_json::json!({})
+        } else {
+            codex2api_upstream::decode_body(&body, &headers)?
+        };
+        if !request.is_object() {
+            return Err(crate::OAuthError::bad_request(
+                "Expected a desktop bootstrap object.",
+            ));
+        }
+        let beta = request
+            .get("desktop_app_beta_enabled")
+            .map(|v| {
+                v.as_bool()
+                    .ok_or_else(|| crate::OAuthError::bad_request("Invalid desktop beta state."))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let mut custom_ids = serde_json::json!({"account_id":account.id});
+        if let Some(stable_id) = request.get("stable_id").filter(|v| !v.is_null()) {
+            let stable_id = stable_id
+                .as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+                .ok_or_else(|| crate::OAuthError::bad_request("Invalid desktop stable_id."))?;
+            custom_ids["stableID"] = stable_id.into();
+        }
+        let access = &oauth.0;
+        let payload = super::desktop_support::bootstrap(
+            &state,
+            access,
+            beta,
+            custom_ids["stableID"].as_str().map(str::to_owned),
+        )
+        .await?;
+        return Ok(crate::providers::chatgpt::identity::json_response(
+            serde_json::json!({"statsigPayload":payload.to_string()}),
+        ));
+    }
+    if matches!(
+        endpoint,
+        ChatgptEndpoint::AnalyticsEvents | ChatgptEndpoint::Traces
+    ) {
+        if endpoint == ChatgptEndpoint::AnalyticsEvents {
+            let value = codex2api_upstream::decode_body(&body, &headers)?;
+            let events = value["events"]
+                .as_array()
+                .filter(|v| v.len() <= 1000)
+                .ok_or_else(|| {
+                    crate::OAuthError::bad_request("Expected at most 1000 analytics events.")
+                })?;
+            state.storage.record_virtual_analytics(&id, events).await?;
+        }
+        // Trace bodies are deliberately not retained; require_oauth records this
+        // request's account/device/status. Nothing is sent under supplier identity.
+        return Ok(crate::providers::chatgpt::identity::json_response(
+            serde_json::json!({}),
+        ));
+    }
+    match endpoint {
+        ChatgptEndpoint::AccountsCheck => {
+            let mut value = crate::providers::chatgpt::identity::account_check(&account);
+            let settings = state
+                .storage
+                .virtual_config(&account.id, "account_settings")
+                .await?
+                .value;
+            value["accounts"][&account.id]["permissions"] = settings["permissions"].clone();
+            return Ok(crate::providers::chatgpt::identity::json_response(value));
+        }
+        ChatgptEndpoint::Subscriptions => {
+            return Ok(crate::providers::chatgpt::identity::json_response(
+                crate::providers::chatgpt::identity::subscriptions(&account),
+            ));
+        }
+        ChatgptEndpoint::Privacy
+        | ChatgptEndpoint::FeaturedPlugins
+        | ChatgptEndpoint::Plugins
+        | ChatgptEndpoint::InstalledPlugins
+        | ChatgptEndpoint::SuggestedPlugins
+        | ChatgptEndpoint::AnalyticsEvents
+        | ChatgptEndpoint::StatsigBootstrap
+        | ChatgptEndpoint::Traces
+        | ChatgptEndpoint::ConnectorDirectory
+        | ChatgptEndpoint::SiteStatus => {}
+    }
+    if matches!(
+        endpoint,
+        ChatgptEndpoint::FeaturedPlugins
+            | ChatgptEndpoint::SuggestedPlugins
+            | ChatgptEndpoint::ConnectorDirectory
+    ) {
+        return Err(catalog_unavailable());
+    }
+    let (_, ctx) =
+        crate::providers::chatgpt::access::resolve_supplier(&state, &headers, oauth).await?;
+    let account_id = ctx.account.chatgpt_account_id.as_deref().unwrap_or("");
+    let translated_query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(query.iter().map(|(key, value)| {
+            (
+                key.as_ref(),
+                if key == "account_id" {
+                    account_id
+                } else {
+                    value.as_ref()
+                },
+            )
+        }))
+        .finish();
+    endpoint.url(account_id, Some(&translated_query))?;
+    let upstream = state.upstream.get(&ctx.account.id).await?;
+    let response = upstream
+        .forward_chatgpt(endpoint, account_id, Some(&translated_query), body, headers)
+        .await?;
+    if !response.status().is_success() {
+        return Err(crate::OAuthError::openai(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "api_error",
+            "The provider service request failed.",
+            Some("provider_request_failed"),
+        ));
+    }
+    if endpoint == ChatgptEndpoint::SiteStatus {
+        let value: serde_json::Value = response.json().await.map_err(|_| {
+            crate::OAuthError::openai(
+                axum::http::StatusCode::BAD_GATEWAY,
+                "api_error",
+                "Invalid desktop service response.",
+                Some("invalid_upstream_response"),
+            )
+        })?;
+        let features = site_features(&value)?;
+        let site = query
+            .iter()
+            .find(|(k, _)| k == "site_url")
+            .and_then(|(_, v)| url::Url::parse(v).ok())
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .ok_or_else(|| crate::OAuthError::bad_request("Invalid site URL."))?;
+        state.storage.save_virtual_resource(&id,"site_status",&site,None,&serde_json::json!({"host":site,"feature_status":features,"checked_at":chrono::Utc::now().to_rfc3339()})).await?;
+        return Ok(crate::providers::chatgpt::identity::json_response(
+            serde_json::json!({"feature_status":features}),
+        ));
+    }
+    Ok(crate::response::forward_response(
+        response.status(),
+        response.headers().clone(),
+        Body::from_stream(response.bytes_stream()),
+    ))
+}
+
+pub async fn plugin_detail(
+    State(state): State<OAuthState>,
+    Path(plugin_id): Path<String>,
+    oauth: Extension<VirtualAccess>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response> {
+    if plugin_id.is_empty()
+        || plugin_id.len() > 256
+        || !plugin_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+    {
+        return Err(crate::OAuthError::bad_request("Invalid plugin identifier."));
+    }
+    let _ = (state, oauth, uri, headers, body);
+    Err(catalog_unavailable())
+}
+
+pub async fn mcp(
+    State(state): State<OAuthState>,
+    oauth: Extension<VirtualAccess>,
+    OriginalUri(_uri): OriginalUri,
+    headers: HeaderMap,
+    method: http::Method,
+    body: Bytes,
+) -> Result<Response> {
+    let access = oauth.0;
+    let value = if method == http::Method::POST {
+        codex2api_upstream::decode_body(&body, &headers)?
+    } else {
+        serde_json::json!({})
+    };
+    let method = value["method"].as_str().unwrap_or("transport");
+    let tool = value["params"]["name"].as_str().unwrap_or("");
+    if method.len() > 128 || tool.len() > 256 {
+        return Err(crate::OAuthError::bad_request("Invalid MCP request."));
+    }
+    // A supplier login is not a virtual-account resource grant. Until an
+    // account-owned connector executor exists, no private RPC may reach it.
+    state.storage.save_virtual_resource(&access.virtual_account_id,"mcp_operation",&uuid::Uuid::new_v4().to_string(),None,&serde_json::json!({"method":method,"tool":tool,"status":"authorization_unavailable","created_at_ms":chrono::Utc::now().timestamp_millis()})).await?;
+    let mut response = crate::providers::chatgpt::identity::json_response(
+        serde_json::json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32003,"message":"Virtual-account connector authorization and execution are unavailable.","data":{"code":"connector_authorization_unavailable"}}}),
+    );
+    *response.status_mut() = http::StatusCode::NOT_IMPLEMENTED;
+    Ok(response)
+}
+
+pub async fn apps_batch(
+    State(state): State<OAuthState>,
+    oauth: Extension<VirtualAccess>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response> {
+    let _ = (state, oauth, uri, headers, body);
+    Err(catalog_unavailable())
+}
+
+pub async fn mcp_metadata(State(state): State<OAuthState>, headers: HeaderMap) -> Result<Response> {
+    let origin = if let Some(origin) = state.public_oauth_url().await? {
+        origin
+    } else {
+        let host = headers
+            .get(http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                crate::OAuthError::bad_request("Host is required for resource discovery.")
+            })?;
+        let authority = host
+            .parse::<http::uri::Authority>()
+            .map_err(|_| crate::OAuthError::bad_request("Invalid Host."))?;
+        if authority.as_str().contains('@') {
+            return Err(crate::OAuthError::bad_request("Invalid Host."));
+        }
+        let url = url::Url::parse(&format!("http://{authority}"))
+            .map_err(|_| crate::OAuthError::bad_request("Invalid Host."))?;
+        url.origin().ascii_serialization()
+    };
+    // Existing virtual-account tokens authenticate this resource; don't advertise OpenAI's issuer.
+    Ok(crate::providers::chatgpt::identity::json_response(
+        serde_json::json!({
+            "resource":format!("{origin}{}/backend-api/ps/mcp",super::oauth::PREFIX),
+            "bearer_methods_supported":["header"],
+            "scopes_supported":["api.connectors.read","api.connectors.invoke"]
+        }),
+    ))
+}
+
+fn catalog_unavailable() -> crate::OAuthError {
+    crate::OAuthError::openai(
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "api_error",
+        "Virtual-account plugin and connector catalog authorization is unavailable.",
+        Some("catalog_authorization_unavailable"),
+    )
+}
+
+fn site_features(value: &serde_json::Value) -> Result<&serde_json::Map<String, serde_json::Value>> {
+    value["feature_status"]
+        .as_object()
+        .filter(|v| v.values().all(serde_json::Value::is_boolean))
+        .ok_or_else(invalid_service_response)
+}
+fn invalid_service_response() -> crate::OAuthError {
+    crate::OAuthError::openai(
+        axum::http::StatusCode::BAD_GATEWAY,
+        "api_error",
+        "Invalid desktop service response.",
+        Some("invalid_upstream_response"),
+    )
+}

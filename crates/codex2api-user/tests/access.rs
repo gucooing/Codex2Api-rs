@@ -352,10 +352,10 @@ async fn setup() -> (
     other.name = "Bob private".into();
     other.email = "bob-private@example.test".into();
     storage.save_user(&other, None).await.unwrap();
-    let app = codex2api_user::router(codex2api_user::UserState {
+    let app = codex2api_user::api_router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://127.0.0.1:8082".into(),
-        metered_api_base_url: "http://127.0.0.1:8083".into(),
+        api_base_url: "http://127.0.0.1:8083".into(),
         api_concurrency: std::sync::Arc::new(|_| 0),
     });
     (dir, storage, app, user)
@@ -363,7 +363,7 @@ async fn setup() -> (
 fn query() -> String {
     url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs([
-            ("client_id", codex2api_version::OAUTH_CLIENT_ID),
+            ("client_id", codex2api_common::version::OAUTH_CLIENT_ID),
             ("response_type", "code"),
             ("redirect_uri", "http://127.0.0.1:1455/auth/callback"),
             ("state", "exact-state"),

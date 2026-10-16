@@ -1,6 +1,6 @@
 //! Resolve business policy once; protocol handlers must not interpret plan JSON.
 use crate::{Result, Storage, StorageError};
-use codex2api_core::ModelAccess;
+use codex2api_common::ModelAccess;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct EffectiveEntitlements {

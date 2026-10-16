@@ -130,7 +130,7 @@ async fn save_plan(s: AdminState, id: Option<String>, f: PlanInput) -> ApiResult
         ),
         None => None,
     };
-    if !codex2api_core::supported_provider(&f.provider_id)
+    if !codex2api_common::supported_provider(&f.provider_id)
         || old.as_ref().is_some_and(|p| p.provider_id != f.provider_id)
     {
         return Err(ApiError::bad("套餐的提供商必须在创建时确定"));

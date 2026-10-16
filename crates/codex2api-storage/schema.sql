@@ -1,4 +1,4 @@
--- PostgreSQL schema. Fresh installations only; no historical migrations.
+-- Current PostgreSQL schema.
 
 CREATE TABLE meta (
     key TEXT PRIMARY KEY NOT NULL,
@@ -124,7 +124,6 @@ CREATE TABLE supplier_accounts (
     os_type TEXT NOT NULL,
     os_version TEXT NOT NULL,
     arch TEXT NOT NULL,
-    home_dir TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_used_at TEXT,
@@ -185,7 +184,7 @@ CREATE TABLE virtual_plans (
     revision BIGINT NOT NULL DEFAULT 0,
     updated_at_ms BIGINT NOT NULL DEFAULT 0,
     provider_id TEXT NOT NULL DEFAULT 'chatgpt' REFERENCES providers(id),
-    CHECK((provider_id='chatgpt' AND plan_type IN ('free','go','plus','prolite','pro','promax','team','business','enterprise','edu','edu_plus','edu_pro','self_serve_business_prolite','self_serve_business_usage_based','ent26','enterprise_cbp_automation','enterprise_cbp_usage_based')) OR (provider_id='grok' AND plan_type IN ('free','x_basic','x_premium','x_premium_plus','supergrok_lite','supergrok','supergrok_plus','supergrok_heavy','premium','premium_plus','supergrok_pro','team'))),
+    CONSTRAINT virtual_plans_provider_tier CHECK((provider_id='chatgpt' AND plan_type IN ('free','go','plus','prolite','pro','promax','team','business','enterprise','edu','edu_plus','edu_pro','self_serve_business_prolite','self_serve_business_usage_based','ent26','enterprise_cbp_automation','enterprise_cbp_usage_based')) OR (provider_id='grok' AND plan_type IN ('free','x_basic','x_premium','x_premium_plus','supergrok_lite','supergrok','supergrok_plus','supergrok_heavy'))),
     sort_id BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE
 );
 

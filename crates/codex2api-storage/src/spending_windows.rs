@@ -44,7 +44,7 @@ pub fn spending_windows(value: &Value) -> Result<Vec<SpendingWindow>> {
     Ok(windows)
 }
 
-/// Plans use one canonical nested-window representation after schema migration.
+/// Plans use one canonical nested-window representation.
 pub fn plan_spending_windows(config: &Value) -> Result<Vec<SpendingWindow>> {
     spending_windows(&config["spending_windows"])
 }

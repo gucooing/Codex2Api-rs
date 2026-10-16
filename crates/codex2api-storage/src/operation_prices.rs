@@ -29,7 +29,7 @@ impl Storage {
         price: &OperationPrice,
         expected: Option<i64>,
     ) -> Result<bool> {
-        if !codex2api_core::supported_provider(&price.provider_id)
+        if !codex2api_common::supported_provider(&price.provider_id)
             || price.operation.is_empty()
             || price.operation.len() > 64
             || !price

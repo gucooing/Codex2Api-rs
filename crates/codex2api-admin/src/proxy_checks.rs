@@ -7,7 +7,7 @@ const MAX_BODY: usize = 256 * 1024;
 
 fn client(proxy: &OutboundProxy) -> Result<reqwest::Client, String> {
     let url = codex2api_storage::parse_proxy_url(&proxy.url).map_err(|_| "代理地址无效")?;
-    codex2api_auth::transport::http_builder()
+    codex2api_suppliers::transport::http_builder()
         .map_err(|_| "无法初始化检测客户端")?
         .proxy(reqwest::Proxy::all(url).map_err(|_| "代理地址无效")?)
         .connect_timeout(Duration::from_secs(8))

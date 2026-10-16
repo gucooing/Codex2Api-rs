@@ -449,7 +449,7 @@ mod tests {
         let directory = codex2api_storage::test_support::tempdir().unwrap();
         let path = directory.path().join("fixture");
         let storage = codex2api_storage::test_support::open(&path).await.unwrap();
-        let accounts = codex2api_accounts::SupplierAccountStore::open(storage.clone());
+        let accounts = codex2api_suppliers::SupplierAccountStore::open(storage.clone());
         let account = accounts.create_pending().await.unwrap().account;
         let other = accounts.create_pending().await.unwrap().account;
         let revision = storage
@@ -556,7 +556,7 @@ mod tests {
     #[tokio::test]
     async fn http_and_websocket_transport_capture_headers_and_events() {
         use axum::{Router, extract::WebSocketUpgrade, response::IntoResponse, routing::get};
-        use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
+        use codex2api_suppliers::{AuthDotJson, SupplierAccountStore, TokenData};
         let directory = codex2api_storage::test_support::tempdir().unwrap();
         let path = directory.path().join("fixture");
         let storage = codex2api_storage::test_support::open(&path).await.unwrap();
@@ -579,7 +579,7 @@ mod tests {
             .unwrap();
         let client = crate::UpstreamClient::from_context(
             accounts.load_context(&account.id).await.unwrap(),
-            Some(codex2api_auth::AuthService::new(accounts.clone()).unwrap()),
+            Some(codex2api_suppliers::AuthService::new(accounts.clone()).unwrap()),
         )
         .unwrap()
         .with_direct_test_http();

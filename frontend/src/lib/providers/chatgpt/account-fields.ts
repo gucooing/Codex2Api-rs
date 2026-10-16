@@ -192,13 +192,6 @@ export const accountSections: {
     fields: [],
   },
   {
-    key: "desktop_preferences",
-    label: "旧版协议配置",
-    description: "兼容能力由已实现的协议自动提供，此历史记录不再控制客户端语言和个人页。",
-    readonly: true,
-    fields: [],
-  },
-  {
     key: "profile_page",
     label: "个人信息页",
     description: "客户端显示名称和用户名留空时使用账号资料；统计来自本账号实际记录。",
@@ -573,7 +566,6 @@ export const accountSections: {
 
 export const clientRecordFields: Record<string, BusinessField[]> = {
   cloud_preferences: [],
-  desktop_preferences: [],
   profile_page: [],
   user_settings: [
     {

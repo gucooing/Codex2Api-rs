@@ -23,17 +23,63 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8082",
         "http://127.0.0.1:8081",
+        "http://127.0.0.1:8083",
     )
     .unwrap();
+    // Listener and provider selection come from the path, never the credential.
     for (app, paths) in [
         (
+            &apps.oauth,
+            vec![
+                "/v1/responses",
+                "/v1/models",
+                "/backend-api/codex/models",
+                "/backend-api/wham/usage",
+                "/codex/desktop-auth",
+                "/api/oauth/chatgpt/oauth/token",
+                "/api/oauth/grok/oauth2/token",
+                "/grok/.well-known/openid-configuration",
+                "/grok/v1/models",
+            ],
+        ),
+        (
             &apps.api,
+            vec![
+                "/v1/chatgpt/backend-api/codex/responses",
+                "/v1/chatgpt/oauth/token",
+                "/v1/chatgpt/codex/desktop-auth",
+                "/v1/grok/oauth2/token",
+                "/v1/grok/.well-known/openid-configuration",
+                "/v1/grok/v1/models",
+            ],
+        ),
+    ] {
+        for path in paths {
+            for method in ["GET", "POST"] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+            }
+        }
+    }
+    for (app, paths) in [
+        (
+            &apps.oauth,
             vec![
                 "/admin/",
                 "/admin/api/users",
                 "/user/",
                 "/user/api/session",
-                "/api/oauth/chatgpt/oauth/authorize/bootstrap",
+                "/v1/chatgpt/oauth/authorize/bootstrap",
             ],
         ),
         (
@@ -42,7 +88,7 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
                 "/admin/",
                 "/admin/api/suppliers",
                 "/v1/responses",
-                "/api/oauth/chatgpt/oauth/token",
+                "/v1/chatgpt/oauth/token",
             ],
         ),
         (
@@ -66,7 +112,7 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
                 matches!(
                     response.status(),
                     StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED
-                ) || (path == "/api/oauth/chatgpt/oauth/authorize/bootstrap"
+                ) || (path == "/v1/chatgpt/oauth/authorize/bootstrap"
                     && response.status() == StatusCode::NOT_IMPLEMENTED),
                 "{path}: {}",
                 response.status()
@@ -138,15 +184,35 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
         .await
         .unwrap()
         .unwrap();
-    let response = apps.api.clone().oneshot(Request::post("/api/oauth/chatgpt/oauth/token")
+    let response = apps.oauth.clone().oneshot(Request::post("/v1/chatgpt/oauth/token")
         .header("content-type","application/json")
-        .body(Body::from(json!({"grant_type":"refresh_token","refresh_token":"client-refresh","client_id":codex2api_version::OAUTH_CLIENT_ID}).to_string())).unwrap()).await.unwrap();
+        .body(Body::from(json!({"grant_type":"refresh_token","refresh_token":"client-refresh","client_id":codex2api_common::version::OAUTH_CLIENT_ID}).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let client_tokens: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 100000).await.unwrap()).unwrap();
     let access_token = client_tokens["access_token"].as_str().unwrap();
     let id_token = client_tokens["id_token"].as_str().unwrap();
     let refresh_token = client_tokens["refresh_token"].as_str().unwrap();
+    for token in [
+        access_token,
+        id_token,
+        refresh_token,
+        admin_token,
+        user_token.as_str(),
+    ] {
+        let response = apps
+            .api
+            .clone()
+            .oneshot(
+                Request::get("/v1/models")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
     for (app, path, own_cookie, own_token, foreign) in [
         (
             &apps.admin,
@@ -196,10 +262,10 @@ async fn independent_routers_do_not_register_other_surfaces_or_accept_user_token
     }
     for token in [admin_token, user_token.as_str(), id_token, refresh_token] {
         let response = apps
-            .api
+            .oauth
             .clone()
             .oneshot(
-                Request::get("/api/oauth/chatgpt/backend-api/wham/profiles/me")
+                Request::get("/v1/chatgpt/backend-api/wham/profiles/me")
                     .header("authorization", format!("Bearer {token}"))
                     .body(Body::empty())
                     .unwrap(),

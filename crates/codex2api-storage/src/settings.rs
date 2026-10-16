@@ -10,7 +10,8 @@ pub enum UaMode {
     Whitelist,
 }
 
-/// Global inbound gateway policy, persisted independently of account fingerprints.
+/// Shared supplier scheduling and OAuth client User-Agent rules.
+/// API-key requests share scheduling but do not use the OAuth User-Agent rules.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewaySettings {

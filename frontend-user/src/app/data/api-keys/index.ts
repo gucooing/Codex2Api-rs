@@ -2,7 +2,7 @@
 import { useActions, useErrorToast } from "@/lib/actions";
 import { request } from "@/lib/api";
 import { copyTextElement } from "@/lib/clipboard";
-import type { ApiGroups, ApiKey, CreatedApiKey } from "@/lib/metered-api";
+import type { ApiGroups, ApiKey, CreatedApiKey } from "@/lib/api-access";
 import { usePageControls, type ListPage } from "@/lib/pagination";
 import { useResource } from "@/lib/resource";
 import { useId, useRef, useState, type FormEvent } from "react";

@@ -199,7 +199,7 @@ mod tests {
         }
         assert!(
             crate::classify_provider_failure(
-                codex2api_core::GROK,
+                codex2api_common::GROK,
                 Some(402),
                 &Value::Null,
                 &HeaderMap::new(),
@@ -282,11 +282,12 @@ mod tests {
         for status in [403, 429, 500, 502, 504] {
             assert!(classify_supplier_failure(Some(status), &Value::Null, &headers, 100).is_none());
         }
-        let refresh = crate::UpstreamError::Refresh(codex2api_auth::AuthError::RefreshRejected {
-            status: 429,
-            code: Some("slow_down".into()),
-            message: "retry later".into(),
-        });
+        let refresh =
+            crate::UpstreamError::Refresh(codex2api_suppliers::AuthError::RefreshRejected {
+                status: 429,
+                code: Some("slow_down".into()),
+                message: "retry later".into(),
+            });
         assert!(refresh.supplier_failure(100).is_none());
     }
 }

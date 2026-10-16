@@ -9,28 +9,9 @@ export const subscriptionChoices = [
   { value: "supergrok_heavy", label: "SuperGrok Heavy" },
 ] as const;
 
-export function subscriptionValue(value: string): string {
-  const aliases: Record<string, string> = {
-    GrokPro: "supergrok",
-    SuperGrok: "supergrok",
-    XBasic: "x_basic",
-    XPremium: "x_premium",
-    XPremiumPlus: "x_premium_plus",
-    SuperGrokLite: "supergrok_lite",
-    SuperGrokPlus: "supergrok_plus",
-    SuperGrokHeavy: "supergrok_heavy",
-    SuperGrokPro: "supergrok_heavy",
-    premium: "x_premium",
-    premium_plus: "x_premium_plus",
-    supergrok_pro: "supergrok_heavy",
-    Free: "free",
-  };
-  return aliases[value] ?? value;
-}
-
 export function subscriptionLabel(value: unknown): string {
   return typeof value === "string"
-    ? (subscriptionChoices.find((c) => c.value === subscriptionValue(value))?.label ?? value)
+    ? (subscriptionChoices.find((c) => c.value === value)?.label ?? value)
     : "未提供订阅";
 }
 

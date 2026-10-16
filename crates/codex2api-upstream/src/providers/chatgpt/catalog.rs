@@ -38,15 +38,15 @@ pub fn configured_model_descriptor(model: &str) -> Value {
 
 /// Public models actually described by the pinned provider adapter.
 /// Internal/hidden aliases do not become public service entitlements.
-pub fn supported_models() -> Vec<codex2api_core::SupportedModel> {
+pub fn supported_models() -> Vec<codex2api_common::SupportedModel> {
     catalog()["models"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|model| model["visibility"] == "list" && model["supported_in_api"] == true)
         .filter_map(|model| model["slug"].as_str())
-        .map(|model| codex2api_core::SupportedModel {
-            provider_id: codex2api_core::CHATGPT.into(),
+        .map(|model| codex2api_common::SupportedModel {
+            provider_id: codex2api_common::CHATGPT.into(),
             model: model.into(),
             kind: "text".into(),
         })

@@ -21,7 +21,6 @@ pub enum PriceRequirement<'a> {
 /// Integer micro-USD per million tokens; snapshot with each request.
 #[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ModelPrice {
-    #[serde(default = "codex2api_core::default_provider")]
     pub provider_id: String,
     pub model: String,
     pub tier: String,
@@ -74,17 +73,13 @@ pub struct UsageCalculation {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum BillingSnapshot {
-    Legacy(Vec<ModelPrice>),
-    Current {
-        tokens: Vec<ModelPrice>,
-        images: Vec<crate::ImagePrice>,
-        #[serde(default)]
-        operations: Vec<crate::OperationPrice>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cost_operations: Option<Vec<crate::OperationPrice>>,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct BillingSnapshot {
+    pub tokens: Vec<ModelPrice>,
+    pub images: Vec<crate::ImagePrice>,
+    pub operations: Vec<crate::OperationPrice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_operations: Option<Vec<crate::OperationPrice>>,
 }
 
 impl BillingSnapshot {
@@ -103,12 +98,9 @@ impl BillingSnapshot {
         terms: &mut Vec<UsageChargeTerm>,
     ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
         if !record.endpoint.contains("/images/")
-            && codex2api_core::billing_operation(&record.provider_id, &record.endpoint).is_none()
+            && codex2api_common::billing_operation(&record.provider_id, &record.endpoint).is_none()
         {
-            let tokens = match self {
-                Self::Legacy(tokens) | Self::Current { tokens, .. } => tokens,
-            };
-            return charge_scaled(record, tokens, multiplier_micros, terms);
+            return charge_scaled(record, &self.tokens, multiplier_micros, terms);
         }
         let (cost, status, model, tier) = self.charge_with_terms(record, terms, false);
         match cost.map(|cost| {
@@ -163,7 +155,7 @@ impl BillingSnapshot {
         base: bool,
     ) -> (Option<i64>, &'static str, Option<String>, Option<String>) {
         if let Some(operation) =
-            codex2api_core::billing_operation(&record.provider_id, &record.endpoint)
+            codex2api_common::billing_operation(&record.provider_id, &record.endpoint)
         {
             let model = record.actual_model.clone().or(record.model.clone());
             if record.status == "failed" {
@@ -172,26 +164,15 @@ impl BillingSnapshot {
             if record.status != "completed" {
                 return (None, "missing_usage", model, Some("request".into()));
             }
-            let price = match self {
-                Self::Current {
-                    operations,
-                    cost_operations,
-                    ..
-                } => {
-                    let prices = if base
-                        && matches!(record.subject_kind.as_str(), "api_key" | "retired_api_key")
-                    {
-                        cost_operations.as_deref().unwrap_or_default()
-                    } else {
-                        operations.as_slice()
-                    };
-                    prices
-                        .iter()
-                        .find(|p| p.provider_id == record.provider_id && p.operation == operation)
-                        .and_then(|p| p.price_nano_usd)
-                }
-                Self::Legacy(_) => None,
+            let prices = if base && record.subject_kind == "api_key" {
+                self.cost_operations.as_deref().unwrap_or_default()
+            } else {
+                self.operations.as_slice()
             };
+            let price = prices
+                .iter()
+                .find(|p| p.provider_id == record.provider_id && p.operation == operation)
+                .and_then(|p| p.price_nano_usd);
             if let Some(price) = price {
                 terms.push(UsageChargeTerm {
                     kind: "request",
@@ -211,17 +192,12 @@ impl BillingSnapshot {
                 Some("request".into()),
             );
         }
-        let (tokens, images) = match self {
-            Self::Legacy(tokens) => (tokens.as_slice(), None),
-            Self::Current { tokens, images, .. } => (tokens.as_slice(), Some(images)),
-        };
+        let tokens = &self.tokens;
+        let images = &self.images;
         if !record.endpoint.contains("/images/") {
             return charge_scaled(record, tokens, 1_000_000, terms);
         }
         let model = record.actual_model.clone().or(record.model.clone());
-        let Some(images) = images else {
-            return (None, "unsupported", model, None);
-        };
         let Some(usage) = record
             .image_usage_json
             .as_deref()
@@ -251,11 +227,7 @@ impl BillingSnapshot {
             }
             let size = item.resolution.as_deref();
             let tier = size.and_then(crate::image_resolution_tier);
-            // Existing fixed-size snapshots keep their original exact prices.
-            let price = images
-                .iter()
-                .find(|p| same_model(p) && Some(p.resolution.as_str()) == size)
-                .or(uniform)
+            let price = uniform
                 .or_else(|| {
                     images
                         .iter()
@@ -266,12 +238,15 @@ impl BillingSnapshot {
                     // configured resolution tier. Only a model with no image
                     // prices remains explicitly unpriced.
                     let requested = tier.as_deref().and_then(image_tier_rank);
-                    images.iter().filter(|p| same_model(p)).min_by_key(|p| {
-                        let rank = image_tier_rank(&p.resolution).unwrap_or(usize::MAX);
-                        requested
-                            .map(|wanted| rank.abs_diff(wanted))
-                            .unwrap_or(usize::MAX)
-                    })
+                    images
+                        .iter()
+                        .filter(|p| same_model(p) && image_tier_rank(&p.resolution).is_some())
+                        .min_by_key(|p| {
+                            let rank = image_tier_rank(&p.resolution).unwrap_or(usize::MAX);
+                            requested
+                                .map(|wanted| rank.abs_diff(wanted))
+                                .unwrap_or(usize::MAX)
+                        })
                 });
             let Some(price) = price else {
                 return (None, "unpriced", model, None);
@@ -415,7 +390,7 @@ fn charge_scaled(
         .as_ref()
         .or(record.model.as_ref())
         .cloned();
-    if record.provider_id == codex2api_core::CHATGPT
+    if record.provider_id == codex2api_common::CHATGPT
         && record.endpoint.ends_with("/responses/input_tokens")
     {
         return (Some(0), "not_charged", model, None);
@@ -558,14 +533,14 @@ impl Storage {
         Ok(true)
     }
     pub async fn billing_summary(&self, owner: &str) -> Result<serde_json::Value> {
-        let (used,pending,unknown,legacy):(i64,i64,i64,i64)=sqlx::query_as("SELECT COALESCE(SUM(cost_nano_usd)::bigint,0),COALESCE(SUM((billing_status='pending')::int)::bigint,0),COALESCE(SUM((billing_status NOT IN ('priced','pending','legacy','not_charged'))::int)::bigint,0),COALESCE(SUM((billing_status='legacy')::int)::bigint,0) FROM usage_records WHERE subject_id=$1")
+        let (used,pending,unknown):(i64,i64,i64)=sqlx::query_as("SELECT COALESCE(SUM(cost_nano_usd)::bigint,0),COALESCE(SUM((billing_status='pending')::int)::bigint,0),COALESCE(SUM((billing_status NOT IN ('priced','pending','not_charged'))::int)::bigint,0) FROM usage_records WHERE subject_id=$1")
             .bind(owner).fetch_one(self.pool()).await?;
         let since: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key='billing_started_at'")
                 .fetch_optional(self.pool())
                 .await?;
         Ok(
-            serde_json::json!({"currency":"USD","used_nano_usd":used,"used_usd":format_units(used,9),"pending_requests":pending,"unpriced_requests":unknown,"legacy_requests":legacy,"started_at":since}),
+            serde_json::json!({"currency":"USD","used_nano_usd":used,"used_usd":format_units(used,9),"pending_requests":pending,"unpriced_requests":unknown,"started_at":since}),
         )
     }
     pub async fn unpriced_models(&self, provider: &str) -> Result<Vec<String>> {
@@ -588,7 +563,7 @@ mod tests {
             status: "completed".into(),
             ..Default::default()
         };
-        let snapshot = BillingSnapshot::Current {
+        let snapshot = BillingSnapshot {
             cost_operations: None,
             tokens: vec![],
             operations: vec![],

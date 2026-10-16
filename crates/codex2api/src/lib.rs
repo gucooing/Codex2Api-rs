@@ -1,15 +1,15 @@
-//! One process, independent OAuth, metered API and browser listeners.
+//! One process, independent OAuth client, standard AI API and browser listeners.
 mod request_debug;
 use anyhow::Result;
 use axum::Router;
-use codex2api_accounts::SupplierAccountStore;
-use codex2api_auth::AuthService;
 use codex2api_storage::Storage;
+use codex2api_suppliers::AuthService;
+use codex2api_suppliers::SupplierAccountStore;
 use codex2api_upstream::UpstreamPool;
 
 pub struct ApplicationRouters {
+    pub oauth: Router,
     pub api: Router,
-    pub metered_api: Router,
     pub admin: Router,
     pub user: Router,
     quota_monitor: codex2api_admin::AdminState,
@@ -21,61 +21,47 @@ impl ApplicationRouters {
 }
 pub fn routers(
     storage: Storage,
-    api_origin: &str,
+    oauth_origin: &str,
     user_origin: &str,
     admin_origin: &str,
-) -> Result<ApplicationRouters> {
-    routers_with_metered_api_origin(
-        storage,
-        api_origin,
-        user_origin,
-        admin_origin,
-        "http://127.0.0.1:8083",
-    )
-}
-
-pub fn routers_with_metered_api_origin(
-    storage: Storage,
     api_origin: &str,
-    user_origin: &str,
-    admin_origin: &str,
-    metered_api_origin: &str,
 ) -> Result<ApplicationRouters> {
-    let api_origin = validate_origin(api_origin)?;
+    let oauth_origin = validate_origin(oauth_origin)?;
     let user_origin = validate_origin(user_origin)?;
     let admin_origin = validate_origin(admin_origin)?;
-    let metered_api_origin = validate_origin(metered_api_origin)?;
+    let api_origin = validate_origin(api_origin)?;
     let accounts = SupplierAccountStore::open(storage.clone());
     let auth = AuthService::new(accounts.clone())?;
     let upstream = UpstreamPool::new(auth.clone());
-    let gateway = codex2api_gateway::GatewayState::new(storage.clone(), upstream.clone());
-    let api_runtime = gateway.runtime().clone();
-    let mut api = codex2api_api::ApiState::new(storage.clone(), accounts.clone(), upstream.clone())
-        .with_public_base_url(&api_origin)?;
-    api.user_base_url = user_origin.clone();
+    let api = codex2api_api::ApiState::new(storage.clone(), upstream.clone());
+    let api_runtime = api.runtime().clone();
+    let mut oauth =
+        codex2api_oauth::OAuthState::new(storage.clone(), accounts.clone(), upstream.clone())
+            .with_oauth_base_url(&oauth_origin)?;
+    oauth.user_base_url = user_origin.clone();
     let mut admin = codex2api_admin::AdminState::from_parts(storage.clone(), accounts, auth)
         .with_upstream(upstream)
         .with_secure_cookies(admin_origin.starts_with("https://"));
     admin.api_concurrency = std::sync::Arc::new(move |key| api_runtime.current_for_key(key));
     admin.public_url_defaults = codex2api_storage::PublicUrlSettings {
-        api_url: api_origin,
+        oauth_url: oauth_origin,
         user_url: user_origin.clone(),
         admin_url: admin_origin,
-        metered_api_url: metered_api_origin.clone(),
+        api_url: api_origin.clone(),
         revision: 0,
     };
     let user = codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: user_origin,
-        metered_api_base_url: metered_api_origin,
+        api_base_url: api_origin,
         api_concurrency: admin.api_concurrency.clone(),
     };
     Ok(ApplicationRouters {
-        api: codex2api_api::router(api).layer(axum::middleware::from_fn(request_debug::trace)),
-        metered_api: codex2api_gateway::router(gateway)
+        oauth: codex2api_oauth::router(oauth)
             .layer(axum::middleware::from_fn(request_debug::trace)),
-        admin: codex2api_admin::router(admin.clone()).merge(codex2api_web::admin_router()),
-        user: codex2api_user::router(user).merge(codex2api_web::user_router()),
+        api: codex2api_api::router(api).layer(axum::middleware::from_fn(request_debug::trace)),
+        admin: codex2api_admin::router(admin.clone()),
+        user: codex2api_user::router(user),
         quota_monitor: admin,
     })
 }

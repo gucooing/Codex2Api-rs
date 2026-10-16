@@ -41,7 +41,7 @@ async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
         2592000
     );
     storage
-        .sync_supported_models(&[codex2api_core::SupportedModel {
+        .sync_supported_models(&[codex2api_common::SupportedModel {
             provider_id: "chatgpt".into(),
             model: "gpt-5.5".into(),
             kind: "text".into(),
@@ -127,7 +127,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .await
             .unwrap();
         storage
-            .sync_supported_models(&[codex2api_core::SupportedModel {
+            .sync_supported_models(&[codex2api_common::SupportedModel {
                 provider_id: provider.into(),
                 model: "shared-model".into(),
                 kind: "text".into(),
@@ -283,7 +283,6 @@ async fn supplier_for(storage: &Storage, id: &str, provider: &str) {
         "Linux",
         "6",
         "x86_64",
-        "",
         "{}",
     );
     new.id = Some(id.into());

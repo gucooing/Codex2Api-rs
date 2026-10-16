@@ -4,7 +4,7 @@ namespace DesktopProxy;
 
 internal sealed class MainForm : Form
 {
-    private readonly TextBox server = new() { Dock = DockStyle.Fill, PlaceholderText = "https://你的服务器/api/oauth/chatgpt" };
+    private readonly TextBox server = new() { Dock = DockStyle.Fill, PlaceholderText = "https://你的服务器/v1/chatgpt" };
     private readonly CheckBox automatic = new() { Text = "自动检测已安装客户端（更新后自动使用新版本）", AutoSize = true, Checked = true };
     private readonly TextBox clientPath = new() { Dock = DockStyle.Fill, ReadOnly = true };
     private readonly Label version = new() { Text = "尚未检测客户端", AutoSize = true, ForeColor = Color.DimGray };

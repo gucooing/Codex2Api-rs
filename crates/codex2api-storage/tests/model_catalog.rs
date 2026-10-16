@@ -35,9 +35,9 @@ fn screen_resolution_bands_accept_dynamic_dimensions_and_both_orientations() {
 }
 
 #[tokio::test]
-async fn old_fixed_resolution_snapshots_keep_their_original_price() {
+async fn in_flight_resolution_snapshots_keep_their_original_price() {
     let dir = codex2api_storage::test_support::tempdir().unwrap();
-    let storage = codex2api_storage::test_support::open(dir.path().join("legacy-size-pg"))
+    let storage = codex2api_storage::test_support::open(dir.path().join("image-snapshot-pg"))
         .await
         .unwrap();
     let model = ModelConfig {
@@ -58,12 +58,8 @@ async fn old_fixed_resolution_snapshots_keep_their_original_price() {
         .save_model_config(&model, &[], &[price.clone()], None)
         .await
         .unwrap();
-    sqlx::query("UPDATE model_image_prices SET resolution='1024x1024' WHERE model='image-test'")
-        .execute(storage.pool())
-        .await
-        .unwrap();
     let mut record = UsageRecord {
-        id: "legacy".into(),
+        id: "snapshot".into(),
         subject_id: "owner".into(),
         endpoint: "/v1/images/generations".into(),
         model: Some(model.model.clone()),

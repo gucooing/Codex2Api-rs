@@ -89,10 +89,10 @@ pub async fn models(
 pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
     let mut models = codex2api_upstream::supported_models();
     models.extend(
-        codex2api_core::providers::grok::PRICED_MODELS
+        codex2api_common::providers::grok::PRICED_MODELS
             .iter()
-            .map(|model| codex2api_core::SupportedModel {
-                provider_id: codex2api_core::GROK.into(),
+            .map(|model| codex2api_common::SupportedModel {
+                provider_id: codex2api_common::GROK.into(),
                 model: (*model).into(),
                 kind: "text".into(),
             }),
@@ -103,12 +103,12 @@ pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
         .into_iter()
         .map(|model| {
             let prices = codex2api_storage::preset_model_prices(&model.provider_id, &model.model);
-            let (source, version) = codex2api_core::model_preset_source(&model.provider_id);
+            let (source, version) = codex2api_common::model_preset_source(&model.provider_id);
             dto::ModelPreset {
                 source_url: prices.as_ref().map(|_| source.to_owned()),
                 verified_at: prices
                     .as_ref()
-                    .map(|_| codex2api_core::model_preset_verified_at(&model.provider_id)),
+                    .map(|_| codex2api_common::model_preset_verified_at(&model.provider_id)),
                 token_prices: prices.unwrap_or_default().iter().map(token_dto).collect(),
                 provider_id: model.provider_id,
                 model: model.model,
@@ -157,11 +157,11 @@ pub struct ImageInput {
 }
 
 pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) -> ApiResult {
-    if !codex2api_core::supported_provider(&f.provider_id) {
+    if !codex2api_common::supported_provider(&f.provider_id) {
         return Err(ApiError::bad("提供商尚未接入"));
     }
     let mut tokens = if let Some(version) = f.pricing_preset.as_deref() {
-        if version != codex2api_core::model_preset_source(&f.provider_id).1 {
+        if version != codex2api_common::model_preset_source(&f.provider_id).1 {
             return Err(ApiError::conflict());
         }
         if f.kind != "text" || !f.token_prices.is_empty() || !f.image_prices.is_empty() {

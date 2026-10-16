@@ -28,9 +28,14 @@ pub(crate) async fn trace(request: Request, next: Next) -> Response {
 }
 
 fn inference_path(path: &str) -> bool {
-    let relative = ["/v1/", "/backend-api/codex/", "/grok/v1/"]
-        .into_iter()
-        .find_map(|prefix| path.strip_prefix(prefix));
+    let relative = [
+        "/v1/chatgpt/backend-api/codex/",
+        "/v1/chatgpt/v1/",
+        "/v1/grok/v1/",
+        "/v1/",
+    ]
+    .into_iter()
+    .find_map(|prefix| path.strip_prefix(prefix));
     relative.is_some_and(|path| {
         matches!(
             path,
@@ -81,7 +86,14 @@ mod tests {
         for (path, level, logged) in [
             ("/v1/responses", tracing::Level::DEBUG, true),
             ("/v1/responses", tracing::Level::INFO, false),
-            ("/oauth/token", tracing::Level::DEBUG, false),
+            (
+                "/v1/chatgpt/backend-api/codex/responses",
+                tracing::Level::DEBUG,
+                true,
+            ),
+            ("/v1/grok/v1/responses", tracing::Level::DEBUG, true),
+            ("/v1/chatgpt/oauth/token", tracing::Level::DEBUG, false),
+            ("/v1/grok/oauth2/token", tracing::Level::DEBUG, false),
         ] {
             let console = Console(Default::default());
             let capture = console.clone();

@@ -1,0 +1,495 @@
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use codex2api_storage::StorageError;
+use codex2api_suppliers::AccountError;
+use codex2api_upstream::UpstreamError;
+
+pub type Result<T> = std::result::Result<T, OAuthError>;
+
+impl From<codex2api_upstream::scheduler::SchedulerError> for OAuthError {
+    fn from(error: codex2api_upstream::scheduler::SchedulerError) -> Self {
+        use codex2api_upstream::scheduler::SchedulerError as E;
+        match error {
+            E::Storage(error) => Self::Storage(error),
+            E::Upstream(error) => Self::Upstream(error),
+            E::ConsumerInvalid => Self::invalid_token(),
+            E::Rejected {
+                status,
+                error_type,
+                message,
+                code,
+            } => Self::openai(status, error_type, message, code),
+        }
+    }
+}
+
+/// Public API failure mapped to OpenAI-style `{ "error": { ... } }` JSON.
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthError {
+    #[error(transparent)]
+    Service(#[from] crate::admission::ServiceError),
+    #[error("{message}")]
+    OpenAi {
+        status: StatusCode,
+        error_type: &'static str,
+        message: String,
+        code: Option<&'static str>,
+    },
+    #[error(transparent)]
+    Upstream(#[from] UpstreamError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    SupplierAccount(#[from] AccountError),
+}
+
+impl OAuthError {
+    pub fn openai(
+        status: StatusCode,
+        error_type: &'static str,
+        message: impl Into<String>,
+        code: Option<&'static str>,
+    ) -> Self {
+        Self::OpenAi {
+            status,
+            error_type,
+            message: message.into(),
+            code,
+        }
+    }
+
+    pub fn missing_token() -> Self {
+        Self::openai(
+            StatusCode::UNAUTHORIZED,
+            "authentication_error",
+            "Provide a virtual account access token using Authorization: Bearer.",
+            Some("missing_token"),
+        )
+    }
+
+    pub fn invalid_token() -> Self {
+        Self::openai(
+            StatusCode::UNAUTHORIZED,
+            "authentication_error",
+            "Invalid or expired virtual account access token.",
+            Some("invalid_token"),
+        )
+    }
+
+    pub fn account_disabled() -> Self {
+        Self::openai(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "This account is disabled.",
+            Some("account_disabled"),
+        )
+    }
+
+    pub fn account_not_ready() -> Self {
+        Self::openai(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "This account is not ready. Complete ChatGPT login before using the API.",
+            Some("account_not_ready"),
+        )
+    }
+
+    pub fn account_not_authenticated() -> Self {
+        Self::openai(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "This account is not authenticated with ChatGPT.",
+            Some("account_not_authenticated"),
+        )
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::openai(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            message,
+            None,
+        )
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::openai(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "api_error",
+            message,
+            None,
+        )
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenAiErrorBody {
+    pub error: OpenAiError,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenAiError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub error_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub param: Option<String>,
+}
+
+impl OpenAiErrorBody {
+    pub fn new(error_type: &str, message: impl Into<String>, code: Option<&str>) -> Self {
+        Self {
+            error: OpenAiError {
+                message: message.into(),
+                error_type: error_type.to_string(),
+                code: code.map(str::to_string),
+                param: None,
+            },
+        }
+    }
+}
+
+impl IntoResponse for OAuthError {
+    fn into_response(self) -> Response {
+        codex2api_upstream::RequestFailureLog::error(&self);
+        match self {
+            Self::Service(error) => service_error_response(error),
+            Self::OpenAi {
+                status,
+                error_type,
+                message,
+                code,
+            } => {
+                let mut response = openai_response(status, error_type, message, code);
+                if code == Some("supplier_concurrency_exceeded") {
+                    response
+                        .headers_mut()
+                        .insert("retry-after", axum::http::HeaderValue::from_static("1"));
+                }
+                response
+            }
+            Self::Upstream(err) => upstream_error_response(err),
+            Self::Storage(StorageError::AccountNotFound(_)) => {
+                OAuthError::invalid_token().into_response()
+            }
+            Self::Storage(StorageError::Runtime) => openai_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                "Request scheduling is temporarily unavailable.",
+                Some("runtime_state_unavailable"),
+            ),
+            Self::Storage(err) => {
+                tracing::error!(error = %err, "storage error");
+                openai_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "api_error",
+                    "Internal server error.",
+                    None,
+                )
+            }
+            Self::SupplierAccount(AccountError::NotFound(_)) => {
+                OAuthError::invalid_token().into_response()
+            }
+            Self::SupplierAccount(err) => {
+                tracing::error!(error = %err, "account error");
+                openai_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "api_error",
+                    "Internal server error.",
+                    None,
+                )
+            }
+        }
+    }
+}
+
+pub fn openai_response(
+    status: StatusCode,
+    error_type: &str,
+    message: impl Into<String>,
+    code: Option<&str>,
+) -> Response {
+    (
+        status,
+        Json(OpenAiErrorBody::new(error_type, message, code)),
+    )
+        .into_response()
+}
+
+pub fn openai_json(error_type: &str, message: impl Into<String>, code: Option<&str>) -> Value {
+    serde_json::to_value(OpenAiErrorBody::new(error_type, message, code)).unwrap_or_else(
+        |_| json!({ "error": { "message": "Internal server error.", "type": "api_error" } }),
+    )
+}
+
+/// Map an upstream HTTP error body to OpenAI-style JSON, preserving upstream
+/// `{ "error": ... }` payloads when present.
+pub fn map_upstream_status_body(status: StatusCode, body: &str) -> Response {
+    if let Ok(value) = serde_json::from_str::<Value>(body) {
+        let error = value
+            .pointer("/response/error")
+            .filter(|value| !value.is_null())
+            .or_else(|| value.get("error").filter(|value| !value.is_null()))
+            .or_else(|| value.get("detail"))
+            .unwrap_or(&value);
+        return (
+            status,
+            Json(json!({"error":crate::public_output::error(error)})),
+        )
+            .into_response();
+    }
+    let message = default_message_for_status(status).to_string();
+    openai_response(status, error_type_for_status(status), message, None)
+}
+
+pub fn upstream_error_response(err: UpstreamError) -> Response {
+    if let UpstreamError::Status {
+        status,
+        body,
+        mut headers,
+        ..
+    } = err
+    {
+        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+        let mut response = map_upstream_status_body(status, &body);
+        codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
+        for name in [
+            "x-request-id",
+            "x-oai-request-id",
+            "cf-ray",
+            "retry-after",
+            "retry-after-ms",
+            "openai-model",
+            "x-openai-model",
+        ] {
+            for value in headers.get_all(name) {
+                response.headers_mut().append(name, value.clone());
+            }
+        }
+        return response;
+    }
+    let failure = err.failure();
+    let status =
+        StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY);
+    let message = match &err {
+        UpstreamError::InvalidRequest(message) => message.clone(),
+        _ => "The service could not complete this request.".into(),
+    };
+    openai_response(
+        status,
+        error_type_for_status(status),
+        message,
+        failure.code.as_deref(),
+    )
+}
+
+pub fn error_type_for_status(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        400 | 404 | 409 | 413 | 415 | 422 => "invalid_request_error",
+        401 => "authentication_error",
+        403 => "permission_error",
+        429 => "rate_limit_error",
+        _ => "api_error",
+    }
+}
+
+fn default_message_for_status(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        400 => "Bad request.",
+        401 => "Unauthorized.",
+        402 => "Payment Required.",
+        403 => "Forbidden.",
+        404 => "Not found.",
+        409 => "Conflict.",
+        429 => "Rate limit exceeded.",
+        500..=599 => "Upstream server error.",
+        _ => "Request failed.",
+    }
+}
+
+fn service_error_response(error: crate::admission::ServiceError) -> Response {
+    use crate::admission::ServiceError;
+    use codex2api_common::PolicyError;
+    let (status, kind, code) = match &error {
+        ServiceError::RpmExceeded { retry_after } => {
+            let mut response = openai_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                error.to_string(),
+                Some("virtual_rpm_exceeded"),
+            );
+            if let Ok(value) = retry_after.to_string().parse() {
+                response.headers_mut().insert("retry-after", value);
+            }
+            return response;
+        }
+        ServiceError::ConcurrencyExceeded => {
+            let mut response = openai_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+                error.to_string(),
+                Some("virtual_concurrency_exceeded"),
+            );
+            response
+                .headers_mut()
+                .insert("retry-after", http::HeaderValue::from_static("1"));
+            return response;
+        }
+        ServiceError::Storage(_) => {
+            return match error {
+                ServiceError::Storage(e) => OAuthError::Storage(e).into_response(),
+                _ => unreachable!(),
+            };
+        }
+        ServiceError::BudgetExceeded => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "virtual_quota_exceeded",
+        ),
+        ServiceError::PricingUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_error",
+            "model_pricing_unavailable",
+        ),
+        ServiceError::Policy(PolicyError::InvalidModel) => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "invalid_model",
+        ),
+        ServiceError::Policy(PolicyError::InvalidModelScope) => (
+            StatusCode::CONFLICT,
+            "configuration_error",
+            "invalid_model_policy",
+        ),
+        ServiceError::Policy(PolicyError::UnsupportedProvider) => (
+            StatusCode::NOT_IMPLEMENTED,
+            "server_error",
+            "provider_unavailable",
+        ),
+        ServiceError::Policy(PolicyError::ProviderMismatch) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "provider_mismatch",
+        ),
+        ServiceError::Policy(PolicyError::SubscriptionRequired) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "subscription_required",
+        ),
+        ServiceError::Policy(PolicyError::ModelNotEntitled) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "model_not_entitled",
+        ),
+        ServiceError::Policy(PolicyError::ModelUnavailable) => (
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "model_unavailable",
+        ),
+    };
+    openai_response(status, kind, error.to_string(), Some(code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn refresh_errors_keep_their_status_instead_of_becoming_unauthorized() {
+        for status in [400, 401, 403, 429, 503] {
+            let error = UpstreamError::Refresh(codex2api_suppliers::AuthError::RefreshRejected {
+                status,
+                code: Some(
+                    if status == 429 {
+                        "rate_limit_exceeded"
+                    } else {
+                        "refresh_rejected"
+                    }
+                    .into(),
+                ),
+                message: "fixture refresh failure".into(),
+            });
+            let failure = error.failure();
+            assert_eq!(failure.authentication_invalid(), status == 401);
+            assert_eq!(upstream_error_response(error).status().as_u16(), status);
+        }
+    }
+
+    #[test]
+    fn preserves_upstream_error_object() {
+        let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
+        let response = map_upstream_status_body(StatusCode::SERVICE_UNAVAILABLE, body);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn payment_errors_keep_the_status_and_detail_code_without_private_diagnostics() {
+        use axum::body::to_bytes;
+        let response = map_upstream_status_body(
+            StatusCode::PAYMENT_REQUIRED,
+            r#"{"detail":{"code":"deactivated_workspace","message":"private supplier billing details"}}"#,
+        );
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "deactivated_workspace");
+        assert!(!String::from_utf8_lossy(&bytes).contains("private supplier"));
+        let response = map_upstream_status_body(StatusCode::PAYMENT_REQUIRED, "Payment Required");
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["message"], "Payment Required.");
+    }
+
+    #[tokio::test]
+    async fn handshake_errors_preserve_classification_and_retry_headers_without_supplier_state() {
+        use axum::body::to_bytes;
+        use axum::http::{HeaderMap, HeaderValue};
+        let body = json!({"error":{"code":"invalid_prompt", "message":"中文🦀".repeat(700)}});
+        for status in [400, 401, 403, 426, 429, 503] {
+            let mut headers = HeaderMap::new();
+            for (key, value) in [
+                ("x-error-json", r#"{"error":{"code":"invalid_prompt"}}"#),
+                ("x-openai-authorization-error", "access_denied"),
+                ("x-request-id", "request-fixture"),
+                ("retry-after", "7"),
+                ("connection", "x-oai-request-id"),
+                ("x-oai-request-id", "connection-local"),
+                ("set-cookie", "account=private"),
+                ("authorization", "Bearer supplier-fixture"),
+                ("x-codex-primary-used-percent", "65"),
+                ("content-length", "999999"),
+            ] {
+                headers.insert(key, HeaderValue::from_static(value));
+            }
+            let response = upstream_error_response(UpstreamError::status_with_headers(
+                StatusCode::from_u16(status).unwrap(),
+                body.to_string(),
+                headers,
+            ));
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers()["retry-after"], "7");
+            assert_eq!(response.headers()["x-request-id"], "request-fixture");
+            for key in [
+                "x-error-json",
+                "x-openai-authorization-error",
+                "x-oai-request-id",
+                "set-cookie",
+                "authorization",
+                "x-codex-primary-used-percent",
+                "content-length",
+            ] {
+                assert!(!response.headers().contains_key(key), "{key}");
+            }
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let value = serde_json::from_slice::<Value>(&bytes).unwrap();
+            assert_eq!(value["error"]["code"], "invalid_prompt");
+            assert!(!value.to_string().contains("中文"));
+        }
+    }
+}

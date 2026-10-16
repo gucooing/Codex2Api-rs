@@ -5,16 +5,17 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+dev-frontend = []
+
 [dependencies]
-codex2api-core.workspace = true
+codex2api-common = { workspace = true, features = ["frontend"] }
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
-codex2api-accounts.workspace = true
-codex2api-auth.workspace = true
+codex2api-suppliers.workspace = true
 codex2api-storage.workspace = true
-codex2api-version.workspace = true
 codex2api-upstream.workspace = true
 bytes.workspace = true
 reqwest.workspace = true
@@ -33,3 +34,6 @@ codex2api-storage = { workspace = true, features = ["test-support"] }
 sqlx.workspace = true
 tempfile = "3"
 tower.workspace = true
+
+[build-dependencies]
+codex2api-common = { workspace = true, features = ["frontend-build"] }

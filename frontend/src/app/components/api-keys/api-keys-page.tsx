@@ -32,7 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { date } from "@/lib/format";
-import { apiCost, apiKeyStatus, apiPlatform, apiTokens } from "@/lib/metered-api";
+import { apiCost, apiKeyStatus, apiPlatform, apiTokens } from "@/lib/api-access";
 import {
   ChevronLeft,
   ChevronRight,

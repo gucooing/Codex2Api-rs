@@ -1,6 +1,6 @@
 import { OpenAIIcon } from "./brand-icon";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { apiPrice, type ApiOperationPrice } from "@/lib/metered-api";
+import { apiPrice, type ApiOperationPrice } from "@/lib/api-access";
 
 export function SearchBillingCard({
   price,

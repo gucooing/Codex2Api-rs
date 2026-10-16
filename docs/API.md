@@ -1,11 +1,11 @@
-# 按量 API
+# AI API 网关
 
-按量 API 在同一 Rust 进程的独立端口提供 ChatGPT 和 Grok 模型调用。默认地址为
-`http://127.0.0.1:8083/v1`。`CODEX2API_METERED_API_BIND` 控制监听地址，
-`CODEX2API_PUBLIC_METERED_API_URL` 提供公开 origin 的启动默认值；管理员在
-**设置 / 访问地址 / 按量 API** 保存的 origin 优先。用户 API Key 页面读取这一
-地址，不从浏览器地址或转发头推测端口。反向代理可使用独立域名指向 8083，
-以保留 OAuth 入口 8080 的兼容路径。
+AI API 网关在同一 Rust 进程的独立端口提供 ChatGPT 和 Grok 模型调用。默认地址为
+`http://127.0.0.1:8083/v1`。`CODEX2API_API_BIND` 控制监听地址，
+`CODEX2API_PUBLIC_API_URL` 提供公开 origin 的启动默认值；管理员在
+**设置 / 访问地址 / AI API 网关** 保存的 origin 优先。用户 API Key 页面读取这一
+地址，不从浏览器地址或转发头推测端口。反向代理可使用独立域名指向 8083，也可将标准 `/v1/*` 路由到此入口，
+将 `/v1/chatgpt`、`/v1/grok` 及其子路径路由到 OAuth 入口 8080。
 
 ## 调用与平台
 
@@ -36,7 +36,7 @@ Grok 使用自己的原生协议；模型目录和供应账户配置决定真实
 通用字段名单丢弃工具、输入或输出。
 
 Responses 的顶层 `instructions` 转为 `input` 中的 developer 消息，system 消息
-保持相同的指令语义。Chat messages、旧式 functions/function_call、function/custom
+保持相同的指令语义。Chat messages、function/custom
 工具和 namespace 统一转换到 Responses；函数参数、结构化工具输出、多模态内容和
 工具调用 ID 保留。reasoning 回放保留 encrypted_content、summary/content，并处理
 store=false 下无法检索的 reasoning ID；已有 include 数组也补齐加密推理内容。
@@ -91,7 +91,7 @@ HTTP JSON、SSE 和原生 WebSocket 共用请求准入、供应调度和 usage_r
 切换供应；普通限流交给客户端退避，并保留结构化错误和 Retry-After。
 
 同步和流式 Chat 均保留真实工具调用、reasoning、refusal、annotations、logprobs、
-音频以及 usage。旧式 function_call 请求保持其对应响应格式。仅当调用者要求
+音频以及 usage。Chat 工具使用 `tools`、`tool_choice` 和 `tool_calls`。仅当调用者要求
 `stream_options.include_usage=true` 时发送最终 Chat 用量 chunk。响应清理只处理
 供应协议信封；正文、JSON schema、工具结果和搜索 results 中同名业务字段不会被删除。
 

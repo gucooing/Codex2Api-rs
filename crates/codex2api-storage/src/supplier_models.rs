@@ -123,7 +123,7 @@ impl Storage {
             .collect())
     }
     pub async fn add_supplier_model(&self, id: &str, model: &str) -> Result<()> {
-        if !codex2api_core::valid_model(model) {
+        if !codex2api_common::valid_model(model) {
             return Err(StorageError::Constraint("模型名称无效".into()));
         }
         let changed = sqlx::query(
@@ -152,7 +152,7 @@ impl Storage {
             || models.len() > 2048
             || models
                 .iter()
-                .any(|model| !codex2api_core::valid_model(model))
+                .any(|model| !codex2api_common::valid_model(model))
         {
             return Err(StorageError::Constraint("账户或模型列表无效".into()));
         }
@@ -233,7 +233,7 @@ impl Storage {
         for value in models {
             let model = value["model"]
                 .as_str()
-                .filter(|v| codex2api_core::valid_model(v))
+                .filter(|v| codex2api_common::valid_model(v))
                 .ok_or_else(|| StorageError::Constraint("上游模型名称无效".into()))?;
             sqlx::query(
                 "INSERT INTO supplier_models(account_id,model,source,descriptor_json,observed_at)

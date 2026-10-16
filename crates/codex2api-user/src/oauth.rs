@@ -1,4 +1,4 @@
-//! Browser-only consent. Protocol token exchange remains on the AI API listener.
+//! Browser-only consent. Protocol token exchange belongs to the OAuth listener.
 use crate::{
     UserState, auth,
     error::{Result, UserError},
@@ -10,75 +10,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use codex2api_storage::{PlatformAccount, oauth_secret};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct AuthorizationRequest {
-    response_type: String,
-    client_id: String,
-    redirect_uri: String,
-    state: String,
-    code_challenge: String,
-    code_challenge_method: String,
-    #[serde(default)]
-    scope: String,
-    #[serde(default)]
-    nonce: Option<String>,
-}
-impl AuthorizationRequest {
-    pub fn provider(&self) -> &'static str {
-        crate::providers::by_client(&self.client_id).map_or("", |p| p.id)
-    }
-    fn allowed_scopes(&self) -> &'static str {
-        crate::providers::by_client(&self.client_id).map_or("", |p| p.scopes)
-    }
-    pub fn valid(&self) -> bool {
-        let Ok(uri) = url::Url::parse(&self.redirect_uri) else {
-            return false;
-        };
-        self.response_type == "code"
-            && crate::providers::by_client(&self.client_id).is_some_and(|p| {
-                (!p.requires_nonce
-                    || self.nonce.as_deref().is_some_and(|s| {
-                        !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control)
-                    }))
-                    && uri.path() == p.callback_path
-            })
-            && self.code_challenge_method == "S256"
-            && self.code_challenge.len() == 43
-            && self
-                .code_challenge
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            && !self.state.is_empty()
-            && self.state.len() <= 1024
-            && !self.state.chars().any(char::is_control)
-            && self
-                .scope
-                .split_whitespace()
-                .all(|s| self.allowed_scopes().split_whitespace().any(|a| a == s))
-            && uri.scheme() == "http"
-            && matches!(uri.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-            && uri.port().is_some_and(|p| p != 0)
-            && uri.username().is_empty()
-            && uri.password().is_none()
-            && uri.query().is_none()
-            && uri.fragment().is_none()
-    }
-    fn scopes(&self) -> String {
-        let requested = if self.scope.trim().is_empty() {
-            "openid profile email offline_access"
-        } else {
-            &self.scope
-        };
-        self.allowed_scopes()
-            .split_whitespace()
-            .filter(|s| requested.split_whitespace().any(|v| v == *s))
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-}
+use codex2api_common::oauth::AuthorizationRequest;
+
 fn failure() -> UserError {
     UserError::bad("授权请求无效或已过期，请回到应用重新发起登录")
 }
@@ -140,7 +76,7 @@ async fn start(
             flow_cookie(&state, &flow, &browser, 600).await?,
         )],
         Json(json!({"request_id":flow,
-        "csrf_token":csrf,"client_name":crate::providers::by_id(provider).map(|p|p.client_name),"provider_id":provider,"scope":scope,"identity":identity,"subscriptions":subscriptions,
+        "csrf_token":csrf,"client_name":codex2api_common::oauth::by_id(provider).map(|p|p.client_name),"provider_id":provider,"scope":scope,"identity":identity,"subscriptions":subscriptions,
         "account_unavailable":account_unavailable,"expires_in":600})),
     )
         .into_response())
@@ -167,10 +103,10 @@ pub(crate) async fn device_bootstrap(
     headers: HeaderMap,
     Query(query): Query<DeviceBootstrap>,
 ) -> Result<Response> {
-    if !codex2api_core::supported_provider(&query.provider) {
+    if !codex2api_common::supported_provider(&query.provider) {
         return Err(failure());
     }
-    let policy = crate::providers::by_id(&query.provider).ok_or_else(failure)?;
+    let policy = codex2api_common::oauth::by_id(&query.provider).ok_or_else(failure)?;
     start(
         state,
         headers,
@@ -181,11 +117,11 @@ pub(crate) async fn device_bootstrap(
 }
 #[derive(Deserialize)]
 pub(crate) struct DeviceBootstrap {
-    #[serde(default = "codex2api_core::default_provider")]
+    #[serde(default = "codex2api_common::default_provider")]
     provider: String,
 }
 fn flow_provider(raw: &str) -> Result<&'static str> {
-    if let Some(policy) = crate::providers::by_device_flow(raw) {
+    if let Some(policy) = codex2api_common::oauth::by_device_flow(raw) {
         return Ok(policy.id);
     }
     let request: AuthorizationRequest = serde_json::from_str(raw).map_err(|_| failure())?;
@@ -224,7 +160,7 @@ pub(crate) async fn cancel(
     Json(input): Json<Reset>,
 ) -> Result<Response> {
     let (browser, raw) = read_flow(&state, &headers, &input.request_id, &input.csrf_token).await?;
-    let result = if crate::providers::by_device_flow(&raw).is_some() {
+    let result = if codex2api_common::oauth::by_device_flow(&raw).is_some() {
         json!({"cancelled":true})
     } else {
         let request: AuthorizationRequest = serde_json::from_str(&raw).map_err(|_| failure())?;
@@ -378,7 +314,7 @@ pub(crate) async fn device_approve(
     Json(input): Json<Approve>,
 ) -> Result<Response> {
     let (browser, raw) = read_flow(&state, &headers, &input.request_id, &input.csrf_token).await?;
-    if !crate::providers::by_device_flow(&raw).is_some() {
+    if !codex2api_common::oauth::by_device_flow(&raw).is_some() {
         return Err(failure());
     }
     let account = approved_account(&state, &input, flow_provider(&raw)?).await?;
@@ -405,7 +341,7 @@ pub(crate) async fn device_approve(
                 csrf: &input.csrf_token,
                 account: &account,
                 code: &oauth_secret(),
-                scopes: crate::providers::by_id(&account.provider_id)
+                scopes: codex2api_common::oauth::by_id(&account.provider_id)
                     .ok_or_else(failure)?
                     .scopes,
             },

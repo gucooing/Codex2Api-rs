@@ -3,7 +3,7 @@ import { useErrorToast } from "@/lib/actions";
 import type { List } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
 import { useResource } from "@/lib/hooks";
-import type { ApiGroupOption, ApiKey } from "@/lib/metered-api";
+import type { ApiGroupOption, ApiKey } from "@/lib/api-access";
 import { useListResource } from "@/lib/pagination";
 import { useId, useState, type FormEvent } from "react";
 

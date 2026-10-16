@@ -266,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn backend_http_calls_use_account_auth_and_preserve_bodies() {
         use axum::{Router, body::Body, http::Uri, response::Response};
-        use codex2api_accounts::{AccountIdentity, HostRuntime};
+        use codex2api_suppliers::{AccountIdentity, HostRuntime};
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let app = Router::new().fallback(
             move |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| {

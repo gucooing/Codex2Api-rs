@@ -66,7 +66,7 @@ impl RequestFailureLog {
             state.record.model = metadata
                 .model
                 .as_deref()
-                .filter(|model| codex2api_core::valid_model(model))
+                .filter(|model| codex2api_common::valid_model(model))
                 .map(str::to_owned);
             state.record.stream = metadata.stream;
             state.record.reasoning_effort = metadata.reasoning_effort.clone();

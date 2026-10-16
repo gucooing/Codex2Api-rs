@@ -14,7 +14,7 @@ internal static class Launcher
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0)
             throw new InvalidOperationException("请输入有效的 HTTP(S) 服务地址，不要包含密码、查询参数或片段。");
         var root = uri.AbsoluteUri.TrimEnd('/');
-        return uri.AbsolutePath == "/" ? root + "/api/oauth/chatgpt" : root;
+        return uri.AbsolutePath == "/" ? root + "/v1/chatgpt" : root;
     }
 
     public static ProcessStartInfo StartInfo(ClientInstallation client, string server, ClientProfile profile)

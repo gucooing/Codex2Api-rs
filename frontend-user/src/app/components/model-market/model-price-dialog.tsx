@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
-import type { ApiGroup } from "@/lib/metered-api";
+import type { ApiGroup } from "@/lib/api-access";
 
 export function ModelPriceDialog({
   item,

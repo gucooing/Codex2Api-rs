@@ -6,7 +6,7 @@
 - Release: `0.162.1` / `rust-v0.162.1`
 - Commit: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`
 - Commit time: `2026-10-09T17:39:05Z`
-- Reference-only checkout: `reference/codex`; constants: `crates/codex2api-version`
+- Reference-only checkout: `reference/codex`; constants: `crates/codex2api-common/src/version.rs`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
 - Fork integration commit: `c63e0d6140676390d687bd1389a1d36b34046821`
 
@@ -23,37 +23,47 @@ the completed local client checks cover source, direct Rust formatting and stati
 
 ## Process and crates
 
-One Rust process runs four listeners: OAuth/client protocols (8080), administration (8081), the user website/API (8082), and API-key metered inference (8083). Each router registers only its own surface and credential audience. The administrator and user Next.js projects produce separate static exports embedded in the same executable. Production does not run a Node.js server.
+One Rust process runs four listeners: OAuth/client protocols (8080), administration (8081), the user website/API (8082), and the standard AI API gateway (8083). Each router registers only its own surface and credential audience. The administrator and user Next.js projects produce separate static exports embedded in the same executable. Production does not run a Node.js server.
 
 | Crate | Responsibility |
 | --- | --- |
-| codex2api-core | Provider identities, entitlement rules and model price presets |
-| codex2api-storage | PostgreSQL schema, credentials, configuration, resources and request ledger |
-| codex2api-accounts | Persistent supplier identity and frozen per-account HTTP fingerprint |
-| codex2api-auth | Supplier OAuth, token refresh/revoke and isolated account transports |
-| codex2api-upstream | Official outbound endpoints, headers, body normalization, HTTP/SSE/WS |
-| codex2api-service | Shared execution authorization and effective entitlement policy |
-| codex2api-scheduler | Provider-neutral supplier selection, affinity, capacity, pre-output inspection and classified failover primitives |
-| codex2api-api | Consumer OAuth and independently scoped client protocol adapters |
-| codex2api-gateway | Public API parsing, provider-owned official request construction, API-key admission, response conversion and wallet settlement |
-| codex2api-admin | Administrator session, CSRF, typed REST contracts and operations |
-| codex2api-user | User browser sessions, own API keys/catalog/usage, wallet purchases, subscriptions/devices and OAuth consent |
-| codex2api-web | Embedded static assets and source freshness validation |
-| codex2api-version | Exact official release and independent application release tag |
-| codex2api | Startup, dependency composition, listener and graceful shutdown |
+| codex2api | Composition, configuration, listeners and graceful shutdown |
+| codex2api-common | Shared DTOs, provider constants, model/entitlement value types and optional frontend build/asset utilities; no storage or business services |
+| codex2api-storage | PostgreSQL schema and queries, Redis coordination, credentials, configuration and request ledger; UserStore restricts user capabilities |
+| codex2api-admin | Administrator sessions, CSRF, management operations and the embedded administrator frontend |
+| codex2api-user | User sessions, own catalog/keys/usage, wallet purchases, subscriptions/devices, browser consent and the embedded user frontend |
+| codex2api-oauth | Configured-client platform protocols, OAuth, subscription execution admission and local client state |
+| codex2api-api | Standard AI API parsing, API-key admission, provider request construction, response conversion and wallet settlement |
+| codex2api-suppliers | Supplier identity, frozen fingerprints, login, credential refresh/revoke and isolated authenticated account clients |
+| codex2api-upstream | Provider transport, HTTP/SSE/WS forwarding, supplier availability classification and provider-neutral pool scheduling |
 
-`codex2api-api` and `codex2api-gateway` both call `codex2api-scheduler`; neither
-inference surface calls the other. The scheduler takes an explicit provider,
-consumer identity and tag set, and never authenticates OAuth or API keys, reads
-wallets, or decides subscription benefits. The caller supplies revalidation for
-waits and retries. Existing OAuth subscription admission remains in
-`codex2api-service`; metered API admission and settlement use independent API
-records and the ordinary user's wallet. Administrator and user HTTP modules
-receive only a read-only current-concurrency callback, not gateway execution
-capabilities. API product configuration and public DTO contracts are described in
-[Metered API](API.md).
+OAuth and API are peer businesses. Both call the scheduler within
+`codex2api-upstream`; neither calls the other's handlers. The scheduler takes an
+explicit provider, consumer identity and tag set, without authenticating consumer
+credentials, reading wallets or deciding subscription benefits. The caller supplies
+revalidation for waits and retries. Subscription admission lives inside OAuth's
+`admission` module; API admission and settlement use API records and the user's wallet.
 
-Incoming routes are explicit in `codex2api-api/src/providers/chatgpt/routes.rs` and
+The administrator and user businesses each embed and serve their own static export.
+`codex2api-common` supplies reusable asset handling and build verification, without
+registering business routes or owning frontend assets. A Rust frontend host can run
+both businesses with distinct listeners and credentials. OAuth only shares a typed,
+I/O-free authorization contract with the browser consent flow; it has no production
+dependency on the user HTTP module. User HTTP code receives UserStore and never
+supplier or raw-storage capabilities. Management HTTP code receives a read-only API
+concurrency callback, not API execution handlers.
+
+These are module boundaries for later process extraction. The current application
+still runs as one process and calls Rust interfaces directly; it does not implement
+RPC, service discovery or separate service binaries. Independent deployment will
+also require explicit service contracts, data-write ownership, retry/idempotency and
+transaction boundaries. Shared PostgreSQL and Redis access is not itself a service
+protocol. Both frontends remain embedded in Rust in that deployment model.
+`scripts/check-module-boundaries.py` checks production crate dependencies and
+cross-provider imports. [AI API gateway](API.md) and [OAuth clients](OAUTH.md)
+describe the independent public contracts.
+
+Incoming routes are explicit in `codex2api-oauth/src/providers/chatgpt/routes.rs` and
 the resource modules under `codex2api-admin/src/rest/` and `codex2api-user/src/rest/`.
 Each administrator business resource owns its router and handlers in one module.
 Plans, models, users and subscriptions have separate business modules; identical
@@ -63,19 +73,20 @@ middleware. Users and their subscriptions have separate namespace routers;
 only identical platform-resource operations share handlers. Handlers adapt requests to services; they do not
 derive routes from outbound endpoint enums. Gateway provider adapters own the
 conversion from public API semantics to official client bodies and request-scoped
-headers. Auth/upstream own supplier credentials, frozen fingerprints, account-bound
+headers. Suppliers/upstream own supplier credentials, frozen fingerprints, account-bound
 normalization and network transport. PostgreSQL code neither calls providers nor
 registers HTTP routes.
 
 ## API gateway and OAuth client surfaces
 
-The two inference listeners have different contracts. The OAuth/client listener
+The two inference listeners have different contracts. `codex2api-oauth` serves configured ccodex, cgrok and hooked Desktop clients under `/v1/chatgpt` and `/v1/grok`; `codex2api-api` serves API-key callers under `/v1`. See [OAuth clients](OAUTH.md) for routing and configuration. The OAuth/client listener
 accepts the corresponding client's protocol, checks its account and subscription,
 and preserves conversation contents, protocol events and client request IDs while
 normalizing supplier identity. The API-key listener accepts public Responses,
 Chat Completions and image APIs and constructs a new official-client request.
-OAuth identifies a consumer on one listener and supplies upstream credentials;
-it is not the API gateway's request-adaptation strategy.
+Client OAuth credentials identify the selected subscription. Supplier credentials
+are resolved separately by the supplier service and upstream transport. Standard
+API callers authenticate with API keys and use their own admission and settlement.
 
 ```mermaid
 flowchart LR
@@ -92,7 +103,7 @@ flowchart LR
     L --> F
 ```
 
-`gateway/request.rs` separates caller response preferences from inference input,
+`codex2api-api/src/request.rs` separates caller response preferences from inference input,
 validates public controls and separates local metadata from upstream input. It
 neither selects a supplier nor supplies credentials. Provider adapters convert
 protocol semantics without dropping opaque tool or multimodal payloads.
@@ -108,7 +119,7 @@ Image JSON and multipart inputs go through the corresponding provider builder.
 Protocol conversion preserves the native tool, multimodal and replay payloads;
 provider validation remains authoritative for unsupported extensions. Search,
 compaction and input counting use their own real upstream wire contracts.
-[Metered API](API.md) documents these operations and their actual boundaries.
+[AI API gateway](API.md) documents these operations and their actual boundaries.
 
 The selected supplier contributes credentials, installation ID, frozen HTTP
 fingerprint and outbound proxy only in the official transport. Caller API keys,
@@ -147,9 +158,11 @@ continues to account for usage when the downstream disconnects.
 ## Storage and supplier isolation
 
 PostgreSQL is the only durable store. `CODEX2API_DATABASE_URL` is mandatory;
-`schema.sql` and `seed.sql` initialize a fresh schema atomically under a
-schema-scoped transaction advisory lock. There is no historical migration runner,
-file database, or old-schema fallback. Existing data is managed outside this application.
+`schema.sql` and `seed.sql` initialize a fresh schema. Embedded SQL migrations run
+in version order during startup under the same schema-scoped transaction advisory
+lock. The migration version commits with its SQL; failure rolls back startup, and
+subsequent starts skip completed versions. Application handlers read the current
+schema only. Migration SQL remains part of the maintained source.
 All listeners share one SQLx PostgreSQL connection pool. Its maximum/minimum size,
 acquisition timeout, idle timeout and maximum lifetime are configurable. Connections
 idle for at least sixty seconds are probed before reuse; active connections avoid
@@ -162,9 +175,9 @@ Foreign keys and PL/pgSQL triggers enforce role, ownership and ledger immutabili
 
 Each supplier has its own row, installation UUID, frozen OS/architecture/terminal,
 HTTP fingerprint, tokens, cookie jar, HTTP clients and session state. There are no
-per-supplier CODEX_HOME files. Upgrades update only version-derived UA values via
-`align_user_agents`; they do not regenerate identity or read the proxy host as
-the account's device.
+per-supplier CODEX_HOME files. Loading validates the stored fingerprint against the
+current protocol constants; startup does not rewrite stored identity. The account's
+device never comes from the proxy host.
 
 Supplier ownership is `(provider_id, chatgpt_account_id, chatgpt_user_id)`.
 A workspace can have several users, and one user can have several workspaces.
@@ -173,7 +186,7 @@ and refresh must preserve owner identity; missing user identity does not fall ba
 to email or workspace-only merging. Supplier IDs, credentials, routing revisions,
 quota snapshots and historical attribution survive upgrades.
 
-User login identities live in `accounts` and `users`. `platform_accounts` stores independently owned subscription identities, with a nonunique `(user_id, provider_id)` index. A user starts with no subscriptions and can hold several on one platform. Each subscription isolates client state, OAuth devices, usage, spending windows and request limits. Standalone virtual-user identities and their data are removed by SQL migration; ordinary-user wallet, order and usage history remains intact.
+User login identities live in `accounts` and `users`. `platform_accounts` stores independently owned subscription identities, with a nonunique `(user_id, provider_id)` index. A user starts with no subscriptions and can hold several on one platform. Each subscription isolates client state, OAuth devices, usage, spending windows and request limits.
 
 A consumer's provider is fixed at creation; execution routes select
 only pools of that provider. ChatGPT and Grok have independent protocol adapters.
@@ -191,8 +204,6 @@ models can be selected from the same provider's billing catalog or entered by na
 Batch replacement validates a single provider and atomically replaces both upstream
 and custom entries with the chosen custom list. These operations never change
 catalog enablement or prices, and batch replacement never requests upstream discovery.
-Migration retains existing Grok discoveries in this common supplier list; ChatGPT
-suppliers need an explicit discovery or custom selection.
 
 Administrator JSON exports contain supplier identities, frozen fingerprints,
 credentials, model lists, scheduling and tag names. Proxy URLs, authentication and
@@ -309,9 +320,7 @@ refresh/delete cannot overwrite a newer binding. Grok subscription Responses do 
 write unused response-owner mappings. API group/model RPM and concurrency are checked
 in one Lua operation before any scope is consumed, with Redis time as the clock;
 all API keys for one user share those scopes. Unlimited RPM creates no counter.
-Old runtime key layouts are not read or migrated; they expire under their existing
-TTL. After deploying a layout change, clients must establish fresh affinity and send
-full context when a previous response no longer has an ownership mapping.
+Clients must send full context when a previous response has no ownership mapping.
 
 Local capacity
 waiters wake on permit release; Redis-backed waits also poll for remote releases.
@@ -521,7 +530,6 @@ middleware; transactions enforce the same ownership guard. Subscription IDs
 cannot be substituted for user IDs or reassigned to another owner or provider.
 Credential changes revoke all devices and pending authorizations owned by that
 user; disabling or deleting one subscription affects only that subscription.
-The removed `/consumers` administrator namespace has no compatibility routes.
 
 Every persisted platform belongs to an ordinary user. Standalone virtual users
 and implicit Free platforms have no schema or runtime path. Subscription price
@@ -611,7 +619,7 @@ Desktop's `plan-names` resource; accepted protocol variants follow the pinned
 
 ### OAuth and devices
 
-The AI API authorization entry redirects to the configured public user origin.
+The OAuth client authorization entry redirects to the configured public user origin.
 Browser consent and device-code approval run on the user listener. A live browser
 session or temporary username/password verification proves the owning user's
 identity, then the page lists that user's enabled, unexpired subscriptions for
@@ -620,7 +628,7 @@ means no client login; the page links to the user center. `oauth_browser_users`
 keeps the flow-scoped proof, and confirmation binds the selected subscription in
 `oauth_browser_identities`. Verification alone never creates a code or device.
 
-Administrator Settings / Public addresses stores the OAuth/client API, metered API, user and administrator HTTP(S) origins together in PostgreSQL with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website and metered API public addresses to the user HTTP module. Existing settings without a metered API origin use the configured startup default until the administrator saves it. Listener bindings and router isolation are unchanged.
+Administrator Settings / Public addresses stores the OAuth/client API, standard AI API, user and administrator HTTP(S) origins together in PostgreSQL with a revision check. Saved values take precedence over process startup defaults without restarting. Each value explicitly supplies its scheme and optional port; reverse-proxy transport and forwarded headers never select the public scheme. OAuth discovery, Grok token issuers, both providers' authorization/device redirects and client resource/event URLs read these settings. User origin checks and website cookies use the corresponding saved website origin; UserStore exposes only the user website and standard AI API public addresses to the user HTTP module. The fields are `oauth_url` and `api_url`, with independent `CODEX2API_PUBLIC_OAUTH_URL` and `CODEX2API_PUBLIC_API_URL` startup defaults. Listener bindings and router isolation are unchanged.
 
 Confirmation binds the displayed account, current password version, optional live browser session, state, exact callback and PKCE S256 challenge. Codes are single use. Browser logout invalidates unconfirmed browser-session grants; password changes or disablement invalidate the user's browser sessions, platform devices and pending authorizations. Administrators authenticate only on the administrator listener. Subscription ownership, platform, enabled state and expiration are checked again when confirming a selection.
 
@@ -637,11 +645,11 @@ The browser retries an unauthorized request once after a shared refresh, and che
 renewal every 10 minutes while visible. Concurrent tabs share a 30-second rotation
 grace period; the earlier refresh generation is rejected after it. One persisted
 session owns both tokens, so logout, password changes and account disablement
-revoke the whole login. Migrating from single-token sessions requires one new login.
+revoke the whole login.
 Web tokens cannot authorize AI/client endpoints. No opaque web sessions or
 failed-Bearer-to-cookie fallback is accepted.
 
-Codex OAuth belongs to the AI API protocol and retains its own PostgreSQL-backed RSA
+Codex OAuth belongs to the configured-client protocol and retains its own PostgreSQL-backed RSA
 signer, official claim shape, token lifetimes, refresh/revoke contract and auxiliary
 client credential formats. It does not gain web account_type/token_use fields or
 web JWT rules. Client grants remain bound to the local platform account/device and
@@ -686,14 +694,11 @@ writes are rejected. Frontend fields are defined in code, not generated from
 server-supplied field descriptions. Preset loading never calls the supplier.
 
 Token rates use integer micro-USD per million tokens. Rules include Standard,
-Fast/Flex, an input-token start and an optional inclusive upper bound. Migration
-0049 adds the nullable upper bound without changing existing prices. Historical
-snapshots without this field retain their original matching semantics. Displayed
+Fast/Flex, an input-token start and an optional inclusive upper bound. Displayed
 intervals end at the lower of the explicit cap and the next start minus one, matching
 settlement. Standard prices are displayed once; proportional Fast/Flex/Ultrafast
 rules covering the same intervals are presented as multipliers, while independently
-configured prices stay explicit. The one-time default Fast correction only updates
-unchanged generated GPT-5.5 prices; custom rules and historical snapshots are preserved.
+configured prices stay explicit. Prices are snapshotted when each request starts.
 
 The shared presets include GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol/Luna, GPT-5.6
 Sol/Terra/Luna and GPT-5.5. Prices have official source links and a verification
@@ -843,7 +848,7 @@ Bearer; an invalid/wrong-purpose Bearer never falls back to another cookie. Muta
 also require the corresponding session's CSRF token. User APIs never serialize
 supplier records, execution routes or administrator DTOs. AI OAuth credentials authorize only their provider/account and existing client scopes. Public upstream responses filter identity/credential headers and metadata; error bodies preserve classification and retry fields while withholding supplier diagnostics.
 
-`frontend/` and `frontend-user/` export independent static assets embedded by codex2api-web. Its build script verifies
+`frontend/` and `frontend-user/` export independent static assets embedded by codex2api-admin and codex2api-user. Their build scripts use the shared frontend build utility to verify
 the source manifest and rejects missing/stale assets. HTML is not cached; hashed
 assets can be. Unknown API routes never fall back to the page shell.
 
@@ -854,10 +859,11 @@ Writes require real loaded data; placeholder defaults are never saved. See
 
 ## Client routes and capability boundaries
 
-Public inference is POST /v1/responses; the /api/oauth/chatgpt service root mounts
-OAuth and the compatible backend-api/v1 routes. HTTP, SSE and WebSocket use the
+Standard AI API inference is POST /v1/responses on the API listener. The OAuth
+listener mounts only the /v1/chatgpt and /v1/grok platform roots, including their
+login and client backend-api/v1 protocols. Unscoped client aliases are not mounted. HTTP, SSE and WebSocket use the
 same execution authorization and ownership rules. Reverse proxies must preserve
-paths, support WebSocket and provide TLS when required. CODEX2API_PUBLIC_API_URL declares
+paths, support WebSocket and provide TLS when required. CODEX2API_PUBLIC_OAUTH_URL declares
 an externally reachable origin; it does not start a TLS server.
 See [CCODEX_ENDPOINTS.md](CCODEX_ENDPOINTS.md) for the current route groups.
 
@@ -911,10 +917,9 @@ Overview subscription counts include all user-owned subscriptions; normal means 
 ## Provider module boundaries
 
 Channel-specific code belongs in `src/providers/chatgpt/` or `src/providers/grok/`
-in the identity, auth, version, core, upstream, API, gateway and admin crates. Root modules
-compose adapters and retain compatibility exports. One adapter must not import or
-patch the other. Generic storage rows retain their historic column names without
-sharing channel credentials or protocols. Frontend channel forms and official
+in the common, suppliers, upstream, OAuth, API and admin crates. Root modules
+compose adapters. One adapter must not import or patch the other. Shared storage
+never shares channel credentials or protocols. Frontend channel forms and official
 record readers follow the same `components/providers/<provider>/` boundary.
-`check-provider-boundaries.py` runs in CI. User consent shares account verification
+`check-module-boundaries.py` runs in CI. User consent shares account verification
 and confirmation mechanics but reads each channel's independent OAuth policy.

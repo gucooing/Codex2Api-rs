@@ -19,7 +19,7 @@ pub const DEFAULT_ADMIN_SESSION_TTL: Duration =
 pub const DEFAULT_OAUTH_PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, \
-     plan_type, installation_id, originator, user_agent, os_type, os_version, arch, home_dir, \
+     plan_type, installation_id, originator, user_agent, os_type, os_version, arch, \
      http_fingerprint_json, proxy_id, created_at, updated_at, last_used_at";
 
 #[derive(Clone)]
@@ -49,7 +49,6 @@ struct AccountRow {
     os_type: String,
     os_version: String,
     arch: String,
-    home_dir: String,
     http_fingerprint_json: String,
     created_at: String,
     updated_at: String,
@@ -76,7 +75,6 @@ impl TryFrom<AccountRow> for SupplierAccount {
             os_type: row.os_type,
             os_version: row.os_version,
             arch: row.arch,
-            home_dir: row.home_dir,
             http_fingerprint_json: row.http_fingerprint_json,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -163,7 +161,7 @@ impl Storage {
 
     async fn initialize(&self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        // Only bootstrap is serialized; normal transactions lock business rows.
+        // Schema initialization and migrations share one transaction and schema lock.
         sqlx::query(
             "SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':bootstrap', 0))",
         )
@@ -181,6 +179,32 @@ impl Storage {
                 .execute(&mut *tx)
                 .await?;
         }
+        let migrations = [(
+            1_i64,
+            include_str!("../migrations/0001_current_contracts.sql"),
+        )];
+        let applied: Option<String> =
+            sqlx::query_scalar("SELECT value FROM meta WHERE key='schema_migration_version'")
+                .fetch_optional(&mut *tx)
+                .await?;
+        let applied = applied
+            .as_deref()
+            .unwrap_or("0")
+            .parse::<i64>()
+            .map_err(|_| StorageError::Constraint("数据库迁移版本无效".into()))?;
+        if applied < 0 || applied > migrations.last().expect("migration list").0 {
+            return Err(StorageError::Constraint(
+                "数据库版本不受当前服务支持".into(),
+            ));
+        }
+        for (version, sql) in migrations {
+            if version <= applied {
+                continue;
+            }
+            sqlx::raw_sql(sql).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO meta(key,value) VALUES('schema_migration_version',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .bind(version.to_string()).execute(&mut *tx).await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -191,7 +215,7 @@ impl Storage {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
         .bind("codex_ref_commit")
-        .bind(codex2api_version::CODEX_REF_COMMIT)
+        .bind(codex2api_common::version::CODEX_REF_COMMIT)
         .execute(&self.pool)
         .await?;
         sqlx::query(
@@ -199,7 +223,7 @@ impl Storage {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
         .bind("codex_ref_repo")
-        .bind(codex2api_version::CODEX_REPO)
+        .bind(codex2api_common::version::CODEX_REPO)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -543,7 +567,7 @@ impl Storage {
     // --- accounts ---
 
     pub async fn create_account(&self, new: NewSupplierAccount) -> Result<SupplierAccount> {
-        if new.provider_id != codex2api_core::CHATGPT
+        if new.provider_id != codex2api_common::CHATGPT
             && (new.chatgpt_account_id.is_some() || new.chatgpt_user_id.is_some())
         {
             return Err(StorageError::Constraint(
@@ -559,9 +583,9 @@ impl Storage {
         sqlx::query(
             "INSERT INTO supplier_accounts (
                 provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
-                installation_id, originator, user_agent, os_type, os_version, arch, home_dir,
+                installation_id, originator, user_agent, os_type, os_version, arch,
                 http_fingerprint_json, created_at, updated_at, last_used_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NULL)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL)",
         )
         .bind(&new.provider_id)
         .bind(&id)
@@ -577,7 +601,6 @@ impl Storage {
         .bind(&new.os_type)
         .bind(&new.os_version)
         .bind(&new.arch)
-        .bind(&new.home_dir)
         .bind(&new.http_fingerprint_json)
         .bind(&now)
         .bind(&now)
@@ -595,7 +618,7 @@ impl Storage {
         tokens: SupplierTokens,
         proxy_id: Option<&str>,
     ) -> Result<SupplierAccount> {
-        if !codex2api_core::supported_provider(&new.provider_id) {
+        if !codex2api_common::supported_provider(&new.provider_id) {
             return Err(StorageError::Constraint("Unknown supplier provider".into()));
         }
         if new
@@ -616,9 +639,9 @@ impl Storage {
         let sql = format!(
             "INSERT INTO supplier_accounts (
                 id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
-                installation_id, originator, user_agent, os_type, os_version, arch, home_dir,
+                installation_id, originator, user_agent, os_type, os_version, arch,
                 http_fingerprint_json, proxy_id, created_at, updated_at, provider_id
-             ) VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+             ) VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
              ON CONFLICT(provider_id,chatgpt_account_id,chatgpt_user_id) DO UPDATE SET
                 status = CASE WHEN supplier_accounts.status='pending' THEN 'active' ELSE supplier_accounts.status END,
                 display_name = COALESCE(excluded.display_name, supplier_accounts.display_name),
@@ -643,7 +666,6 @@ impl Storage {
             .bind(new.os_type)
             .bind(new.os_version)
             .bind(new.arch)
-            .bind(new.home_dir)
             .bind(new.http_fingerprint_json)
             .bind(proxy_id)
             .bind(&now)
@@ -779,7 +801,7 @@ impl Storage {
             .get_account(id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(id.to_string()))?;
-        if account.provider_id != codex2api_core::CHATGPT
+        if account.provider_id != codex2api_common::CHATGPT
             && (update.chatgpt_account_id.is_some() || update.chatgpt_user_id.is_some())
         {
             return Err(StorageError::Constraint(
@@ -818,9 +840,6 @@ impl Storage {
         }
         if let Some(arch) = update.arch {
             account.arch = arch;
-        }
-        if let Some(home_dir) = update.home_dir {
-            account.home_dir = home_dir;
         }
         if let Some(http_fingerprint_json) = update.http_fingerprint_json {
             account.http_fingerprint_json = http_fingerprint_json;
@@ -885,9 +904,9 @@ impl Storage {
             "UPDATE supplier_accounts SET
                 status = $1, display_name = $2, chatgpt_account_id = $3, chatgpt_user_id = $4,
                 email = $5, plan_type = $6, originator = $7, user_agent = $8, os_type = $9,
-                os_version = $10, arch = $11, home_dir = $12, http_fingerprint_json = $13,
-                updated_at = $14, last_used_at = $15
-             WHERE id = $16",
+                os_version = $10, arch = $11, http_fingerprint_json = $12,
+                updated_at = $13, last_used_at = $14
+             WHERE id = $15",
         )
         .bind(account.status.as_str())
         .bind(&account.display_name)
@@ -900,7 +919,6 @@ impl Storage {
         .bind(&account.os_type)
         .bind(&account.os_version)
         .bind(&account.arch)
-        .bind(&account.home_dir)
         .bind(&account.http_fingerprint_json)
         .bind(&now)
         .bind(&account.last_used_at)

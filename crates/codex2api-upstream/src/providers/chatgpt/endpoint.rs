@@ -6,7 +6,7 @@ use crate::request::{
     prepare_responses_value,
 };
 use crate::{Result, UpstreamClient};
-use codex2api_version::{CHATGPT_CODEX_BASE_URL, CODEX_PACKAGE_VERSION};
+use codex2api_common::version::{CHATGPT_CODEX_BASE_URL, CODEX_PACKAGE_VERSION};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Endpoint {
@@ -211,7 +211,7 @@ impl UpstreamClient {
 mod tests {
     use super::*;
     use axum::{Router, body::Body, http::Uri, response::Response};
-    use codex2api_accounts::{AccountIdentity, HostRuntime};
+    use codex2api_suppliers::{AccountIdentity, HostRuntime};
     use serde_json::{Value, json};
 
     #[test]

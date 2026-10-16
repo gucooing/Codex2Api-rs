@@ -70,11 +70,11 @@ fn export_sub2api(accounts: &[SupplierTransferAccount]) -> Result<Value, ApiErro
     let mut rows = Vec::new();
     for item in accounts {
         let (platform, mut credentials) = match item.account.provider_id.as_str() {
-            codex2api_core::CHATGPT => (
+            codex2api_common::CHATGPT => (
                 "openai",
                 crate::providers::chatgpt::transfer::to_sub2api(item)?,
             ),
-            codex2api_core::GROK => ("grok", crate::providers::grok::transfer::to_sub2api(item)?),
+            codex2api_common::GROK => ("grok", crate::providers::grok::transfer::to_sub2api(item)?),
             _ => return Err(ApiError::bad("该平台不支持 Sub2api 导出")),
         };
         credentials["model_mapping"] = json!(
@@ -179,7 +179,7 @@ pub(crate) fn sub2api_record(
         for value in mapping.values() {
             let model = value
                 .as_str()
-                .filter(|m| codex2api_core::valid_model(m))
+                .filter(|m| codex2api_common::valid_model(m))
                 .ok_or_else(|| ApiError::bad("模型映射包含无法导入的名称"))?;
             models.insert(model.to_owned());
         }
@@ -253,7 +253,7 @@ fn parse_account(
         Format::Native => {
             if !row["provider_id"]
                 .as_str()
-                .is_some_and(codex2api_core::supported_provider)
+                .is_some_and(codex2api_common::supported_provider)
             {
                 return Ok(None);
             }
@@ -294,8 +294,8 @@ fn parse_account(
         return Err(ApiError::bad("账户身份或指纹无效"));
     }
     match a.provider_id.as_str() {
-        codex2api_core::CHATGPT => crate::providers::chatgpt::transfer::normalize(&mut item)?,
-        codex2api_core::GROK => crate::providers::grok::transfer::normalize(&mut item)?,
+        codex2api_common::CHATGPT => crate::providers::chatgpt::transfer::normalize(&mut item)?,
+        codex2api_common::GROK => crate::providers::grok::transfer::normalize(&mut item)?,
         _ => return Ok(None),
     }
     Ok(Some(item))

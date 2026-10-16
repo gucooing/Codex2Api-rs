@@ -5,9 +5,9 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use codex2api_accounts::{AccountIdentity, HostRuntime, new_installation_id};
-use codex2api_auth::{CompletedLogin, LoginFlow};
 use codex2api_storage::{SupplierAccount, SupplierInfoSection};
+use codex2api_suppliers::{AccountIdentity, HostRuntime, new_installation_id};
+use codex2api_suppliers::{CompletedLogin, LoginFlow};
 use codex2api_upstream::BackendEndpoint as E;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -25,7 +25,7 @@ pub(crate) async fn subscription_expiration(
         .await?
         .and_then(|t| t.id_token)
         .and_then(|t| {
-            codex2api_auth::parse_chatgpt_subscription_expiration(&t)
+            codex2api_suppliers::parse_chatgpt_subscription_expiration(&t)
                 .ok()
                 .flatten()
         }))
@@ -56,10 +56,12 @@ impl Fingerprint {
             timezone: a.http_fingerprint.timezone.clone().unwrap_or_default(),
         }
     }
-    pub(crate) fn from_account(a: &SupplierAccount) -> Self {
-        let mut f = Self::from_identity(&AccountIdentity::from_account(a));
+    pub(crate) fn from_account(a: &SupplierAccount) -> Result<Self, ApiError> {
+        let mut f = Self::from_identity(
+            &AccountIdentity::from_account(a).map_err(|_| ApiError::bad("账户指纹无效"))?,
+        );
         f.proxy_id = a.proxy_id.clone();
-        f
+        Ok(f)
     }
     fn identity(&self, id: String, installation: String) -> Result<AccountIdentity, ApiError> {
         if !self.timezone.trim().is_empty() && self.timezone.parse::<chrono_tz::Tz>().is_err() {
@@ -80,8 +82,8 @@ impl Fingerprint {
             }
         }
         let runtime = HostRuntime {
-            originator: codex2api_version::DEFAULT_ORIGINATOR.into(),
-            user_agent: codex2api_version::official_user_agent(
+            originator: codex2api_common::version::DEFAULT_ORIGINATOR.into(),
+            user_agent: codex2api_common::version::official_user_agent(
                 self.os_type.trim(),
                 self.os_version.trim(),
                 self.arch.trim(),
@@ -111,12 +113,14 @@ pub async fn fingerprint(
     let mut a = s.storage.require_account(&id).await?;
     f.validate_proxy(&s).await?;
     let identity = f.identity(a.id.clone(), a.installation_id.clone())?;
-    let mut fp = AccountIdentity::from_account(&a).http_fingerprint;
+    let mut fp = AccountIdentity::from_account(&a)
+        .map_err(|_| ApiError::bad("账户指纹无效"))?
+        .http_fingerprint;
     fp.os_type = identity.os_type.clone();
     fp.os_version = identity.os_version.clone();
     fp.arch = identity.arch.clone();
     fp.user_agent = identity.official_user_agent();
-    fp.originator = codex2api_version::DEFAULT_ORIGINATOR.into();
+    fp.originator = codex2api_common::version::DEFAULT_ORIGINATOR.into();
     fp.timezone = identity.http_fingerprint.timezone;
     a.os_type = fp.os_type.clone();
     a.os_version = fp.os_version.clone();
@@ -131,14 +135,14 @@ pub async fn fingerprint(
         .reload_account_http(&id)
         .await
         .map_err(|_| ApiError::upstream("指纹已保存，但 HTTP 客户端更新失败"))?;
-    Ok(Json(json!(Fingerprint::from_account(&a))))
+    Ok(Json(json!(Fingerprint::from_account(&a)?)))
 }
 pub async fn official_rows(
     State(s): State<AdminState>,
     Path(id): Path<String>,
     Query(q): Query<codex2api_storage::ListQuery>,
 ) -> ApiResult {
-    if s.storage.require_account(&id).await?.provider_id != codex2api_core::CHATGPT {
+    if s.storage.require_account(&id).await?.provider_id != codex2api_common::CHATGPT {
         return Err(ApiError::missing());
     }
     Ok(Json(json!(s.storage.chatgpt_official_page(&id, &q).await?)))

@@ -73,8 +73,7 @@ export function ConsumerUsage({ id }: { id: string }) {
               <CardDescription className="text-sm text-muted-foreground">
                 已结算费用 {money(resource.data?.quota.billing.used_usd)} · 待结算{" "}
                 {resource.data?.quota.billing.pending_requests ?? "未提供"} 条 · 未计价{" "}
-                {resource.data?.quota.billing.unpriced_requests ?? "未提供"} 条 · 历史未计费{" "}
-                {resource.data?.quota.billing.legacy_requests ?? "未提供"} 条
+                {resource.data?.quota.billing.unpriced_requests ?? "未提供"} 条
               </CardDescription>
             </CardContent>
           </Card>

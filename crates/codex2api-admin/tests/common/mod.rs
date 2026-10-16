@@ -23,7 +23,7 @@ impl Fixture {
             .await
             .unwrap();
         let state = codex2api_admin::AdminState::new(storage.clone()).unwrap();
-        let app = codex2api_admin::router(state.clone());
+        let app = codex2api_admin::api_router(state.clone());
         let response = app
             .clone()
             .oneshot(

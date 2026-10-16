@@ -9,7 +9,7 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
 - commit: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d` (2026-10-09T17:39:05Z)
-- constants: `crates/codex2api-version`
+- constants: `crates/codex2api-common/src/version.rs`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
 
@@ -47,14 +47,14 @@ validation are complete.
 ## Product constraints
 
 - One process.
-- PostgreSQL storage (`CODEX2API_DATABASE_URL` is required); no historical migrations or SQLite support.
+- PostgreSQL storage (`CODEX2API_DATABASE_URL` is required); current schema only.
 - Redis is required for affinity, response ownership, RPM and concurrency leases.
   Missing configuration or failed initial connection must stop startup. Do not add
   in-process substitutes when Redis is absent or unavailable.
 - Isolated persistent per-account identity and HTTP fingerprint in PostgreSQL (no `$CODEX_HOME` files).
 - HTTP fingerprint: official header names/formula; originator + UA version are constants; OS/terminal are random per account then frozen. Do not use the proxy host. Do not forge TLS/JA3.
 - Admin web: one user, username/password, default `admin` / `admin`.
-- User web/API, administrator web/API, and AI API have separate routers and
+- OAuth clients, the standard AI API gateway, user web/API and administrator web/API have separate routers and
   configurable listening ports in the same process. Build the two Next.js
   frontends independently; never mount administrator routes on other listeners.
 - Only administrators create users. Login credentials belong to `accounts` and
@@ -91,18 +91,26 @@ validation are complete.
   login applies only to the current authorization link.
 - Login identity lives in accounts (immutable account_type admin/user); admin_users
   and users are separate role-checked profiles. Platform accounts hold entitlements,
-  never separate usernames/passwords. Migrate old identities with SQL only; do not
-  add runtime legacy authentication, dual writes or old-schema compatibility. The user HTTP module receives only
+  never separate usernames/passwords. The user HTTP module receives only
   UserStore, never raw storage or supplier/admin query capabilities.
 - Administrator/user web session tokens are purpose-bound JWTs with independent admin
   and user RSA keys. Allow only the server's fixed RS256 algorithm; reject none,
   empty/other algorithms and token-selected key sources. Check account_type,
   token_use, audience, issuer, lifetime and persisted revocation/ownership.
-  Do not accept old opaque web sessions or fallback to a cookie
+  Accept only purpose-bound JWT web sessions. Do not fallback to a cookie
   when an explicit Bearer credential fails. Codex OAuth is a separate client
   protocol: preserve its official claims, signing keys, refresh/revoke behavior and
   auxiliary credential formats; never apply web-session JWT changes to it.
-- Public API is Codex-compatible `POST /v1/responses`.
+- `codex2api-oauth` serves configured clients (ccodex, cgrok and hooked Desktop)
+  only under `/v1/chatgpt` and `/v1/grok`. OAuth includes authentication and the
+  client's inference, account, quota and state protocols, scoped to subscriptions.
+  Register only the current platform service roots.
+- `codex2api-api` serves the standard AI API gateway under `/v1`, authenticated
+  by API keys and billed to user wallets. Public Responses is `POST /v1/responses`.
+  Neither module calls the other's handlers or accepts the other's credentials.
+  Use `CODEX2API_OAUTH_*` / `CODEX2API_PUBLIC_OAUTH_URL` for the client listener
+  and `CODEX2API_API_*` / `CODEX2API_PUBLIC_API_URL` for the AI API listener;
+  persisted public origins are `oauth_url` and `api_url` respectively.
 - Upstream requests must look like a logged-in official Codex CLI for the pinned commit.
 - Ordinary supplier request throttling (`rate_limit_exceeded`, `slow_down`, or an
   unclassified HTTP 429) belongs to client backoff. Forward its structured error
@@ -160,7 +168,7 @@ validation are complete.
   overrides may inherit the plan or use an explicit value; zero means unlimited.
   Do not restore gateway-wide default RPM/concurrency settings. User catalogs and
   subscription views expose these limits without supplier routing data.
-- Subscription management uses the former virtual-account table/detail structure,
+- Subscription management uses a table and detail view,
   with a User column and a Manage action. All settings and records belong to that
   subscription. OAuth verification lists only the user's available subscriptions
   on the requested platform; confirmation binds the explicitly selected ID.
@@ -168,9 +176,12 @@ validation are complete.
   shadcn Select/Combobox, compact labelled fields, full-width triggers and popper
   dropdowns. Do not introduce alternate filter controls or visual wrappers.
 
-### Documentation lifecycle (user-confirmed 2026-10-03)
+### Current contracts and documentation
 
 - Keep documentation focused on the current architecture, behavior, contracts and maintenance rules.
+- Do not implement backward compatibility: no legacy routes, field aliases, old-format readers, dual reads/writes or runtime configuration-name mappings. Validate the current contract and reject invalid input.
+- Database migrations are required persistence maintenance, not backward compatibility. Keep migration SQL and its automatic execution; perform stored-data changes in SQL, atomically and once per migration. Never delete necessary migration SQL as historical documentation.
+- Do not retain transition guides, old/new configuration tables or descriptions of removed implementations. Official protocol variants required by the pinned clients are current external contracts, not project history.
 - Update plans are temporary working documents used for approval and implementation. After the task is complete, remove the completed plan and historical version plans, investigation notes, audit logs and execution diaries; do not archive them as new Markdown files.
 - Merge enduring conclusions and known limitations into the relevant current documentation, then remove links to deleted records. Git history and cloud CI retain the change and validation history.
 - Do not add dated progress logs or prose such as "the previous implementation record has been archived" to README or architectural documentation.
@@ -215,18 +226,17 @@ validation are complete.
 - Show loading, request, login, save and validation failures as small floating toast messages. Error feedback must not occupy page/form layout, move keyboard focus or use a blocking browser validation popup; persistent business statuses remain normal record content.
 - See [Frontend UI](docs/FRONTEND_UI.md) for the component and interaction conventions.
 
-### Subscription client data (user-confirmed 2026-09-20)
+### Subscription client data
 
-Ownership clarification (user-confirmed 2026-09-21): admin editing applies to
+Admin editing applies to
 server-owned identity, catalog, billing and service policy. Client-owned sessions,
 sidebar projects/pins, preferences, approvals, onboarding, installation state and
 operation history are read-only in admin; preserve their normal client writes.
 Do not manufacture client state through configuration forms. Mixed responses must
 separate editable service flags from client preferences. Generate protocol fields
 in code and offer named business controls, never arbitrary field-name editors.
-This clarification supersedes the older blanket requirement to edit every client value.
 
-Subscription operations clarification (user-confirmed 2026-09-21): operate each
+Operate each
 virtual account as a subscription account, following the ChatGPT subscription
 account model. Every client identity belongs to a user's explicitly created subscription.
 Subscriptions are administrator grants or local-wallet purchases, never official
@@ -294,17 +304,16 @@ Before changing subscription client endpoints, read
   do not patch Desktop business logic or bypass its readiness/permission checks.
   Launcher loading and routing must be implemented in C#, with no JavaScript/CJS
   payloads, script evaluation, debugger protocol, inspector ports or breakpoints.
-  HTTP scheme compatibility in workspace discovery and subsequent native routing
-  is explicitly authorized by the user on 2026-09-26; keep identity, credentials,
+  HTTP scheme support in workspace discovery and subsequent native routing
+  is authorized; keep identity, credentials,
   account ownership and permission checks. Do not substitute an HTTPS bridge.
   Report server, launcher and
   actual Desktop execution evidence separately; parser tests alone do not prove
   that a task was created or that an inference request was sent.
-- Desktop launcher policy (user-updated 2026-09-29): isolate only `auth.json` and
+- Desktop launcher: isolate only `auth.json` and
   `config.toml` per service. Share the original client's session home, SQLite,
-  history, projects, plugins and Desktop data. This supersedes the earlier fully
-  isolated profile policy. Preserve old isolated data; do not overwrite or merge
-  live SQLite files. Initialize file credential
+  history, projects, plugins and Desktop data. Do not overwrite or merge live
+  SQLite files. Initialize file credential
   storage and service addresses without copying default credentials or overwriting
   existing client preferences/tokens. Let the original client perform login and
   token refresh in that profile. Keep the installed native runtime and address
@@ -329,16 +338,23 @@ Before changing subscription client endpoints, read
 - These requirements do not authorize unrelated feature expansion or a Codex
   baseline update. Implement each requested repair through its data and UI path.
 
-- Match existing crate boundaries.
+- Organize crates by business: admin and user (each embeds its frontend), OAuth,
+  API, suppliers and upstream forwarding. Shared contracts/utilities belong in
+  `codex2api-common`; PostgreSQL/Redis capabilities belong in `codex2api-storage`.
+  Supplier authentication and identity stay together; scheduling belongs inside
+  upstream, and subscription admission inside OAuth. Do not recreate standalone
+  crates for static assets, version constants or thin execution wrappers.
+  OAuth/API must not depend on each other's HTTP handlers or browser businesses.
+  Keep both frontend businesses embeddable in the same Rust host; service extraction
+  requires explicit protocols and data ownership, not extra crates by itself.
 - Keep tests focused on critical algorithms such as billing, authorization,
   scheduling and protocol parsing. Do not add tests for constant repetition,
-  ordinary UI structure, trivial field mappings or simple CRUD. Use compilation,
+  ordinary UI structure, required-field/serialization checks, trivial field mappings or simple CRUD. Use compilation,
   lint and type checks for routine changes.
 - Give derived caches stable business keys or tie them to their owning object.
   Do not add periodic cache scans to compensate for retained obsolete objects.
 - Remove superseded routes, fields and runtime branches when replacing behavior.
-  Migrate persisted data with SQL only; do not retain legacy aliases, dual reads,
-  dual writes or compatibility fallbacks.
+  Persist only the current contract; reject unsupported data without conversion.
 - Keep account isolation. Never share auth, installation_id, HTTP client, or session state.
 - Persist identity; do not regenerate installation_id on re-login of the same ChatGPT account.
 - Dynamic IDs (session/thread/turn/request) stay request-scoped.

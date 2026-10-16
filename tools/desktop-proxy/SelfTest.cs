@@ -7,7 +7,7 @@ internal static class SelfTest
     public static async Task Run(string report)
     {
         void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
-        Require(Launcher.NormalizeServer("https://proxy.example:8443/") == "https://proxy.example:8443/api/oauth/chatgpt", "Origin normalization failed");
+        Require(Launcher.NormalizeServer("https://proxy.example:8443/") == "https://proxy.example:8443/v1/chatgpt", "Origin normalization failed");
         Require(Launcher.NormalizeServer("https://another.example/custom/path/") == "https://another.example/custom/path", "Custom path changed");
         foreach (var bad in new[] { "", "file:///x", "https://a:b@example.test", "https://example.test/?secret=x" })
         {
@@ -41,6 +41,14 @@ internal static class SelfTest
             Require(policy.Map("https://chatgpt.com/backend-api/me?x=1") == settings.Server + "/backend-api/me?x=1", "Backend address routing failed");
             Require(policy.Map("https://chatgpt.com.evil.test/backend-api/me") == "https://chatgpt.com.evil.test/backend-api/me", "Unrelated host was routed");
             Require(policy.Map("http://localhost:1455/auth/callback?code=fixture") == "http://localhost:1455/auth/callback?code=fixture", "Local login callback changed");
+            var oauthRoot = "https://proxy.example:8443/v1/chatgpt";
+            var oauthPolicy = new NativeHook.AddressPolicy(oauthRoot);
+            var parameters = "state=keep%2Bexact&code_challenge=fixture&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback";
+            var authorize = "https://auth.openai.com/oauth/authorize?" + parameters;
+            var wrapper = "https://chatgpt.com/codex/desktop-auth?authorize_url=" + Uri.EscapeDataString(authorize) + "&no_universal_links=1";
+            Require(oauthPolicy.Map(wrapper) == oauthRoot + "/codex/desktop-auth?authorize_url=" + Uri.EscapeDataString(oauthRoot + "/oauth/authorize?" + parameters) + "&no_universal_links=1", "Desktop OAuth wrapper escaped the platform root or changed PKCE/state");
+            Require(oauthPolicy.Map("wss://chatgpt.com/backend-api/codex/responses") == "wss://proxy.example:8443/v1/chatgpt/backend-api/codex/responses", "OAuth WebSocket root mismatch");
+            Require(oauthPolicy.Map(oauthRoot + "/backend-api/me") == oauthRoot + "/backend-api/me", "OAuth prefix was duplicated");
             // Render on the STA thread before the first await, without displaying a window.
             using (var form = new MainForm(true))
             {

@@ -26,7 +26,7 @@ RUN apt-get update \
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
-# Keep the exact sources alongside each export for codex2api-web's SHA-256 checks.
+# Keep the exact sources alongside each export for the web businesses' SHA-256 checks.
 COPY --from=admin-frontend /src/frontend/ frontend/
 COPY --from=user-frontend /src/frontend-user/ frontend-user/
 ARG CODEX2API_BUILD_TAG=unknown
@@ -43,10 +43,10 @@ RUN apt-get update \
     && install -d -o codex2api -g codex2api /app
 WORKDIR /app
 COPY --from=builder /src/target/release/codex2api /usr/local/bin/codex2api
-ENV CODEX2API_API_BIND=0.0.0.0:8080 \
+ENV CODEX2API_OAUTH_BIND=0.0.0.0:8080 \
     CODEX2API_ADMIN_BIND=0.0.0.0:8081 \
     CODEX2API_USER_BIND=0.0.0.0:8082 \
-    CODEX2API_METERED_API_BIND=0.0.0.0:8083
+    CODEX2API_API_BIND=0.0.0.0:8083
 USER 10001:10001
 EXPOSE 8080 8081 8082 8083
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

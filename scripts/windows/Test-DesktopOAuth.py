@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 
 base, client_home = sys.argv[1:]
-proxy = base + "/api/oauth/chatgpt"
+proxy = base + "/v1/chatgpt"
 user_api = os.environ.get("CODEX2API_TEST_USER_URL", base).rstrip("/") + "/user/api"
 cli = os.environ["CODEX2API_TEST_CLI"]
 client_env = os.environ.copy()

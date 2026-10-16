@@ -2,8 +2,8 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
-use codex2api_auth::{AuthService, transport::AccountHttpClients};
 use codex2api_storage::QuotaSnapshot;
+use codex2api_suppliers::{AuthService, transport::AccountHttpClients};
 use http::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
@@ -43,7 +43,7 @@ impl WorkspaceRoute {
         // It keeps the configured bootstrap origin; it is not a malformed URL.
         let unconstrained = origin == "NO_CONSTRAINT";
         let url = reqwest::Url::parse(if unconstrained {
-            codex2api_version::CHATGPT_BACKEND_BASE_URL
+            codex2api_common::version::CHATGPT_BACKEND_BASE_URL
         } else {
             origin
         })
@@ -288,7 +288,7 @@ impl UpstreamClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex2api_accounts::{AccountIdentity, HostRuntime, SupplierAccountStore};
+    use codex2api_suppliers::{AccountIdentity, HostRuntime, SupplierAccountStore};
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -404,8 +404,8 @@ mod tests {
         let store = SupplierAccountStore::open(storage.clone());
         let account = store.create_pending().await.unwrap().account;
         let other = store.create_pending().await.unwrap().account;
-        let mut credentials = codex2api_auth::AuthDotJson::chatgpt(
-            codex2api_auth::TokenData {
+        let mut credentials = codex2api_suppliers::AuthDotJson::chatgpt(
+            codex2api_suppliers::TokenData {
                 id_token: "id".into(),
                 access_token: "access".into(),
                 refresh_token: "refresh".into(),
@@ -562,11 +562,11 @@ mod tests {
         .unwrap();
         client.discovery_url = Some(format!("{origin}/accounts/check"));
         let ca = reqwest::Certificate::from_pem(include_bytes!(
-            "../../../../codex2api-auth/tests/fixtures/proxy-ca.pem"
+            "../../../../codex2api-suppliers/tests/fixtures/proxy-ca.pem"
         ))
         .unwrap();
         let builder = || {
-            codex2api_auth::transport::http_builder()
+            codex2api_suppliers::transport::http_builder()
                 .unwrap()
                 .no_proxy()
                 .add_root_certificate(ca.clone())

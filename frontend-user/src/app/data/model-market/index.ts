@@ -1,7 +1,7 @@
 "use client";
 import { modelMarketPricing, type ModelMarketItem } from "./pricing";
 import { useErrorToast } from "@/lib/actions";
-import type { ApiGroups, ApiModelMarket } from "@/lib/metered-api";
+import type { ApiGroups, ApiModelMarket } from "@/lib/api-access";
 import { usePageControls } from "@/lib/pagination";
 import { useResource } from "@/lib/resource";
 import { useId, useState, type FormEvent } from "react";

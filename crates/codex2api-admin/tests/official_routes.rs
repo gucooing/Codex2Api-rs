@@ -68,7 +68,7 @@ async fn workspace_details_are_local_readonly_and_show_credential_invalidation()
     assert_eq!(ready["routing"]["status"], "ready");
     assert_eq!(ready["routing"]["backend_origin"], "https://chatgpt.com");
     assert_eq!(ready["routing"]["constraint"], "us_cr");
-    let credential = codex2api_auth::persist::chatgpt_auth(
+    let credential = codex2api_suppliers::persist::chatgpt_auth(
         "id".into(),
         "access".into(),
         "refresh".into(),

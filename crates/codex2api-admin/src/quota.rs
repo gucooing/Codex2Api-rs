@@ -154,7 +154,7 @@ impl SupplierCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex2api_accounts::SupplierAccountStore;
+    use codex2api_suppliers::SupplierAccountStore;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

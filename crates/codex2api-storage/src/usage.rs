@@ -84,7 +84,7 @@ impl Default for UsageRecord {
             consumer_name: Default::default(),
             subject_kind: "virtual_account".into(),
             source_name: None,
-            provider_id: codex2api_core::default_provider(),
+            provider_id: codex2api_common::default_provider(),
             user_id: None,
             key_id: None,
             group_id: None,
@@ -153,7 +153,7 @@ pub enum UsageSource {
     Subscription,
 }
 
-pub(crate) const CONSUMER_NAME: &str = "CASE WHEN subject_kind IN ('api_key','retired_api_key') THEN COALESCE((SELECT name FROM api_keys WHERE id=usage_records.subject_id),'') ELSE COALESCE((SELECT username FROM platform_principals WHERE id=usage_records.subject_id),'') END";
+pub(crate) const CONSUMER_NAME: &str = "CASE WHEN subject_kind='api_key' THEN COALESCE((SELECT name FROM api_keys WHERE id=usage_records.subject_id),'') ELSE COALESCE((SELECT username FROM platform_principals WHERE id=usage_records.subject_id),'') END";
 
 pub const USAGE_PAGE_SIZE: i64 = 20;
 
@@ -216,7 +216,7 @@ pub(crate) fn conditions(query: &mut QueryBuilder<'_, Postgres>, filter: &UsageF
     query.push(" WHERE 1=1");
     match filter.source {
         Some(UsageSource::Api) => {
-            query.push(" AND subject_kind IN ('api_key','retired_api_key')");
+            query.push(" AND subject_kind='api_key'");
         }
         Some(UsageSource::Subscription) => {
             query.push(" AND subject_kind='virtual_account'");
@@ -459,11 +459,6 @@ impl Storage {
             .await?;
         tx.commit().await?;
         for record in &mut records {
-            if record.source_name.is_none()
-                && matches!(record.subject_kind.as_str(), "api_key" | "retired_api_key")
-            {
-                record.source_name = record.group_name.clone();
-            }
             if let Some(snapshot) = record
                 .pricing_snapshot_json
                 .as_deref()

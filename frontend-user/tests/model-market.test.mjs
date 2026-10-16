@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { modelMarketPricing } from "../src/app/data/model-market/pricing.ts";
-import { apiRange } from "../src/lib/metered-api.ts";
+import { apiRange } from "../src/lib/api-access.ts";
 
 const price = (tier, start, end, multiplier, input, output) => ({
   tier,

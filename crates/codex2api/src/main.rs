@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use tracing_subscriber::EnvFilter;
 
+use codex2api_common::version::{CODEX_PACKAGE_VERSION, CODEX_REF_COMMIT, CODEX_REF_COMMIT_DATE};
 use codex2api_storage::Storage;
-use codex2api_version::{CODEX_PACKAGE_VERSION, CODEX_REF_COMMIT, CODEX_REF_COMMIT_DATE};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -14,13 +14,13 @@ async fn main() -> Result<()> {
     }
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let api_bind = std::env::var("CODEX2API_API_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let oauth_bind =
+        std::env::var("CODEX2API_OAUTH_BIND").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let admin_bind =
         std::env::var("CODEX2API_ADMIN_BIND").unwrap_or_else(|_| "127.0.0.1:8081".into());
     let user_bind =
         std::env::var("CODEX2API_USER_BIND").unwrap_or_else(|_| "127.0.0.1:8082".into());
-    let metered_api_bind =
-        std::env::var("CODEX2API_METERED_API_BIND").unwrap_or_else(|_| "127.0.0.1:8083".into());
+    let api_bind = std::env::var("CODEX2API_API_BIND").unwrap_or_else(|_| "127.0.0.1:8083".into());
     let database_url = std::env::var("CODEX2API_DATABASE_URL")
         .map_err(|_| anyhow::anyhow!("CODEX2API_DATABASE_URL is required"))?;
 
@@ -32,17 +32,18 @@ async fn main() -> Result<()> {
     );
 
     let storage = Storage::open(&database_url).await?;
+    storage
+        .public_url_settings()
+        .await
+        .context("load public OAuth/API addresses")?;
     let registered = storage
         .sync_supported_models(&codex2api_upstream::supported_models())
         .await?;
     tracing::info!(registered, "synchronized supported model presets");
-    codex2api_accounts::SupplierAccountStore::open(storage.clone())
-        .align_user_agents()
-        .await?;
     storage.ensure_default_admin().await?;
     storage.recover_interrupted_usage().await?;
 
-    let api_origin = std::env::var("CODEX2API_PUBLIC_API_URL")
+    let oauth_origin = std::env::var("CODEX2API_PUBLIC_OAUTH_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
     let user_origin = std::env::var("CODEX2API_PUBLIC_USER_URL").unwrap_or_else(|_| {
         if cfg!(feature = "dev-frontend") {
@@ -53,28 +54,28 @@ async fn main() -> Result<()> {
     });
     let admin_origin = std::env::var("CODEX2API_PUBLIC_ADMIN_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-    let metered_api_origin = std::env::var("CODEX2API_PUBLIC_METERED_API_URL")
+    let api_origin = std::env::var("CODEX2API_PUBLIC_API_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8083".into());
-    let apps = codex2api::routers_with_metered_api_origin(
+    let apps = codex2api::routers(
         storage.clone(),
-        &api_origin,
+        &oauth_origin,
         &user_origin,
         &admin_origin,
-        &metered_api_origin,
+        &api_origin,
     )?;
-    let api_listener = tokio::net::TcpListener::bind(&api_bind)
+    let oauth_listener = tokio::net::TcpListener::bind(&oauth_bind)
         .await
-        .with_context(|| format!("bind AI API {api_bind}"))?;
+        .with_context(|| format!("bind OAuth clients {oauth_bind}"))?;
     let admin_listener = tokio::net::TcpListener::bind(&admin_bind)
         .await
         .with_context(|| format!("bind administration {admin_bind}"))?;
     let user_listener = tokio::net::TcpListener::bind(&user_bind)
         .await
         .with_context(|| format!("bind user website {user_bind}"))?;
-    let metered_api_listener = tokio::net::TcpListener::bind(&metered_api_bind)
+    let api_listener = tokio::net::TcpListener::bind(&api_bind)
         .await
-        .with_context(|| format!("bind metered API {metered_api_bind}"))?;
-    tracing::info!(%api_bind,%admin_bind,%user_bind,%metered_api_bind,"listening on independent surfaces");
+        .with_context(|| format!("bind standard AI API {api_bind}"))?;
+    tracing::info!(%oauth_bind,%admin_bind,%user_bind,%api_bind,"listening on independent surfaces");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let signal = tokio::spawn(async move {
         shutdown_signal().await;
@@ -82,11 +83,11 @@ async fn main() -> Result<()> {
     });
     let admin_shutdown = shutdown_rx.clone();
     let user_shutdown = shutdown_rx.clone();
-    let metered_api_shutdown = shutdown_rx.clone();
+    let api_shutdown = shutdown_rx.clone();
     let quota_monitor = apps.spawn_quota_monitor();
     let result = tokio::try_join!(
         async {
-            axum::serve(api_listener, apps.api)
+            axum::serve(oauth_listener, apps.oauth)
                 .with_graceful_shutdown(wait_shutdown(shutdown_rx))
                 .await
         },
@@ -101,8 +102,8 @@ async fn main() -> Result<()> {
                 .await
         },
         async {
-            axum::serve(metered_api_listener, apps.metered_api)
-                .with_graceful_shutdown(wait_shutdown(metered_api_shutdown))
+            axum::serve(api_listener, apps.api)
+                .with_graceful_shutdown(wait_shutdown(api_shutdown))
                 .await
         }
     );

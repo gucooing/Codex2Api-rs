@@ -1,7 +1,7 @@
 use thiserror::Error;
 
-use codex2api_accounts::AccountError;
-use codex2api_auth::AuthError;
+use codex2api_suppliers::AccountError;
+use codex2api_suppliers::AuthError;
 
 pub type Result<T> = std::result::Result<T, UpstreamError>;
 
@@ -46,7 +46,7 @@ pub enum UpstreamError {
     #[error(transparent)]
     Auth(#[from] AuthError),
     #[error(transparent)]
-    GrokAuth(#[from] codex2api_auth::grok::GrokAuthError),
+    GrokAuth(#[from] codex2api_suppliers::grok::GrokAuthError),
     #[error(transparent)]
     SupplierAccount(#[from] AccountError),
     #[error(transparent)]

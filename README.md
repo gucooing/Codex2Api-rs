@@ -2,11 +2,11 @@
 
 ## 项目定位
 
-单个 Rust 进程提供 OAuth 客户端、管理端、用户端和按量 API 四个独立监听入口；两个前端分别构建并嵌入同一个可执行文件。
+单个 Rust 进程提供 OAuth 客户端、AI API 网关、管理端和用户端四个独立监听入口；两个前端分别构建并嵌入同一个可执行文件。
 
-目标是把 Codex 订阅转换成标准、可供 Codex 客户端使用的 API。Proxy 对外提供该 API；对内管理多个上游 OpenAI/ChatGPT 账户，并把请求发到官方 Codex 服务。
+OAuth 模块专用于已配置本服务地址的 ccodex、cgrok 和 hook Desktop，提供各平台的登录、推理、账户、额度和客户端状态协议，统一服务根为 `/v1/chatgpt`、`/v1/grok`。API 模块专用于标准 AI API 网关，提供 `/v1/responses`、`/v1/chat/completions` 等接口。
 
-供应账户仅负责上游执行。虚拟账户是仅限 OAuth 登录的特殊用户，与普通用户共用身份存储，但管理入口、展示、订阅、钱包、订单与用户统计彼此隔离。虚拟账户仍由管理员在“虚拟账户”管理，不能登录用户中心。每位普通用户可以订阅多个平台，每个平台只有一个订阅及其独立执行身份，身份、设备和历史均归属该用户。创建消费账户时固定提供商，之后不可切换。当前支持 ChatGPT 和 Grok，各自使用独立协议、凭据与上游 transport。普通用户还可创建 API Key，通过独立的按量 API 端口调用文本和图像模型，费用按 API 组倍率从现有 USD 钱包结算，详见[按量 API](docs/API.md)。
+供应账户负责上游执行。普通用户可以持有同平台的多个独立订阅，OAuth 客户端身份、设备、额度和历史绑定明确选择的订阅。API Key 则按 API 组调用文本和图像模型，从用户 USD 钱包结算，不消耗订阅额度。ChatGPT 与 Grok 使用各自独立的协议、凭据和上游传输。接入见 [OAuth 客户端](docs/OAUTH.md)及 [AI API 网关](docs/API.md)。
 
 客户端单独维护在 [gucooing/codex 的 ccodex 分支](https://github.com/gucooing/codex/tree/ccodex)，本地可与本仓库并列放在 `../codex`。更新顺序为官方稳定版 → ccodex → 本仓库。官方源码只作为协议和行为参考，不引入官方 Rust crates；纯净参考快照位置为 `reference/codex`，精确来源记录在版本常量中。
 
@@ -15,7 +15,7 @@
 - 发布版: `0.162.1`（tag `rust-v0.162.1`，commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`）
 - 源码快照: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`（2026-10-09T17:39:05Z）
 - User-Agent 版本写死为 `0.162.1`，不用源码树的 `0.0.0`
-- 常量 crate: `crates/codex2api-version`
+- 协议常量: `crates/codex2api-common/src/version.rs`
 - 架构说明: `docs/ARCHITECTURE.md`
 
 支持范围与剩余能力见[架构说明](docs/ARCHITECTURE.md)及[客户端接口](docs/CCODEX_ENDPOINTS.md)。协议基线不表示文件、云插件等全部官方产品能力已实现。[临时启动测试](docs/LOCAL_TEST.md)使用独立测试库。
@@ -24,7 +24,7 @@
 
 数据仅使用 PostgreSQL，通过必填的 `CODEX2API_DATABASE_URL` 连接。管理端只有一个管理员，账户密码登录，首次启动默认 `admin` / `admin`。
 
-Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授权，支持本地套餐、钱包购买、模型计价和用量记录。`cgrok` 的默认服务根与 `ccodex` 同域，使用 `/api/oauth/grok`。模型可用性由管理端配置及套餐决定，自定义模型无需内置名单认证；官方数据仅作预设。接入方式及能力边界见 [Grok 渠道](docs/GROK.md)。
+Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授权，支持本地套餐、钱包购买、模型计价和用量记录。`cgrok` 服务根使用 OAuth origin 加 `/v1/grok`。模型可用性由管理端配置及套餐决定，自定义模型无需内置名单认证；官方数据仅作预设。接入方式及能力边界见 [Grok 渠道](docs/GROK.md)。
 
 ## Docker Compose 部署
 
@@ -46,16 +46,16 @@ PowerShell 中复制配置使用 `Copy-Item .env.example .env`。默认镜像标
 
 | 入口 | 地址 | Compose 配置 |
 | --- | --- | --- |
-| AI API | `http://127.0.0.1:8080` | `CODEX2API_API_HOST` / `CODEX2API_API_PORT` |
+| OAuth 客户端 | `http://127.0.0.1:8080` | `CODEX2API_OAUTH_HOST` / `CODEX2API_OAUTH_PORT` |
 | 管理端 | `http://127.0.0.1:8081/admin/` | `CODEX2API_ADMIN_HOST` / `CODEX2API_ADMIN_PORT` |
 | 用户端 | `http://127.0.0.1:8082/user/` | `CODEX2API_USER_HOST` / `CODEX2API_USER_PORT` |
-| 按量 API | `http://127.0.0.1:8083/v1` | `CODEX2API_METERED_API_HOST` / `CODEX2API_METERED_API_PORT` |
+| AI API 网关 | `http://127.0.0.1:8083/v1` | `CODEX2API_API_HOST` / `CODEX2API_API_PORT` |
 
-直接从其他机器访问时，将所需入口的 `*_HOST` 改为 `0.0.0.0`，并将对应的 `CODEX2API_PUBLIC_*_URL` 改为客户端实际访问的 origin。首次管理登录为 `admin` / `admin`，登录后修改密码。使用宿主机上的反向代理时，可保留回环绑定，并将四个公开地址设置为实际 HTTPS origin；这些变量不启用容器内 TLS。反向代理应把 `/admin` 及其子路径转发到 8081，把 `/user` 及其子路径转发到 8082，其余客户端协议路径转发到 8080，并支持 WebSocket 和不缓冲的 SSE。按量 API 使用独立公开 origin 转发到 8083。容器内监听端口固定为 8080、8081、8082、8083，只通过端口映射更改宿主机端口。
+直接从其他机器访问时，将所需入口的 `*_HOST` 改为 `0.0.0.0`，并将对应的 `CODEX2API_PUBLIC_*_URL` 改为客户端实际访问的 origin。首次管理登录为 `admin` / `admin`，登录后修改密码。使用宿主机上的反向代理时，可保留回环绑定，并将四个公开地址设置为实际 HTTPS origin；这些变量不启用容器内 TLS。反向代理应把 `/admin` 及其子路径转发到 8081，把 `/user` 及其子路径转发到 8082，`/v1/chatgpt`、`/v1/grok` 及其子路径原样转发到 8080，其余标准 `/v1/*` 转发到 8083，并支持 WebSocket 和不缓冲的 SSE。两类入口也可以使用独立域名。容器内监听端口固定为 8080、8081、8082、8083，只通过端口映射更改宿主机端口。
 
 管理端 **设置 → 访问地址** 中保存的地址优先于 `.env` 中的启动默认值；已有部署改域名时同步更新该设置，并重新发起客户端登录。
 
-账户、配置和账本保存在外部 PostgreSQL。首次启动在已创建的空数据库内原子初始化当前 schema 和预设；没有旧库迁移、历史兼容或文件数据库路径。实际数据由部署者处理。数据库备份使用 PostgreSQL 自身的备份工具。
+账户、配置和账本保存在外部 PostgreSQL。首次启动在已创建的空数据库内原子初始化当前 schema 和预设；已有数据库在启动时按版本自动执行嵌入的 SQL 迁移。迁移和版本记录在同一事务提交，失败时回滚并停止启动。应用只读取当前 schema 和配置契约。数据库备份使用 PostgreSQL 自身的备份工具。
 
 升级时执行：
 
@@ -100,11 +100,11 @@ Linux/macOS：
 bash scripts/build.sh --release
 ```
 
-脚本依次执行 `npm ci`、ESLint、Prettier 格式检查、TypeScript 检查、前端契约测试、Next.js 导出及 Rust 编译。`codex2api-web` 在构建时校验前端源文件 SHA-256 清单，把 `frontend/out` 和 `frontend-user/out` 编译进二进制；产物缺失或过期会明确拒绝编译。Cargo 不会隐式联网安装 Node 依赖。发布仍为单个可执行文件，运行不依赖 Node.js 或外部网页目录。
+脚本依次执行 `npm ci`、ESLint、Prettier 格式检查、TypeScript 检查、前端契约测试、Next.js 导出及 Rust 编译。`codex2api-admin` 和 `codex2api-user` 分别通过公共工具校验前端源文件 SHA-256 清单，把各自的 `frontend/out` 和 `frontend-user/out` 编译进二进制；产物缺失或过期会明确拒绝编译。Cargo 不会隐式联网安装 Node 依赖。发布仍为单个可执行文件，运行不依赖 Node.js 或外部网页目录。
 
-管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。AI API 在 `127.0.0.1:8080`，仅注册客户端协议接口。按量 API 在 `127.0.0.1:8083`，只接受 API Key。四端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
+管理端入口为 `http://127.0.0.1:8081/admin/`，接口为 `/admin/api/`。用户端入口为 `http://127.0.0.1:8082/user/`，接口为 `/user/api/`。OAuth 在 `127.0.0.1:8080`，仅注册客户端协议接口。AI API 网关在 `127.0.0.1:8083`，只接受 API Key。四端不注册其他端的页面或接口；静态页面不能代替登录验证，所有数据操作仍经过对应账户类型的 JWT 与 CSRF 边界。HTML 不缓存，Next.js 哈希资源长期缓存；未知 API 路径不会返回网页壳。
 
-反向代理部署后，在管理端 **设置 → 访问地址** 填写 OAuth API、按量 API、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/api/oauth/grok`、`/user`、`/admin` 等路径。浏览器与 OAuth 入口可由反向代理按路径区分；按量 API 建议使用独立域名，以免与 OAuth 的 `/v1` 兼容路径冲突。保存到 PostgreSQL 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
+反向代理部署后，在管理端 **设置 → 访问地址** 填写 OAuth 客户端、AI API 网关、用户端和管理端的实际基础地址，包含明确的 `http://` 或 `https://` 及可选端口，不带 `/v1/grok`、`/user`、`/admin` 等路径。四个入口可使用独立域名，也可由反向代理按平台前缀和网站路径区分。保存到 PostgreSQL 后立即生效，优先于启动环境变量；尚未保存时显示并沿用启动配置。OAuth 发现、令牌 issuer、授权跳转、设备码页面和客户端服务链接使用保存的地址，Cookie 安全属性使用对应网站地址的协议，不从反向代理的内部 HTTP 连接或转发请求头推断。修改后重新发起客户端登录，无需重新编译 cgrok。
 
 开发时可使用 `cargo run -p codex2api --features dev-frontend`，再分别运行两个前端的 `pnpm dev`，无需预先导出静态页面。该特性仅用于本地开发，release 构建不允许启用；完整配置见 [本地验证](docs/LOCAL_TEST.md#前后端开发启动)。
 
@@ -116,14 +116,14 @@ bash scripts/build.sh --release
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `CODEX2API_API_BIND` | `127.0.0.1:8080` | AI API 监听地址。 |
+| `CODEX2API_OAUTH_BIND` | `127.0.0.1:8080` | OAuth 客户端监听地址。 |
 | `CODEX2API_ADMIN_BIND` | `127.0.0.1:8081` | 管理端监听地址。 |
 | `CODEX2API_USER_BIND` | `127.0.0.1:8082` | 用户端监听地址。 |
-| `CODEX2API_METERED_API_BIND` | `127.0.0.1:8083` | 按量 API 监听地址。 |
-| `CODEX2API_PUBLIC_API_URL` | `http://127.0.0.1:8080` | 对外 AI API origin，用于 OAuth 资源发现和客户端事件地址。 |
+| `CODEX2API_API_BIND` | `127.0.0.1:8083` | AI API 网关监听地址。 |
+| `CODEX2API_PUBLIC_OAUTH_URL` | `http://127.0.0.1:8080` | 对外 OAuth origin，用于 OAuth 资源发现和客户端事件地址。 |
 | `CODEX2API_PUBLIC_USER_URL` | `http://127.0.0.1:8082` | 对外用户端 origin，用于浏览器授权跳转、同源校验和安全 Cookie。 |
 | `CODEX2API_PUBLIC_ADMIN_URL` | `http://127.0.0.1:8081` | 对外管理端 origin；HTTPS 时登录、退出和改密 Cookie 都带 `Secure`，不采信请求中的转发协议头。 |
-| `CODEX2API_PUBLIC_METERED_API_URL` | `http://127.0.0.1:8083` | 按量 API 公开 origin；用户 API Key 页显示此地址加 `/v1`。 |
+| `CODEX2API_PUBLIC_API_URL` | `http://127.0.0.1:8083` | AI API 网关公开 origin；用户 API Key 页显示此地址加 `/v1`。 |
 | `CODEX2API_DATABASE_URL` | 必填 | PostgreSQL URL，例如 `postgresql://codex2api:password@127.0.0.1:5432/codex2api`。 |
 | `CODEX2API_DB_MAX_CONNECTIONS` | `32` | 单进程 PostgreSQL 连接上限，范围 1–1024。 |
 | `CODEX2API_DB_MIN_CONNECTIONS` | `2` | 保持的最小连接数，不得超过上限。 |
@@ -151,7 +151,7 @@ CODEX2API_REDIS_URL=redis://127.0.0.1:6379/0 ./codex2api
 Linux 或 macOS 自定义监听地址和数据库路径：
 
 ```bash
-CODEX2API_API_BIND=0.0.0.0:8080 \
+CODEX2API_OAUTH_BIND=0.0.0.0:8080 \
 CODEX2API_REDIS_URL=redis://127.0.0.1:6379/0 \
 CODEX2API_DATABASE_URL=postgresql://codex2api:password@127.0.0.1:5432/codex2api \
 ./codex2api
@@ -160,7 +160,7 @@ CODEX2API_DATABASE_URL=postgresql://codex2api:password@127.0.0.1:5432/codex2api 
 Windows PowerShell：
 
 ```powershell
-$env:CODEX2API_API_BIND = "0.0.0.0:8080"
+$env:CODEX2API_OAUTH_BIND = "0.0.0.0:8080"
 $env:CODEX2API_REDIS_URL = "redis://127.0.0.1:6379/0"
 $env:CODEX2API_DATABASE_URL = "postgresql://codex2api:password@127.0.0.1:5432/codex2api"
 .\codex2api.exe
@@ -173,10 +173,10 @@ $env:CODEX2API_DATABASE_URL = "postgresql://codex2api:password@127.0.0.1:5432/co
 在 `~/.ccodex/config.toml` 顶层配置：
 
 ```toml
-BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
+BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/v1/chatgpt"
 ```
 
-不配置时使用同一默认值。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_API_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/api/oauth/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/api/oauth/chatgpt/codex/device`。授权入口跳转到 `CODEX2API_PUBLIC_USER_URL` 上的确认页；反向代理应分别路由三端，并在用户端保留 `/user` 路径。设备登录可以在用户中心或管理端撤销。
+客户端应明确配置服务根。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_OAUTH_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/v1/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/v1/chatgpt/codex/device`。授权入口跳转到 `CODEX2API_PUBLIC_USER_URL` 上的确认页；反向代理应分别路由四个入口，并在用户端保留 `/user` 路径。设备登录可以在用户中心或管理端撤销。
 
 管理员在 **用户管理** 创建用户，在 **订阅管理** 新增、续期、调整或终止用户订阅。列表以用户、套餐和独立订阅编号区分记录，“管理”打开设置、用量、重置卡、记录和登录设备。
 
@@ -186,17 +186,17 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 浏览器已有用户会话时显示身份，未登录时仅验证当前授权链接的用户名和密码。随后从当前平台的可用订阅中下拉选择目标并确认，才发放授权码。保留 PKCE S256、state 和本机回调地址；每份订阅独立持有 OAuth 设备与凭据。
 
-登录身份统一保存在 `accounts`，管理员和普通用户资料分开。`platform_accounts` 只保存用户拥有的订阅及客户端身份，不另存登录密码。同平台订阅通过独立 ID 绑定权限和数据；SQL 迁移清理旧独立虚拟用户与自动 Free 身份，保留普通用户的付费订阅、钱包、订单和用量历史。
+登录身份统一保存在 `accounts`，管理员和普通用户资料分开。`platform_accounts` 只保存用户拥有的订阅及客户端身份，不另存登录密码。同平台订阅通过独立 ID 绑定权限和数据。
 
 供应账户的身份、凭据、指纹、额度快照及执行路由只在管理端可见。用户接口不复用管理 DTO；用户 Cookie、AI access/refresh/ID token 均不能授权管理接口。改密和停用用户撤销其网页会话、平台设备及未确认授权；订阅过期后保留记录并停止执行权益。
 
-虚拟身份、登录设备和本系统用量独立于真实账户。订阅默认继承套餐号池，可在管理中配置独立标签号池，不再固定绑定供应账号。每次请求从同平台号池中选择已配置该模型且状态可用的供应账号，结合会话粘连、优先级、负载、等待数、错误率和首字延迟调度；可在设置中选择传统负载模式。粘连记录是会话到账号的映射，Grok 按模型隔离。删除或失效账号会退出候选池；无可用模型或账号时拒绝执行。号池变更保留身份、设备与历史用量。
+虚拟身份、登录设备和本系统用量独立于真实账户。订阅默认继承套餐号池，可在管理中配置独立标签号池。每次请求从同平台号池中选择已配置该模型且状态可用的供应账号，结合会话粘连、优先级、负载、等待数、错误率和首字延迟调度；可在设置中选择传统负载模式。粘连记录是会话到账号的映射，Grok 按模型隔离。删除或失效账号会退出候选池；无可用模型或账号时拒绝执行。号池变更保留身份、设备与历史用量。
 
 套餐设置 RPM 和并发限制，默认 40 和 10；订阅可覆盖或留空继承，0 表示无限。系统设置中没有这两项全局默认值。供应账户调度仍有独立并发上限、优先级和负载容量。HTTP 与 WebSocket 共用每份订阅的限制，内部换号不重复计算 RPM 或并发。
 
 运行态必须通过 `CODEX2API_REDIS_URL` 接入 Redis，存放会话粘连、响应归属、RPM 和并发租约。`CODEX2API_REDIS_PREFIX` 用于隔离共享 Redis 的不同部署；留空时按 PostgreSQL 主机、端口、库名及 schema 生成。独立部署可显式设置不同前缀。未配置 Redis 或初始连接失败时启动报错；运行中 Redis 不可用时拒绝新的调度请求，不使用本地替代。响应归属写入 Redis 后才交付完成响应。PostgreSQL 保留身份、配置和真实计费账本；业务快照统一使用本地热缓存、Redis 和合并回源，按业务域或对象失效。API 组/模型与订阅的限流统一使用 Redis；价格快照在 PostgreSQL 事务中校验版本，最近使用时间合并写入。
 
-语音通话功能已移除。原 Realtime、Live、通话创建、侧边 WebSocket、语音目录及语音选择 API 返回 `501 voice_calls_unavailable`，不会调用供应账号。客户端设置明确关闭语音入口，独立听写功能保留。
+语音通话不提供服务。Realtime、Live、通话创建、侧边 WebSocket、语音目录及语音选择 API 返回 `501 voice_calls_unavailable`，不会调用供应账号。客户端设置明确关闭语音入口，独立听写功能保留。
 
 订阅详情顶部提供 **账户设置、用量统计、重置卡、记录查询、登录设备** 页签。配置使用输入框、开关、下拉框和可增删列表，保存校验结构与版本；用量以指标、额度进度和每日图表展示，资源与日志使用表格。网页和客户端使用同一份 PostgreSQL 数据。实现范围与验证边界见[订阅客户端数据与管理](docs/ARCHITECTURE.md#subscription-client-data-and-management)。
 
@@ -204,41 +204,41 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 **订阅额度独立**：使用 7 天或 30 天外层与可选 5 小时内层两个美元费用窗口，各订阅额度由其套餐决定，无订阅或订阅到期后不提供兜底权益。模型价格在请求开始时快照，按实际普通输入、缓存输入、缓存写入与输出结算，推理 Token 不重复收费。修改价格不重算历史；未知价格或用量明确标注。客户端响应、HTTP 头、SSE 与 WebSocket 读取同一 PostgreSQL 账本。未完成的并发请求尚未结算，可能造成短暂超额。
 
-本系统真实用量单独记录，每条记录保留请求时的实际供应账户和来源名称，号池变化不会重写历史。供应账户详情提供“可用模型”和“调度”。同步上游模型只更新当前账号，手动添加项来自同平台计费配置（可未启用或未定价）；两者都不改变计费配置，空模型列表不接受请求。Grok 独立的“官方模型”功能已移除。
+本系统真实用量单独记录，每条记录保留请求时的实际供应账户和来源名称，号池变化不会重写历史。供应账户详情提供“可用模型”和“调度”。同步上游模型只更新当前账号，手动添加项来自同平台计费配置（可未启用或未定价）；两者都不改变计费配置，空模型列表不接受请求。
 
-客户端个人资料 `GET /api/oauth/chatgpt/backend-api/wham/profiles/me` 返回虚拟账号显示名称、用户名，以及按虚拟账号累计的本系统 Token 和每日用量统计。变更号池和重启不会丢失统计，不继承真实账户的头像或个人资料。未记录的轮次持续时间保持为空。
+客户端个人资料 `GET /v1/chatgpt/backend-api/wham/profiles/me` 返回虚拟账号显示名称、用户名，以及按虚拟账号累计的本系统 Token 和每日用量统计。变更号池和重启不会丢失统计，不继承真实账户的头像或个人资料。未记录的轮次持续时间保持为空。
 
-客户端需支持自定义服务地址及浏览器授权码登录。统一基础地址为 `http://127.0.0.1:8080/api/oauth/chatgpt`，接口如下：
+客户端需支持自定义服务地址及浏览器授权码登录。统一基础地址为 `http://127.0.0.1:8080/v1/chatgpt`，接口如下：
 
 | 功能 | 路径 |
 | --- | --- |
-| 浏览器授权入口 | `GET /api/oauth/chatgpt/oauth/authorize`，跳转至用户端 `/user/authorize/` |
-| 授权码兑换／令牌刷新 | `POST /api/oauth/chatgpt/oauth/token` |
-| 撤销代理令牌 | `POST /api/oauth/chatgpt/oauth/revoke` |
-| 申请设备码／轮询授权结果 | `POST /api/oauth/chatgpt/api/accounts/deviceauth/usercode`、`POST /api/oauth/chatgpt/api/accounts/deviceauth/token` |
-| 设备码验证页 | `GET /api/oauth/chatgpt/codex/device` |
-| Responses | `POST /api/oauth/chatgpt/backend-api/codex/responses` |
-| 上下文压缩 | `POST /api/oauth/chatgpt/backend-api/codex/responses/compact` |
-| 其他 Responses 子接口 | `POST /api/oauth/chatgpt/backend-api/codex/responses/{子路径}`（校验路径片段） |
-| Responses WebSocket | `ws://服务地址/api/oauth/chatgpt/backend-api/codex/responses` |
-| 模型列表 | `GET /api/oauth/chatgpt/backend-api/codex/models` |
-| 额度查询 | `GET /api/oauth/chatgpt/backend-api/wham/usage` |
-| 账户查询 | `GET /api/oauth/chatgpt/backend-api/wham/accounts/check` |
-| 虚拟账户信息 | `GET /api/oauth/chatgpt/backend-api/accounts/check/v4-2023-04-27` |
-| 订阅到期时间 | `GET /api/oauth/chatgpt/backend-api/subscriptions?account_id=虚拟账号ID` |
-| 关闭训练数据共享 | `PATCH /api/oauth/chatgpt/backend-api/settings/account_user_setting?feature=training_allowed&value=false` |
-| 输入 Token 计数 | `POST /api/oauth/chatgpt/v1/responses/input_tokens` |
-| 应用批量查询 | `POST /api/oauth/chatgpt/backend-api/ps/apps/batch` |
-| 客户端统计事件 | `POST /api/oauth/chatgpt/backend-api/codex/analytics-events/events`（按虚拟账号保存允许的活动元数据，重试去重，不计推理 Token） |
-| MCP | `GET /api/oauth/chatgpt/backend-api/ps/mcp`、`POST /api/oauth/chatgpt/backend-api/ps/mcp` |
-| MCP 资源发现（无需登录） | `GET /api/oauth/chatgpt/backend-api/ps/mcp/.well-known/oauth-protected-resource` |
-| 客户端追踪事件 | `POST /api/oauth/chatgpt/backend-api/o11y/v1/traces`（记录本地请求状态，不保存正文、不转发供应账户） |
-| 浏览器设置 | `GET/PATCH /api/oauth/chatgpt/backend-api/wham/browser/settings`（按虚拟账号持久化，PATCH 校验版本） |
-| 引导状态 | `GET /api/oauth/chatgpt/backend-api/wham/onboarding/context`、`POST /api/oauth/chatgpt/backend-api/wham/onboarding/desktop/complete` |
-| 精选插件 | `GET /api/oauth/chatgpt/backend-api/plugins/featured` |
-| 插件目录 | `GET /api/oauth/chatgpt/backend-api/ps/plugins/list` |
-| 已安装插件 | `GET /api/oauth/chatgpt/backend-api/ps/plugins/installed` |
-| Codex 推荐插件 | `GET /api/oauth/chatgpt/backend-api/ps/plugins/suggested/codex` |
+| 浏览器授权入口 | `GET /v1/chatgpt/oauth/authorize`，跳转至用户端 `/user/authorize/` |
+| 授权码兑换／令牌刷新 | `POST /v1/chatgpt/oauth/token` |
+| 撤销代理令牌 | `POST /v1/chatgpt/oauth/revoke` |
+| 申请设备码／轮询授权结果 | `POST /v1/chatgpt/api/accounts/deviceauth/usercode`、`POST /v1/chatgpt/api/accounts/deviceauth/token` |
+| 设备码验证页 | `GET /v1/chatgpt/codex/device` |
+| Responses | `POST /v1/chatgpt/backend-api/codex/responses` |
+| 上下文压缩 | `POST /v1/chatgpt/backend-api/codex/responses/compact` |
+| 其他 Responses 子接口 | `POST /v1/chatgpt/backend-api/codex/responses/{子路径}`（校验路径片段） |
+| Responses WebSocket | `ws://服务地址/v1/chatgpt/backend-api/codex/responses` |
+| 模型列表 | `GET /v1/chatgpt/backend-api/codex/models` |
+| 额度查询 | `GET /v1/chatgpt/backend-api/wham/usage` |
+| 账户查询 | `GET /v1/chatgpt/backend-api/wham/accounts/check` |
+| 虚拟账户信息 | `GET /v1/chatgpt/backend-api/accounts/check/v4-2023-04-27` |
+| 订阅到期时间 | `GET /v1/chatgpt/backend-api/subscriptions?account_id=虚拟账号ID` |
+| 关闭训练数据共享 | `PATCH /v1/chatgpt/backend-api/settings/account_user_setting?feature=training_allowed&value=false` |
+| 输入 Token 计数 | `POST /v1/chatgpt/v1/responses/input_tokens` |
+| 应用批量查询 | `POST /v1/chatgpt/backend-api/ps/apps/batch` |
+| 客户端统计事件 | `POST /v1/chatgpt/backend-api/codex/analytics-events/events`（按虚拟账号保存允许的活动元数据，重试去重，不计推理 Token） |
+| MCP | `GET /v1/chatgpt/backend-api/ps/mcp`、`POST /v1/chatgpt/backend-api/ps/mcp` |
+| MCP 资源发现（无需登录） | `GET /v1/chatgpt/backend-api/ps/mcp/.well-known/oauth-protected-resource` |
+| 客户端追踪事件 | `POST /v1/chatgpt/backend-api/o11y/v1/traces`（记录本地请求状态，不保存正文、不转发供应账户） |
+| 浏览器设置 | `GET/PATCH /v1/chatgpt/backend-api/wham/browser/settings`（按虚拟账号持久化，PATCH 校验版本） |
+| 引导状态 | `GET /v1/chatgpt/backend-api/wham/onboarding/context`、`POST /v1/chatgpt/backend-api/wham/onboarding/desktop/complete` |
+| 精选插件 | `GET /v1/chatgpt/backend-api/plugins/featured` |
+| 插件目录 | `GET /v1/chatgpt/backend-api/ps/plugins/list` |
+| 已安装插件 | `GET /v1/chatgpt/backend-api/ps/plugins/installed` |
+| Codex 推荐插件 | `GET /v1/chatgpt/backend-api/ps/plugins/suggested/codex` |
 
 现有 Codex 和 WHAM 路由均可通过此前缀访问，包括图片、搜索和账户资料。HTTP/WS 由应用提供，证书和外部 HTTPS/WSS 由反向代理处理；反向代理需保留请求路径并支持 WebSocket Upgrade。
 
@@ -246,9 +246,9 @@ BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/api/oauth/chatgpt"
 
 云任务只列出本账号实际创建并记录的任务；详情和兄弟轮次请求校验归属。任务与已创建会话保留原供应来源，只有原账号仍属于当前号池且可用时才能继续执行；不能用新账号读取旧供应资源。ChatGPT conduit 凭据在服务端保存，以有期限且绑定虚拟账号及执行来源的本地凭据替换。只有上游实际返回会话 ID 后才建立会话归属。
 
-`celsius/ws/user` 返回本地事件连接地址，通知更新从持久化事件读取。连接凭据仅用于事件通道，设备下线后失效；没有通知时保持连接，不返回假的上游 URL。反向代理部署须设置 `CODEX2API_PUBLIC_API_URL` 为外部 HTTPS origin，以生成正确的 WSS 地址。
+`celsius/ws/user` 返回本地事件连接地址，通知更新从持久化事件读取。连接凭据仅用于事件通道，设备下线后失效；没有通知时保持连接，不返回假的上游 URL。反向代理部署须设置 `CODEX2API_PUBLIC_OAUTH_URL` 为外部 HTTPS origin，以生成正确的 WSS 地址。
 
-桌面用量页支持 `GET /api/oauth/chatgpt/backend-api/wham/usage/daily-token-usage-breakdown`：按虚拟账号、UTC 日期及实际模型汇总本系统已记录的输入和输出 Token（缓存输入已包含在输入中，不重复累加）。支持 `start_date`、`end_date`（包含当天）及 `group_by=day`，默认最近七天；没有上报 Token 的请求不伪造成已知用量。数据跨变更号池保留。
+桌面用量页支持 `GET /v1/chatgpt/backend-api/wham/usage/daily-token-usage-breakdown`：按虚拟账号、UTC 日期及实际模型汇总本系统已记录的输入和输出 Token（缓存输入已包含在输入中，不重复累加）。支持 `start_date`、`end_date`（包含当天）及 `group_by=day`，默认最近七天；没有上报 Token 的请求不伪造成已知用量。数据跨变更号池保留。
 
 轮次、插件和技能统计读取本账号实际提交的 `codex_turn_event`、`codex_plugin_used`、`skill_invocation`，按服务端接收日期汇总；轮次按 thread/turn 去重，客户端未提交的活动无法还原。这些是客户端活动统计，不替代从上游完成事件读取的 Token 账本。金额消费、积分购买和官方历史周期尚无本地业务数据源，不能用 Token 冒充；月金额上限返回客户端支持的不可用状态，轮次金额估算明确返回不可用，历史覆盖不会标为完整。
 
@@ -256,10 +256,10 @@ Sub2API 的地址字段可按以下示例配置（客户端与代理在同一台
 
 ```json
 {
-  "responses_url": "http://127.0.0.1:8080/api/oauth/chatgpt/backend-api/codex/responses",
-  "chatgpt_base_url": "http://127.0.0.1:8080/api/oauth/chatgpt",
-  "auth_base_url": "http://127.0.0.1:8080/api/oauth/chatgpt",
-  "platform_base_url": "http://127.0.0.1:8080/api/oauth/chatgpt"
+  "responses_url": "http://127.0.0.1:8080/v1/chatgpt/backend-api/codex/responses",
+  "chatgpt_base_url": "http://127.0.0.1:8080/v1/chatgpt",
+  "auth_base_url": "http://127.0.0.1:8080/v1/chatgpt",
+  "platform_base_url": "http://127.0.0.1:8080/v1/chatgpt"
 }
 ```
 
@@ -271,7 +271,7 @@ Responses 子路径和同级模型、图片、搜索、实时接口按该客户�
 
 每次授权创建独立设备会话。后台显示客户端／UA、安装标识、首次登录、最近续期和最近使用，支持下线单个设备；下线使它的 Refresh Token 和全部 Access Token 失效。安装标识和 UA 是客户端上报信息，不能可靠识别物理设备，也不表示当前在线。
 
-客户端仅接受虚拟消费账户的 OAuth Access Token，已移除 API Key 客户端模式。授权 scope 随设备保存，刷新仅可保持或缩小；客户端令牌不能管理账户、套餐、价格、路由或读取供应凭据。管理端和用户端均使用 JWT，网页通过各自 HttpOnly Cookie 携带；接口也可使用对应用途的 Bearer JWT，写入仍要求 X-CSRF-Token。管理员与用户使用两套独立 RSA 密钥，保存在 PostgreSQL 的 `jwt_signing_keys`。验签只允许服务端固定的 RS256，拒绝 none、空算法、其他算法、未知密钥和旧随机会话凭据。签名之外还校验 account_type、token_use、aud、iss、有效期及服务端会话/设备撤销记录；错误 Bearer 不会回退使用 Cookie。Codex OAuth 的签名密钥、设备授权和令牌保持原有契约。
+客户端仅接受虚拟消费账户的 OAuth Access Token。授权 scope 随设备保存，刷新仅可保持或缩小；客户端令牌不能管理账户、套餐、价格、路由或读取供应凭据。管理端和用户端均使用 JWT，网页通过各自 HttpOnly Cookie 携带；接口也可使用对应用途的 Bearer JWT，写入仍要求 X-CSRF-Token。管理员与用户使用两套独立 RSA 密钥，保存在 PostgreSQL 的 `jwt_signing_keys`。验签只允许服务端固定的 RS256，拒绝 none、空算法、其他算法、未知密钥和非 JWT 凭据。签名之外还校验 account_type、token_use、aud、iss、有效期及服务端会话/设备撤销记录；错误 Bearer 不会回退使用 Cookie。Codex OAuth 的签名密钥、设备授权和令牌保持原有契约。
 
 未实现的路径和 HTTP 方法返回 `501 / endpoint_not_implemented`，在 **系统设置 → 端点诊断** 中记录方法、路径、次数、首次和最近时间，不保存查询参数、请求正文、密码或令牌。诊断只覆盖到达代理此前缀的请求，无法捕获应用绕过代理的直连流量。
 

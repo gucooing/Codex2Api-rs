@@ -5,7 +5,6 @@ use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, FromRow, Serialize, Deserialize)]
 pub struct ModelConfig {
-    #[serde(default = "codex2api_core::default_provider")]
     pub provider_id: String,
     pub model: String,
     pub kind: String,
@@ -16,7 +15,6 @@ pub struct ModelConfig {
 
 #[derive(Clone, Debug, FromRow, Serialize, Deserialize)]
 pub struct ImagePrice {
-    #[serde(default = "codex2api_core::default_provider")]
     pub provider_id: String,
     pub model: String,
     pub resolution: String,

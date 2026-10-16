@@ -4,9 +4,9 @@ Grok 与 ChatGPT 是独立渠道。客户端参考 [gucooing/grok-build](https:/
 
 ## 目录与账户隔离
 
-各 crate 的 `src/providers/grok/` 保存 Grok 身份、认证、请求、响应和管理实现；`src/providers/chatgpt/` 保存 ChatGPT 实现。入口模块仅负责渠道分发。数据库、供应池、请求账本、模型计价、用户钱包和订阅事务是公共基础能力。`scripts/check-provider-boundaries.py` 检查跨渠道导入。
+各 crate 的 `src/providers/grok/` 保存 Grok 身份、认证、请求、响应和管理实现；`src/providers/chatgpt/` 保存 ChatGPT 实现。入口模块仅负责渠道分发。数据库、供应池、请求账本、模型计价、用户钱包和订阅事务是公共基础能力。`scripts/check-module-boundaries.py` 检查跨渠道导入。
 
-Grok 供应凭据使用独立的 `GrokCredentials`，不会通过 Codex `auth.json` 解析。每个供应账户在 PostgreSQL 内保存独立身份、安装 UUID、冻结的设备资料、凭据版本和代理；HTTP 连接与刷新锁按账户隔离。供应表中的 `chatgpt_account_id` / `chatgpt_user_id` 是兼容既有数据库的列名，Grok 分别保存带个人／团队前缀的主体及官方用户编号，不跨提供商合并。
+Grok 供应凭据使用独立的 `GrokCredentials`，不会通过 Codex `auth.json` 解析。每个供应账户在 PostgreSQL 内保存独立身份、安装 UUID、冻结的设备资料、凭据版本和代理；HTTP 连接与刷新锁按账户隔离。Grok 供应身份由带个人／团队前缀的主体及官方用户编号标识，不跨提供商合并。
 
 ## 供应授权和资料
 
@@ -20,19 +20,19 @@ RT 创建一行一个，每批最多 50 条；页面依次提交并显示每行�
 
 ## 模型和计价
 
-管理端计费模型目录决定客户端发布和套餐授权，供应账户的“可用模型”决定该账号能否承接请求。调度只选择同平台、同号池且已添加请求模型的供应账号；列表为空不接受生成。独立的 Grok“官方模型”页面和接口已移除，统一使用供应账户详情的“可用模型”。同步调用该账号的 `/v1/models`，只更新该账号的上游模型及安全描述；手动模型只能从已存在的计费配置选择，允许未启用或未定价。同步、添加和移除供应模型都不修改计费模型或价格；同步保留手动添加项。客户端仍能使用管理员添加的自定义模型，没有内置模型白名单。
+管理端计费模型目录决定客户端发布和套餐授权，供应账户的“可用模型”决定该账号能否承接请求。调度只选择同平台、同号池且已添加请求模型的供应账号；列表为空不接受生成。供应账户详情的“可用模型”管理该账户的模型。同步调用该账号的 `/v1/models`，只更新该账号的上游模型及安全描述；手动模型只能从已存在的计费配置选择，允许未启用或未定价。同步、添加和移除供应模型都不修改计费模型或价格；同步保留手动添加项。客户端仍能使用管理员添加的自定义模型，没有内置模型白名单。
 
 “模型配置”的价格预设来自 [xAI 官方计价](https://docs.x.ai/developers/pricing)。已核实的文本预设覆盖 Grok 4.7、4.6、4.5、4.3、grok-build-0.1 以及列出的 4.20 模型；200,000 输入 Token 起使用官方长上下文价格。预设不推断未公布档位、不改已有人工价格，管理员可以添加任意有效模型名并设置价格。输入、缓存读取、缓存写入、输出按请求开始时的价格快照结算，推理不重复计费。未知费用保持未知，有额度限制时不能把缺价当免费。
 
 Grok 套餐独立选择 Grok 订阅档位、模型范围、售价、供应池及 7 天／30 天外层和可选 5 小时内层额度，RPM 与并发限制默认分别为 40 和 10。用户默认无订阅，同一用户可持有多个 Grok 订阅，OAuth 确认时选择具体订阅。管理员发放与钱包购买新增独立订阅；续费、升级、用量和设备撤销按订阅 ID 管理。到期保留记录并停止执行权益，不创建或回退到 Free，不能跨平台绑定供应或模型。
 
-本地套餐的订阅选项为 X Basic、X Premium、X Premium+、SuperGrok Lite、SuperGrok、SuperGrok Plus、SuperGrok Heavy；供应账户仍可显示官方返回的 Free 档位。客户端 `/settings` 使用官方展示名，不使用管理员自定义的套餐名称；`/user.subscriptionTier` 和访问令牌的数字 `tier` 分别遵循客户端枚举。例如 `GrokPro` 对应 SuperGrok，`SuperGrokPro` 对应 SuperGrok Heavy。普通用户的订单历史保留；旧 `premium`、`premium_plus`、`supergrok_pro` 值按对应档位读取，原有 `team` 不冒充任何官方档位，也不再作为新增选项。
+本地套餐的订阅选项为 X Basic、X Premium、X Premium+、SuperGrok Lite、SuperGrok、SuperGrok Plus、SuperGrok Heavy；供应账户仍可显示官方返回的 Free 档位。客户端 `/settings` 使用官方展示名，不使用管理员自定义的套餐名称；`/user.subscriptionTier` 和访问令牌的数字 `tier` 分别遵循客户端枚举。例如 `GrokPro` 对应 SuperGrok，`SuperGrokPro` 对应 SuperGrok Heavy。本地配置只接受上述档位的规范 ID。
 
 ## cgrok 接入
 
-默认服务根与 ccodex 同域，为 `https://oauth-ai.alsl.xyz/api/oauth/grok`。服务同时保留 `/grok` 别名；发现文档和 JWT issuer 跟随实际使用的入口。
+服务根为 OAuth origin 加 `/v1/grok`，例如 `https://oauth-ai.alsl.xyz/v1/grok`。发现文档和 JWT issuer 使用这一根地址。cgrok 应显式配置服务根。
 
-服务端在管理端“设置 → 访问地址”保存 API 和用户端的完整基础地址；协议和端口均使用管理员填写的值。API 基础地址用于发现文档中的所有端点及令牌 issuer，用户端基础地址用于浏览器授权和设备码确认页。保存立即生效并优先于启动配置，不受反向代理内部监听地址或转发头影响。客户端从发现文档读取登录地址，因此修正服务端地址后重新运行 `cgrok login` 即可，无需重新编译客户端。
+服务端在管理端“设置 → 访问地址”保存 OAuth 客户端和用户端的完整基础地址；协议和端口均使用管理员填写的值。OAuth 基础地址用于发现文档中的所有端点及令牌 issuer，用户端基础地址用于浏览器授权和设备码确认页。保存立即生效并优先于启动配置，不受反向代理内部监听地址或转发头影响。客户端从发现文档读取登录地址，因此修正服务端地址后重新运行 `cgrok login` 即可，已配置新服务根的客户端无需重新编译。
 
 | 路径（相对于服务根） | 行为 |
 | --- | --- |
@@ -43,7 +43,7 @@ Grok 套餐独立选择 Grok 订阅档位、模型范围、售价、供应池及
 | `/v1/responses`、`/v1/chat/completions`、`/v1/messages` | Grok 原生推理、流式工具事件及实际用量记录 |
 | `/v1/user`、`/v1/settings`、`/v1/billing` | 本地虚拟身份、套餐服务策略和本地额度，不读取供应隐私 |
 
-通用 `/v1/responses`、`/v1/models` 根据平台凭据分发；Grok 凭据不能访问 ChatGPT 专属路由。Grok Build 配置使用 `endpoints.cli_chat_proxy_base_url` 指向服务根后的 `/v1`，OAuth issuer 指向服务根本身。不要用 `models_base_url` 代替，因为客户端会把它解释为 API-key 认证的独立模型服务。
+平台由路径明确选择，Grok 客户端使用 `/v1/grok/v1/responses`、`/v1/grok/v1/models`；Grok 凭据不能访问 ChatGPT 专属路由。Grok Build 配置使用 `endpoints.cli_chat_proxy_base_url` 指向服务根后的 `/v1`，OAuth issuer 指向服务根本身。不要用 `models_base_url` 代替，因为客户端会把它解释为 API-key 认证的独立模型服务。
 
 普通 429 保留结构化错误及重试信息，不改变供应状态；明确授权失效和额度耗尽才切换同平台号池。开始输出后不重放请求。客户端停止后仍收集已报告用量并结算一次。Grok 原生请求携带完整会话输入；供应端保存的 `previous_response_id` 不能跨虚拟账户读取。
 

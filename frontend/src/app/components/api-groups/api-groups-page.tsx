@@ -31,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiLimit, apiPlatform } from "@/lib/metered-api";
+import { apiLimit, apiPlatform } from "@/lib/api-access";
 import {
   ChevronLeft,
   ChevronRight,

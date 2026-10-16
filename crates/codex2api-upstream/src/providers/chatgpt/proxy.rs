@@ -92,8 +92,8 @@ pub(crate) async fn connect(
 mod tests {
     use super::*;
     use crate::{UpstreamClient, proxy_fixture as fixture};
-    use codex2api_accounts::{AccountIdentity, HostRuntime};
-    use codex2api_auth::transport::AccountHttpClients;
+    use codex2api_suppliers::transport::AccountHttpClients;
+    use codex2api_suppliers::{AccountIdentity, HostRuntime};
     use futures::{SinkExt, StreamExt};
     use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -133,7 +133,7 @@ mod tests {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "proxy::tests::websockets_use_all_four_proxies_with_tls_dns_auth_and_direct_isolation", "--nocapture"])
                 .env("CODEX2API_WS_PROXY_CHILD", "1")
-                .env("CODEX_CA_CERTIFICATE", concat!(env!("CARGO_MANIFEST_DIR"), "/../codex2api-auth/tests/fixtures/proxy-ca.pem"))
+                .env("CODEX_CA_CERTIFICATE", concat!(env!("CARGO_MANIFEST_DIR"), "/../codex2api-suppliers/tests/fixtures/proxy-ca.pem"))
                 .env("HTTP_PROXY", "http://127.0.0.1:9").env("HTTPS_PROXY", "http://127.0.0.1:9")
                 .env("ALL_PROXY", "http://127.0.0.1:9").env("NO_PROXY", "")
                 .output().unwrap();

@@ -3,7 +3,6 @@ import type { BusinessField, Json, Model, ModelRef, OAuth, Plan } from "./api";
 export const clientOwnedKeys = new Set([
   "cloud_preferences",
   "profile_page",
-  "desktop_preferences",
   "payment_methods",
   "referral_tracking",
   "family",

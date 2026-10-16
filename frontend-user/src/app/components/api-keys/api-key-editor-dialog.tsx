@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { apiLimit, apiPlatform } from "@/lib/metered-api";
+import { apiLimit, apiPlatform } from "@/lib/api-access";
 
 export function ApiKeyEditorDialog({ state }: { state: ReturnType<typeof useApiKeysPage> }) {
   const {

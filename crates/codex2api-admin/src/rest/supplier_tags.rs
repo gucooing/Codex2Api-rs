@@ -54,7 +54,7 @@ pub async fn update(
 }
 
 async fn save(s: AdminState, id: String, f: TagInput) -> ApiResult {
-    if !codex2api_core::supported_provider(&f.provider_id) {
+    if !codex2api_common::supported_provider(&f.provider_id) {
         return Err(ApiError::bad("不支持的提供商"));
     }
     s.storage

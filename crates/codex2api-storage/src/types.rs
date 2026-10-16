@@ -82,7 +82,6 @@ pub struct SupplierAccount {
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
-    pub home_dir: String,
     /// Official Codex CLI application-layer HTTP fingerprint, frozen per account.
     pub http_fingerprint_json: String,
     pub created_at: String,
@@ -107,13 +106,11 @@ pub struct NewSupplierAccount {
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
-    pub home_dir: String,
     pub http_fingerprint_json: String,
 }
 
 impl NewSupplierAccount {
     // The frozen supplier identity is persisted as these independent fields.
-    #[allow(clippy::too_many_arguments)]
     pub fn pending_identity(
         installation_id: impl Into<String>,
         originator: impl Into<String>,
@@ -121,11 +118,10 @@ impl NewSupplierAccount {
         os_type: impl Into<String>,
         os_version: impl Into<String>,
         arch: impl Into<String>,
-        home_dir: impl Into<String>,
         http_fingerprint_json: impl Into<String>,
     ) -> Self {
         Self {
-            provider_id: codex2api_core::CHATGPT.into(),
+            provider_id: codex2api_common::CHATGPT.into(),
             id: None,
             status: SupplierStatus::Pending,
             display_name: None,
@@ -139,7 +135,6 @@ impl NewSupplierAccount {
             os_type: os_type.into(),
             os_version: os_version.into(),
             arch: arch.into(),
-            home_dir: home_dir.into(),
             http_fingerprint_json: http_fingerprint_json.into(),
         }
     }
@@ -159,7 +154,6 @@ pub struct SupplierAccountUpdate {
     pub os_type: Option<String>,
     pub os_version: Option<String>,
     pub arch: Option<String>,
-    pub home_dir: Option<String>,
     pub http_fingerprint_json: Option<String>,
 }
 

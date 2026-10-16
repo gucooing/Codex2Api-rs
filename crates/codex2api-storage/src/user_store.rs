@@ -18,13 +18,12 @@ impl Storage {
     }
 }
 impl UserStore {
-    pub async fn public_metered_api_url(&self, fallback: &str) -> Result<String> {
+    pub async fn public_api_url(&self, fallback: &str) -> Result<String> {
         Ok(self
             .storage
             .public_url_settings()
             .await?
-            .map(|settings| settings.metered_api_url)
-            .filter(|value| !value.is_empty())
+            .map(|settings| settings.api_url)
             .unwrap_or_else(|| fallback.to_owned()))
     }
 

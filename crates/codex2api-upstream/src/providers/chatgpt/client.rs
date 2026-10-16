@@ -6,15 +6,15 @@ use http::header::HeaderMap;
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use codex2api_accounts::{AccountIdentity, SupplierContext};
-use codex2api_auth::AuthService;
-use codex2api_version::{CHATGPT_CODEX_BASE_URL, RESPONSES_PATH};
+use codex2api_common::version::{CHATGPT_CODEX_BASE_URL, RESPONSES_PATH};
+use codex2api_suppliers::AuthService;
+use codex2api_suppliers::{AccountIdentity, SupplierContext};
 
 use crate::error::{Result, UpstreamError};
 use crate::headers::{RequestHeaders, default_headers};
 use crate::request::{PreparedRequest, prepare_responses};
 use crate::stream::{SseForwardStream, spawn_sse_forward};
-use codex2api_auth::transport::{AccountCookieStore, AccountHttpClients};
+use codex2api_suppliers::transport::{AccountCookieStore, AccountHttpClients};
 
 /// Default idle timeout while waiting for the next SSE event (official-style).
 pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -24,7 +24,7 @@ struct TokenState {
     access_token: String,
     chatgpt_account_id: Option<String>,
     revision: i64,
-    credentials: Option<Arc<codex2api_auth::tokens::ChatgptCredentials>>,
+    credentials: Option<Arc<codex2api_suppliers::tokens::ChatgptCredentials>>,
     headers: Option<HeaderMap>,
 }
 
@@ -155,7 +155,7 @@ impl UpstreamClient {
     #[cfg(test)]
     pub(crate) fn with_direct_test_http(mut self) -> Self {
         // Loopback fixtures must not depend on Windows/PAC/environment proxy settings.
-        self.http = codex2api_auth::transport::http_builder()
+        self.http = codex2api_suppliers::transport::http_builder()
             .unwrap()
             .no_proxy()
             .cookie_provider(self.cookies.clone())
@@ -397,7 +397,7 @@ impl UpstreamClient {
             Ok(credentials) => credentials,
             Err(error) => {
                 if error.permanent_refresh_failure()
-                    && !matches!(error, codex2api_auth::AuthError::MissingRefreshToken)
+                    && !matches!(error, codex2api_suppliers::AuthError::MissingRefreshToken)
                 {
                     self.reject_auth(self.request_auth()?.revision).await;
                     return Err(UpstreamError::Refresh(error));
@@ -442,7 +442,7 @@ impl UpstreamClient {
 
     pub(crate) fn apply_auth(
         &self,
-        credentials: Arc<codex2api_auth::tokens::ChatgptCredentials>,
+        credentials: Arc<codex2api_suppliers::tokens::ChatgptCredentials>,
     ) -> Result<()> {
         {
             let state = self.tokens.read().unwrap_or_else(|e| e.into_inner());
@@ -504,7 +504,7 @@ mod tests {
     use axum::body::Body;
     use axum::response::Response;
     use axum::routing::post;
-    use codex2api_accounts::HostRuntime;
+    use codex2api_suppliers::HostRuntime;
     use http::HeaderValue;
 
     #[tokio::test]
@@ -574,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_failures_never_disable_credentials_and_only_401_is_persisted() {
-        use codex2api_accounts::{AuthDotJson, SupplierAccountStore, TokenData};
+        use codex2api_suppliers::{AuthDotJson, SupplierAccountStore, TokenData};
         let directory = codex2api_storage::test_support::tempdir().unwrap();
         let path = directory.path().join("fixture");
         let storage = codex2api_storage::test_support::open(&path).await.unwrap();

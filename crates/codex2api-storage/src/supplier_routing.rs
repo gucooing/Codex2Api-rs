@@ -169,25 +169,4 @@ impl Storage {
         }
         Ok(changed)
     }
-
-    /// Compare-and-set only derived UA fields; preserve concurrent fingerprint edits.
-    pub async fn align_supplier_user_agent(
-        &self,
-        account: &SupplierAccount,
-        user_agent: &str,
-        fingerprint: &str,
-    ) -> Result<bool> {
-        let changed = sqlx::query("UPDATE supplier_accounts SET user_agent=$1,http_fingerprint_json=$2 WHERE id=$3 AND user_agent=$4 AND http_fingerprint_json=$5")
-            .bind(user_agent).bind(fingerprint).bind(&account.id).bind(&account.user_agent).bind(&account.http_fingerprint_json)
-            .execute(self.pool()).await?.rows_affected() == 1;
-        if changed {
-            self.runtime
-                .snapshots
-                .invalidate_key(&format!("supplier-account:{}", account.id));
-            self.runtime
-                .snapshots
-                .invalidate_key(&format!("supplier-transport:{}", account.id));
-        }
-        Ok(changed)
-    }
 }

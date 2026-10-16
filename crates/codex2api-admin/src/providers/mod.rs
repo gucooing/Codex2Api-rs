@@ -15,10 +15,13 @@ use serde_json::Value;
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ApiError> {
     serde_json::from_value(value).map_err(|_| ApiError::bad("渠道请求字段无效"))
 }
-pub fn fingerprint_view(account: &codex2api_storage::SupplierAccount) -> Value {
+pub fn fingerprint_view(account: &codex2api_storage::SupplierAccount) -> Result<Value, ApiError> {
     match account.provider_id.as_str() {
-        codex2api_core::GROK => grok::fingerprint_view(account),
-        _ => serde_json::json!(chatgpt::Fingerprint::from_account(account)),
+        codex2api_common::GROK => grok::fingerprint_view(account),
+        codex2api_common::CHATGPT => Ok(serde_json::json!(chatgpt::Fingerprint::from_account(
+            account
+        )?)),
+        _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
 pub async fn subscription_expiration(
@@ -26,7 +29,7 @@ pub async fn subscription_expiration(
     account: &codex2api_storage::SupplierAccount,
 ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
     match account.provider_id.as_str() {
-        codex2api_core::CHATGPT => chatgpt::subscription_expiration(s, &account.id).await,
+        codex2api_common::CHATGPT => chatgpt::subscription_expiration(s, &account.id).await,
         _ => Ok(None),
     }
 }
@@ -51,8 +54,8 @@ pub async fn quota(
         .provider_id
         .as_str()
     {
-        codex2api_core::CHATGPT => chatgpt::quota(s, id, refresh).await,
-        codex2api_core::GROK => grok::quota(s, id, refresh).await,
+        codex2api_common::CHATGPT => chatgpt::quota(s, id, refresh).await,
+        codex2api_common::GROK => grok::quota(s, id, refresh).await,
         _ => Err("不支持的渠道".into()),
     }
 }
@@ -62,10 +65,10 @@ pub async fn fingerprint(
     Json(value): Json<Value>,
 ) -> ApiResult {
     match s.storage.require_account(&id).await?.provider_id.as_str() {
-        codex2api_core::CHATGPT => {
+        codex2api_common::CHATGPT => {
             chatgpt::fingerprint(State(s), Path(id), Json(decode(value)?)).await
         }
-        codex2api_core::GROK => grok::fingerprint(State(s), Path(id), Json(decode(value)?)).await,
+        codex2api_common::GROK => grok::fingerprint(State(s), Path(id), Json(decode(value)?)).await,
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
@@ -75,8 +78,10 @@ pub async fn relogin(
     Json(value): Json<Value>,
 ) -> ApiResult {
     match s.storage.require_account(&id).await?.provider_id.as_str() {
-        codex2api_core::CHATGPT => chatgpt::relogin(State(s), Path(id), Json(decode(value)?)).await,
-        codex2api_core::GROK => grok::relogin(State(s), Path(id), Json(decode(value)?)).await,
+        codex2api_common::CHATGPT => {
+            chatgpt::relogin(State(s), Path(id), Json(decode(value)?)).await
+        }
+        codex2api_common::GROK => grok::relogin(State(s), Path(id), Json(decode(value)?)).await,
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
@@ -93,10 +98,10 @@ pub async fn official(
 ) -> ApiResult {
     let value = serde_json::to_value(q).map_err(|_| ApiError::bad("请求无效"))?;
     match s.storage.require_account(&id).await?.provider_id.as_str() {
-        codex2api_core::CHATGPT => {
+        codex2api_common::CHATGPT => {
             chatgpt::official(State(s), Path(id), Query(decode(value)?)).await
         }
-        codex2api_core::GROK => grok::official(State(s), Path(id), Query(decode(value)?)).await,
+        codex2api_common::GROK => grok::official(State(s), Path(id), Query(decode(value)?)).await,
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
@@ -105,7 +110,7 @@ pub async fn credit(
     Path(id): Path<String>,
     Json(value): Json<Value>,
 ) -> ApiResult {
-    if s.storage.require_account(&id).await?.provider_id != codex2api_core::CHATGPT {
+    if s.storage.require_account(&id).await?.provider_id != codex2api_common::CHATGPT {
         return Err(ApiError::bad("该渠道不支持官方重置卡"));
     }
     chatgpt::credit(State(s), Path(id), Json(decode(value)?)).await

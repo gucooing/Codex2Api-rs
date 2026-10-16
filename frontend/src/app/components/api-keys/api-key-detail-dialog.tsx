@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { date } from "@/lib/format";
-import { apiCost, apiKeyStatus, apiPlatform, apiTokens, type ApiKey } from "@/lib/metered-api";
+import { apiCost, apiKeyStatus, apiPlatform, apiTokens, type ApiKey } from "@/lib/api-access";
 
 export function ApiKeyDetailDialog({
   selected,

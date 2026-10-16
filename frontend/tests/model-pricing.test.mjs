@@ -52,7 +52,7 @@ test("base and context prices round trip through tier multipliers without changi
     "30",
   );
 });
-test("non-proportional legacy tiers and missing tiers stay exact and explicit", () => {
+test("non-proportional custom tiers and missing tiers stay exact and explicit", () => {
   const prices = [base(), { ...base(), tier: "fast", input_rate: "3", output_rate: "17" }];
   const draft = pricingDraft(prices);
   assert.equal(draft.fast.mode, "custom");

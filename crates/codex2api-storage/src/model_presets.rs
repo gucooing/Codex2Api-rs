@@ -1,9 +1,9 @@
 use crate::{ModelPrice, Result, Storage, StorageError};
-use codex2api_core::SupportedModel;
+use codex2api_common::SupportedModel;
 
 pub fn preset_model_prices(provider: &str, model: &str) -> Option<Vec<ModelPrice>> {
     Some(
-        codex2api_core::model_price_preset(provider, model)?
+        codex2api_common::model_price_preset(provider, model)?
             .into_iter()
             .map(|price| ModelPrice {
                 provider_id: provider.into(),
@@ -15,7 +15,10 @@ pub fn preset_model_prices(provider: &str, model: &str) -> Option<Vec<ModelPrice
                 cached_rate: price.cached_rate,
                 cache_write_rate: price.cache_write_rate,
                 output_rate: price.output_rate,
-                source: format!("preset:{}", codex2api_core::model_preset_source(provider).1),
+                source: format!(
+                    "preset:{}",
+                    codex2api_common::model_preset_source(provider).1
+                ),
                 revision: 1,
             })
             .collect(),
@@ -29,8 +32,8 @@ impl Storage {
         let mut tx = self.pool().begin().await?;
         let mut changed = 0;
         for model in models {
-            if !codex2api_core::supported_provider(&model.provider_id)
-                || !codex2api_core::valid_model(&model.model)
+            if !codex2api_common::supported_provider(&model.provider_id)
+                || !codex2api_common::valid_model(&model.model)
                 || !matches!(model.kind.as_str(), "text" | "image")
             {
                 return Err(StorageError::InvalidAdminUpdate("内置模型配置无效"));

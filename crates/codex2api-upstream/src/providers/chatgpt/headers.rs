@@ -2,7 +2,7 @@ use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use uuid::Uuid;
 
-use codex2api_accounts::AccountIdentity;
+use codex2api_suppliers::AccountIdentity;
 
 use crate::error::Result;
 
@@ -129,7 +129,7 @@ pub fn default_headers(
     access_token: &str,
     chatgpt_account_id: Option<&str>,
 ) -> Result<HeaderMap> {
-    let mut headers = codex2api_auth::transport::identity_headers(identity)?;
+    let mut headers = codex2api_suppliers::transport::identity_headers(identity)?;
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {access_token}"))?,
@@ -142,7 +142,7 @@ pub fn default_headers(
     }
     headers.insert(
         "version",
-        HeaderValue::from_static(codex2api_version::CODEX_PACKAGE_VERSION),
+        HeaderValue::from_static(codex2api_common::version::CODEX_PACKAGE_VERSION),
     );
     Ok(headers)
 }
@@ -224,7 +224,7 @@ pub fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex2api_accounts::HostRuntime;
+    use codex2api_suppliers::HostRuntime;
 
     #[test]
     fn identity_uses_pinned_version_and_account_auth() {

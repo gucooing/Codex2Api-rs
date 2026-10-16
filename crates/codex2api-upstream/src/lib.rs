@@ -1,6 +1,6 @@
-//! Upstream Codex HTTP client.
+//! Supplier transport, availability and shared pool scheduling.
 //!
-//! Talks to official Codex servers with the same application-layer request
+//! The ChatGPT provider talks to official Codex servers with the same request
 //! identity as a logged-in Codex CLI at commit
 //! `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`.
 //!
@@ -9,7 +9,8 @@
 //!
 //! Public services: `UpstreamPool` selects an isolated account client;
 //! `UpstreamClient` sends requests; `Endpoint` and `BackendEndpoint`
-//! describe official outbound targets. Incoming HTTP routes belong to codex2api-api.
+//! describe official outbound targets. Incoming client and standard API routes
+//! belong to codex2api-oauth and codex2api-api respectively.
 //! Protocol construction lives in request/headers; transport lives in client/websocket/stream.
 
 pub(crate) use providers::chatgpt::backend;
@@ -18,13 +19,13 @@ pub mod providers;
 pub use catalog::{codex_model_descriptor, configured_model_descriptor};
 pub(crate) use providers::chatgpt::catalog;
 pub(crate) use providers::chatgpt::client;
-pub fn supported_models() -> Vec<codex2api_core::SupportedModel> {
+pub fn supported_models() -> Vec<codex2api_common::SupportedModel> {
     catalog::supported_models()
 }
 
 mod availability;
-pub(crate) use providers::chatgpt::compat;
 pub(crate) use providers::chatgpt::endpoint;
+pub(crate) use providers::chatgpt::operations;
 mod body;
 mod error;
 mod outcome;
@@ -54,13 +55,12 @@ pub use timing::{RequestClock, ResponseTiming, TokenProtocol};
 pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
 
 #[cfg(test)]
-#[path = "../../codex2api-auth/tests/support/proxy.rs"]
+#[path = "../../codex2api-suppliers/tests/support/proxy.rs"]
 mod proxy_fixture;
 
 pub use backend::BackendEndpoint;
 pub use body::{data_url_resolution, request_metadata_value, request_user_agent};
 pub use client::{DEFAULT_STREAM_IDLE_TIMEOUT, UpstreamClient, responses_url};
-pub use compat::{ChatgptEndpoint, responses_subpath_url};
 pub use endpoint::Endpoint;
 pub use error::{Result, UpstreamError};
 pub use headers::{
@@ -70,6 +70,7 @@ pub use headers::{
     X_CODEX_TURN_STATE_HEADER, X_CODEX_WINDOW_ID_HEADER, X_OPENAI_SUBAGENT_HEADER, default_headers,
     insert_header, strip_hop_by_hop_headers,
 };
+pub use operations::{ChatgptEndpoint, responses_subpath_url};
 pub use pool::UpstreamPool;
 pub use request::{
     MAX_REQUEST_BYTES, decode_body, normalize_response_identity, serialize_responses_request,
@@ -82,3 +83,5 @@ pub use websocket::UpstreamWebSocket;
 
 mod response;
 pub use response::ResponseFormat;
+
+pub mod scheduler;

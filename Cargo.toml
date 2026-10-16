@@ -1,20 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/codex2api-gateway",
-    "crates/codex2api-scheduler",
+    "crates/codex2api-api",
     "crates/codex2api-user",
-    "crates/codex2api-web",
-    "crates/codex2api-service",
-    "crates/codex2api-core",
+    "crates/codex2api-common",
     "crates/codex2api",
     "crates/codex2api-admin",
-    "crates/codex2api-accounts",
-    "crates/codex2api-api",
-    "crates/codex2api-auth",
+    "crates/codex2api-oauth",
+    "crates/codex2api-suppliers",
     "crates/codex2api-storage",
     "crates/codex2api-upstream",
-    "crates/codex2api-version",
 ]
 
 [workspace.package]
@@ -24,12 +19,9 @@ license = "MIT"
 rust-version = "1.93"
 
 [workspace.dependencies]
-codex2api-gateway = { path = "crates/codex2api-gateway" }
-codex2api-scheduler = { path = "crates/codex2api-scheduler" }
+codex2api-api = { path = "crates/codex2api-api" }
 codex2api-user = { path = "crates/codex2api-user" }
-codex2api-web = { path = "crates/codex2api-web" }
-codex2api-service = { path = "crates/codex2api-service" }
-codex2api-core = { path = "crates/codex2api-core" }
+codex2api-common = { path = "crates/codex2api-common" }
 anyhow = "1"
 argon2 = "0.5"
 async-stream = "0.3"
@@ -38,13 +30,11 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde", "clock"] }
 chrono-tz = "0.10"
-codex2api-accounts = { path = "crates/codex2api-accounts" }
 codex2api-admin = { path = "crates/codex2api-admin" }
-codex2api-api = { path = "crates/codex2api-api" }
-codex2api-auth = { path = "crates/codex2api-auth" }
+codex2api-oauth = { path = "crates/codex2api-oauth" }
+codex2api-suppliers = { path = "crates/codex2api-suppliers" }
 codex2api-storage = { path = "crates/codex2api-storage" }
 codex2api-upstream = { path = "crates/codex2api-upstream" }
-codex2api-version = { path = "crates/codex2api-version" }
 eventsource-stream = "0.2"
 futures = "0.3"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }

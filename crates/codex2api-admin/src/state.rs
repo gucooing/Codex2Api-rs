@@ -1,7 +1,7 @@
 //! Dependencies for the cookie-authenticated administrator API.
-use codex2api_accounts::SupplierAccountStore;
-use codex2api_auth::AuthService;
 use codex2api_storage::Storage;
+use codex2api_suppliers::AuthService;
+use codex2api_suppliers::SupplierAccountStore;
 use std::sync::Arc;
 #[derive(Clone)]
 pub struct AdminState {

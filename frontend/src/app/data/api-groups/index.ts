@@ -4,7 +4,7 @@ import { useActions, useErrorToast } from "@/lib/actions";
 import { query, request, type List, type ModelOption, type SupplierTag } from "@/lib/api";
 import { useColumnVisibility } from "@/lib/columns";
 import { useResource } from "@/lib/hooks";
-import type { ApiGroup, ApiModelRule } from "@/lib/metered-api";
+import type { ApiGroup, ApiModelRule } from "@/lib/api-access";
 import { useListResource } from "@/lib/pagination";
 import { useSavedFilters } from "@/lib/preferences";
 import { useId, useState, type FormEvent } from "react";

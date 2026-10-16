@@ -12,10 +12,9 @@ test-support = ["dep:tempfile"]
 tempfile = { version = "3", optional = true }
 base64.workspace = true
 rsa.workspace = true
-codex2api-core.workspace = true
+codex2api-common.workspace = true
 argon2.workspace = true
 chrono.workspace = true
-codex2api-version.workspace = true
 rand.workspace = true
 redis.workspace = true
 serde.workspace = true

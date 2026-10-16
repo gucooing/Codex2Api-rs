@@ -1,4 +1,4 @@
-use codex2api_core::SupportedModel;
+use codex2api_common::SupportedModel;
 use codex2api_storage::{UsageFilter, UsageRecord, preset_model_prices};
 use serde_json::json;
 

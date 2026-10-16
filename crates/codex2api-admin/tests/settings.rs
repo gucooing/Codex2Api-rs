@@ -100,7 +100,7 @@ async fn admin_cookie_security_uses_configured_origin_for_login_logout_and_passw
     use tower::ServiceExt;
     let f = Fixture::new().await;
     for secure in [true, false] {
-        let app = codex2api_admin::router(f.state.clone().with_secure_cookies(secure));
+        let app = codex2api_admin::api_router(f.state.clone().with_secure_cookies(secure));
         for action in ["logout", "settings/security"] {
             let response = app
                 .clone()

@@ -260,7 +260,7 @@ impl Storage {
     }
     pub async fn save_api_group(&self, group: &ApiGroup, expected: Option<i64>) -> Result<bool> {
         let multiplier = multiplier_micros(&group.multiplier)?;
-        if group.provider_id != codex2api_core::CHATGPT && group.search_price_usd.is_some() {
+        if group.provider_id != codex2api_common::CHATGPT && group.search_price_usd.is_some() {
             return Err(StorageError::InvalidAdminUpdate(
                 "只有 ChatGPT 平台可以配置搜索单价",
             ));
@@ -291,13 +291,13 @@ impl Storage {
         }
         let mut seen = BTreeSet::new();
         for model in &group.allowed_models {
-            if !codex2api_core::valid_model(model) || !seen.insert(model) {
+            if !codex2api_common::valid_model(model) || !seen.insert(model) {
                 return Err(StorageError::InvalidAdminUpdate("模型列表无效或重复"));
             }
         }
         seen.clear();
         for rule in &group.model_rules {
-            if !codex2api_core::valid_model(&rule.model)
+            if !codex2api_common::valid_model(&rule.model)
                 || !seen.insert(&rule.model)
                 || rule.concurrency_limit > 1_000_000
                 || rule.rpm_limit > 1_000_000
@@ -613,7 +613,8 @@ pub(crate) async fn catalog_on(
                 price_usd: scaled(i128::from(p.price_nano_usd) * factor, 15),
             })
             .collect();
-        let search_price = (config.provider_id == codex2api_core::CHATGPT && config.kind == "text")
+        let search_price = (config.provider_id == codex2api_common::CHATGPT
+            && config.kind == "text")
             .then(|| group.and_then(|g| g.search_price_usd.clone()))
             .flatten();
         items.push(ApiCatalogModel {

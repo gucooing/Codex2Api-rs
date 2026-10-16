@@ -120,7 +120,7 @@ export const usageType = (stream: boolean | null | undefined) =>
   stream == null ? "—" : stream ? "流式" : "同步";
 
 export function usageSource(kind: string | undefined) {
-  if (kind === "api_key" || kind === "retired_api_key") return "Api";
+  if (kind === "api_key") return "Api";
   if (kind === "virtual_account") return "订阅";
   return "—";
 }
@@ -136,7 +136,6 @@ export function usageConsumption(
   record: Pick<UsageRecord, "status" | "subject_kind" | "wallet_debit_cents" | "cost_nano_usd">,
 ) {
   if (record.status === "in_progress") return null;
-  if (record.subject_kind === "api_key" || record.subject_kind === "retired_api_key")
-    return record.wallet_debit_cents / 100;
+  if (record.subject_kind === "api_key") return record.wallet_debit_cents / 100;
   return record.cost_nano_usd == null ? null : record.cost_nano_usd / 1e9;
 }

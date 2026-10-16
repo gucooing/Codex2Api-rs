@@ -210,8 +210,9 @@ impl UserStore {
             .map(|g| g.provider_id.as_str())
             .unwrap_or(query.provider_id.as_str());
         let operations = match provider {
-            "" | codex2api_core::CHATGPT
-                if query.provider_id.is_empty() || query.provider_id == codex2api_core::CHATGPT =>
+            "" | codex2api_common::CHATGPT
+                if query.provider_id.is_empty()
+                    || query.provider_id == codex2api_common::CHATGPT =>
             {
                 crate::providers::chatgpt::catalog_operation_prices(&mut tx, group.as_ref()).await?
             }

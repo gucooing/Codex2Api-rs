@@ -13,7 +13,7 @@
 开始前读取以下文件，并检查本地未提交改动，保留与本次更新无关的工作：
 
 - [AGENTS.md](../AGENTS.md)：项目约束及当前固定版本。
-- [版本常量](../crates/codex2api-version/src/lib.rs)：实际使用的版本、commit、协议常量。
+- [版本常量](../crates/codex2api-common/src/providers/chatgpt/version.rs)：实际使用的版本、commit、协议常量。
 - [README.md](../README.md)、[架构说明](ARCHITECTURE.md)：产品范围和实现边界。
 - `reference/SOURCE.md`、`reference/codex`：本地官方源码来源与快照。
 
@@ -64,11 +64,11 @@ git -C $analysisDir diff --find-renames $baseCommit $targetCommit
 
 | 影响面 | 要确认的官方行为 | 本项目重点位置 |
 | --- | --- | --- |
-| 请求身份 | originator、UA 公式与发布版版本、安装标识、账户头、客户端元数据、头部添加条件 | `codex2api-version`、`codex2api-accounts`、`codex2api-upstream/src/headers.rs`、`codex2api-auth/src/transport.rs` |
-| 认证 | OAuth issuer/client_id/scopes、PKCE、回调、设备码、刷新令牌、撤销、错误码与重试 | `codex2api-auth`、管理端授权入口 |
-| 请求协议 | endpoint、方法、字段、默认值、模型目录、推理强度、service tier、路由提示、工具与多模态内容 | `codex2api-upstream`、`codex2api-api` |
-| 传输与会话 | HTTP/WS 握手、压缩、SSE 事件、增量输入、预热、重连、回退、取消、动态 ID 和连接状态生命周期 | `codex2api-upstream`、`codex2api-api/src/handlers` |
-| 账户与用量 | 官方账户接口、额度窗口及重置时间、套餐、usage 字段和流结束条件 | `codex2api-admin`、`codex2api-api/src/usage.rs`、`codex2api-storage` |
+| 请求身份 | originator、UA 公式与发布版版本、安装标识、账户头、客户端元数据、头部添加条件 | `codex2api-common::version`、`codex2api-suppliers`、`codex2api-upstream/src/providers/chatgpt/headers.rs`、`codex2api-suppliers/src/providers/chatgpt/transport.rs` |
+| 认证 | OAuth issuer/client_id/scopes、PKCE、回调、设备码、刷新令牌、撤销、错误码与重试 | `codex2api-suppliers`、管理端授权入口 |
+| 请求协议 | endpoint、方法、字段、默认值、模型目录、推理强度、service tier、路由提示、工具与多模态内容 | `codex2api-upstream`、`codex2api-oauth` |
+| 传输与会话 | HTTP/WS 握手、压缩、SSE 事件、增量输入、预热、重连、回退、取消、动态 ID 和连接状态生命周期 | `codex2api-upstream`、`codex2api-oauth/src/handlers` |
+| 账户与用量 | 官方账户接口、额度窗口及重置时间、套餐、usage 字段和流结束条件 | `codex2api-admin`、`codex2api-oauth/src/usage.rs`、`codex2api-storage` |
 | 构建与依赖 | 发布时注入的版本、默认 feature、影响上述行为的依赖变化和跨平台要求 | 官方发布流程、相关依赖；本项目 `Cargo.toml`、`Cargo.lock`、发布工作流 |
 
 对每项变更确认它在目标发布版是否启用，以及适用的认证方式、模型、feature flag 和平台。源码中存在某个分支不等于发布版默认采用；其他供应商或 API Key 模式的行为不能直接套到 ChatGPT 订阅模式。
@@ -85,7 +85,7 @@ git -C $analysisDir diff --find-renames $baseCommit $targetCommit
 2. 官方客户端更新概览，以及从当前参考快照到目标发布版的实际行为差异。
 3. 逐项适配表：官方旧行为、新行为、证据、本项目当前行为、受影响文件、建议修改、验证方法与风险。
 4. 每项结论的状态：**需要同步、已兼容、不适用、待确认**。已透传或已兼容的变化也写明依据，不能只列准备改的部分。
-5. 既有账户、持久化指纹、数据库、HTTP 客户端和会话状态的处理方式，以及是否需要重新构建、重启或数据迁移。
+5. 既有账户、持久化指纹、数据库、HTTP 客户端和会话状态的处理方式，以及是否需要重新构建或重启。
 6. 实施顺序、验证范围、失败时的恢复方式，以及尚未取得证据的部分。
 7. 明确的用户裁决项：批准整个方案、仅批准指定项目、要求调整或暂不更新。
 
@@ -106,7 +106,7 @@ git -C $analysisDir diff --find-renames $baseCommit $targetCommit
 - 保留现有代理、时区及凭据配置。需要改变其行为时，必须已经在获准方案中说明。
 - 继续采用官方应用层头部与协议规则，不扩展为 TLS/JA3 伪造。
 
-数据库结构需要调整时新增迁移，不改写已经应用的迁移历史。先在临时数据库或副本验证存量数据升级；备份、迁移和恢复要求应在方案中具体写明。
+数据库结构需要调整时维护当前 schema、种子数据和按版本自动执行的 SQL 迁移，并在隔离数据库验证。迁移 SQL 必须保留；应用处理器只读取当前 schema。
 
 目标源码应先单独准备并核对 commit。在实现和验证完成后，再把目标作为新的 `reference/codex` 快照，并更新 `reference/SOURCE.md`。若只实施了部分方案且仍有必要的兼容工作未完成，不得将整个项目标记为已完整对齐新版本。
 
@@ -118,7 +118,7 @@ git -C $analysisDir diff --find-renames $baseCommit $targetCommit
 
 获准更新完成并通过相应检查后，统一更新以下基线记录：
 
-- `crates/codex2api-version/src/lib.rs`：参考 commit、来源、时间、提交说明、官方发布版/tag/commit、UA 版本及有证据变化的协议常量；同步相关版本断言。
+- `crates/codex2api-common/src/providers/chatgpt/version.rs`：参考 commit、来源、时间、提交说明、官方发布版/tag/commit、UA 版本及有证据变化的协议常量；同步相关版本断言。
 - `AGENTS.md`、`README.md`、`docs/ARCHITECTURE.md`：当前对齐版本与相应行为说明。
 - `reference/SOURCE.md` 和本地 `reference/codex`：实际采用的目标源码快照。该目录被忽略，其他工作区必须能根据已提交的 commit 信息重新取得源码。
 - `docs/CODEX_UPDATE_PLAN.md`：实施期间保存批准范围、验证状态和未完成项。任务完成后删除；长期有效的行为及限制并入 README、架构或相应当前规范。

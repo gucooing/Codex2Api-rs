@@ -31,8 +31,8 @@ jobs:
       RUST_TEST_THREADS: 4
     steps:
       - uses: actions/checkout@v7
-      - name: Check provider module boundaries
-        run: python3 scripts/check-provider-boundaries.py
+      - name: Check business and provider module boundaries
+        run: python3 scripts/check-module-boundaries.py
       - uses: actions/setup-node@v6
         with:
           node-version: 24

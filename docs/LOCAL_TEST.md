@@ -5,14 +5,14 @@
 在放置二进制的目录执行：
 
 ```powershell
-$env:CODEX2API_API_BIND = '127.0.0.1:8080'
+$env:CODEX2API_OAUTH_BIND = '127.0.0.1:8080'
 $env:CODEX2API_ADMIN_BIND = '127.0.0.1:8081'
 $env:CODEX2API_USER_BIND = '127.0.0.1:8082'
-$env:CODEX2API_METERED_API_BIND = '127.0.0.1:8083'
-$env:CODEX2API_PUBLIC_API_URL = 'http://127.0.0.1:8080'
+$env:CODEX2API_API_BIND = '127.0.0.1:8083'
+$env:CODEX2API_PUBLIC_OAUTH_URL = 'http://127.0.0.1:8080'
 $env:CODEX2API_PUBLIC_ADMIN_URL = 'http://127.0.0.1:8081'
 $env:CODEX2API_PUBLIC_USER_URL = 'http://127.0.0.1:8082'
-$env:CODEX2API_PUBLIC_METERED_API_URL = 'http://127.0.0.1:8083'
+$env:CODEX2API_PUBLIC_API_URL = 'http://127.0.0.1:8083'
 $env:CODEX2API_DATABASE_URL = 'postgresql://codex2api:password@127.0.0.1:5432/codex2api_test'
 $env:CODEX2API_REDIS_URL = 'redis://127.0.0.1:6379/0'
 .\codex2api.exe
@@ -32,14 +32,14 @@ Invoke-RestMethod http://127.0.0.1:8080/version
 测试必须使用独立 PostgreSQL 数据库，不得连接正式库。
 
 ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录、模型和额度读取、连续两轮生成、
-取消及客户端重连。使用实际反向代理入口时配置 CODEX2API_PUBLIC_API_URL 并启用 WebSocket；
+取消及客户端重连。使用实际反向代理入口时配置 CODEX2API_PUBLIC_OAUTH_URL 并启用 WebSocket；
 该环境变量只声明地址，不自动提供 TLS。检查号池内授权失效和配额耗尽时输出前自动换号，号池耗尽的结构化错误，以及已输出后不重放的边界。
 
 检查用量记录中的实际模型、错误、上游 request ID 和费用快照。未知价格、未报告用量及
 [未实现能力](ARCHITECTURE.md#client-routes-and-capability-boundaries)不能用假成功代替。
 
 普通改动执行两个前端的 lint、typecheck、build 和 `cargo check --workspace --locked`。自动化测试集中于精确计价、鉴权隔离、并发调度和协议解析等关键算法，按改动运行已有用例。Windows 可使用已安装的 MSVC 工具链，或同版本 Rust GNU 工具链加 MinGW。浏览器交互按实际改动人工核对，钱包数据只在独立测试库通过管理端余额调整准备。
-迁移 SQL 使用 LF，不能修改已应用的迁移或手工改写校验记录。
+数据库校验使用当前 schema 和种子数据，并覆盖启动迁移的事务回滚、版本记录及重复启动跳过已执行迁移。
 
 ## 前后端开发启动
 
@@ -49,17 +49,17 @@ ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录�
 
 Rust 设置 `CODEX2API_PUBLIC_USER_URL=http://127.0.0.1:3001`；管理前端在 `frontend/` 运行
 `pnpm dev --hostname 127.0.0.1 --port 3000`，用户前端在 `frontend-user/` 运行
-`pnpm dev --hostname 127.0.0.1 --port 3001`。对应后端默认端口为 8081 和 8082，OAuth 客户端入口为 8080，按量 API 为 8083。
+`pnpm dev --hostname 127.0.0.1 --port 3001`。对应后端默认端口为 8081 和 8082，OAuth 客户端入口为 8080，AI API 网关为 8083。
 Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p codex2api --features dev-frontend`，并将 MinGW 的 bin 目录加入 PATH。
 
 
 用户登录经 Next 同源代理转发时，浏览器的 `Sec-Fetch-Site: same-origin` 保留浏览器入口语义；后端允许该同源请求或与 `CODEX2API_PUBLIC_USER_URL` 精确匹配的 Origin，并拒绝 cross-site。受保护的写入另行校验 CSRF。访问 3000、3001 的根路径分别跳转 `/admin/`、`/user/`。
 
-鉴权回归覆盖两端真实 JWT 互换、同密钥不同用途、错误账户类型、未知 kid、过期/撤销、篡改签名，以及 none、空算法、HS256、非 RS256 算法的拒绝。带错误 Bearer 和有效 Cookie 的请求仍须失败。`accounts` 的账户类型与资料表归属不可更改；用户侧数据仓库不得暴露供应账户查询。账户/JWT 结构迁移会使旧网页会话失效；Codex OAuth 的客户端协议、签名密钥、设备授权和令牌不因网页登录 JWT 改造而更换。
+鉴权回归覆盖两端真实 JWT 互换、同密钥不同用途、错误账户类型、未知 kid、过期/撤销、篡改签名，以及 none、空算法、HS256、非 RS256 算法的拒绝。带错误 Bearer 和有效 Cookie 的请求仍须失败。`accounts` 的账户类型与资料表归属不可更改；用户侧数据仓库不得暴露供应账户查询。Codex OAuth 的客户端协议、签名密钥、设备授权和令牌与网页登录 JWT 独立。
 
 用户端页面为 `/user/`（总览）、`/user/usage/`（使用信息）、`/user/subscriptions/`、`/user/plans/`、`/user/orders/`、`/user/wallet/`、`/user/devices/`、`/user/profile/`（用户信息）。检查桌面侧栏折叠和手机抽屉、面包屑及头像入口；直接进入或刷新子页先恢复会话，确认未登录后才显示登录表单。总览数值应与本人对应明细一致，资料页只展示本人的信息，修改密码仍要求当前密码。
 
-用量记录统一在 `/admin/usage/` 和 `/user/usage/`，API 与 OAuth 请求共用列表、详情和统计。按量 API 页面为管理端 `/admin/api-groups/`、`/admin/api-keys/`，用户端 `/user/model-market/`、`/user/api-keys/`。配置同平台标签与模型后，核对空模型列表表示该平台全部已启用模型、模型列表不随标签支持范围变化、执行仍限定在所选标签号池、模型倍率覆盖组倍率、组与模型的每用户并发和 RPM 同时生效，多把 Key 不能增加同一用户的限额。模型广场默认展示基础目录，横向切换组后展示精确计费价格和两层限制。密钥只在创建时返回一次，撤销后调用立即失效；钱包 API 扣款不能改变 OAuth 订阅额度。
+用量记录统一在 `/admin/usage/` 和 `/user/usage/`，API 与 OAuth 请求共用列表、详情和统计。AI API 网关页面为管理端 `/admin/api-groups/`、`/admin/api-keys/`，用户端 `/user/model-market/`、`/user/api-keys/`。配置同平台标签与模型后，核对空模型列表表示该平台全部已启用模型、模型列表不随标签支持范围变化、执行仍限定在所选标签号池、模型倍率覆盖组倍率、组与模型的每用户并发和 RPM 同时生效，多把 Key 不能增加同一用户的限额。模型广场默认展示基础目录，横向切换组后展示精确计费价格和两层限制。密钥只在创建时返回一次，撤销后调用立即失效；钱包 API 扣款不能改变 OAuth 订阅额度。
 
 管理前端的布局、表单与失败反馈在隔离服务上按需人工检查。真实平台授权、订阅权限及生成行为使用获准的供应账户单独验证。
 
@@ -78,7 +78,7 @@ Windows GNU 工具链可显式使用 `cargo +1.93.0-x86_64-pc-windows-gnu run -p
 
 流水管理联合检查用户名、来源和时间范围筛选，核对总数与分页一致、开始包含 / 结束排除、空结果、同一时间多笔流水的顺序，以及历史订单支付和可空原因的系统操作同时可见。仅管理会话可访问全站流水；用户接口仍只返回本人流水，不显示管理操作人和原因。金额及记录不可改写或删除。
 
-账户存储和业务隔离：Rust 回归在真实 PostgreSQL 中验证钱包并发、订单幂等、数据库约束、新用户无订阅和同平台多订阅。验证 `/subscriptions/{id}` 的配置、设备、路由、用量和记录均校验订阅归属，旧独立虚拟账户管理路由不再提供。续费和升级必须指定目标订阅，另购应创建独立 ID；套餐限流默认为 RPM 40、并发 10，订阅覆盖与继承分别验证。
+账户存储和业务隔离：Rust 回归在真实 PostgreSQL 中验证钱包并发、订单幂等、数据库约束、新用户无订阅和同平台多订阅。验证 `/subscriptions/{id}` 的配置、设备、路由、用量和记录均校验订阅归属。续费和升级必须指定目标订阅，另购应创建独立 ID；套餐限流默认为 RPM 40、并发 10，订阅覆盖与继承分别验证。
 
 Rust 数据库回归必须设置 `CODEX2API_TEST_DATABASE_URL`，使用有建 schema 权限的专用测试数据库。每个临时 fixture 创建独立 schema，释放后删除该 schema；没有内存数据库替代实现。
 

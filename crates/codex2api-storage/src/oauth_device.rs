@@ -50,10 +50,10 @@ impl Storage {
         request: DeviceAuthorization<'_>,
         scopes: Option<&str>,
     ) -> Result<bool> {
-        let provider = if request.client_id == codex2api_version::grok::CLIENT_ID {
-            codex2api_core::GROK
-        } else if request.client_id == codex2api_version::OAUTH_CLIENT_ID {
-            codex2api_core::CHATGPT
+        let provider = if request.client_id == codex2api_common::version::grok::CLIENT_ID {
+            codex2api_common::GROK
+        } else if request.client_id == codex2api_common::version::OAUTH_CLIENT_ID {
+            codex2api_common::CHATGPT
         } else {
             return Ok(false);
         };
@@ -119,7 +119,7 @@ impl Storage {
         if !crate::users::confirmed_browser_identity(&mut tx, request.id, request.account).await? {
             return Ok(false);
         }
-        let flow_kind = if request.account.provider_id == codex2api_core::GROK {
+        let flow_kind = if request.account.provider_id == codex2api_common::GROK {
             "device-grok"
         } else {
             "device"

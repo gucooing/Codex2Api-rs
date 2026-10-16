@@ -125,7 +125,7 @@ export function useGateway() {
         setDraft({});
         resource.reload();
       },
-      "网关设置已保存",
+      "转发与客户端设置已保存",
     );
   const form = {
     id,
@@ -176,12 +176,12 @@ export type GatewayForm = ReturnType<typeof useGateway>["form"];
 
 export const fields = [
   {
-    key: "api_url",
+    key: "oauth_url",
     label: "OAuth 客户端基础地址",
   },
   {
-    key: "metered_api_url",
-    label: "按量 API 基础地址",
+    key: "api_url",
+    label: "AI API 网关基础地址",
   },
   {
     key: "user_url",

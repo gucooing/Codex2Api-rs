@@ -12,7 +12,7 @@ impl Storage {
         let model = record
             .model
             .as_deref()
-            .filter(|m| codex2api_core::valid_model(m))
+            .filter(|m| codex2api_common::valid_model(m))
             .ok_or(StorageError::Api {
                 code: "invalid_model",
                 message: "请指定有效模型",
@@ -30,10 +30,10 @@ impl Storage {
             "/v1/images/generations" | "/v1/images/edits" => {
                 PriceRequirement::Image(record.image_size.as_deref())
             }
-            "/v1/alpha/search" if record.provider_id == codex2api_core::CHATGPT => {
+            "/v1/alpha/search" if record.provider_id == codex2api_common::CHATGPT => {
                 PriceRequirement::Operation("search")
             }
-            "/v1/responses/input_tokens" if record.provider_id == codex2api_core::CHATGPT => {
+            "/v1/responses/input_tokens" if record.provider_id == codex2api_common::CHATGPT => {
                 PriceRequirement::ReadOnly
             }
             _ => {
@@ -169,7 +169,7 @@ impl Storage {
             }
         }
         let snapshot = if matches!(requirement, PriceRequirement::Operation(_)) {
-            std::sync::Arc::new(serde_json::to_string(&BillingSnapshot::Current {
+            std::sync::Arc::new(serde_json::to_string(&BillingSnapshot {
                 tokens: Vec::new(),
                 images: Vec::new(),
                 operations,

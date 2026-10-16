@@ -5,12 +5,14 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+dev-frontend = []
+
 [dependencies]
 axum.workspace = true
 chrono.workspace = true
-codex2api-core.workspace = true
+codex2api-common = { workspace = true, features = ["frontend"] }
 codex2api-storage.workspace = true
-codex2api-version.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -23,3 +25,6 @@ codex2api-storage = { workspace = true, features = ["test-support"] }
 sqlx.workspace = true
 tempfile = "3"
 tower.workspace = true
+
+[build-dependencies]
+codex2api-common = { workspace = true, features = ["frontend-build"] }

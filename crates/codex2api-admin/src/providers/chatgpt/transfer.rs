@@ -2,10 +2,10 @@ use crate::rest::{
     error::ApiError,
     supplier_transfer::{Sub2apiAccount, credential, sub2api_record},
 };
-use codex2api_accounts::{
+use codex2api_storage::{NewSupplierAccount, SupplierStatus, SupplierTransferAccount};
+use codex2api_suppliers::{
     AccountIdentity, AuthDotJson, HostRuntime, HttpFingerprint, TokenData, new_installation_id,
 };
-use codex2api_storage::{NewSupplierAccount, SupplierStatus, SupplierTransferAccount};
 use serde_json::{Value, json};
 
 pub(crate) fn to_sub2api(item: &SupplierTransferAccount) -> Result<Value, ApiError> {
@@ -22,7 +22,7 @@ pub(crate) fn to_sub2api(item: &SupplierTransferAccount) -> Result<Value, ApiErr
     let mut value = json!({"access_token":data.access_token,"refresh_token":data.refresh_token,"id_token":data.id_token,
         "chatgpt_account_id":item.account.chatgpt_account_id,"chatgpt_user_id":item.account.chatgpt_user_id,
         "email":item.account.email,"plan_type":item.account.plan_type});
-    if let Ok(Some(expires)) = codex2api_auth::parse_jwt_expiration(&data.access_token) {
+    if let Ok(Some(expires)) = codex2api_suppliers::parse_jwt_expiration(&data.access_token) {
         value["expires_at"] = expires.to_rfc3339().into();
     }
     value
@@ -37,9 +37,9 @@ pub(crate) fn from_sub2api(source: &Sub2apiAccount) -> Result<SupplierTransferAc
     let access =
         credential(c, "access_token").ok_or_else(|| ApiError::bad("缺少 ChatGPT Access Token"))?;
     let id_token = credential(c, "id_token").unwrap_or_default();
-    let claims = codex2api_auth::parse_chatgpt_jwt_claims(&id_token)
+    let claims = codex2api_suppliers::parse_chatgpt_jwt_claims(&id_token)
         .ok()
-        .or_else(|| codex2api_auth::parse_chatgpt_jwt_claims(&access).ok());
+        .or_else(|| codex2api_suppliers::parse_chatgpt_jwt_claims(&access).ok());
     let owner = credential(c, "chatgpt_user_id")
         .or_else(|| claims.as_ref().and_then(|c| c.chatgpt_user_id.clone()))
         .ok_or_else(|| ApiError::bad("缺少 ChatGPT 用户编号"))?;
@@ -58,7 +58,6 @@ pub(crate) fn from_sub2api(source: &Sub2apiAccount) -> Result<SupplierTransferAc
         &identity.os_type,
         &identity.os_version,
         &identity.arch,
-        "",
         identity
             .fingerprint_json()
             .map_err(|_| ApiError::bad("指纹无效"))?,
@@ -98,9 +97,13 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
         .map(|(_, t)| t)
         .filter(|t| !t.trim().is_empty() && t.len() <= 128 && !t.chars().any(char::is_control))
         .ok_or_else(|| ApiError::bad("ChatGPT 终端指纹无效"))?;
-    a.originator = codex2api_version::DEFAULT_ORIGINATOR.into();
-    a.user_agent =
-        codex2api_version::official_user_agent(&a.os_type, &a.os_version, &a.arch, terminal);
+    a.originator = codex2api_common::version::DEFAULT_ORIGINATOR.into();
+    a.user_agent = codex2api_common::version::official_user_agent(
+        &a.os_type,
+        &a.os_version,
+        &a.arch,
+        terminal,
+    );
     fingerprint.originator = a.originator.clone();
     fingerprint.user_agent = a.user_agent.clone();
     fingerprint.os_type = a.os_type.clone();
@@ -135,7 +138,7 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
             return Err(ApiError::bad("ChatGPT 凭据与账户身份不一致"));
         }
         for token in [&data.id_token, &data.access_token] {
-            if let Ok(claims) = codex2api_auth::parse_chatgpt_jwt_claims(token)
+            if let Ok(claims) = codex2api_suppliers::parse_chatgpt_jwt_claims(token)
                 && (claims
                     .chatgpt_account_id
                     .as_deref()

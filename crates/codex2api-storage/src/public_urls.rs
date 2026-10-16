@@ -1,16 +1,14 @@
 use crate::{Result, Storage, StorageError};
 use serde::{Deserialize, Serialize};
 
-/// Browser-facing origins, independent of the process's listening addresses.
+/// Public OAuth, standard API and browser origins, independent of listener bindings.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PublicUrlSettings {
-    pub api_url: String,
+    pub oauth_url: String,
     pub user_url: String,
     pub admin_url: String,
-    /// Older saved settings use the process default until this origin is configured.
-    #[serde(default)]
-    pub metered_api_url: String,
+    pub api_url: String,
     pub revision: i64,
 }
 
@@ -62,10 +60,10 @@ impl Storage {
             return Err(StorageError::InvalidAdminUpdate("访问地址版本无效"));
         }
         let saved = PublicUrlSettings {
-            api_url: normalize_public_origin(&settings.api_url)?,
+            oauth_url: normalize_public_origin(&settings.oauth_url)?,
             user_url: normalize_public_origin(&settings.user_url)?,
             admin_url: normalize_public_origin(&settings.admin_url)?,
-            metered_api_url: normalize_public_origin(&settings.metered_api_url)?,
+            api_url: normalize_public_origin(&settings.api_url)?,
             revision: settings.revision + 1,
         };
         let value = serde_json::to_string(&saved)?;

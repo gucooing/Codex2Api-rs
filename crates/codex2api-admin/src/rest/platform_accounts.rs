@@ -176,7 +176,7 @@ pub async fn client_rows(
 
 pub async fn configs(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     let account = require(&s, &id).await?;
-    if account.provider_id != codex2api_core::CHATGPT {
+    if account.provider_id != codex2api_common::CHATGPT {
         // This channel's service settings are its identity, plan and execution route.
         // Do not materialize another channel's Desktop configuration defaults.
         return Ok(Json(json!({"items":[]})));
@@ -212,7 +212,7 @@ pub async fn save_config(
     Path((id, key)): Path<(String, String)>,
     Json(mut f): Json<ConfigInput>,
 ) -> ApiResult {
-    if require(&s, &id).await?.provider_id != codex2api_core::CHATGPT {
+    if require(&s, &id).await?.provider_id != codex2api_common::CHATGPT {
         return Err(ApiError::bad("该渠道的配置在账户、套餐和供应路由中维护"));
     }
     if key == "models"

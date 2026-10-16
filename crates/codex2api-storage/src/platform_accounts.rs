@@ -236,7 +236,7 @@ impl Storage {
             sqlx::query_as("SELECT m.*,to_char(to_timestamp((s.at/1000.0)::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS+00:00') AS last_success_at FROM oauth_missing_endpoints m LEFT JOIN (
                 SELECT method,path,MAX(at) AS at FROM (
                     SELECT method,path,created_at_ms AS at FROM virtual_request_logs WHERE status BETWEEN 200 AND 299
-                    UNION ALL SELECT 'GET','/api/oauth/chatgpt'||path,fetched_at_ms FROM desktop_public_resources
+                    UNION ALL SELECT 'GET','/v1/chatgpt'||path,fetched_at_ms FROM desktop_public_resources
                 ) GROUP BY method,path
             ) s ON s.method=m.method AND s.path=m.path ORDER BY m.last_seen_at DESC")
                 .fetch_all(self.pool())

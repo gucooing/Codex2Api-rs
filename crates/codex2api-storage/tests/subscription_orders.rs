@@ -183,7 +183,6 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             "Linux",
             "6",
             "x86_64",
-            "",
             "{}",
         );
         supplier.id = Some(id.into());

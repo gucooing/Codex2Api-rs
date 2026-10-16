@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { apiPrice, apiTier } from "@/lib/metered-api";
+import { apiPrice, apiTier } from "@/lib/api-access";
 
 export function ModelMarketCard({
   item,

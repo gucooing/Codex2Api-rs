@@ -23,7 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 export function GatewayClientRules({ form }: { form: GatewayForm }) {
   return (
     <FieldSet>
-      <FieldLegend variant="label">客户端规则</FieldLegend>
+      <FieldLegend variant="label">OAuth 客户端规则</FieldLegend>
       <FieldGroup className="grid gap-4 sm:grid-cols-2">
         <Field>
           <div className="flex items-center gap-1">

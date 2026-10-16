@@ -15,10 +15,7 @@ pub(crate) async fn groups(
     State(state): State<UserState>,
     Extension(session): Extension<UserSession>,
 ) -> Result<Json<Value>> {
-    let origin = state
-        .storage
-        .public_metered_api_url(&state.metered_api_base_url)
-        .await?;
+    let origin = state.storage.public_api_url(&state.api_base_url).await?;
     Ok(Json(json!({
         "items": state.storage.api_groups(&session.user_id).await?,
         "api_base_url": format!("{origin}/v1"),
