@@ -62,84 +62,104 @@ export default function ApiGroupsPage() {
   } = useApiGroupsPage();
   return (
     <>
-      <form className="flex flex-wrap items-end gap-3" onSubmit={search}>
-        <Field className="w-44">
-          <FieldLabel htmlFor={id + "-search"}>API 组</FieldLabel>
-          <Input
-            id={id + "-search"}
-            placeholder="名称或介绍"
-            value={filters.search}
-            onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-          />
-        </Field>
-        <Field className="w-36">
-          <FieldLabel htmlFor={id + "-platform"}>平台</FieldLabel>
-          <Select
-            value={filters.provider_id || "all"}
-            onValueChange={(provider) =>
-              setFilters({ ...filters, provider_id: provider === "all" ? "" : provider })
-            }
+      <Card size="sm">
+        <CardContent>
+          <form
+            className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap"
+            onSubmit={search}
           >
-            <SelectTrigger id={id + "-platform"} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              <SelectItem value="all">全部平台</SelectItem>
-              <SelectItem value="chatgpt">ChatGPT</SelectItem>
-              <SelectItem value="grok">Grok</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-        <Button type="submit">
-          <Search />
-          查询
-        </Button>
-        <Button type="button" variant="secondary" onClick={reset}>
-          <RotateCcw />
-          重置
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline">
-              <Columns3 />
-              显示列
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>{columns.mobile ? "手机显示列" : "桌面显示列"}</DropdownMenuLabel>
-            {columns.labels.map((label) => (
-              <DropdownMenuCheckboxItem
-                key={label}
-                checked={columns.isVisible(label)}
-                disabled={columns.count === 1 && columns.isVisible(label)}
-                onSelect={(event) => event.preventDefault()}
-                onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
+            <Field className="min-w-0 sm:w-44">
+              <FieldLabel className="sr-only" htmlFor={id + "-search"}>
+                API 组
+              </FieldLabel>
+              <Input
+                id={id + "-search"}
+                placeholder="搜索组名或介绍"
+                value={filters.search}
+                onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+              />
+            </Field>
+            <Field className="min-w-0 sm:w-32">
+              <FieldLabel className="sr-only" htmlFor={id + "-platform"}>
+                平台
+              </FieldLabel>
+              <Select
+                value={filters.provider_id || "all"}
+                onValueChange={(provider) =>
+                  setFilters({ ...filters, provider_id: provider === "all" ? "" : provider })
+                }
               >
-                {label}
-              </DropdownMenuCheckboxItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
-            <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <div className="ml-auto flex gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="刷新 API 组"
-            disabled={resource.refreshing}
-            onClick={resource.reload}
-          >
-            <RefreshCw />
-          </Button>
-          <Button type="button" disabled={!resource.ready} onClick={() => setEditing(emptyGroup())}>
-            <Plus />
-            添加 API 组
-          </Button>
-        </div>
-      </form>
+                <SelectTrigger id={id + "-platform"} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="all">全部平台</SelectItem>
+                  <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                  <SelectItem value="grok">Grok</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-auto sm:flex-1">
+              <Button type="submit" size="sm">
+                <Search />
+                查询
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={reset}>
+                <RotateCcw />
+                重置
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm">
+                    <Columns3 />
+                    显示列
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>
+                    {columns.mobile ? "手机显示列" : "桌面显示列"}
+                  </DropdownMenuLabel>
+                  {columns.labels.map((label) => (
+                    <DropdownMenuCheckboxItem
+                      key={label}
+                      checked={columns.isVisible(label)}
+                      disabled={columns.count === 1 && columns.isVisible(label)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <div className="ml-auto flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="刷新 API 组"
+                  disabled={resource.refreshing}
+                  onClick={resource.reload}
+                >
+                  <RefreshCw />
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!resource.ready}
+                  onClick={() => setEditing(emptyGroup())}
+                >
+                  <Plus />
+                  添加 API 组
+                </Button>
+              </div>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
       <Card>
         <CardContent>
           <Table>

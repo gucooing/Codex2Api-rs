@@ -89,7 +89,10 @@ impl ApiError {
                     let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) else {
                         continue;
                     };
-                    if !matches!(name.as_str(), "retry-after" | "retry-after-ms") {
+                    if !matches!(
+                        name.as_str(),
+                        "retry-after" | "retry-after-ms" | "x-should-retry"
+                    ) {
                         continue;
                     }
                     let text = match value {
@@ -228,7 +231,7 @@ impl From<codex2api_upstream::UpstreamError> for ApiError {
                 {
                     error.status = status;
                 }
-                for name in ["retry-after", "retry-after-ms"] {
+                for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
                     if let Some(value) = headers.get(name) {
                         error.headers.insert(name, value.clone());
                     }
@@ -238,13 +241,21 @@ impl From<codex2api_upstream::UpstreamError> for ApiError {
             other => {
                 let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&other);
                 let failure = other.failure();
-                Self::new(
+                let mut response = Self::new(
                     StatusCode::from_u16(failure.status.unwrap_or(502))
                         .unwrap_or(StatusCode::BAD_GATEWAY),
                     failure.code.as_deref().unwrap_or("upstream_error"),
                     "The upstream service could not complete this request.",
                 )
-                .with_diagnostic(&diagnostic)
+                .with_diagnostic(&diagnostic);
+                if let Some(headers) = other.retry_headers() {
+                    for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
+                        if let Some(value) = headers.get(name) {
+                            response.headers.insert(name, value.clone());
+                        }
+                    }
+                }
+                response
             }
         }
     }

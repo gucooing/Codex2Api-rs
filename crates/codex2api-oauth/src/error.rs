@@ -265,6 +265,7 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
             "cf-ray",
             "retry-after",
             "retry-after-ms",
+            "x-should-retry",
             "openai-model",
             "x-openai-model",
         ] {
@@ -281,12 +282,20 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
         UpstreamError::InvalidRequest(message) => message.clone(),
         _ => "The service could not complete this request.".into(),
     };
-    openai_response(
+    let mut response = openai_response(
         status,
         error_type_for_status(status),
         message,
         failure.code.as_deref(),
-    )
+    );
+    if let Some(headers) = err.retry_headers() {
+        for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
+            if let Some(value) = headers.get(name) {
+                response.headers_mut().insert(name, value.clone());
+            }
+        }
+    }
+    response
 }
 
 pub fn error_type_for_status(status: StatusCode) -> &'static str {

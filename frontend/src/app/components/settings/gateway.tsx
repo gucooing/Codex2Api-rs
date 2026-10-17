@@ -3,6 +3,7 @@ import { GatewayClientRules } from "@/app/components/settings/gateway-client-rul
 import { GatewayScheduling } from "@/app/components/settings/gateway-scheduling";
 import { useGateway } from "@/app/data/settings";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { FieldSet } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 
@@ -32,8 +33,16 @@ export function Gateway() {
         </Button>
       </div>
       <FieldSet className="gap-4">
-        <GatewayScheduling form={form} />
-        <GatewayClientRules form={form} />
+        <Card>
+          <CardContent>
+            <GatewayScheduling form={form} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <GatewayClientRules form={form} />
+          </CardContent>
+        </Card>
       </FieldSet>
     </form>
   );

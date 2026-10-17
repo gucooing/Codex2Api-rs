@@ -347,10 +347,20 @@ Before changing subscription client endpoints, read
   OAuth/API must not depend on each other's HTTP handlers or browser businesses.
   Keep both frontend businesses embeddable in the same Rust host; service extraction
   requires explicit protocols and data ownership, not extra crates by itself.
-- Keep tests focused on critical algorithms such as billing, authorization,
-  scheduling and protocol parsing. Do not add tests for constant repetition,
-  ordinary UI structure, required-field/serialization checks, trivial field mappings or simple CRUD. Use compilation,
-  lint and type checks for routine changes.
+- Write tests only for critical algorithms and business invariants, such as
+  billing, authorization, scheduling and protocol parsing. Do not add tests for
+  constant repetition, ordinary UI structure, required-field/serialization checks,
+  trivial field mappings or simple CRUD. Existing noncritical or redundant tests
+  may be deleted; do not preserve or repair them solely to make a suite pass.
+  Use compilation, lint and type checks for routine changes.
+- Before reacting to a failing assertion, identify the business invariant it
+  protects and verify the current contract. Fix genuine implementation defects;
+  update invalid fixtures or obsolete expectations only when the current contract
+  supports the change. Never weaken production validation or blindly change code
+  to satisfy a test. Resolve relevant critical failures before reporting completion.
+- Finish the related changes, then run the smallest set of relevant checks.
+  Do not repeatedly run scattered tests or expand to unrelated suites without a
+  concrete reason. Repeat checks only for new changes, failures or unresolved risks.
 - Give derived caches stable business keys or tie them to their owning object.
   Do not add periodic cache scans to compensate for retained obsolete objects.
 - Remove superseded routes, fields and runtime branches when replacing behavior.

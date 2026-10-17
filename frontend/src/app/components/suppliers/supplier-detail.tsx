@@ -9,7 +9,7 @@ import { SupplierTagEditor } from "@/components/forms/supplier-tags-form";
 import { supplierChannel } from "@/components/providers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Field, FieldDescription, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
@@ -45,8 +45,23 @@ export function SupplierDetail() {
   const ChannelOfficialData = supplierChannel(account?.provider_id).OfficialData;
   return (
     <>
-      <div className="flex items-center justify-end gap-2">
-        <CardDescription className="mr-auto truncate">{account?.email ?? "—"}</CardDescription>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="mr-auto flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium">{account?.email ?? "—"}</span>
+          {account && (
+            <Badge
+              variant={
+                account.status === "error"
+                  ? "destructive"
+                  : account.status === "active"
+                    ? "secondary"
+                    : "outline"
+              }
+            >
+              {supplierStatusLabel(account.status)}
+            </Badge>
+          )}
+        </div>
         {profileRefresh && (
           <Button
             variant="outline"
@@ -66,7 +81,7 @@ export function SupplierDetail() {
         >
           {resource.refreshing && <Spinner />}刷新
         </Button>
-        <Button variant="outline" asChild>
+        <Button variant="outline" size="sm" asChild>
           <Link href="/suppliers/">返回列表</Link>
         </Button>
       </div>

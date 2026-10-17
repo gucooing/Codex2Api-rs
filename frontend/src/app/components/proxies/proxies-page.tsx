@@ -68,18 +68,19 @@ export default function ProxiesPage() {
   } = useProxiesPage();
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-wrap items-end gap-3">
+      <Card size="sm">
+        <CardContent className="flex flex-wrap items-center gap-2">
           <form
-            className="flex flex-wrap items-end gap-3"
+            className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
               resource.reload(1);
             }}
           >
-            <Field className="w-40">
+            <Field className="min-w-0 sm:w-44">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-1" + "-" + encodeURIComponent(String("搜索代理"))}
               >
                 {"搜索代理"}
@@ -89,11 +90,12 @@ export default function ProxiesPage() {
                 aria-label={"搜索代理"}
                 value={filters.search}
                 onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-                placeholder="名称或主机地址"
+                placeholder="搜索名称或主机地址"
               />
             </Field>
-            <Field className="w-40">
+            <Field className="min-w-0 sm:w-32">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("代理协议"))}
               >
                 {"代理协议"}
@@ -153,8 +155,9 @@ export default function ProxiesPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field className="w-40">
+            <Field className="min-w-0 sm:w-36">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("连接检查结果"))}
               >
                 {"连接检查结果"}
@@ -216,14 +219,15 @@ export default function ProxiesPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <div className="flex flex-wrap items-center gap-2 self-end">
-              <Button type="submit">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button type="submit" size="sm">
                 <Search />
                 查询
               </Button>
               <Button
                 type="button"
-                variant="secondary"
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
@@ -234,6 +238,8 @@ export default function ProxiesPage() {
                 重置
               </Button>
             </div>
+          </form>
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="outline" size="sm" aria-label="显示列">
@@ -261,14 +267,10 @@ export default function ProxiesPage() {
                 <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </form>
-          <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
-            {
-              <Button type="button" onClick={() => setEditing("new")}>
-                <Plus />
-                添加代理
-              </Button>
-            }
+            <Button type="button" size="sm" onClick={() => setEditing("new")}>
+              <Plus />
+              添加代理
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -417,6 +419,7 @@ export default function ProxiesPage() {
                               className="max-md:hidden"
                               type="button"
                               variant="outline"
+                              size="sm"
                               disabled={false || actions.isBusy("app\\proxies\\page.tsx:action:4")}
                               onClick={() => handleClick(proxy)}
                             >

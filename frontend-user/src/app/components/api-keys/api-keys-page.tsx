@@ -81,17 +81,22 @@ export default function ApiKeysPage() {
         </Button>
         <Badge variant="outline">USD 钱包按量计费</Badge>
       </div>
-      <form className="flex flex-wrap items-end gap-3" onSubmit={search}>
-        <Field className="w-40">
-          <FieldLabel htmlFor={id + "-search"}>密钥名称</FieldLabel>
+      <form className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap" onSubmit={search}>
+        <Field className="min-w-0 sm:w-40">
+          <FieldLabel className="sr-only" htmlFor={id + "-search"}>
+            密钥名称
+          </FieldLabel>
           <Input
             id={id + "-search"}
+            placeholder="搜索密钥名称"
             value={filters.search}
             onChange={(event) => setFilters({ ...filters, search: event.target.value })}
           />
         </Field>
-        <Field className="w-40">
-          <FieldLabel htmlFor={id + "-group"}>API 组</FieldLabel>
+        <Field className="min-w-0 sm:w-40">
+          <FieldLabel className="sr-only" htmlFor={id + "-group"}>
+            API 组
+          </FieldLabel>
           <Select
             value={filters.group_id || "all"}
             onValueChange={(group_id) =>
@@ -111,8 +116,10 @@ export default function ApiKeysPage() {
             </SelectContent>
           </Select>
         </Field>
-        <Field className="w-32">
-          <FieldLabel htmlFor={id + "-status"}>状态</FieldLabel>
+        <Field className="min-w-0 sm:w-28">
+          <FieldLabel className="sr-only" htmlFor={id + "-status"}>
+            状态
+          </FieldLabel>
           <Select
             value={filters.status || "all"}
             onValueChange={(status) =>
@@ -130,15 +137,17 @@ export default function ApiKeysPage() {
             </SelectContent>
           </Select>
         </Field>
-        <Button type="submit">
-          <Search />
-          查询
-        </Button>
-        <Button type="button" variant="secondary" onClick={reset}>
-          <RotateCcw />
-          重置
-        </Button>
-        <div className="ml-auto flex gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button type="submit" size="sm">
+            <Search />
+            查询
+          </Button>
+          <Button type="button" variant="secondary" size="sm" onClick={reset}>
+            <RotateCcw />
+            重置
+          </Button>
+        </div>
+        <div className="col-span-2 flex items-center justify-end gap-2 sm:col-auto sm:ml-auto">
           <Button
             type="button"
             variant="ghost"
@@ -150,6 +159,7 @@ export default function ApiKeysPage() {
           </Button>
           <Button
             type="button"
+            size="sm"
             disabled={!resource.ready || !groups.ready || !groups.data?.items.length}
             onClick={() => openEditor()}
           >

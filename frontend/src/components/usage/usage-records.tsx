@@ -65,10 +65,9 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
   } = useUsagePageView({ consumerId });
   return (
     <>
-      <Card>
-        <CardContent className="space-y-4">
+      <Card size="sm">
+        <CardContent>
           <form
-            className="space-y-4"
             noValidate
             onSubmit={(e) => {
               e.preventDefault();
@@ -79,9 +78,9 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
             }}
           >
             <Collapsible>
-              <div className="flex flex-wrap items-end gap-3">
+              <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
                 {!consumerId && (
-                  <Field className="w-40">
+                  <Field className="min-w-0 sm:w-36 lg:flex-1 lg:max-w-44">
                     <FieldLabel className="sr-only" htmlFor={fieldId + "-user"}>
                       用户
                     </FieldLabel>
@@ -116,7 +115,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     >
                       <ComboboxInput
                         id={fieldId + "-user"}
-                        placeholder="搜索选择用户"
+                        placeholder="全部用户"
                         showClear
                         className="w-full"
                         maxLength={128}
@@ -140,8 +139,10 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     </Combobox>
                   </Field>
                 )}
-                <Field className="w-40">
-                  <FieldLabel htmlFor={fieldId + "-supplier"}>供应账户</FieldLabel>
+                <Field className="min-w-0 sm:w-36 lg:flex-1 lg:max-w-44">
+                  <FieldLabel className="sr-only" htmlFor={fieldId + "-supplier"}>
+                    供应账户
+                  </FieldLabel>
                   <Combobox<SupplierOption>
                     items={suppliers.data?.items ?? []}
                     value={selectedSupplier ?? null}
@@ -178,7 +179,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     <ComboboxInput
                       id={fieldId + "-supplier"}
                       aria-label="供应账户"
-                      placeholder="全部账户"
+                      placeholder="全部供应账户"
                       showClear
                       className="w-full"
                     />
@@ -208,8 +209,10 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                   </Combobox>
                 </Field>
                 {!consumerId && (
-                  <Field className="w-40">
-                    <FieldLabel htmlFor={fieldId + "-consumer"}>消费账户</FieldLabel>
+                  <Field className="min-w-0 sm:w-36 lg:flex-1 lg:max-w-44">
+                    <FieldLabel className="sr-only" htmlFor={fieldId + "-consumer"}>
+                      消费账户
+                    </FieldLabel>
                     <Combobox<ConsumerOption>
                       items={consumers.data?.items ?? []}
                       value={selectedConsumer ?? null}
@@ -246,7 +249,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                       <ComboboxInput
                         id={fieldId + "-consumer"}
                         aria-label="消费账户"
-                        placeholder="全部账户"
+                        placeholder="全部消费账户"
                         showClear
                         className="w-full"
                       />
@@ -274,8 +277,9 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     </Combobox>
                   </Field>
                 )}
-                <Field className="w-40">
+                <Field className="min-w-0 sm:w-32 lg:flex-1 lg:max-w-40">
                   <FieldLabel
+                    className="sr-only"
                     htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("模型"))}
                   >
                     {"模型"}
@@ -283,12 +287,14 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                   <Input
                     id={fieldId + "-field-3" + "-" + encodeURIComponent(String("模型"))}
                     aria-label={"模型"}
+                    placeholder="全部模型"
                     value={filters.model}
                     onChange={(e) => update("model", e.target.value)}
                   />
                 </Field>
-                <Field className="w-40">
+                <Field className="min-w-0 sm:w-28">
                   <FieldLabel
+                    className="sr-only"
                     htmlFor={fieldId + "-field-4" + "-" + encodeURIComponent(String("状态"))}
                   >
                     {"状态"}
@@ -325,8 +331,10 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field className="w-40">
-                  <FieldLabel htmlFor={fieldId + "-source"}>来源</FieldLabel>
+                <Field className="min-w-0 sm:w-28">
+                  <FieldLabel className="sr-only" htmlFor={fieldId + "-source"}>
+                    来源
+                  </FieldLabel>
                   <Select
                     value={filters.source || "all"}
                     onValueChange={(next) => update("source", next === "all" ? "" : next)}
@@ -341,13 +349,14 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     </SelectContent>
                   </Select>
                 </Field>
-                <div className="flex flex-wrap items-center gap-2 self-end">
-                  <Button type="submit">
+                <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-auto">
+                  <Button type="submit" size="sm">
                     <Search />
                     查询
                   </Button>
                   <Button
                     variant="outline"
+                    size="sm"
                     type="button"
                     onClick={() => {
                       const next = { ...emptyFilters, virtual_account: consumerId ?? "" };
@@ -363,7 +372,7 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     重置
                   </Button>
                   <CollapsibleTrigger asChild>
-                    <Button type="button" variant="ghost">
+                    <Button type="button" variant="ghost" size="sm">
                       <CalendarDays />
                       时间范围{filters.from || filters.until ? " · 已设置" : ""}
                     </Button>
@@ -371,32 +380,36 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                 </div>
               </div>
               <CollapsibleContent>
-                <div className="mt-3 flex flex-wrap items-end gap-3">
-                  <Field className="w-56">
+                <div className="mt-2.5 grid grid-cols-1 gap-2 border-t pt-2.5 sm:flex sm:flex-wrap sm:items-center sm:gap-2.5">
+                  <Field orientation="horizontal" className="min-w-0 sm:w-auto">
                     <FieldLabel
+                      className="shrink-0 text-xs text-muted-foreground"
                       htmlFor={fieldId + "-field-5" + "-" + encodeURIComponent(String("开始时间"))}
                     >
-                      {"开始时间"}
+                      开始
                     </FieldLabel>
                     <Input
                       id={fieldId + "-field-5" + "-" + encodeURIComponent(String("开始时间"))}
                       aria-label={"开始时间"}
                       type="datetime-local"
+                      className="min-w-0 flex-1 sm:w-44"
                       value={filters.from}
                       max={filters.until || undefined}
                       onChange={(event) => update("from", event.target.value)}
                     />
                   </Field>
-                  <Field className="w-56">
+                  <Field orientation="horizontal" className="min-w-0 sm:w-auto">
                     <FieldLabel
+                      className="shrink-0 text-xs text-muted-foreground"
                       htmlFor={fieldId + "-field-6" + "-" + encodeURIComponent(String("结束时间"))}
                     >
-                      {"结束时间"}
+                      结束
                     </FieldLabel>
                     <Input
                       id={fieldId + "-field-6" + "-" + encodeURIComponent(String("结束时间"))}
                       aria-label={"结束时间"}
                       type="datetime-local"
+                      className="min-w-0 flex-1 sm:w-44"
                       value={filters.until}
                       min={filters.from || undefined}
                       onChange={(event) => update("until", event.target.value)}

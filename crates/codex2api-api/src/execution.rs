@@ -473,7 +473,7 @@ async fn response_body(
         == codex2api_upstream::ResponseFormat::EventStream;
     if !is_sse {
         let result = read_json(response).await;
-        let value = match result {
+        let mut value = match result {
             Ok(value) => value,
             Err(error) => {
                 log.fail(&error);
@@ -481,6 +481,9 @@ async fn response_body(
                 return Err(error);
             }
         };
+        if route.provider_id == codex2api_common::GROK {
+            codex2api_upstream::grok::errors::normalize_response(&mut value);
+        }
         log.measure(&value, prepared.output);
         if matches!(
             ResponseOutcome::from_value(&value, None),
@@ -655,7 +658,7 @@ pub(crate) fn error_event(error: &ApiError) -> Value {
     let mut value = error.body.clone();
     value["type"] = "error".into();
     value["status"] = error.status.as_u16().into();
-    for name in ["retry-after", "retry-after-ms"] {
+    for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
         if let Some(retry) = error.headers.get(name).and_then(|v| v.to_str().ok()) {
             value["headers"][name] = retry.into();
         }
@@ -819,6 +822,9 @@ async fn consume_stream(
         }
         if value.get("type").is_none() && !event.event.is_empty() && event.event != "message" {
             value["type"] = event.event.into();
+        }
+        if route.provider_id == codex2api_common::GROK {
+            codex2api_upstream::grok::errors::normalize_response(&mut value);
         }
         if matches!(
             value["type"].as_str(),

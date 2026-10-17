@@ -1,6 +1,7 @@
 "use client";
 import { useSecurityEditor } from "@/app/data/settings";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -82,47 +83,51 @@ export function SecurityEditor({
         </Button>
       </div>
       {groups.map((group) => (
-        <FieldSet key={group.title}>
-          <FieldLegend variant="label">{group.title}</FieldLegend>
-          <FieldGroup className="grid gap-4 sm:grid-cols-2">
-            {group.fields.map((field) => (
-              <Field key={field.key}>
-                <div className="flex items-center gap-1">
-                  <FieldLabel htmlFor={`${fieldId}-${field.key}`}>{field.label}</FieldLabel>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        className="size-5 text-muted-foreground"
-                        aria-label={`${field.label}说明`}
-                      >
-                        <CircleAlert className="size-3" aria-hidden="true" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      align="start"
-                      collisionPadding={16}
-                      aria-label={`${field.label}说明`}
-                    >
-                      {field.description}
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <Input
-                  id={`${fieldId}-${field.key}`}
-                  type={field.type}
-                  autoComplete={field.autoComplete}
-                  required={field.required}
-                  value={form[field.key]}
-                  onChange={(event) => update(field.key, event.target.value)}
-                  disabled={disabled || busy}
-                />
-              </Field>
-            ))}
-          </FieldGroup>
-        </FieldSet>
+        <Card key={group.title}>
+          <CardContent>
+            <FieldSet>
+              <FieldLegend variant="label">{group.title}</FieldLegend>
+              <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                {group.fields.map((field) => (
+                  <Field key={field.key}>
+                    <div className="flex items-center gap-1">
+                      <FieldLabel htmlFor={`${fieldId}-${field.key}`}>{field.label}</FieldLabel>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="size-5 text-muted-foreground"
+                            aria-label={`${field.label}说明`}
+                          >
+                            <CircleAlert className="size-3" aria-hidden="true" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="start"
+                          collisionPadding={16}
+                          aria-label={`${field.label}说明`}
+                        >
+                          {field.description}
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <Input
+                      id={`${fieldId}-${field.key}`}
+                      type={field.type}
+                      autoComplete={field.autoComplete}
+                      required={field.required}
+                      value={form[field.key]}
+                      onChange={(event) => update(field.key, event.target.value)}
+                      disabled={disabled || busy}
+                    />
+                  </Field>
+                ))}
+              </FieldGroup>
+            </FieldSet>
+          </CardContent>
+        </Card>
       ))}
     </form>
   );

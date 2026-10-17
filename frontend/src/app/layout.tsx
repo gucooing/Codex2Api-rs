@@ -4,7 +4,6 @@ import "./styles.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
-import { desktopViewportScript } from "@/lib/viewport";
 import {
   CircleCheckIcon,
   OctagonXIcon,
@@ -21,9 +20,6 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: desktopViewportScript }} />
-      </head>
       {/* Browser extensions may add attributes to body before React hydrates it. */}
       <body suppressHydrationWarning>
         <ThemeProvider>

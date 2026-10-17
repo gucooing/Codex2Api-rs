@@ -48,7 +48,7 @@ export default function OrdersPage() {
         <form
           aria-label="订单筛选"
           noValidate
-          className="flex flex-wrap items-center gap-2"
+          className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
           onSubmit={(event) => {
             event.preventDefault();
             setApplied({ ...filters, search: filters.search.trim() });
@@ -57,7 +57,7 @@ export default function OrdersPage() {
             plans.reload();
           }}
         >
-          <Field className="w-40">
+          <Field className="min-w-0 sm:w-40">
             <FieldLabel className="sr-only" htmlFor={`${id}-search`}>
               订单号
             </FieldLabel>
@@ -69,7 +69,7 @@ export default function OrdersPage() {
               onChange={(event) => setFilters((v) => ({ ...v, search: event.target.value }))}
             />
           </Field>
-          <Field className="w-40">
+          <Field className="min-w-0 sm:w-36">
             <FieldLabel className="sr-only" htmlFor={`${id}-filter-plan`}>
               套餐
             </FieldLabel>
@@ -77,7 +77,7 @@ export default function OrdersPage() {
               value={filters.plan_id}
               onValueChange={(plan_id) => setFilters((v) => ({ ...v, plan_id }))}
             >
-              <SelectTrigger id={`${id}-filter-plan`}>
+              <SelectTrigger id={`${id}-filter-plan`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper">
@@ -90,7 +90,7 @@ export default function OrdersPage() {
               </SelectContent>
             </Select>
           </Field>
-          <Field className="w-32">
+          <Field className="min-w-0 sm:w-28">
             <FieldLabel className="sr-only" htmlFor={`${id}-status`}>
               订单状态
             </FieldLabel>
@@ -98,7 +98,7 @@ export default function OrdersPage() {
               value={filters.status}
               onValueChange={(status) => setFilters((v) => ({ ...v, status }))}
             >
-              <SelectTrigger id={`${id}-status`}>
+              <SelectTrigger id={`${id}-status`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper">
@@ -111,19 +111,24 @@ export default function OrdersPage() {
               </SelectContent>
             </Select>
           </Field>
-          <Button type="submit">查询</Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              setFilters(emptyFilters);
-              setApplied(emptyFilters);
-              setPage(1);
-              resource.reload();
-            }}
-          >
-            重置
-          </Button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button type="submit" size="sm">
+              查询
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setFilters(emptyFilters);
+                setApplied(emptyFilters);
+                setPage(1);
+                resource.reload();
+              }}
+            >
+              重置
+            </Button>
+          </div>
         </form>
       </div>
       <Card>

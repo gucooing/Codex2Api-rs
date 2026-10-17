@@ -152,6 +152,21 @@ where
             }
             Err(error) => {
                 revision = error.auth_revision().or(revision);
+                if let UpstreamError::Status { body, .. } = &error
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(body)
+                    && codex2api_upstream::scheduler::generation_observed(&value)
+                {
+                    if let Some(failure) = error.supplier_failure_for(
+                        &ctx.account.provider_id,
+                        chrono::Utc::now().timestamp(),
+                    ) {
+                        observe(state, &ctx.account.id, revision, &failure).await?;
+                    }
+                    if let Some(log) = log {
+                        log.upstream_failure(&error);
+                    }
+                    return Err(error.into());
+                }
                 let Some(mut failure) = error
                     .supplier_failure_for(&ctx.account.provider_id, chrono::Utc::now().timestamp())
                 else {

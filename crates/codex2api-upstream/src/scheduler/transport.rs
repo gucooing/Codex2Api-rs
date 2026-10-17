@@ -81,6 +81,10 @@ pub fn generation_observed(value: &serde_json::Value) -> bool {
         .and_then(serde_json::Value::as_object)
         .is_some_and(|usage| !usage.is_empty())
         || response
+            .get("message")
+            .filter(|v| v.is_object())
+            .is_some_and(generation_observed)
+        || response
             .get("output")
             .and_then(serde_json::Value::as_array)
             .is_some_and(|output| !output.is_empty())
@@ -88,6 +92,10 @@ pub fn generation_observed(value: &serde_json::Value) -> bool {
             .get("data")
             .and_then(serde_json::Value::as_array)
             .is_some_and(|data| !data.is_empty())
+        || response
+            .get("content")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|content| !content.is_empty())
         || response
             .get("choices")
             .and_then(serde_json::Value::as_array)
@@ -101,6 +109,11 @@ pub fn generation_observed(value: &serde_json::Value) -> bool {
                         .get("content")
                         .and_then(serde_json::Value::as_str)
                         .is_some_and(|text| !text.is_empty())
+                        || message
+                            .get("reasoning_content")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|text| !text.is_empty())
+                        || message.get("function_call").is_some_and(|v| !v.is_null())
                         || message
                             .get("tool_calls")
                             .and_then(serde_json::Value::as_array)
@@ -117,8 +130,16 @@ pub async fn inspect_response(
     let status = response.status();
     let mut headers = response.headers().clone();
     if !status.is_success() {
+        let revision = response
+            .extensions()
+            .get::<crate::SupplierAuthRevision>()
+            .copied();
         let body = response.text().await?;
-        return Err(UpstreamError::status_with_headers(status, body, headers));
+        let mut error = UpstreamError::status_with_headers(status, body, headers);
+        if let Some(revision) = revision {
+            error = error.with_auth_revision(revision.0);
+        }
+        return Err(error);
     }
     let version = response.version();
     let mut framing = None;

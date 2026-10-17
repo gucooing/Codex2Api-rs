@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request, setSessionCsrf as setCsrf } from "../src/lib/api.ts";
+import { isMobileDesktopMode, syncDesktopViewport } from "../src/hooks/use-mobile.ts";
 
 const json = (status, value) => new Response(JSON.stringify(value), { status });
 const unauthorized = () => json(401, { error: { code: "unauthorized", message: "登录已失效" } });
@@ -104,5 +105,72 @@ test("only a rejected refresh logs out; outages, foreign 401s and canceled reads
   } finally {
     Object.assign(globalThis, original);
     setCsrf("");
+  }
+});
+
+test("mobile PC mode locks 1280px desktop viewport while preserving normal phone and desktop modes", () => {
+  const original = {
+    window: globalThis.window,
+    navigator: globalThis.navigator,
+    document: globalThis.document,
+  };
+  try {
+    let viewportContent = "width=device-width, initial-scale=1";
+    const meta = {
+      getAttribute: (name) => (name === "content" ? viewportContent : null),
+      setAttribute: (name, value) => {
+        if (name === "content") viewportContent = value;
+      },
+    };
+    const root = {
+      clientWidth: 390,
+      dataset: {},
+      style: { zoom: "", minWidth: "" },
+    };
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      writable: true,
+      value: {
+        documentElement: root,
+        head: {
+          querySelectorAll: () => [meta],
+        },
+      },
+    });
+
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      writable: true,
+      value: {
+        userAgent:
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        maxTouchPoints: 5,
+        userAgentData: { mobile: false },
+      },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: {
+        innerWidth: 390,
+        screen: { width: 1080, height: 2400 },
+        matchMedia: (q) => ({
+          matches: q.includes("pointer: coarse") || q.includes("hover: none"),
+        }),
+      },
+    });
+    assert.equal(isMobileDesktopMode(), true);
+    assert.equal(syncDesktopViewport(), true);
+    assert.equal(viewportContent.startsWith("width=1280"), true);
+    assert.equal(root.dataset.desktopViewport, "true");
+    assert.equal(root.style.minWidth, "1280px");
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      Object.defineProperty(globalThis, key, {
+        configurable: true,
+        writable: true,
+        value,
+      });
+    }
   }
 });

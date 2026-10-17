@@ -241,6 +241,7 @@ impl GrokAuthService {
             .await?;
         let status = response.status();
         if !status.is_success() {
+            let retry_headers = response.headers().clone();
             let value: Value = response.json().await.unwrap_or_default();
             let code = value["error"]
                 .as_str()
@@ -254,6 +255,7 @@ impl GrokAuthService {
                     status: status.as_u16(),
                     code,
                     message: "Grok 拒绝刷新凭据".into(),
+                    headers: retry_headers,
                 }
             } else {
                 AuthError::TokenEndpoint {

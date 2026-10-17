@@ -33,6 +33,16 @@ import {
 } from "@/components/ui/table";
 import { money } from "@/lib/format";
 import { subscriptionLabel } from "@/lib/subscriptions";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Columns3,
+  Plus,
+  RotateCcw,
+  Search,
+} from "lucide-react";
 
 export default function PlansPage() {
   const {
@@ -50,68 +60,82 @@ export default function PlansPage() {
   } = usePlansPage();
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-wrap items-end gap-3">
+      <Card size="sm">
+        <CardContent className="flex flex-wrap items-center gap-2">
           <form
-            className="flex flex-wrap items-end gap-2"
+            className="flex w-full items-center gap-1.5 sm:w-auto sm:gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               setApplied(search.trim());
               resource.reload(1);
             }}
           >
-            <Field className="w-56">
-              <FieldLabel htmlFor={`${id}-search`}>搜索套餐</FieldLabel>
+            <Field className="min-w-0 flex-1 sm:w-52 sm:flex-none">
+              <FieldLabel className="sr-only" htmlFor={`${id}-search`}>
+                搜索套餐
+              </FieldLabel>
               <Input
                 id={`${id}-search`}
+                placeholder="搜索套餐名称"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </Field>
-            <Button type="submit">查询</Button>
+            <Button type="submit" size="sm">
+              <Search />
+              查询
+            </Button>
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => {
                 setSearch("");
                 setApplied("");
                 resource.reload(1);
               }}
             >
+              <RotateCcw />
               重置
             </Button>
           </form>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button type="button" variant="outline">
-                显示列
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>{columns.mobile ? "手机显示列" : "桌面显示列"}</DropdownMenuLabel>
-              {columns.labels.map((label) => (
-                <DropdownMenuCheckboxItem
-                  key={label}
-                  checked={columns.isVisible(label)}
-                  disabled={columns.count === 1 && columns.isVisible(label)}
-                  onSelect={(event) => event.preventDefault()}
-                  onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
-                >
-                  {label}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
-              <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            className="ml-auto"
-            disabled={!resource.ready}
-            onClick={() => setEditing({ ...emptyPlan })}
-          >
-            添加套餐
-          </Button>
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm">
+                  <Columns3 />
+                  显示列
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>
+                  {columns.mobile ? "手机显示列" : "桌面显示列"}
+                </DropdownMenuLabel>
+                {columns.labels.map((label) => (
+                  <DropdownMenuCheckboxItem
+                    key={label}
+                    checked={columns.isVisible(label)}
+                    disabled={columns.count === 1 && columns.isVisible(label)}
+                    onSelect={(event) => event.preventDefault()}
+                    onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
+                  >
+                    {label}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
+                <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              size="sm"
+              disabled={!resource.ready}
+              onClick={() => setEditing({ ...emptyPlan })}
+            >
+              <Plus />
+              添加套餐
+            </Button>
+          </div>
         </CardContent>
       </Card>
       <Card>
@@ -136,7 +160,7 @@ export default function PlansPage() {
                       {plan.provider_id} · {subscriptionLabel(plan.plan_type, plan.provider_id)}
                     </p>
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("售价 / 有效期")}>
+                  <TableCell hidden={!columns.isVisible("售价 / 有效期")} className="tabular-nums">
                     {plan.sale_price_usd === null ? "未开放购买" : money(plan.sale_price_usd)}
                     <p className="text-xs text-muted-foreground">{plan.duration_days} 天</p>
                   </TableCell>
@@ -147,7 +171,7 @@ export default function PlansPage() {
                         ? "无模型"
                         : `指定 ${plan.models.length} 个模型`}
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("费用上限")}>
+                  <TableCell hidden={!columns.isVisible("费用上限")} className="tabular-nums">
                     {plan.spending_windows.map((w) => (
                       <p key={w.duration_seconds}>
                         {windowLabel(w.duration_seconds)}：
@@ -156,7 +180,7 @@ export default function PlansPage() {
                     ))}
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("允许购买")}>
-                    <Badge variant="secondary">
+                    <Badge variant={plan.allow_purchase ? "secondary" : "outline"}>
                       {plan.allow_purchase ? "允许购买" : "未开放购买"}
                     </Badge>
                   </TableCell>
@@ -182,48 +206,79 @@ export default function PlansPage() {
                   </TableCell>
                 </TableRow>
               ))}
+              {pagination.rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={columns.count} className="text-center text-muted-foreground">
+                    暂无套餐
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
           <Pagination className="mt-3 justify-end" aria-label="套餐分页">
-            <PaginationContent className="flex-wrap">
-              <PaginationItem>
-                共 {pagination.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
-              </PaginationItem>
+            <PaginationContent className="flex-wrap justify-end gap-1">
               <PaginationItem>
                 <Select {...pagination.size}>
-                  <SelectTrigger aria-label="每页条数">
+                  <SelectTrigger aria-label="每页条数" className="h-7 w-24">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent side="bottom">
+                  <SelectContent position="popper" side="bottom" align="end">
                     {[10, 20, 30, 50].map((n) => (
                       <SelectItem key={n} value={String(n)}>
-                        {n} 条
+                        {n} 条/页
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </PaginationItem>
+              <PaginationItem className="mr-2 text-xs text-muted-foreground">
+                共 {pagination.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
+              </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.first}>
-                  首页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="首页"
+                  {...pagination.first}
+                >
+                  <ChevronsLeft />
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.previous}>
-                  上一页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="上一页"
+                  {...pagination.previous}
+                >
+                  <ChevronLeft />
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Input className="w-16" {...pagination.input} />
+                <Input className="h-7 w-14 text-center tabular-nums" {...pagination.input} />
               </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.next}>
-                  下一页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="下一页"
+                  {...pagination.next}
+                >
+                  <ChevronRight />
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.last}>
-                  末页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="末页"
+                  {...pagination.last}
+                >
+                  <ChevronsRight />
                 </Button>
               </PaginationItem>
             </PaginationContent>

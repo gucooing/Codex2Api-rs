@@ -173,13 +173,22 @@ function AdminShell({ children }: { children: ReactNode }) {
   if (!session.authenticated)
     return (
       <Context value={{ session, refresh }}>
-        <main className="flex min-h-svh w-full items-center justify-center p-4">
-          <Card className="w-full max-w-sm">
-            <CardHeader>
-              <CardTitle role="heading" aria-level={1}>
-                管理登录
-              </CardTitle>
-              <CardDescription>Codex2API · 供应账户与订阅管理</CardDescription>
+        <main className="flex min-h-svh w-full items-center justify-center bg-muted/30 p-4">
+          <Card className="w-full max-w-sm shadow-sm">
+            <CardHeader className="space-y-3 pb-2">
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs">
+                  <ArrowRightLeft className="size-4" />
+                </div>
+                <div className="space-y-0.5">
+                  <CardTitle role="heading" aria-level={1} className="text-base">
+                    管理登录
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Codex2API · 供应账户与订阅管理
+                  </CardDescription>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <form noValidate onSubmit={(event) => handleSubmit2(event)}>
@@ -193,6 +202,7 @@ function AdminShell({ children }: { children: ReactNode }) {
                           value={username}
                           onChange={(event) => setUsername(event.target.value)}
                           autoComplete="username"
+                          placeholder="请输入管理员用户名"
                           required
                         />
                       </Field>
@@ -204,10 +214,15 @@ function AdminShell({ children }: { children: ReactNode }) {
                           value={password}
                           onChange={(event) => setPassword(event.target.value)}
                           autoComplete="current-password"
+                          placeholder="请输入管理员密码"
                           required
                         />
                       </Field>
-                      <Button type="submit" disabled={actions.isBusy("admin-login")}>
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={actions.isBusy("admin-login")}
+                      >
                         {actions.isBusy("admin-login") && <Spinner />}登录
                       </Button>
                     </FieldGroup>
@@ -222,13 +237,18 @@ function AdminShell({ children }: { children: ReactNode }) {
   return (
     <Context value={{ session, refresh }}>
       <Sidebar collapsible="icon">
-        <SidebarHeader>
+        <SidebarHeader className="border-b border-sidebar-border/60">
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild size="lg">
+              <SidebarMenuButton asChild size="lg" tooltip="Codex2API 管理首页">
                 <Link href="/" aria-label="Codex2API 管理首页">
-                  <ArrowRightLeft />
-                  <span>Codex2API</span>
+                  <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+                    <ArrowRightLeft className="size-4" />
+                  </div>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-semibold">Codex2API</span>
+                    <span className="truncate text-xs text-muted-foreground">管理工作台</span>
+                  </div>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -267,7 +287,7 @@ function AdminShell({ children }: { children: ReactNode }) {
             ))}
           </nav>
         </SidebarContent>
-        <SidebarFooter>
+        <SidebarFooter className="border-t border-sidebar-border/60">
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
@@ -282,8 +302,8 @@ function AdminShell({ children }: { children: ReactNode }) {
           </SidebarMenu>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset className="min-w-0">
-        <header className="flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-1">
+      <SidebarInset className="min-w-0 bg-muted/20 dark:bg-background">
+        <header className="sticky top-0 z-20 flex min-h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-4 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <SidebarTrigger
             className="-ml-1"
             aria-label={
@@ -301,8 +321,8 @@ function AdminShell({ children }: { children: ReactNode }) {
             orientation="vertical"
             className="mr-2 data-vertical:h-4 data-vertical:self-auto"
           />
-          <Breadcrumb>
-            <BreadcrumbList>
+          <Breadcrumb className="shrink-0">
+            <BreadcrumbList className="flex-nowrap">
               <BreadcrumbItem className="hidden md:block">
                 <BreadcrumbLink asChild>
                   <Link href="/">管理工作台</Link>
@@ -310,18 +330,26 @@ function AdminShell({ children }: { children: ReactNode }) {
               </BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:block" />
               <BreadcrumbItem>
-                <BreadcrumbPage>{page?.label ?? "管理"}</BreadcrumbPage>
+                <BreadcrumbPage className="font-medium whitespace-nowrap">
+                  {page?.label ?? "管理"}
+                </BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex min-w-0 items-center gap-1">
             <div
               aria-label="版本信息"
-              className="mr-2 flex flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground sm:flex-row sm:gap-3"
+              className="mr-1 hidden items-center gap-1.5 text-[11px] leading-tight text-muted-foreground md:flex"
             >
-              <span>Codex CLI {session.codex_cli_version || "—"}</span>
-              <span>Grok Build {session.grok_build_version || "—"}</span>
-              <span>Codex2API {session.app_version || "—"}</span>
+              <span className="whitespace-nowrap rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono">
+                Codex CLI {session.codex_cli_version || "—"}
+              </span>
+              <span className="whitespace-nowrap rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono">
+                Grok Build {session.grok_build_version || "—"}
+              </span>
+              <span className="whitespace-nowrap rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono">
+                Codex2API {session.app_version || "—"}
+              </span>
             </div>
             <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
               <DialogTrigger asChild>
@@ -403,12 +431,14 @@ function AdminShell({ children }: { children: ReactNode }) {
                 </DropdownMenuLabel>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Avatar className="ml-1 size-7" aria-label={`管理员 ${session.username}`}>
-              <AvatarFallback>{session.username.slice(0, 1).toUpperCase()}</AvatarFallback>
+            <Avatar className="ml-1 size-7 border" aria-label={`管理员 ${session.username}`}>
+              <AvatarFallback className="text-xs font-medium">
+                {session.username.slice(0, 1).toUpperCase()}
+              </AvatarFallback>
             </Avatar>
           </div>
         </header>
-        <div className="flex min-w-0 flex-1 flex-col gap-4 p-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 md:p-5">
           <div className="min-w-0 space-y-4">{children}</div>
         </div>
       </SidebarInset>

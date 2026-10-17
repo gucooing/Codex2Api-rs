@@ -3,7 +3,7 @@ import { GrantResetCreditsDialog } from "@/components/platform-account/grant-res
 import { ResetCreditDialog } from "@/components/platform-account/reset-credit-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardDescription } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -50,47 +50,26 @@ export function ConsumerResetCredits({ id }: { id: string }) {
     handleClick,
   } = useConsumerResetCredits({ id });
   return (
-    <>
-      <div className="flex items-center gap-3">
-        <Button
-          size="sm"
-          disabled={!resource.ready || busy}
-          onClick={() => {
-            setStartMode("now");
-            setActivateAt("");
-            setDurationDays("30");
-            setQuantity("1");
-            setNote("");
-            setGrantOpen(true);
-          }}
-        >
-          发放重置卡
-        </Button>
-        <Badge variant="secondary">可用 {resource.data?.available_count ?? "—"} 张</Badge>
-      </div>
-      <GrantResetCreditsDialog
-        grantOpen={grantOpen}
-        busy={busy}
-        setGrantOpen={setGrantOpen}
-        dialogFocus={dialogFocus}
-        actions={actions}
-        id={id}
-        path={path}
-        quantity={quantity}
-        note={note}
-        startMode={startMode}
-        activateAt={activateAt}
-        durationDays={durationDays}
-        setNote={setNote}
-        resource={resource}
-        fieldId={fieldId}
-        setQuantity={setQuantity}
-        setStartMode={setStartMode}
-        setActivateAt={setActivateAt}
-        setDurationDays={setDurationDays}
-      />
-      <>
-        <div className="mb-2 flex justify-end">
+    <Card size="sm">
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              disabled={!resource.ready || busy}
+              onClick={() => {
+                setStartMode("now");
+                setActivateAt("");
+                setDurationDays("30");
+                setQuantity("1");
+                setNote("");
+                setGrantOpen(true);
+              }}
+            >
+              发放重置卡
+            </Button>
+            <Badge variant="secondary">可用 {resource.data?.available_count ?? "—"} 张</Badge>
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="sm" aria-label="显示列">
@@ -119,6 +98,27 @@ export function ConsumerResetCredits({ id }: { id: string }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <GrantResetCreditsDialog
+          grantOpen={grantOpen}
+          busy={busy}
+          setGrantOpen={setGrantOpen}
+          dialogFocus={dialogFocus}
+          actions={actions}
+          id={id}
+          path={path}
+          quantity={quantity}
+          note={note}
+          startMode={startMode}
+          activateAt={activateAt}
+          durationDays={durationDays}
+          setNote={setNote}
+          resource={resource}
+          fieldId={fieldId}
+          setQuantity={setQuantity}
+          setStartMode={setStartMode}
+          setActivateAt={setActivateAt}
+          setDurationDays={setDurationDays}
+        />
         <Table
           className={
             tableColumns1.count > 4
@@ -207,7 +207,7 @@ export function ConsumerResetCredits({ id }: { id: string }) {
                   data-compact="true"
                   role="cell"
                 >
-                  <Badge variant="outline">
+                  <Badge variant={credit.status === "available" ? "secondary" : "outline"}>
                     {
                       {
                         available: "可用",
@@ -297,19 +297,19 @@ export function ConsumerResetCredits({ id }: { id: string }) {
             )}
           </TableBody>
         </Table>
-      </>
-      <div className="flex items-center justify-end gap-2">
-        <CardDescription>{rows.total} 张</CardDescription>
-        <Button size="sm" variant="outline" {...rows.previous}>
-          上一页
-        </Button>
-        <CardDescription>
-          {rows.page} / {rows.pages}
-        </CardDescription>
-        <Button size="sm" variant="outline" {...rows.next}>
-          下一页
-        </Button>
-      </div>
-    </>
+        <div className="flex items-center justify-end gap-2">
+          <CardDescription>{rows.total} 张</CardDescription>
+          <Button size="sm" variant="outline" {...rows.previous}>
+            上一页
+          </Button>
+          <CardDescription>
+            {rows.page} / {rows.pages}
+          </CardDescription>
+          <Button size="sm" variant="outline" {...rows.next}>
+            下一页
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

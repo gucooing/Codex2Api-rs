@@ -95,6 +95,7 @@ impl UpstreamError {
                 }
                 _ => (503, "upstream_auth_unavailable", "上游授权当前不可用"),
             },
+            Self::GrokAuth(error) => return crate::grok::errors::auth_failure(error),
             Self::MissingAccessToken(_) => (503, "upstream_auth_missing", "供应账户没有可用授权"),
             Self::WorkspaceChanged => (
                 409,
@@ -133,6 +134,17 @@ impl UpstreamError {
     pub fn auth_revision(&self) -> Option<i64> {
         match self {
             Self::Status { auth_revision, .. } => *auth_revision,
+            _ => None,
+        }
+    }
+
+    pub fn retry_headers(&self) -> Option<&http::HeaderMap> {
+        match self {
+            Self::Status { headers, .. }
+            | Self::GrokAuth(codex2api_suppliers::grok::GrokAuthError::RefreshRejected {
+                headers,
+                ..
+            }) => Some(headers),
             _ => None,
         }
     }

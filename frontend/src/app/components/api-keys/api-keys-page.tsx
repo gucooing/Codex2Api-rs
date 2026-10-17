@@ -60,101 +60,119 @@ export default function ApiKeysPage() {
   } = useApiKeysPage();
   return (
     <>
-      <form className="flex flex-wrap items-end gap-3" onSubmit={search}>
-        <Field className="w-44">
-          <FieldLabel htmlFor={id + "-search"}>用户 / 密钥</FieldLabel>
-          <Input
-            id={id + "-search"}
-            placeholder="用户名或密钥名称"
-            value={filters.search}
-            onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-          />
-        </Field>
-        <Field className="w-40">
-          <FieldLabel htmlFor={id + "-group"}>API 组</FieldLabel>
-          <Select
-            value={filters.group_id || "all"}
-            onValueChange={(group_id) =>
-              setFilters({ ...filters, group_id: group_id === "all" ? "" : group_id })
-            }
+      <Card size="sm">
+        <CardContent>
+          <form
+            className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap"
+            onSubmit={search}
           >
-            <SelectTrigger id={id + "-group"} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              <SelectItem value="all">全部 API 组</SelectItem>
-              {groups.data?.items.map((group) => (
-                <SelectItem key={group.id} value={group.id}>
-                  {group.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field className="w-32">
-          <FieldLabel htmlFor={id + "-status"}>状态</FieldLabel>
-          <Select
-            value={filters.status || "all"}
-            onValueChange={(status) =>
-              setFilters({ ...filters, status: status === "all" ? "" : status })
-            }
-          >
-            <SelectTrigger id={id + "-status"} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              <SelectItem value="all">全部状态</SelectItem>
-              <SelectItem value="enabled">已启用</SelectItem>
-              <SelectItem value="disabled">已停用</SelectItem>
-              <SelectItem value="revoked">已撤销</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-        <Button type="submit">
-          <Search />
-          查询
-        </Button>
-        <Button type="button" variant="secondary" onClick={reset}>
-          <RotateCcw />
-          重置
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline">
-              <Columns3 />
-              显示列
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>{columns.mobile ? "手机显示列" : "桌面显示列"}</DropdownMenuLabel>
-            {columns.labels.map((label) => (
-              <DropdownMenuCheckboxItem
-                key={label}
-                checked={columns.isVisible(label)}
-                disabled={columns.count === 1 && columns.isVisible(label)}
-                onSelect={(event) => event.preventDefault()}
-                onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
+            <Field className="min-w-0 sm:w-44">
+              <FieldLabel className="sr-only" htmlFor={id + "-search"}>
+                用户 / 密钥
+              </FieldLabel>
+              <Input
+                id={id + "-search"}
+                placeholder="搜索用户名或密钥名称"
+                value={filters.search}
+                onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+              />
+            </Field>
+            <Field className="min-w-0 sm:w-36">
+              <FieldLabel className="sr-only" htmlFor={id + "-group"}>
+                API 组
+              </FieldLabel>
+              <Select
+                value={filters.group_id || "all"}
+                onValueChange={(group_id) =>
+                  setFilters({ ...filters, group_id: group_id === "all" ? "" : group_id })
+                }
               >
-                {label}
-              </DropdownMenuCheckboxItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
-            <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          type="button"
-          className="ml-auto"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="刷新 API 密钥"
-          disabled={resource.refreshing}
-          onClick={resource.reload}
-        >
-          <RefreshCw />
-        </Button>
-      </form>
+                <SelectTrigger id={id + "-group"} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="all">全部 API 组</SelectItem>
+                  {groups.data?.items.map((group) => (
+                    <SelectItem key={group.id} value={group.id}>
+                      {group.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field className="min-w-0 sm:w-28">
+              <FieldLabel className="sr-only" htmlFor={id + "-status"}>
+                状态
+              </FieldLabel>
+              <Select
+                value={filters.status || "all"}
+                onValueChange={(status) =>
+                  setFilters({ ...filters, status: status === "all" ? "" : status })
+                }
+              >
+                <SelectTrigger id={id + "-status"} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="enabled">已启用</SelectItem>
+                  <SelectItem value="disabled">已停用</SelectItem>
+                  <SelectItem value="revoked">已撤销</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button type="submit" size="sm">
+                <Search />
+                查询
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={reset}>
+                <RotateCcw />
+                重置
+              </Button>
+            </div>
+            <div className="col-span-2 flex items-center justify-end gap-1.5 sm:col-auto sm:ml-auto">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm">
+                    <Columns3 />
+                    显示列
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>
+                    {columns.mobile ? "手机显示列" : "桌面显示列"}
+                  </DropdownMenuLabel>
+                  {columns.labels.map((label) => (
+                    <DropdownMenuCheckboxItem
+                      key={label}
+                      checked={columns.isVisible(label)}
+                      disabled={columns.count === 1 && columns.isVisible(label)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) => columns.setVisible(label, checked === true)}
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={columns.showAll}>显示全部列</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={columns.reset}>恢复默认列</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                aria-label="刷新 API 密钥"
+                disabled={resource.refreshing}
+                onClick={resource.reload}
+              >
+                <RefreshCw />
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
       <Card>
         <CardContent>
           <Table>
@@ -171,10 +189,10 @@ export default function ApiKeysPage() {
               {pagination.rows.map((key) => (
                 <TableRow key={key.id}>
                   <TableCell hidden={!columns.isVisible("用户 / 密钥")}>
-                    <p className="max-w-48 truncate">
+                    <p className="max-w-48 truncate font-medium">
                       {key.username} / {key.name}
                     </p>
-                    <p className="text-xs text-muted-foreground">{key.key_prefix}…</p>
+                    <p className="font-mono text-xs text-muted-foreground">{key.key_prefix}…</p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("API 组")}>
                     {key.group_name}
@@ -185,11 +203,13 @@ export default function ApiKeysPage() {
                       {apiKeyStatus(key)}
                     </Badge>
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("请求数")}>{key.total_requests}</TableCell>
-                  <TableCell hidden={!columns.isVisible("输入 / 输出")}>
+                  <TableCell hidden={!columns.isVisible("请求数")} className="tabular-nums">
+                    {key.total_requests}
+                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("输入 / 输出")} className="tabular-nums">
                     {apiTokens(key.input_tokens)} / {apiTokens(key.output_tokens)}
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("计费金额")}>
+                  <TableCell hidden={!columns.isVisible("计费金额")} className="tabular-nums">
                     {apiCost(key.cost_nano_usd)}
                     {key.unknown_cost_requests > 0 && (
                       <p className="text-xs text-muted-foreground">
@@ -197,14 +217,14 @@ export default function ApiKeysPage() {
                       </p>
                     )}
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("当前并发")}>
+                  <TableCell hidden={!columns.isVisible("当前并发")} className="tabular-nums">
                     {key.active_requests}
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("最后使用")}>
                     {date(key.last_used_at)}
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("操作")}>
-                    <Button variant="ghost" size="sm" onClick={() => setSelected(key)}>
+                    <Button variant="outline" size="sm" onClick={() => setSelected(key)}>
                       详情
                     </Button>
                   </TableCell>

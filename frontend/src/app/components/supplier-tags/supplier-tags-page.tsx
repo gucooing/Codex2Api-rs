@@ -56,27 +56,31 @@ export default function SupplierTagsPage() {
   } = useSupplierTagsPage();
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-wrap items-end gap-3">
+      <Card size="sm">
+        <CardContent className="flex flex-wrap items-center gap-2">
           <form
-            className="flex flex-wrap items-end gap-3"
+            className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
               tags.reload(1);
             }}
           >
-            <Field className="w-40">
-              <FieldLabel htmlFor={`${id}-search`}>搜索标签</FieldLabel>
+            <Field className="min-w-0 sm:w-44">
+              <FieldLabel className="sr-only" htmlFor={`${id}-search`}>
+                搜索标签
+              </FieldLabel>
               <Input
                 id={`${id}-search`}
                 value={filters.search}
-                placeholder="标签名称"
+                placeholder="搜索标签名称"
                 onChange={(event) => setFilters({ ...filters, search: event.target.value })}
               />
             </Field>
-            <Field className="w-40">
-              <FieldLabel htmlFor={`${id}-platform`}>平台</FieldLabel>
+            <Field className="min-w-0 sm:w-32">
+              <FieldLabel className="sr-only" htmlFor={`${id}-platform`}>
+                平台
+              </FieldLabel>
               <Select
                 value={filters.provider_id || "all"}
                 onValueChange={(value) =>
@@ -93,14 +97,15 @@ export default function SupplierTagsPage() {
                 </SelectContent>
               </Select>
             </Field>
-            <div className="flex items-center gap-2">
-              <Button type="submit">
+            <div className="col-span-2 flex items-center gap-1.5 sm:col-auto">
+              <Button type="submit" size="sm">
                 <Search />
                 查询
               </Button>
               <Button
                 type="button"
-                variant="secondary"
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
@@ -112,10 +117,10 @@ export default function SupplierTagsPage() {
               </Button>
             </div>
           </form>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5">
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="icon-sm"
               aria-label="刷新标签"
               title="刷新"
@@ -124,7 +129,7 @@ export default function SupplierTagsPage() {
             >
               <RefreshCw />
             </Button>
-            <Button type="button" disabled={!tags.ready} onClick={() => openEditor()}>
+            <Button type="button" size="sm" disabled={!tags.ready} onClick={() => openEditor()}>
               <Plus />
               添加标签
             </Button>
@@ -145,7 +150,7 @@ export default function SupplierTagsPage() {
             <TableBody>
               {pagination.rows.map((tag) => (
                 <TableRow key={tag.id}>
-                  <TableCell>{tag.name}</TableCell>
+                  <TableCell className="font-medium">{tag.name}</TableCell>
                   <TableCell>
                     {tag.provider_id === "chatgpt"
                       ? "ChatGPT"
@@ -153,7 +158,7 @@ export default function SupplierTagsPage() {
                         ? "Grok"
                         : tag.provider_id}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="tabular-nums">
                     {tag.supplier_count} / {tag.binding_count}
                   </TableCell>
                   <TableCell>

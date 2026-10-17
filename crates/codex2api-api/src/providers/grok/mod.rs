@@ -97,21 +97,7 @@ pub(crate) fn prepare(
     })
 }
 
-pub(crate) fn prelude(value: &Value) -> bool {
-    if value["object"] == "chat.completion.chunk" {
-        return value["choices"].as_array().is_some_and(|rows| {
-            rows.iter().all(|row| {
-                row["delta"]["content"].as_str().is_none_or(str::is_empty)
-                    && row["delta"]["tool_calls"].is_null()
-                    && row["delta"]["reasoning_content"]
-                        .as_str()
-                        .is_none_or(str::is_empty)
-                    && row["finish_reason"].is_null()
-            })
-        });
-    }
-    codex2api_upstream::scheduler::prelude_event(value)
-}
+pub(crate) use codex2api_upstream::grok::prelude;
 
 pub(crate) fn scheduling(
     headers: &HeaderMap,

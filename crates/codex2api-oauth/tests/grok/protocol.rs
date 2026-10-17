@@ -53,7 +53,7 @@ async fn payload(response: axum::response::Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
 }
 
-async fn authorize(app: &Router) -> Value {
+pub(super) async fn authorize(app: &Router, users: &Router) -> Value {
     let verifier = "a".repeat(64);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let query = url::form_urlencoded::Serializer::new(String::new())
@@ -69,7 +69,7 @@ async fn authorize(app: &Router) -> Value {
         ])
         .finish();
     let bootstrap = request(
-        app,
+        users,
         &format!("/user/api/oauth/authorize/bootstrap?{query}"),
         None,
         None,
@@ -86,10 +86,10 @@ async fn authorize(app: &Router) -> Value {
         .to_owned();
     let flow = payload(bootstrap).await;
     assert_eq!(flow["provider_id"], "grok");
-    let identified=request(app,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await;
+    let identified=request(users,"/user/api/oauth/authorize/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await;
     assert_eq!(identified.status(), StatusCode::OK);
     let identity = payload(identified).await;
-    let approval=request(app,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identity["subscriptions"][0]["id"]})),Some(&cookie),None).await;
+    let approval=request(users,"/user/api/oauth/authorize/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identity["subscriptions"][0]["id"]})),Some(&cookie),None).await;
     assert_eq!(approval.status(), StatusCode::OK);
     let target = payload(approval).await;
     let target = url::Url::parse(target["redirect_uri"].as_str().unwrap()).unwrap();
@@ -150,14 +150,14 @@ async fn subscription_names_match_grok_build_readers_and_expiry() {
         codex2api_oauth::OAuthState::new(storage.clone(), accounts, pool)
             .with_oauth_base_url("http://service.example.test")
             .unwrap(),
-    )
-    .merge(codex2api_user::api_router(codex2api_user::UserState {
+    );
+    let users = codex2api_user::api_router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://service.example.test".into(),
         api_base_url: "http://127.0.0.1:8083".into(),
         api_concurrency: std::sync::Arc::new(|_| 0),
-    }));
-    let tokens = authorize(&app).await;
+    });
+    let tokens = authorize(&app, &users).await;
     let access = tokens["access_token"].as_str().unwrap();
     let claims: Value = serde_json::from_slice(
         &URL_SAFE_NO_PAD
@@ -374,14 +374,14 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         codex2api_oauth::OAuthState::new(storage.clone(), accounts, pool)
             .with_oauth_base_url("http://service.example.test")
             .unwrap(),
-    )
-    .merge(codex2api_user::api_router(codex2api_user::UserState {
+    );
+    let users = codex2api_user::api_router(codex2api_user::UserState {
         storage: storage.user_store(),
         public_base_url: "http://service.example.test".into(),
         api_base_url: "http://127.0.0.1:8083".into(),
         api_concurrency: std::sync::Arc::new(|_| 0),
-    }));
-    let tokens = authorize(&app).await;
+    });
+    let tokens = authorize(&app, &users).await;
     let access = tokens["access_token"].as_str().unwrap();
     let claims: Value = serde_json::from_slice(
         &URL_SAFE_NO_PAD
@@ -520,13 +520,14 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     );
     let issued=payload(request(&app,"/v1/grok/oauth2/device/code",Some(json!({"client_id":codex2api_common::version::grok::CLIENT_ID,"scope":"openid profile offline_access"})),None,None).await).await;
     let flow = request(
-        &app,
+        &users,
         "/user/api/oauth/device/bootstrap?provider=grok",
         None,
         None,
         None,
     )
     .await;
+    assert_eq!(flow.status(), StatusCode::OK);
     let cookie = flow.headers()["set-cookie"]
         .to_str()
         .unwrap()
@@ -535,8 +536,8 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .unwrap()
         .to_owned();
     let flow = payload(flow).await;
-    let identified=payload(request(&app,"/user/api/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await).await;
-    assert_eq!(request(&app,"/user/api/oauth/device/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identified["subscriptions"][0]["id"],"user_code":issued["user_code"]})),Some(&cookie),None).await.status(),StatusCode::OK);
+    let identified=payload(request(&users,"/user/api/oauth/device/identify",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"username":"grok-user","password":"fixture-password"})),Some(&cookie),None).await).await;
+    assert_eq!(request(&users,"/user/api/oauth/device/approve",Some(json!({"request_id":flow["request_id"],"csrf_token":flow["csrf_token"],"confirmed":true,"account_id":identified["subscriptions"][0]["id"],"user_code":issued["user_code"]})),Some(&cookie),None).await.status(),StatusCode::OK);
     let device_tokens=payload(request(&app,"/v1/grok/oauth2/token",Some(json!({"client_id":codex2api_common::version::grok::CLIENT_ID,"grant_type":"urn:ietf:params:oauth:grant-type:device_code","device_code":issued["device_code"]})),None,None).await).await;
     assert_eq!(device_tokens["scope"], "openid profile offline_access");
     let claims: Value = serde_json::from_slice(

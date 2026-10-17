@@ -14,6 +14,7 @@ pub fn headers(headers: &mut HeaderMap) {
                     | "cache-control"
                     | "retry-after"
                     | "retry-after-ms"
+                    | "x-should-retry"
                     | "x-request-id"
                     | "x-oai-request-id"
                     | "openai-model"
@@ -86,7 +87,10 @@ fn retry_headers(value: &Value) -> Option<Value> {
         let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
-        if !matches!(name.as_str(), "retry-after" | "retry-after-ms") {
+        if !matches!(
+            name.as_str(),
+            "retry-after" | "retry-after-ms" | "x-should-retry"
+        ) {
             continue;
         }
         let text = match value {

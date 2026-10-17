@@ -45,7 +45,29 @@ Grok 套餐独立选择 Grok 订阅档位、模型范围、售价、供应池及
 
 平台由路径明确选择，Grok 客户端使用 `/v1/grok/v1/responses`、`/v1/grok/v1/models`；Grok 凭据不能访问 ChatGPT 专属路由。Grok Build 配置使用 `endpoints.cli_chat_proxy_base_url` 指向服务根后的 `/v1`，OAuth issuer 指向服务根本身。不要用 `models_base_url` 代替，因为客户端会把它解释为 API-key 认证的独立模型服务。
 
-普通 429 保留结构化错误及重试信息，不改变供应状态；明确授权失效和额度耗尽才切换同平台号池。开始输出后不重放请求。客户端停止后仍收集已报告用量并结算一次。Grok 原生请求携带完整会话输入；供应端保存的 `previous_response_id` 不能跨虚拟账户读取。
+Grok 原生请求携带完整会话输入；供应端保存的 `previous_response_id` 不能跨虚拟账户读取。
+
+## 错误处理和供应调度
+
+Grok 的错误解析和调度策略位于 `codex2api-upstream/src/providers/grok/`，OAuth 与标准 API 使用同一分类和流式前导判断。协议依据是固定参考提交中的 [provider_error.rs](https://github.com/gucooing/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampling-types/src/provider_error.rs)、[sampling-types/error.rs](https://github.com/gucooing/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampling-types/src/error.rs)、[sampler/retry.rs](https://github.com/gucooing/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-sampler/src/retry.rs) 和 [shell/sampling/error.rs](https://github.com/gucooing/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/sampling/error.rs)。客户端的单账号退避与代理的供应池切换分开处理。
+
+| 上游情况 | 处理 |
+| --- | --- |
+| HTTP 或流内 401 | 当前账号最多刷新一次并重试；刷新成功后仍被拒绝、缺少 RT，或刷新返回 `invalid_grant` / `invalid_client` 时记录授权失效并切号 |
+| 刷新服务限流、5xx、未知 OAuth 错误 | 保留失败状态和重试指示，不据此判定凭据永久失效，不切号 |
+| `subscription:free-usage-exhausted` | 记录额度耗尽并切号；支持平面、嵌套、WKE 和 JSON 字符串包装 |
+| 429 中明确的 “You've used all the included free usage for model … for now. Usage resets over a rolling …” | 无语义错误码时也识别为免费额度耗尽；仅出现 quota、upgrade 或普通限流字样不足以切号 |
+| `personal-team-blocked:spending-limit`、`insufficient_quota`、`insufficient_credits`、`billing_error` | 记录额度耗尽并切号 |
+| 普通 429、`rate_limit_exceeded`、`slow_down`、未分类的 429 | 返回结构化错误和 `Retry-After`、`retry-after-ms`、`x-should-retry`，由客户端退避；不改供应状态 |
+| 403 权限或内容策略拒绝，400/404/413/415/422 请求、模型、图片或上下文错误 | 保留错误，不刷新身份、不改模型或请求内容、不切号 |
+| 5xx、529 过载、Cloudflare 52x/530、连接失败或超时 | 保留状态和重试指示，由客户端决定重试；HTML 页面不作为额度耗尽证据 |
+| 未知错误、损坏响应、流提前结束 | 未知错误保留已知状态和错误码；协议及传输失败记录失败，不伪造完成，不因猜测切号 |
+
+错误处理保留官方重试指示，包括 `x-should-retry: false`，不会把该指示解释成账号不可用。Grok 的裸 HTTP 402 不套用 ChatGPT 的永久欠费状态；只有明确的 Grok 额度错误参与供应切换。供应隐私和任意诊断字段仍由公开响应的字段白名单过滤。
+
+额度耗尽使用实际返回的 reset 时间、Retry-After 或重试秒数／毫秒数；没有明确时间时冷却 60 秒后允许下一次真实请求尝试。滚动 24 小时说明不是确切恢复时间，不直接生成“当前时间加 24 小时”的重置时间，也不将 `/billing` 的月度余额当成特定模型免费额度已经恢复的证据。状态写入 PostgreSQL 并使候选池缓存失效，现有管理端供应状态显示“配额耗尽”。管理端重置和重新授权沿用现有操作；迟到失败不得覆盖新授权。
+
+仅在没有生成内容或计费用量时内部重试。Responses 输出、Chat 的文本／推理／工具调用、Messages 的内容或用量一旦出现，就不重放；HTTP 错误体中的部分输出和用量同样生效。流中途失败只更新账号可用性并结算该次实际用量，客户端停止后继续收集已报告用量，结算一次。每次请求最多尝试同池每个可用账号一次，401 的单账号刷新重试除外；供应池耗尽返回 `supplier_pool_exhausted`。
 
 远程沙箱、relay、工作区云同步及官方充值等服务没有被本地渠道伪造实现；未实现路由返回明确错误，不返回假空记录或假成功。真实上游推理是否可用取决于所选供应账户的官方权限与可用模型配置。
 

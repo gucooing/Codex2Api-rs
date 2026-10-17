@@ -327,6 +327,9 @@ pub(crate) async fn forward(
             .start_admitted(admission, start, requested_at)
             .await?,
         );
+        log.as_mut()
+            .expect("request ledger")
+            .set_protocol_observer(usage::Observer::default());
         let response = crate::pool_execution::execute_with_prelude(
             &state,
             &access,
@@ -347,18 +350,26 @@ pub(crate) async fn forward(
         )
         .await?;
         let status = response.status();
-        let response_headers = response.headers().clone();
-        log.as_mut()
-            .expect("request ledger")
-            .set_protocol_observer(usage::Observer::default());
+        let mut response_headers = response.headers().clone();
         let sse = response_headers
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"));
+        let encoded_headers = response_headers.clone();
+        if !sse {
+            response_headers.remove(http::header::CONTENT_LENGTH);
+            response_headers.remove(http::header::CONTENT_ENCODING);
+        }
         let body = log
             .take()
             .expect("request ledger")
-            .wrap_with(response, |body| if sse { isolate(body) } else { body });
+            .wrap_with(response, |body| {
+                if sse {
+                    isolate(body)
+                } else {
+                    normalize_json(body, encoded_headers)
+                }
+            });
         Ok(crate::response::forward_response(
             status,
             response_headers,
@@ -366,6 +377,17 @@ pub(crate) async fn forward(
         ))
     })
     .await
+}
+fn normalize_json(body: Body, headers: HeaderMap) -> Body {
+    Body::from_stream(futures::stream::once(async move {
+        let bytes = axum::body::to_bytes(body, codex2api_upstream::MAX_REQUEST_BYTES)
+            .await
+            .map_err(std::io::Error::other)?;
+        let mut value =
+            codex2api_upstream::decode_body(&bytes, &headers).map_err(std::io::Error::other)?;
+        codex2api_upstream::grok::errors::normalize_response(&mut value);
+        Ok::<_, std::io::Error>(Bytes::from(value.to_string()))
+    }))
 }
 fn isolate(body: Body) -> Body {
     use eventsource_stream::Eventsource;
@@ -385,19 +407,24 @@ fn isolate(body: Body) -> Body {
                     Ok(v) => v,
                     Err(e) => return Some(Err(std::io::Error::other(e))),
                 };
-                if value["type"]
-                    .as_str()
-                    .is_some_and(|s| s.contains("rate_limit") || s.contains("billing"))
-                {
+                if value["type"].is_null() && event.event == "error" {
+                    value["type"] = "error".into();
+                }
+                if matches!(
+                    value["type"].as_str(),
+                    Some("codex.rate_limits" | "rate_limits.updated")
+                ) {
                     return None;
                 }
                 let mut changed = false;
-                if value.get("error").is_some_and(|v| !v.is_null()) {
+                if value.get("error").is_some_and(|v| !v.is_null())
+                    || value
+                        .pointer("/response/error")
+                        .is_some_and(|v| !v.is_null())
+                    || value["type"] == "error"
+                {
                     changed = true;
-                    value["error"] = codex2api_upstream::grok::errors::normalize(&value);
-                    if value["type"].is_null() {
-                        value["type"] = "error".into();
-                    }
+                    codex2api_upstream::grok::errors::normalize_response(&mut value);
                 }
                 changed |= crate::public_output::metadata(&mut value);
                 let data = if changed {

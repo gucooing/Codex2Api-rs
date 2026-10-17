@@ -67,18 +67,19 @@ export function ModelPricing() {
   } = useModelPricing();
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-wrap items-end gap-3">
+      <Card size="sm">
+        <CardContent className="flex flex-wrap items-center gap-2">
           <form
-            className="flex flex-wrap items-end gap-3"
+            className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
               resource.reload(1);
             }}
           >
-            <Field className="w-40">
+            <Field className="min-w-0 sm:w-44">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-1" + "-" + encodeURIComponent(String("搜索模型"))}
               >
                 {"搜索模型"}
@@ -88,11 +89,12 @@ export function ModelPricing() {
                 aria-label={"搜索模型"}
                 value={filters.search}
                 onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-                placeholder="模型名称或提供商"
+                placeholder="搜索模型名称或提供商"
               />
             </Field>
-            <Field className="w-40">
+            <Field className="min-w-0 sm:w-32">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("模型类型"))}
               >
                 {"模型类型"}
@@ -148,8 +150,9 @@ export function ModelPricing() {
                 </SelectContent>
               </Select>
             </Field>
-            <Field className="w-40">
+            <Field className="min-w-0 sm:w-32">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("模型状态"))}
               >
                 {"模型状态"}
@@ -205,14 +208,15 @@ export function ModelPricing() {
                 </SelectContent>
               </Select>
             </Field>
-            <div className="flex flex-wrap items-center gap-2 self-end">
-              <Button type="submit">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button type="submit" size="sm">
                 <Search />
                 查询
               </Button>
               <Button
                 type="button"
-                variant="secondary"
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
@@ -223,6 +227,8 @@ export function ModelPricing() {
                 重置
               </Button>
             </div>
+          </form>
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="outline" size="sm" aria-label="显示列">
@@ -250,8 +256,6 @@ export function ModelPricing() {
                 <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </form>
-          <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
             {(resource.error || presets.error) && (
               <Button
                 type="button"
@@ -265,12 +269,10 @@ export function ModelPricing() {
                 重新加载
               </Button>
             )}
-            {
-              <Button type="button" onClick={() => setEditing(emptyModel())}>
-                <Plus />
-                添加模型
-              </Button>
-            }
+            <Button type="button" size="sm" onClick={() => setEditing(emptyModel())}>
+              <Plus />
+              添加模型
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -382,7 +384,7 @@ export function ModelPricing() {
                           role="cell"
                         >
                           <div className="flex flex-wrap items-center gap-2">
-                            <Button variant="outline" onClick={() => setEditing(model)}>
+                            <Button variant="outline" size="sm" onClick={() => setEditing(model)}>
                               <Pencil />
                               编辑
                             </Button>

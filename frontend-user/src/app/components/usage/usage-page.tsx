@@ -30,13 +30,15 @@ export default function UsagePage() {
   const { filters, id, resource, pagination, update, search, reset } = useUsagePage();
   return (
     <>
-      <Card>
-        <CardContent className="space-y-4">
-          <form className="space-y-4" noValidate onSubmit={search}>
+      <Card size="sm">
+        <CardContent>
+          <form noValidate onSubmit={search}>
             <Collapsible>
-              <div className="flex flex-wrap items-end gap-3">
-                <Field className="w-40">
-                  <FieldLabel htmlFor={`${id}-days`}>时间范围</FieldLabel>
+              <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
+                <Field className="min-w-0 sm:w-32">
+                  <FieldLabel className="sr-only" htmlFor={`${id}-days`}>
+                    时间范围
+                  </FieldLabel>
                   <Select value={filters.days} onValueChange={(value) => update("days", value)}>
                     <SelectTrigger id={`${id}-days`} className="w-full">
                       <SelectValue />
@@ -48,8 +50,10 @@ export default function UsagePage() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field className="w-40">
-                  <FieldLabel htmlFor={`${id}-provider`}>平台</FieldLabel>
+                <Field className="min-w-0 sm:w-32">
+                  <FieldLabel className="sr-only" htmlFor={`${id}-provider`}>
+                    平台
+                  </FieldLabel>
                   <Select
                     value={filters.provider}
                     onValueChange={(value) => update("provider", value)}
@@ -64,17 +68,22 @@ export default function UsagePage() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field className="w-40">
-                  <FieldLabel htmlFor={`${id}-model`}>模型</FieldLabel>
+                <Field className="min-w-0 sm:w-36">
+                  <FieldLabel className="sr-only" htmlFor={`${id}-model`}>
+                    模型
+                  </FieldLabel>
                   <Input
                     id={`${id}-model`}
                     value={filters.model}
                     maxLength={100}
+                    placeholder="全部模型"
                     onChange={(event) => update("model", event.target.value)}
                   />
                 </Field>
-                <Field className="w-40">
-                  <FieldLabel htmlFor={`${id}-status`}>状态</FieldLabel>
+                <Field className="min-w-0 sm:w-28">
+                  <FieldLabel className="sr-only" htmlFor={`${id}-status`}>
+                    状态
+                  </FieldLabel>
                   <Select value={filters.status} onValueChange={(value) => update("status", value)}>
                     <SelectTrigger id={`${id}-status`} className="w-full">
                       <SelectValue />
@@ -89,8 +98,10 @@ export default function UsagePage() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field className="w-40">
-                  <FieldLabel htmlFor={id + "-source"}>来源</FieldLabel>
+                <Field className="min-w-0 sm:w-28">
+                  <FieldLabel className="sr-only" htmlFor={id + "-source"}>
+                    来源
+                  </FieldLabel>
                   <Select value={filters.source} onValueChange={(next) => update("source", next)}>
                     <SelectTrigger id={id + "-source"} className="w-full">
                       <SelectValue />
@@ -102,17 +113,17 @@ export default function UsagePage() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <div className="flex flex-wrap items-center gap-2 self-end">
-                  <Button type="submit">
+                <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-auto">
+                  <Button type="submit" size="sm">
                     <Search />
                     查询
                   </Button>
-                  <Button type="button" variant="outline" onClick={reset}>
+                  <Button type="button" variant="outline" size="sm" onClick={reset}>
                     <RotateCcw />
                     重置
                   </Button>
                   <CollapsibleTrigger asChild>
-                    <Button type="button" variant="ghost">
+                    <Button type="button" variant="ghost" size="sm">
                       <CalendarDays />
                       起止时间{filters.from || filters.until ? " · 已设置" : ""}
                     </Button>
@@ -120,22 +131,34 @@ export default function UsagePage() {
                 </div>
               </div>
               <CollapsibleContent>
-                <div className="mt-3 flex flex-wrap items-end gap-3">
-                  <Field className="w-56">
-                    <FieldLabel htmlFor={`${id}-from`}>开始时间</FieldLabel>
+                <div className="mt-2.5 grid grid-cols-1 items-center gap-2 border-t pt-2.5 sm:flex sm:flex-wrap sm:gap-2.5">
+                  <Field orientation="horizontal" className="min-w-0 sm:w-auto">
+                    <FieldLabel
+                      className="shrink-0 text-xs text-muted-foreground"
+                      htmlFor={`${id}-from`}
+                    >
+                      开始
+                    </FieldLabel>
                     <Input
                       id={`${id}-from`}
                       type="datetime-local"
+                      className="min-w-0 flex-1 sm:w-44"
                       value={filters.from}
                       max={filters.until || undefined}
                       onChange={(event) => update("from", event.target.value)}
                     />
                   </Field>
-                  <Field className="w-56">
-                    <FieldLabel htmlFor={`${id}-until`}>结束时间</FieldLabel>
+                  <Field orientation="horizontal" className="min-w-0 sm:w-auto">
+                    <FieldLabel
+                      className="shrink-0 text-xs text-muted-foreground"
+                      htmlFor={`${id}-until`}
+                    >
+                      结束
+                    </FieldLabel>
                     <Input
                       id={`${id}-until`}
                       type="datetime-local"
+                      className="min-w-0 flex-1 sm:w-44"
                       value={filters.until}
                       min={filters.from || undefined}
                       onChange={(event) => update("until", event.target.value)}

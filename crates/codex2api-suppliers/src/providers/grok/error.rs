@@ -21,6 +21,7 @@ pub enum GrokAuthError {
         status: u16,
         code: Option<String>,
         message: String,
+        headers: reqwest::header::HeaderMap,
     },
     #[error(transparent)]
     Storage(#[from] codex2api_storage::StorageError),

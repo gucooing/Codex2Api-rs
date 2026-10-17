@@ -82,19 +82,21 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
   } = useOverviewStatistics();
   return (
     <>
-      <Card>
+      <Card size="sm">
         <CardContent>
           <form
             aria-label="概览统计筛选"
-            className="flex flex-wrap items-end gap-3"
+            className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap"
             noValidate
             onSubmit={(event) => {
               event.preventDefault();
               if (validateForm(event.currentTarget)) apply(filters);
             }}
           >
-            <Field className="w-40">
-              <FieldLabel htmlFor="overview-subject">用户/账户</FieldLabel>
+            <Field className="min-w-0 sm:w-40 lg:flex-1 lg:max-w-44">
+              <FieldLabel className="sr-only" htmlFor="overview-subject">
+                用户/账户
+              </FieldLabel>
               <Combobox<SubjectOption>
                 items={subjects}
                 value={selectedSubject}
@@ -158,8 +160,10 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 </ComboboxContent>
               </Combobox>
             </Field>
-            <Field className="w-40">
-              <FieldLabel htmlFor="overview-supplier">供应账户</FieldLabel>
+            <Field className="min-w-0 sm:w-40 lg:flex-1 lg:max-w-44">
+              <FieldLabel className="sr-only" htmlFor="overview-supplier">
+                供应账户
+              </FieldLabel>
               <Combobox<SupplierOption>
                 items={suppliers.data?.items ?? []}
                 value={selectedSupplier}
@@ -222,17 +226,21 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 </ComboboxContent>
               </Combobox>
             </Field>
-            <Field className="w-40">
-              <FieldLabel htmlFor="overview-model">模型</FieldLabel>
+            <Field className="min-w-0 sm:w-32 lg:flex-1 lg:max-w-40">
+              <FieldLabel className="sr-only" htmlFor="overview-model">
+                模型
+              </FieldLabel>
               <Input
                 id="overview-model"
-                placeholder="请求／响应模型关键词"
+                placeholder="全部模型"
                 value={filters.model}
                 onChange={(event) => update("model", event.target.value)}
               />
             </Field>
-            <Field className="w-32">
-              <FieldLabel htmlFor="overview-range">时间范围</FieldLabel>
+            <Field className="min-w-0 sm:w-28">
+              <FieldLabel className="sr-only" htmlFor="overview-range">
+                时间范围
+              </FieldLabel>
               <Select
                 value={filters.preset}
                 onValueChange={(value) =>
@@ -265,30 +273,50 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
             </Field>
             {filters.preset === "custom" && (
               <>
-                <Field className="w-52">
-                  <FieldLabel htmlFor="overview-from">开始时间</FieldLabel>
+                <Field
+                  orientation="horizontal"
+                  className="col-span-2 min-w-0 sm:col-auto sm:w-auto"
+                >
+                  <FieldLabel
+                    className="shrink-0 text-xs text-muted-foreground"
+                    htmlFor="overview-from"
+                  >
+                    开始
+                  </FieldLabel>
                   <Input
                     id="overview-from"
                     type="datetime-local"
                     required
+                    className="min-w-0 flex-1 sm:w-44"
                     value={filters.from}
                     onChange={(event) => update("from", event.target.value)}
                   />
                 </Field>
-                <Field className="w-52">
-                  <FieldLabel htmlFor="overview-until">结束时间（不含）</FieldLabel>
+                <Field
+                  orientation="horizontal"
+                  className="col-span-2 min-w-0 sm:col-auto sm:w-auto"
+                >
+                  <FieldLabel
+                    className="shrink-0 text-xs text-muted-foreground"
+                    htmlFor="overview-until"
+                  >
+                    结束
+                  </FieldLabel>
                   <Input
                     id="overview-until"
                     type="datetime-local"
                     required
+                    className="min-w-0 flex-1 sm:w-44"
                     value={filters.until}
                     onChange={(event) => update("until", event.target.value)}
                   />
                 </Field>
               </>
             )}
-            <Field className="w-28">
-              <FieldLabel htmlFor="overview-status">请求状态</FieldLabel>
+            <Field className="min-w-0 sm:w-28">
+              <FieldLabel className="sr-only" htmlFor="overview-status">
+                请求状态
+              </FieldLabel>
               <Select
                 value={filters.status || "all"}
                 onValueChange={(value) => update("status", value === "all" ? "" : value)}
@@ -306,8 +334,10 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 </SelectContent>
               </Select>
             </Field>
-            <Field className="w-36">
-              <FieldLabel htmlFor="overview-group">统计维度</FieldLabel>
+            <Field className="min-w-0 sm:w-28">
+              <FieldLabel className="sr-only" htmlFor="overview-group">
+                统计维度
+              </FieldLabel>
               <Select value={filters.group_by} onValueChange={(value) => update("group_by", value)}>
                 <SelectTrigger id="overview-group" className="w-full">
                   <SelectValue />
@@ -321,42 +351,47 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 </SelectContent>
               </Select>
             </Field>
-            <Button type="submit" size="sm" disabled={resource.refreshing}>
-              <Search />
-              查询
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setFilters(defaults);
-                userLookup.setSearch("");
-                setSupplierSearch("");
-                setVisible(defaultVisibility);
-                apply(defaults);
-              }}
-            >
-              <RotateCcw />
-              重置
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={resource.refreshing}
-              onClick={() => {
-                resource.reload();
-                onRefresh();
-              }}
-            >
-              <RefreshCw />
-              刷新
-            </Button>
+            <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-auto">
+              <Button type="submit" size="sm" disabled={resource.refreshing}>
+                <Search />
+                查询
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setFilters(defaults);
+                  userLookup.setSearch("");
+                  setSupplierSearch("");
+                  setVisible(defaultVisibility);
+                  apply(defaults);
+                }}
+              >
+                <RotateCcw />
+                重置
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={resource.refreshing}
+                onClick={() => {
+                  resource.reload();
+                  onRefresh();
+                }}
+              >
+                <RefreshCw />
+                刷新
+              </Button>
+            </div>
           </form>
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2" aria-label="显示统计">
+          <div
+            className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t pt-2.5"
+            aria-label="显示统计"
+          >
             {(Object.keys(seriesOptions) as (keyof typeof seriesOptions)[]).map((key) => (
-              <Field key={key} orientation="horizontal" className="w-auto gap-2">
+              <Field key={key} orientation="horizontal" className="w-auto gap-1.5">
                 <Checkbox
                   id={`overview-visible-${key}`}
                   checked={visible[key]}
@@ -364,14 +399,16 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                     setVisible((current) => ({ ...current, [key]: checked === true }))
                   }
                 />
-                <FieldLabel htmlFor={`overview-visible-${key}`}>{seriesOptions[key]}</FieldLabel>
+                <FieldLabel className="text-xs" htmlFor={`overview-visible-${key}`}>
+                  {seriesOptions[key]}
+                </FieldLabel>
               </Field>
             ))}
           </div>
         </CardContent>
       </Card>
       <div
-        className="grid grid-cols-2 gap-2 xl:grid-cols-4"
+        className="grid grid-cols-2 gap-3 xl:grid-cols-4"
         aria-label="统计摘要"
         aria-busy={resource.refreshing}
       >
@@ -402,15 +439,15 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
           },
         ].map((item) => (
           <Card key={item.label} size="sm">
-            <CardHeader className="gap-1 px-3">
-              <CardDescription>{item.label}</CardDescription>
+            <CardHeader className="gap-1.5 px-4">
+              <CardDescription className="text-xs font-medium">{item.label}</CardDescription>
               <CardTitle
-                className="break-all text-xl tabular-nums"
+                className="break-all text-2xl font-semibold tracking-tight tabular-nums"
                 title={item.exact?.toLocaleString("en-US")}
               >
                 {item.value}
               </CardTitle>
-              <CardDescription>{item.detail}</CardDescription>
+              <CardDescription className="text-xs">{item.detail}</CardDescription>
             </CardHeader>
           </Card>
         ))}
@@ -420,7 +457,6 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
           <CardTitle>用量统计 · {usageGroups[applied.group_by]}</CardTitle>
           <CardDescription>
             {applied.from.replace("T", " ")} 至 {applied.until.replace("T", " ")}
-            （本地时间，结束时间不含）
             {chart.truncated ? " · 图表显示 Token 用量前 20 项，摘要汇总全部分组" : ""}
           </CardDescription>
         </CardHeader>

@@ -42,6 +42,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cents, orderKinds, orderStatus, orderStatuses, orderTime } from "@/lib/orders";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Columns3,
+  RotateCcw,
+  Search,
+} from "lucide-react";
 
 export default function OrdersPage() {
   const {
@@ -71,7 +80,7 @@ export default function OrdersPage() {
         <form
           aria-label="订单筛选"
           noValidate
-          className="flex flex-wrap items-center gap-2"
+          className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
           onSubmit={(event) => {
             event.preventDefault();
             setApplied({ ...filters, search: filters.search.trim() });
@@ -80,7 +89,7 @@ export default function OrdersPage() {
             plans.reload();
           }}
         >
-          <Field className="w-40">
+          <Field className="min-w-0 sm:w-40">
             <FieldLabel className="sr-only" htmlFor={`${id}-search`}>
               订单号
             </FieldLabel>
@@ -92,7 +101,7 @@ export default function OrdersPage() {
               onChange={(event) => setFilters((v) => ({ ...v, search: event.target.value }))}
             />
           </Field>
-          <Field className="w-48">
+          <Field className="min-w-0 sm:w-44">
             <FieldLabel className="sr-only" htmlFor={`${id}-filter-user`}>
               用户
             </FieldLabel>
@@ -144,7 +153,7 @@ export default function OrdersPage() {
               </ComboboxContent>
             </Combobox>
           </Field>
-          <Field className="w-40">
+          <Field className="min-w-0 sm:w-36">
             <FieldLabel className="sr-only" htmlFor={`${id}-filter-plan`}>
               套餐
             </FieldLabel>
@@ -152,7 +161,7 @@ export default function OrdersPage() {
               value={filters.plan_id}
               onValueChange={(plan_id) => setFilters((v) => ({ ...v, plan_id }))}
             >
-              <SelectTrigger id={`${id}-filter-plan`}>
+              <SelectTrigger id={`${id}-filter-plan`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper">
@@ -165,7 +174,7 @@ export default function OrdersPage() {
               </SelectContent>
             </Select>
           </Field>
-          <Field className="w-32">
+          <Field className="min-w-0 sm:w-28">
             <FieldLabel className="sr-only" htmlFor={`${id}-status`}>
               订单状态
             </FieldLabel>
@@ -173,7 +182,7 @@ export default function OrdersPage() {
               value={filters.status}
               onValueChange={(status) => setFilters((v) => ({ ...v, status }))}
             >
-              <SelectTrigger id={`${id}-status`}>
+              <SelectTrigger id={`${id}-status`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper">
@@ -186,25 +195,35 @@ export default function OrdersPage() {
               </SelectContent>
             </Select>
           </Field>
-          <Button type="submit">查询</Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              setFilters(emptyFilters);
-              setApplied(emptyFilters);
-              setPage(1);
-              resource.reload();
-              setSelectedUser(null);
-              userLookup.setSearch("");
-            }}
-          >
-            重置
-          </Button>
+          <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-auto">
+            <Button type="submit" size="sm">
+              <Search />
+              查询
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setFilters(emptyFilters);
+                setApplied(emptyFilters);
+                setPage(1);
+                resource.reload();
+                setSelectedUser(null);
+                userLookup.setSearch("");
+              }}
+            >
+              <RotateCcw />
+              重置
+            </Button>
+          </div>
         </form>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline">显示列</Button>
+            <Button variant="outline" size="sm" className="ml-auto">
+              <Columns3 />
+              显示列
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>{columns.mobile ? "手机显示列" : "桌面显示列"}</DropdownMenuLabel>
@@ -239,83 +258,116 @@ export default function OrdersPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {resource.data?.items.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell hidden={!columns.isVisible("用户")}>{order.username}</TableCell>
-                  <TableCell hidden={!columns.isVisible("订单 / 套餐")}>
-                    <div>
-                      {order.plan_name} · {orderKinds[order.kind]}
-                    </div>
-                    <div
-                      className="max-w-48 truncate text-xs text-muted-foreground"
-                      title={order.id}
-                    >
-                      {order.id}
-                    </div>
-                  </TableCell>
-                  <TableCell hidden={!columns.isVisible("应付")}>
-                    {cents(order.amount_cents)}
-                  </TableCell>
-                  <TableCell hidden={!columns.isVisible("状态")}>
-                    <Badge variant="secondary">{orderStatuses[orderStatus(order, now)]}</Badge>
-                  </TableCell>
-                  <TableCell hidden={!columns.isVisible("创建时间")}>
-                    {orderTime(order.created_at_ms)}
-                  </TableCell>
-                  <TableCell hidden={!columns.isVisible("操作")}>
-                    <Button variant="outline" onClick={() => setSelected(order)}>
-                      详情
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {resource.data?.items.map((order) => {
+                const status = orderStatus(order, now);
+                return (
+                  <TableRow key={order.id}>
+                    <TableCell hidden={!columns.isVisible("用户")} className="font-medium">
+                      {order.username}
+                    </TableCell>
+                    <TableCell hidden={!columns.isVisible("订单 / 套餐")}>
+                      <div className="font-medium">
+                        {order.plan_name} · {orderKinds[order.kind]}
+                      </div>
+                      <div
+                        className="max-w-48 truncate text-xs text-muted-foreground"
+                        title={order.id}
+                      >
+                        {order.id}
+                      </div>
+                    </TableCell>
+                    <TableCell hidden={!columns.isVisible("应付")} className="tabular-nums">
+                      {cents(order.amount_cents)}
+                    </TableCell>
+                    <TableCell hidden={!columns.isVisible("状态")}>
+                      <Badge variant={status === "paid" ? "secondary" : "outline"}>
+                        {orderStatuses[status]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell hidden={!columns.isVisible("创建时间")}>
+                      {orderTime(order.created_at_ms)}
+                    </TableCell>
+                    <TableCell hidden={!columns.isVisible("操作")}>
+                      <Button size="sm" variant="outline" onClick={() => setSelected(order)}>
+                        详情
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
               {resource.data?.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={columns.count}>暂无订单</TableCell>
+                  <TableCell colSpan={columns.count} className="text-center text-muted-foreground">
+                    暂无订单
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
-          <Pagination className="mt-3 justify-end">
-            <PaginationContent className="flex-wrap">
-              <PaginationItem>
-                共 {resource.data?.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
-              </PaginationItem>
+          <Pagination className="mt-3 justify-end" aria-label="订单分页">
+            <PaginationContent className="flex-wrap justify-end gap-1">
               <PaginationItem>
                 <Select {...pagination.size}>
-                  <SelectTrigger aria-label="每页条数">
+                  <SelectTrigger aria-label="每页条数" className="h-7 w-24">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent position="popper">
+                  <SelectContent position="popper" side="bottom" align="end">
                     {[10, 20, 30, 50].map((value) => (
                       <SelectItem key={value} value={String(value)}>
-                        {value} 条
+                        {value} 条/页
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </PaginationItem>
+              <PaginationItem className="mr-2 text-xs text-muted-foreground">
+                共 {resource.data?.total ?? "—"} 条 · {pagination.pages ?? "—"} 页
+              </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.first}>
-                  首页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="首页"
+                  {...pagination.first}
+                >
+                  <ChevronsLeft />
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.previous}>
-                  上一页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="上一页"
+                  {...pagination.previous}
+                >
+                  <ChevronLeft />
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Input className="w-16" {...pagination.input} />
+                <Input className="h-7 w-14 text-center tabular-nums" {...pagination.input} />
               </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.next}>
-                  下一页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="下一页"
+                  {...pagination.next}
+                >
+                  <ChevronRight />
                 </Button>
               </PaginationItem>
               <PaginationItem>
-                <Button variant="outline" {...pagination.last}>
-                  末页
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="末页"
+                  {...pagination.last}
+                >
+                  <ChevronsRight />
                 </Button>
               </PaginationItem>
             </PaginationContent>

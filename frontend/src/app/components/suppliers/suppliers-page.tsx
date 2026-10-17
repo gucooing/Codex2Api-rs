@@ -150,11 +150,11 @@ export default function SuppliersPage() {
   );
   return (
     <>
-      <Card>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-end gap-3">
+      <Card size="sm">
+        <CardContent className="space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <form
-              className="grid w-full grid-cols-2 items-end gap-3 sm:flex sm:w-auto sm:flex-wrap"
+              className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
               onSubmit={(event) => {
                 event.preventDefault();
                 setApplied({ ...filters });
@@ -162,17 +162,21 @@ export default function SuppliersPage() {
                 resource.reload(1);
               }}
             >
-              <Field className="min-w-0 sm:w-40">
-                <FieldLabel htmlFor={`${fieldId}-search`}>搜索账户</FieldLabel>
+              <Field className="min-w-0 sm:w-44">
+                <FieldLabel className="sr-only" htmlFor={`${fieldId}-search`}>
+                  搜索账户
+                </FieldLabel>
                 <Input
                   id={`${fieldId}-search`}
                   value={filters.search}
-                  placeholder="名称或邮箱"
+                  placeholder="搜索名称或邮箱"
                   onChange={(event) => setFilters({ ...filters, search: event.target.value })}
                 />
               </Field>
-              <Field className="min-w-0 sm:w-40">
-                <FieldLabel htmlFor={`${fieldId}-platform`}>平台</FieldLabel>
+              <Field className="min-w-0 sm:w-28">
+                <FieldLabel className="sr-only" htmlFor={`${fieldId}-platform`}>
+                  平台
+                </FieldLabel>
                 <Select
                   value={filters.provider_id || "all"}
                   onValueChange={(value) =>
@@ -189,8 +193,10 @@ export default function SuppliersPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field className="min-w-0 sm:w-40">
-                <FieldLabel htmlFor={`${fieldId}-status`}>状态</FieldLabel>
+              <Field className="min-w-0 sm:w-28">
+                <FieldLabel className="sr-only" htmlFor={`${fieldId}-status`}>
+                  状态
+                </FieldLabel>
                 <Select
                   value={filters.status || "all"}
                   onValueChange={(value) =>
@@ -216,8 +222,10 @@ export default function SuppliersPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field className="min-w-0 sm:w-40">
-                <FieldLabel htmlFor={`${fieldId}-tag`}>标签</FieldLabel>
+              <Field className="min-w-0 sm:w-32">
+                <FieldLabel className="sr-only" htmlFor={`${fieldId}-tag`}>
+                  标签
+                </FieldLabel>
                 <Select
                   value={filters.tag || "all"}
                   onValueChange={(value) =>
@@ -238,14 +246,15 @@ export default function SuppliersPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <div className="col-span-2 flex items-center gap-2">
-                <Button type="submit">
+              <div className="col-span-2 flex items-center gap-1.5 sm:col-auto">
+                <Button type="submit" size="sm">
                   <Search />
                   查询
                 </Button>
                 <Button
                   type="button"
                   variant="secondary"
+                  size="sm"
                   onClick={() => {
                     setFilters(empty);
                     setApplied(empty);
@@ -258,7 +267,7 @@ export default function SuppliersPage() {
                 </Button>
               </div>
             </form>
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex items-center gap-1.5">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -304,13 +313,14 @@ export default function SuppliersPage() {
               >
                 {view === "table" ? <LayoutGrid /> : <Table2 />}
               </Button>
-              <Button type="button" onClick={() => setAdd(true)}>
+              <Button type="button" size="sm" onClick={() => setAdd(true)}>
                 <Plus />
                 添加供应账户
               </Button>
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 disabled={batchBusy}
                 onClick={() => setTransfer({ mode: "import", ids: [] })}
               >
@@ -651,15 +661,19 @@ export default function SuppliersPage() {
           {pagination.rows.map((item) => (
             <Card key={item.id} size="sm">
               <CardContent className="space-y-3">
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start justify-between gap-2.5">
                   <Checkbox
+                    className="mt-0.5"
                     aria-label={`选择供应账户 ${item.email || item.display_name || item.id}`}
                     checked={selectedIds.has(item.id)}
                     disabled={!resource.ready || batchBusy}
                     onCheckedChange={(checked) => toggleSelection([item.id], checked === true)}
                   />
                   <div className="min-w-0 flex-1 break-words">
-                    <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
+                    <Link
+                      href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}
+                      className="hover:underline"
+                    >
                       <strong>{item.email || item.display_name || item.id}</strong>
                     </Link>
                     <CardDescription>{item.email || "未提供邮箱"}</CardDescription>
@@ -793,7 +807,12 @@ export default function SuppliersPage() {
                     </span>
                   )}
                 </div>
-                <div className="border-t pt-2">{supplierActions(item)}</div>
+                <div className="flex items-center justify-between gap-2 border-t pt-2">
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>详情</Link>
+                  </Button>
+                  {supplierActions(item)}
+                </div>
               </CardContent>
             </Card>
           ))}

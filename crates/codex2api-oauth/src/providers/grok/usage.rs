@@ -48,9 +48,16 @@ impl crate::usage::ProtocolObserver for Observer {
                 vec![]
             };
         }
-        let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        let Ok(mut value) = serde_json::from_slice::<Value>(bytes) else {
             return vec![];
         };
+        codex2api_upstream::grok::errors::normalize_response(&mut value);
+        if let Some(model) = value["model"]
+            .as_str()
+            .or_else(|| value["message"]["model"].as_str())
+        {
+            self.model = Some(model.to_owned());
+        }
         if value["type"]
             .as_str()
             .is_some_and(|t| t.starts_with("response."))
@@ -71,15 +78,25 @@ impl crate::usage::ProtocolObserver for Observer {
         if value.get("error").is_some_and(|v| !v.is_null()) || value["type"] == "error" {
             self.finished = true;
             let error = codex2api_upstream::grok::errors::normalize(&value);
+            if value["usage"].is_object() {
+                let usage = &value["usage"];
+                if usage.get("prompt_tokens").is_some() {
+                    self.usage = json!({"input_tokens":usage["prompt_tokens"],"output_tokens":usage["completion_tokens"],"input_tokens_details":usage["prompt_tokens_details"],"output_tokens_details":usage["completion_tokens_details"]});
+                } else {
+                    self.usage = usage.clone();
+                    if value["usage"].get("cache_read_input_tokens").is_some()
+                        || value["usage"].get("cache_creation_input_tokens").is_some()
+                    {
+                        self.message_usage(&value["usage"]);
+                    }
+                }
+            } else if value["message"]["usage"].is_object() {
+                self.usage = json!({});
+                self.message_usage(&value["message"]["usage"]);
+            }
             return vec![
-                json!({"type":"response.failed","response":{"model":self.model,"usage":self.usage,"error":error}}),
+                json!({"type":"response.failed","response":{"model":self.model,"usage":self.usage,"error":error,"output":value["output"],"choices":value["choices"],"content":value["content"]}}),
             ];
-        }
-        let model = value["model"]
-            .as_str()
-            .or_else(|| value["message"]["model"].as_str());
-        if let Some(model) = model {
-            self.model = Some(model.to_owned());
         }
         if value.get("choices").is_some() {
             let usage = &value["usage"];
@@ -117,24 +134,7 @@ impl crate::usage::ProtocolObserver for Observer {
         ]
     }
 }
-pub fn prelude(value: &Value) -> bool {
-    if matches!(value["type"].as_str(), Some("message_start" | "ping")) {
-        return true;
-    }
-    if value["object"] == "chat.completion.chunk" {
-        return value["choices"].as_array().is_some_and(|rows| {
-            rows.iter().all(|c| {
-                c["delta"]["content"].as_str().is_none_or(str::is_empty)
-                    && c["delta"]["tool_calls"].is_null()
-                    && c["delta"]["reasoning_content"]
-                        .as_str()
-                        .is_none_or(str::is_empty)
-                    && c["finish_reason"].is_null()
-            })
-        });
-    }
-    crate::pool_execution::prelude_event(value)
-}
+pub use codex2api_upstream::grok::prelude;
 
 #[cfg(test)]
 mod tests {

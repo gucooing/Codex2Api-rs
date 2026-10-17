@@ -324,10 +324,6 @@ pub fn router(state: OAuthState) -> Router {
             post(chatgpt::forward).layer(Extension(ChatgptEndpoint::AnalyticsEvents)),
         )
         .route(
-            "/v1/responses/input_tokens",
-            post(codex::forward).layer(Extension(Endpoint::InputTokens)),
-        )
-        .route(
             "/backend-api/wham/environments",
             get(handlers::virtual_data::cloud_environments),
         )

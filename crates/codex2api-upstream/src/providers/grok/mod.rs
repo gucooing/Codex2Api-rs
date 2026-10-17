@@ -12,6 +12,8 @@ pub struct GrokUpstream {
 
 pub mod errors;
 pub mod models;
+mod scheduling;
+pub use scheduling::{classify_failure, prelude};
 
 #[derive(Clone)]
 pub struct PreparedBody {
@@ -200,7 +202,7 @@ impl GrokUpstream {
         if !response.status().is_success() {
             let status = response.status();
             let headers = response.headers().clone();
-            let raw: Value = response.json().await.unwrap_or_default();
+            let raw = errors::decode(&response.bytes().await?);
             let mut normalized = json!({"error":errors::normalize(&raw)});
             let measured = raw.get("response").unwrap_or(&raw);
             // Keep generation evidence for request settlement and replay protection.
@@ -213,6 +215,8 @@ impl GrokUpstream {
                 "model",
                 "size",
                 "resolution",
+                "content",
+                "message",
             ] {
                 if let Some(value) = measured.get(field) {
                     normalized[field] = value.clone();
@@ -259,13 +263,23 @@ impl GrokUpstream {
                 .await?
                 .ok_or_else(|| UpstreamError::MissingAccessToken(id.into()))?;
             if revision.is_some_and(|r| r.0 == snapshot.auth_revision) {
-                self.auth()
+                let refreshed = self
+                    .auth()
                     .refresh_grok(
                         id,
                         true,
                         Some(snapshot.tokens.access_token.as_deref().unwrap_or("")),
                     )
-                    .await?;
+                    .await;
+                if let Err(error) = refreshed {
+                    if error.permanent_refresh_failure() {
+                        self.auth()
+                            .storage()?
+                            .reject_supplier_auth(id, snapshot.auth_revision)
+                            .await?;
+                    }
+                    return Err(error.into());
+                }
             }
             response = self
                 .grok_request(id, Method::GET, path, None, &HeaderMap::new())
@@ -275,20 +289,25 @@ impl GrokUpstream {
         if !status.is_success() {
             let revision = response.extensions().get::<SupplierAuthRevision>().copied();
             let headers = response.headers().clone();
-            let error = UpstreamError::status_with_headers(status, response.text().await?, headers);
-            if let Some(revision) = revision
-                && matches!(
-                    error.supplier_failure_for(
-                        codex2api_common::GROK,
-                        chrono::Utc::now().timestamp()
-                    ),
-                    Some(crate::SupplierFailure::Authentication)
-                )
-            {
-                self.auth()
-                    .storage()?
-                    .reject_supplier_auth(id, revision.0)
-                    .await?;
+            let mut error =
+                UpstreamError::status_with_headers(status, response.text().await?, headers);
+            if let Some(revision) = revision {
+                error = error.with_auth_revision(revision.0);
+                if let Some(failure) = error
+                    .supplier_failure_for(codex2api_common::GROK, chrono::Utc::now().timestamp())
+                {
+                    if failure == crate::SupplierFailure::Authentication {
+                        self.auth()
+                            .storage()?
+                            .reject_supplier_auth(id, revision.0)
+                            .await?;
+                    } else if let crate::SupplierFailure::QuotaExhausted { until, code } = failure {
+                        self.auth()
+                            .storage()?
+                            .exhaust_supplier_quota(id, revision.0, until, &code)
+                            .await?;
+                    }
+                }
             }
             return Err(error);
         }
@@ -317,63 +336,4 @@ pub fn prepare(body: &[u8], inbound: &HeaderMap) -> Result<Value> {
 
 pub fn encoded(value: &Value) -> Result<Bytes> {
     Ok(Bytes::from(serde_json::to_vec(value)?))
-}
-
-/// The pinned Grok reader treats WKE as a machine-readable error tag. Ordinary 429s
-/// and rate_limit_exceeded remain client backoff, never supplier exhaustion.
-pub fn classify_failure(
-    status: Option<u16>,
-    value: &Value,
-    headers: &HeaderMap,
-    now: i64,
-) -> Option<crate::SupplierFailure> {
-    let error = value
-        .pointer("/response/error")
-        .or_else(|| value.get("error"))
-        .unwrap_or(value);
-    let status = status.or_else(|| {
-        value["status"]
-            .as_u64()
-            .or_else(|| value["code"].as_u64())
-            .and_then(|n| u16::try_from(n).ok())
-    });
-    if status == Some(401) {
-        return Some(crate::SupplierFailure::Authentication);
-    }
-    let message = error
-        .as_str()
-        .or_else(|| error["message"].as_str())
-        .unwrap_or("");
-    let wke = message
-        .split_once("[WKE=")
-        .and_then(|(_, tail)| tail.split_once(']').map(|(tag, _)| tag));
-    let code = wke
-        .or_else(|| error["code"].as_str())
-        .or_else(|| error["type"].as_str())?;
-    if !matches!(
-        code,
-        "personal-team-blocked:spending-limit"
-            | "insufficient_quota"
-            | "insufficient_credits"
-            | "billing_error"
-    ) {
-        return None;
-    }
-    let retry = headers
-        .get("retry-after")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<i64>().ok())
-        .filter(|n| *n >= 0)
-        .map(|n| now.saturating_add(n));
-    let reset = error["reset_at"]
-        .as_i64()
-        .or_else(|| error["resets_at"].as_i64())
-        .filter(|t| *t > now);
-    Some(crate::SupplierFailure::QuotaExhausted {
-        until: reset
-            .or(retry)
-            .unwrap_or(now.saturating_add(60))
-            .max(now.saturating_add(1)),
-        code: code.into(),
-    })
 }

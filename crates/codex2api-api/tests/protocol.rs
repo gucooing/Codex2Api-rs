@@ -4,7 +4,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use codex2api_storage::{
-    ApiGroup, ModelConfig, ModelPrice, NewSupplierAccount, Storage, SupplierTokens, User, UserKind,
+    ApiGroup, ModelConfig, ModelPrice, NewSupplierAccount, Storage, User, UserKind,
     WalletAdjustment,
 };
 use futures::StreamExt;
@@ -14,6 +14,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tower::ServiceExt;
+
+#[path = "grok/scheduling.rs"]
+mod grok_scheduling;
 
 #[derive(Default)]
 struct Gate {
@@ -45,6 +48,7 @@ struct Mock {
     failed_usage: AtomicBool,
     partial_output: AtomicBool,
     response_content_type: Mutex<Option<Option<String>>>,
+    grok_rejections: Mutex<std::collections::HashMap<String, (u16, String)>>,
 }
 fn response_value() -> Value {
     json!({"object":"response","id":"resp_fixture","created_at":100,"model":"custom-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":10000,"output_tokens":5000,"input_tokens_details":{"cached_tokens":2000},"output_tokens_details":{"reasoning_tokens":1000}},"supplier_account_id":"private-supplier"})
@@ -62,6 +66,12 @@ impl codex2api_upstream::HttpTransport for Mock {
         let failed_usage = self.failed_usage.load(Ordering::Relaxed);
         let partial_output = self.partial_output.load(Ordering::Relaxed);
         let response_content_type = self.response_content_type.lock().unwrap().clone();
+        let grok_rejection = built
+            .as_ref()
+            .ok()
+            .and_then(|request| request.headers().get("x-userid"))
+            .and_then(|id| id.to_str().ok())
+            .and_then(|id| self.grok_rejections.lock().unwrap().get(id).cloned());
         let decoded = built.as_ref().ok().and_then(|request| {
             request
                 .body()
@@ -77,6 +87,23 @@ impl codex2api_upstream::HttpTransport for Mock {
         }
         Box::pin(async move {
             let request = built?;
+            if let Some((status, body)) = grok_rejection {
+                return Ok(http::Response::builder()
+                    .status(status)
+                    .header("retry-after", "120")
+                    .header("x-should-retry", "false")
+                    .header(
+                        "content-type",
+                        if body.starts_with("data:") {
+                            "text/event-stream"
+                        } else {
+                            "application/json"
+                        },
+                    )
+                    .body(reqwest::Body::from(body))
+                    .unwrap()
+                    .into());
+            }
             assert_eq!(
                 request.headers()["authorization"],
                 "Bearer fixture-supplier"
@@ -385,7 +412,9 @@ async fn add_supplier(storage: &Storage, provider: &str, id: &str) {
             uuid::Uuid::new_v4().to_string(),
             codex2api_suppliers::HostRuntime {
                 originator: "codex_cli_rs".into(),
-                user_agent: "codex_cli_rs/fixture (Linux 6; x86_64) fixture".into(),
+                user_agent: codex2api_common::version::official_user_agent(
+                    "Linux", "6", "x86_64", "fixture",
+                ),
                 os_type: "Linux".into(),
                 os_version: "6".into(),
                 arch: "x86_64".into(),
@@ -401,12 +430,15 @@ async fn add_supplier(storage: &Storage, provider: &str, id: &str) {
                 &identity.arch,
                 identity.fingerprint_json().unwrap(),
             ),
-            SupplierTokens {
-                access_token: Some("fixture-supplier".into()),
-                auth_mode: Some("chatgpt".into()),
-                last_refresh: Some(chrono::Utc::now().to_rfc3339()),
-                ..Default::default()
-            },
+            codex2api_suppliers::AuthDotJson::chatgpt(
+                codex2api_suppliers::TokenData {
+                    access_token: "fixture-supplier".into(),
+                    account_id: Some("workspace".into()),
+                    ..Default::default()
+                },
+                Some(chrono::Utc::now()),
+            )
+            .to_supplier_tokens(id),
         )
     };
     supplier.id = Some(id.into());
@@ -806,9 +838,11 @@ async fn supplier_throttle_is_forwarded_without_failover_or_persistent_ban() {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(response.headers()["retry-after"], "7");
+        let status = response.status();
+        let headers = response.headers().clone();
         let value = json_body(response).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{provider}: {value}");
+        assert_eq!(headers["retry-after"], "7");
         assert_eq!(value["error"]["code"], "rate_limit_exceeded");
         assert!(!value.to_string().contains("private-supplier"));
         assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);

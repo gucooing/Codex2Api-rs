@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request, setCsrf as setCsrf } from "../src/lib/http.ts";
+import { isMobileDesktopMode, syncDesktopViewport } from "../src/hooks/use-mobile.ts";
 
 const json = (status, value) => new Response(JSON.stringify(value), { status });
 const unauthorized = () => json(401, { error: { code: "unauthorized", message: "登录已失效" } });
@@ -104,5 +105,114 @@ test("only a rejected refresh logs out; outages, foreign 401s and canceled reads
   } finally {
     Object.assign(globalThis, original);
     setCsrf("");
+  }
+});
+
+test("mobile PC mode locks 1280px desktop viewport while preserving normal phone and desktop modes", () => {
+  const original = {
+    window: globalThis.window,
+    navigator: globalThis.navigator,
+    document: globalThis.document,
+  };
+  try {
+    let viewportContent = "width=device-width, initial-scale=1";
+    const meta = {
+      getAttribute: (name) => (name === "content" ? viewportContent : null),
+      setAttribute: (name, value) => {
+        if (name === "content") viewportContent = value;
+      },
+    };
+    const root = {
+      clientWidth: 390,
+      dataset: {},
+      style: { zoom: "", minWidth: "" },
+    };
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      writable: true,
+      value: {
+        documentElement: root,
+        head: {
+          querySelectorAll: () => [meta],
+        },
+      },
+    });
+
+    // 1. Mobile browser in PC mode (desktop Linux/X11 UA, coarse pointer, touch points)
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      writable: true,
+      value: {
+        userAgent:
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        maxTouchPoints: 5,
+        userAgentData: { mobile: false },
+      },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: {
+        innerWidth: 390,
+        screen: { width: 1080, height: 2400 },
+        matchMedia: (q) => ({
+          matches: q.includes("pointer: coarse") || q.includes("hover: none"),
+        }),
+      },
+    });
+    assert.equal(isMobileDesktopMode(), true);
+    assert.equal(syncDesktopViewport(), true);
+    assert.equal(viewportContent.startsWith("width=1280"), true);
+    assert.equal(root.dataset.desktopViewport, "true");
+    assert.equal(root.style.minWidth, "1280px");
+
+    // 2. Normal phone mode (Mobile UA)
+    viewportContent = "width=device-width, initial-scale=1";
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      writable: true,
+      value: {
+        userAgent:
+          "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        maxTouchPoints: 5,
+        userAgentData: { mobile: true },
+      },
+    });
+    assert.equal(isMobileDesktopMode(), false);
+    assert.equal(syncDesktopViewport(), false);
+    assert.equal(viewportContent, "width=device-width, initial-scale=1");
+    assert.equal(root.dataset.desktopViewport, undefined);
+    assert.equal(root.style.zoom, "");
+
+    // 3. Normal desktop PC with narrow window
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      writable: true,
+      value: {
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        maxTouchPoints: 0,
+        userAgentData: { mobile: false },
+      },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: {
+        innerWidth: 640,
+        screen: { width: 1920, height: 1080 },
+        matchMedia: () => ({ matches: false }),
+      },
+    });
+    assert.equal(isMobileDesktopMode(), false);
+    assert.equal(syncDesktopViewport(), false);
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      Object.defineProperty(globalThis, key, {
+        configurable: true,
+        writable: true,
+        value,
+      });
+    }
   }
 });

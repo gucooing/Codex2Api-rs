@@ -151,298 +151,312 @@ export default function SubscriptionsPage({ initialUserId = "" }: { initialUserI
   );
   return (
     <>
-      <Card>
-        <CardContent className="flex flex-wrap items-end gap-3">
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setApplied({ ...filters });
-              clearSelection();
-              setPage(1);
-              resource.reload();
-            }}
-          >
-            <Field className="w-40">
-              <FieldLabel
-                htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("搜索用户"))}
-              >
-                {"搜索用户"}
-              </FieldLabel>
-              <Input
-                id={fieldId + "-field-2" + "-" + encodeURIComponent(String("搜索用户"))}
-                aria-label={"搜索用户"}
-                value={filters.search}
-                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                placeholder="名称、用户名或邮箱"
-              />
-            </Field>
-            <Field className="w-40">
-              <FieldLabel
-                htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("登录状态"))}
-              >
-                {"登录状态"}
-              </FieldLabel>
-              <Select
-                value={filters.status}
-                onValueChange={(next) =>
-                  ((status) => setFilters({ ...filters, status }))(
-                    next ===
-                      fieldId + "-field-3" + "-" + encodeURIComponent(String("登录状态")) + "-empty"
-                      ? ""
-                      : next,
-                  )
-                }
-              >
-                <SelectTrigger
-                  id={fieldId + "-field-3" + "-" + encodeURIComponent(String("登录状态"))}
-                  aria-label={"登录状态"}
-                  data-empty={String(filters.status) === "" ? "true" : undefined}
-                  className="w-full"
+      <Card size="sm">
+        <CardContent className="space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <form
+              className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setApplied({ ...filters });
+                clearSelection();
+                setPage(1);
+                resource.reload();
+              }}
+            >
+              <Field className="min-w-0 sm:w-44">
+                <FieldLabel
+                  className="sr-only"
+                  htmlFor={fieldId + "-field-2" + "-" + encodeURIComponent(String("搜索用户"))}
                 >
-                  <SelectValue
-                    placeholder={
-                      [
-                        { value: "", label: "全部状态" },
-                        { value: "enabled", label: "已启用" },
-                        { value: "disabled", label: "已停用" },
-                      ].find((option) => option.value === "")?.label ?? "请选择"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  {[
-                    { value: "", label: "全部状态" },
-                    { value: "enabled", label: "已启用" },
-                    { value: "disabled", label: "已停用" },
-                  ].map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={
-                        option.value ||
+                  {"搜索用户"}
+                </FieldLabel>
+                <Input
+                  id={fieldId + "-field-2" + "-" + encodeURIComponent(String("搜索用户"))}
+                  aria-label={"搜索用户"}
+                  value={filters.search}
+                  onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                  placeholder="搜索名称、用户名或邮箱"
+                />
+              </Field>
+              <Field className="min-w-0 sm:w-28">
+                <FieldLabel
+                  className="sr-only"
+                  htmlFor={fieldId + "-field-3" + "-" + encodeURIComponent(String("登录状态"))}
+                >
+                  {"登录状态"}
+                </FieldLabel>
+                <Select
+                  value={filters.status}
+                  onValueChange={(next) =>
+                    ((status) => setFilters({ ...filters, status }))(
+                      next ===
                         fieldId +
                           "-field-3" +
                           "-" +
                           encodeURIComponent(String("登录状态")) +
                           "-empty"
-                      }
-                      disabled={"disabled" in option && Boolean(option.disabled)}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field className="w-40">
-              <FieldLabel
-                htmlFor={fieldId + "-field-4" + "-" + encodeURIComponent(String("订阅状态"))}
-              >
-                {"订阅状态"}
-              </FieldLabel>
-              <Select
-                value={filters.subscription}
-                onValueChange={(next) =>
-                  ((subscription) => setFilters({ ...filters, subscription }))(
-                    next ===
-                      fieldId + "-field-4" + "-" + encodeURIComponent(String("订阅状态")) + "-empty"
-                      ? ""
-                      : next,
-                  )
-                }
-              >
-                <SelectTrigger
-                  id={fieldId + "-field-4" + "-" + encodeURIComponent(String("订阅状态"))}
-                  aria-label={"订阅状态"}
-                  data-empty={String(filters.subscription) === "" ? "true" : undefined}
-                  className="w-full"
+                        ? ""
+                        : next,
+                    )
+                  }
                 >
-                  <SelectValue
-                    placeholder={
-                      [
-                        { value: "", label: "全部订阅" },
-                        { value: "active", label: "订阅有效" },
-                        { value: "expired", label: "订阅已到期" },
-                      ].find((option) => option.value === "")?.label ?? "请选择"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  {[
-                    { value: "", label: "全部订阅" },
-                    { value: "active", label: "订阅有效" },
-                    { value: "expired", label: "订阅已到期" },
-                  ].map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={
-                        option.value ||
+                  <SelectTrigger
+                    id={fieldId + "-field-3" + "-" + encodeURIComponent(String("登录状态"))}
+                    aria-label={"登录状态"}
+                    data-empty={String(filters.status) === "" ? "true" : undefined}
+                    className="w-full"
+                  >
+                    <SelectValue
+                      placeholder={
+                        [
+                          { value: "", label: "全部状态" },
+                          { value: "enabled", label: "已启用" },
+                          { value: "disabled", label: "已停用" },
+                        ].find((option) => option.value === "")?.label ?? "请选择"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    {[
+                      { value: "", label: "全部状态" },
+                      { value: "enabled", label: "已启用" },
+                      { value: "disabled", label: "已停用" },
+                    ].map((option) => (
+                      <SelectItem
+                        key={option.value}
+                        value={
+                          option.value ||
+                          fieldId +
+                            "-field-3" +
+                            "-" +
+                            encodeURIComponent(String("登录状态")) +
+                            "-empty"
+                        }
+                        disabled={"disabled" in option && Boolean(option.disabled)}
+                      >
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="min-w-0 sm:w-28">
+                <FieldLabel
+                  className="sr-only"
+                  htmlFor={fieldId + "-field-4" + "-" + encodeURIComponent(String("订阅状态"))}
+                >
+                  {"订阅状态"}
+                </FieldLabel>
+                <Select
+                  value={filters.subscription}
+                  onValueChange={(next) =>
+                    ((subscription) => setFilters({ ...filters, subscription }))(
+                      next ===
                         fieldId +
                           "-field-4" +
                           "-" +
                           encodeURIComponent(String("订阅状态")) +
                           "-empty"
-                      }
-                      disabled={"disabled" in option && Boolean(option.disabled)}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <div className="flex flex-wrap items-center gap-2 self-end">
-              <Button type="submit">
-                <Search />
-                查询
-              </Button>
-              <Button
-                variant="secondary"
-                type="button"
-                onClick={() => {
-                  setFilters(empty);
-                  setApplied(empty);
-                  clearSelection();
-                  setPage(1);
-                  resource.reload();
-                }}
-              >
-                <RotateCcw />
-                重置
-              </Button>
-            </div>
-          </form>
-          <div className="flex flex-wrap items-center gap-2 self-end xl:ml-auto">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                aria-label="选择当前页账户"
-                checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
-                disabled={!resource.ready || batchBusy}
-                onCheckedChange={togglePage}
-              />
-              <span className="text-sm text-muted-foreground">选择账户</span>
-            </div>
-            {selectionCount > 0 && (
-              <>
-                <Badge variant="secondary">
-                  已选择 {selectionCount} 个{selectAllMatching ? "（全部筛选结果）" : ""}
-                </Badge>
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  disabled={batchBusy}
-                  onClick={clearSelection}
+                        ? ""
+                        : next,
+                    )
+                  }
                 >
-                  取消选择
-                </Button>
-                {!selectAllMatching && (resource.data?.total ?? 0) > pageIds.length && (
-                  <Button
-                    size="sm"
-                    variant="link"
-                    type="button"
-                    disabled={!resource.ready || batchBusy}
-                    onClick={() => {
-                      setSelectAllMatching(true);
-                      setExcluded(new Set());
-                    }}
+                  <SelectTrigger
+                    id={fieldId + "-field-4" + "-" + encodeURIComponent(String("订阅状态"))}
+                    aria-label={"订阅状态"}
+                    data-empty={String(filters.subscription) === "" ? "true" : undefined}
+                    className="w-full"
                   >
-                    选择当前筛选的全部 {resource.data?.total ?? "—"} 个
-                  </Button>
-                )}
+                    <SelectValue
+                      placeholder={
+                        [
+                          { value: "", label: "全部订阅" },
+                          { value: "active", label: "订阅有效" },
+                          { value: "expired", label: "订阅已到期" },
+                        ].find((option) => option.value === "")?.label ?? "请选择"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    {[
+                      { value: "", label: "全部订阅" },
+                      { value: "active", label: "订阅有效" },
+                      { value: "expired", label: "订阅已到期" },
+                    ].map((option) => (
+                      <SelectItem
+                        key={option.value}
+                        value={
+                          option.value ||
+                          fieldId +
+                            "-field-4" +
+                            "-" +
+                            encodeURIComponent(String("订阅状态")) +
+                            "-empty"
+                        }
+                        disabled={"disabled" in option && Boolean(option.disabled)}
+                      >
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button type="submit" size="sm">
+                  <Search />
+                  查询
+                </Button>
                 <Button
-                  size="sm"
                   variant="outline"
+                  size="sm"
                   type="button"
-                  disabled={!resource.ready || batchBusy || selectionCount === 0}
-                  onClick={() => openBatch("reset")}
+                  onClick={() => {
+                    setFilters(empty);
+                    setApplied(empty);
+                    clearSelection();
+                    setPage(1);
+                    resource.reload();
+                  }}
                 >
+                  <RotateCcw />
                   重置
                 </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  type="button"
-                  disabled={!resource.ready || batchBusy || selectionCount === 0}
-                  onClick={() => openBatch("grant_reset")}
-                >
-                  发放重置卡
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  type="button"
-                  disabled={!resource.ready || batchBusy || selectionCount === 0}
-                  onClick={() => openBatch("delete")}
-                >
-                  删除
-                </Button>
-              </>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={resource.reload}
-              aria-label="刷新账户"
-            >
-              <RefreshCw />
-              刷新
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="outline" size="sm" aria-label="显示列">
-                  <Columns3 />
-                  显示列
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>
-                  {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
-                </DropdownMenuLabel>
-                {tableColumns0.labels.map((label) => (
-                  <DropdownMenuCheckboxItem
-                    key={label}
-                    checked={tableColumns0.isVisible(label)}
-                    disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
-                    onSelect={(event) => event.preventDefault()}
-                    onCheckedChange={(checked) => tableColumns0.setVisible(label, checked === true)}
-                  >
-                    {label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
-                <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <ToggleGroup
-              className="hidden md:flex"
-              type="single"
-              variant="outline"
-              size="sm"
-              value={view}
-              onValueChange={(next) => {
-                if (next === "table" || next === "cards") setView(next);
-              }}
-              aria-label="视图切换"
-            >
-              <ToggleGroupItem value="table" aria-label="表格视图">
-                <Table2 />
-                表格
-              </ToggleGroupItem>
-              <ToggleGroupItem value="cards" aria-label="卡片视图">
-                <LayoutGrid />
-                卡片
-              </ToggleGroupItem>
-            </ToggleGroup>
-            {
-              <Button type="button" onClick={() => setCreate(true)}>
+              </div>
+            </form>
+            <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
+              <div className="mr-1 flex items-center gap-1.5">
+                <Checkbox
+                  aria-label="选择当前页账户"
+                  checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                  disabled={!resource.ready || batchBusy}
+                  onCheckedChange={togglePage}
+                />
+                <span className="text-xs text-muted-foreground">选择账户</span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={resource.reload}
+                aria-label="刷新账户"
+              >
+                <RefreshCw />
+                刷新
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" aria-label="显示列">
+                    <Columns3 />
+                    显示列
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel>
+                    {tableColumns0.mobile ? "手机显示列" : "桌面显示列"}
+                  </DropdownMenuLabel>
+                  {tableColumns0.labels.map((label) => (
+                    <DropdownMenuCheckboxItem
+                      key={label}
+                      checked={tableColumns0.isVisible(label)}
+                      disabled={tableColumns0.count === 1 && tableColumns0.isVisible(label)}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(checked) =>
+                        tableColumns0.setVisible(label, checked === true)
+                      }
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={tableColumns0.showAll}>显示全部列</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={tableColumns0.reset}>恢复默认列</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <ToggleGroup
+                className="hidden md:flex"
+                type="single"
+                variant="outline"
+                size="sm"
+                value={view}
+                onValueChange={(next) => {
+                  if (next === "table" || next === "cards") setView(next);
+                }}
+                aria-label="视图切换"
+              >
+                <ToggleGroupItem value="table" aria-label="表格视图">
+                  <Table2 />
+                  表格
+                </ToggleGroupItem>
+                <ToggleGroupItem value="cards" aria-label="卡片视图">
+                  <LayoutGrid />
+                  卡片
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <Button type="button" size="sm" onClick={() => setCreate(true)}>
                 <Plus />
                 新增订阅
               </Button>
-            }
+            </div>
           </div>
+          {selectionCount > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t pt-2.5">
+              <Badge variant="secondary">
+                已选择 {selectionCount} 个{selectAllMatching ? "（全部筛选结果）" : ""}
+              </Badge>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                disabled={batchBusy}
+                onClick={clearSelection}
+              >
+                取消选择
+              </Button>
+              {!selectAllMatching && (resource.data?.total ?? 0) > pageIds.length && (
+                <Button
+                  size="sm"
+                  variant="link"
+                  type="button"
+                  disabled={!resource.ready || batchBusy}
+                  onClick={() => {
+                    setSelectAllMatching(true);
+                    setExcluded(new Set());
+                  }}
+                >
+                  选择当前筛选的全部 {resource.data?.total ?? "—"} 个
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                disabled={!resource.ready || batchBusy || selectionCount === 0}
+                onClick={() => openBatch("reset")}
+              >
+                重置
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                disabled={!resource.ready || batchBusy || selectionCount === 0}
+                onClick={() => openBatch("grant_reset")}
+              >
+                发放重置卡
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                type="button"
+                disabled={!resource.ready || batchBusy || selectionCount === 0}
+                onClick={() => openBatch("delete")}
+              >
+                删除
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
       <Card>
@@ -645,52 +659,55 @@ export default function SubscriptionsPage({ initialUserId = "" }: { initialUserI
           ) : items.length ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {items.map((account) => (
-                <Card key={account.id}>
-                  <CardContent className="space-y-4">
-                    <Checkbox
-                      aria-label={`选择 ${account.name}`}
-                      checked={isSelected(account.id)}
-                      disabled={!resource.ready || batchBusy}
-                      onCheckedChange={(checked) => toggleIds([account.id], checked === true)}
-                    />
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <Link href={`/subscriptions/detail/?id=${encodeURIComponent(account.id)}`}>
+                <Card key={account.id} size="sm">
+                  <CardContent className="space-y-3">
+                    <div className="flex items-start justify-between gap-2.5">
+                      <Checkbox
+                        className="mt-0.5"
+                        aria-label={`选择 ${account.name}`}
+                        checked={isSelected(account.id)}
+                        disabled={!resource.ready || batchBusy}
+                        onCheckedChange={(checked) => toggleIds([account.id], checked === true)}
+                      />
+                      <div className="min-w-0 flex-1 break-words">
+                        <Link
+                          href={`/subscriptions/detail/?id=${encodeURIComponent(account.id)}`}
+                          className="hover:underline"
+                        >
                           <strong>{account.name}</strong>
                         </Link>
-                        <CardDescription>{account.username}</CardDescription>
+                        <CardDescription>
+                          {account.username} · {account.email}
+                        </CardDescription>
                       </div>
                       <Badge variant={account.enabled ? "secondary" : "outline"}>
                         {account.enabled ? "已启用" : "已停用"}
                       </Badge>
                     </div>
-                    <div className="space-y-3">
-                      <CardDescription className="text-sm text-muted-foreground">
-                        {account.email}
-                      </CardDescription>
-                      <FieldGroup className="grid gap-4 sm:grid-cols-2 gap-3">
-                        {[
-                          { label: "提供商", value: account.provider_id },
-                          { label: "订阅套餐", value: account.plan_name },
-                          {
-                            label: "当前权益",
-                            value: subscriptionLabel(account.subscription_status),
-                          },
-                          {
-                            label: "订阅到期",
-                            value: account.subscription_expires_at
-                              ? date(account.subscription_expires_at)
-                              : "未设置到期时间",
-                          },
-                        ].map(({ label, value }) => (
-                          <Field key={label}>
-                            <FieldTitle>{label}</FieldTitle>
-                            <FieldDescription>{value ?? "—"}</FieldDescription>
-                          </Field>
-                        ))}
-                      </FieldGroup>
-                    </div>
-                    <div className="flex w-64 flex-wrap gap-2" aria-label="账户额度">
+                    <FieldGroup className="grid grid-cols-2 gap-x-3 gap-y-2">
+                      {[
+                        { label: "提供商", value: account.provider_id },
+                        { label: "订阅套餐", value: account.plan_name },
+                        {
+                          label: "当前权益",
+                          value: subscriptionLabel(account.subscription_status),
+                        },
+                        {
+                          label: "订阅到期",
+                          value: account.subscription_expires_at
+                            ? date(account.subscription_expires_at)
+                            : "未设置到期时间",
+                        },
+                      ].map(({ label, value }) => (
+                        <Field key={label} className="min-w-0">
+                          <FieldTitle>{label}</FieldTitle>
+                          <FieldDescription className="break-words">
+                            {value ?? "—"}
+                          </FieldDescription>
+                        </Field>
+                      ))}
+                    </FieldGroup>
+                    <div className="flex w-full flex-wrap gap-2" aria-label="账户额度">
                       {account.quota.windows.map((window) => (
                         <div key={window.id} className="min-w-0 flex-1 basis-28 space-y-1 text-xs">
                           <div
@@ -728,7 +745,7 @@ export default function SubscriptionsPage({ initialUserId = "" }: { initialUserI
                         <span className="text-xs text-muted-foreground">不限额</span>
                       )}
                     </div>
-                    <div className="border-t pt-3">{accountActions(account)}</div>
+                    <div className="border-t pt-2">{accountActions(account)}</div>
                   </CardContent>
                 </Card>
               ))}

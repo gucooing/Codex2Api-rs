@@ -65,9 +65,9 @@ export function Logs({ id }: { id: string }) {
   return (
     <>
       <Card size="sm">
-        <CardContent className="space-y-4">
+        <CardContent>
           <form
-            className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+            className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap"
             onSubmit={(event) => {
               event.preventDefault();
               setApplied({ ...filters });
@@ -75,8 +75,9 @@ export function Logs({ id }: { id: string }) {
               resource.reload();
             }}
           >
-            <Field>
+            <Field className="min-w-0 sm:w-44">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-19" + "-" + encodeURIComponent(String("请求接口"))}
               >
                 {"请求接口"}
@@ -89,8 +90,9 @@ export function Logs({ id }: { id: string }) {
                 placeholder="输入请求路径"
               />
             </Field>
-            <Field>
+            <Field className="min-w-0 sm:w-32">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-20" + "-" + encodeURIComponent(String("请求方法"))}
               >
                 {"请求方法"}
@@ -154,8 +156,9 @@ export function Logs({ id }: { id: string }) {
                 </SelectContent>
               </Select>
             </Field>
-            <Field>
+            <Field className="min-w-0 sm:w-40">
               <FieldLabel
+                className="sr-only"
                 htmlFor={fieldId + "-field-21" + "-" + encodeURIComponent(String("响应结果"))}
               >
                 {"响应结果"}
@@ -215,14 +218,15 @@ export function Logs({ id }: { id: string }) {
                 </SelectContent>
               </Select>
             </Field>
-            <div className="flex flex-wrap items-center gap-2 self-end">
-              <Button type="submit">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button type="submit" size="sm">
                 <Search />
                 查询
               </Button>
               <Button
                 type="button"
                 variant="secondary"
+                size="sm"
                 onClick={() => {
                   setFilters(empty);
                   setApplied(empty);
