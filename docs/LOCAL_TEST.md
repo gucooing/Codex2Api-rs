@@ -31,7 +31,7 @@ Invoke-RestMethod http://127.0.0.1:8080/version
 核对 package_version、release_commit 与仓库版本常量一致。Ctrl+C 停止服务；重新运行保留该测试库。
 测试必须使用独立 PostgreSQL 数据库，不得连接正式库。
 
-ccodex 配置服务根 BASE_OAUTH_URL 后，可检查浏览器/设备码登录、模型和额度读取、连续两轮生成、
+ccodex 内置正式服务根 `https://oauth-ai.alsl.xyz/v1/chatgpt`，需经该域名的反向代理接入测试实例，再检查浏览器/设备码登录、模型和额度读取、连续两轮生成、
 取消及客户端重连。使用实际反向代理入口时配置 CODEX2API_PUBLIC_OAUTH_URL 并启用 WebSocket；
 该环境变量只声明地址，不自动提供 TLS。检查号池内授权失效和配额耗尽时输出前自动换号，号池耗尽的结构化错误，以及已输出后不重放的边界。
 

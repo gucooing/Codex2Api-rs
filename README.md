@@ -168,15 +168,9 @@ $env:CODEX2API_DATABASE_URL = "postgresql://codex2api:password@127.0.0.1:5432/co
 
 ## 第三方客户端 OAuth 接入
 
-配套客户端安装与更新：`npm install -g @gucooing/ccodex@latest`（需要先完成 ccodex 首次发布）。命令为 `ccodex`，默认配置与登录数据放在 `~/.ccodex`，不覆盖官方 `codex`；不按服务地址另分凭据。客户端保留官方工具、权限、沙箱和交互逻辑。
+配套客户端安装与更新：`npm install -g @gucooing/ccodex@latest`。命令为 `ccodex`，默认配置与登录数据放在 `~/.ccodex`，不覆盖官方 `codex`。客户端基于官方最新稳定版，服务地址已内置为 `https://oauth-ai.alsl.xyz/v1/chatgpt`，无需配置；客户端保留官方工具、权限、沙箱和交互逻辑。
 
-在 `~/.ccodex/config.toml` 顶层配置：
-
-```toml
-BASE_OAUTH_URL = "https://oauth-ai.alsl.xyz/v1/chatgpt"
-```
-
-客户端应明确配置服务根。该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_OAUTH_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/v1/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/v1/chatgpt/codex/device`。授权入口跳转到 `CODEX2API_PUBLIC_USER_URL` 上的确认页；反向代理应分别路由四个入口，并在用户端保留 `/user` 路径。设备登录可以在用户中心或管理端撤销。
+该域名需部署本服务后才能使用；部署时设置 `CODEX2API_PUBLIC_OAUTH_URL=https://oauth-ai.alsl.xyz`，反向代理保留 `/v1/chatgpt` 路径并支持 WebSocket。`ccodex login` 使用浏览器授权；`ccodex login --device-auth` 使用设备码，浏览器验证页为 `/v1/chatgpt/codex/device`。授权入口跳转到 `CODEX2API_PUBLIC_USER_URL` 上的确认页；反向代理应分别路由四个入口，并在用户端保留 `/user` 路径。设备登录可以在用户中心或管理端撤销。
 
 管理员在 **用户管理** 创建用户，在 **订阅管理** 新增、续期、调整或终止用户订阅。列表以用户、套餐和独立订阅编号区分记录，“管理”打开设置、用量、重置卡、记录和登录设备。
 

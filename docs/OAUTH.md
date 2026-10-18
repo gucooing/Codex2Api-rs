@@ -19,7 +19,7 @@ OAuth 模块 `codex2api-oauth` 专门服务配置了本服务地址的客户端�
 
 ## 平台路由
 
-ChatGPT 服务根为 `{oauth_url}/v1/chatgpt`。ccodex 的 `BASE_OAUTH_URL` 和 Desktop 启动器服务器地址都指向此根。启动器输入纯 origin 时自动补上 `/v1/chatgpt`。客户端继续使用原协议的相对路径：
+ChatGPT 服务根为 `{oauth_url}/v1/chatgpt`。ccodex 内置的服务地址和 Desktop 启动器服务器地址都指向此根。启动器输入纯 origin 时自动补上 `/v1/chatgpt`。客户端继续使用原协议的相对路径：
 
 - `/oauth/authorize`、`/oauth/token`、`/oauth/revoke`。
 - `/api/accounts/deviceauth/usercode`、`/api/accounts/deviceauth/token`、`/codex/device`。

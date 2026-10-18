@@ -8,11 +8,14 @@
 - Commit time: `2026-10-09T17:39:05Z`
 - Reference-only checkout: `reference/codex`; constants: `crates/codex2api-common/src/version.rs`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
-- Fork integration commit: `c63e0d6140676390d687bd1389a1d36b34046821`
+- Client base: official `rust-v0.163.0` (`83086188ae0614bd882818ff1aa23f3194962012`)
+- Fork commit: `bf16b05196136aba7d28f89f8dac4d41c6c1d635` (`ccodex-v0.163.0`)
 
-The maintained client inherits the exact official release. Its customizations are
-`BASE_OAUTH_URL`, the `ccodex` executable, `.ccodex` default home and its release
-channel. Supplier protocol constants always come from official Codex. Official
+The maintained client is rebuilt from the latest official stable release tag. It
+changes only its release channel (npm `@gucooing/ccodex`), the official server
+addresses (pointed to `https://oauth-ai.alsl.xyz/v1/chatgpt`) and its separation
+from official Codex (`ccodex` command, `~/.ccodex` home, gucooing update and install
+channel); all other client code is official. Supplier protocol constants always come from official Codex. Official
 Rust crates are never dependencies of this proxy. Follow [CODEX_UPDATES.md](CODEX_UPDATES.md)
 for baseline changes. Build and test both frontend exports and the Rust workspace; release packaging uses the release workflow.
 

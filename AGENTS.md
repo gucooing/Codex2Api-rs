@@ -16,14 +16,19 @@ Do not depend on official `codex-rs` crates. Official source is reference only.
 ## Updating the official Codex baseline
 
 The maintained client is https://github.com/gucooing/codex, branch `ccodex`
-(a sibling checkout such as `../codex`). Update that fork from an exact official
-stable release first, then compare and adapt this proxy. Record both the official
-release commit and the fork integration commit; fork-only service routing,
-`BASE_OAUTH_URL`, the `ccodex` executable and npm packaging must never replace
-official supplier-side protocol constants. The client otherwise retains official
-Codex behavior and isolates its default home from official Codex, not per service.
+(a sibling checkout such as `../codex`). Rebuild ccodex from the exact commit of the
+latest official stable release tag, never from official `main` or other unreleased
+repository code, then compare and adapt this proxy. On top of that tag ccodex keeps
+only its release channel (`ccodex-v*` tags publishing npm `@gucooing/ccodex`), the
+official server addresses pointed to `https://oauth-ai.alsl.xyz/v1/chatgpt`, and its
+separation from official Codex (`ccodex` command, `~/.ccodex` home, gucooing update
+and install channel). All other official code stays unchanged; never add a service
+routing layer or a configurable service root. Follow the ccodex section of
+[docs/CODEX_UPDATES.md](docs/CODEX_UPDATES.md). ccodex addresses and names never
+replace official supplier-side protocol constants.
 
-Current official release integration in the fork: `c63e0d6140676390d687bd1389a1d36b34046821`.
+Current fork: official `rust-v0.163.0` (`83086188ae0614bd882818ff1aa23f3194962012`),
+ccodex `bf16b05196136aba7d28f89f8dac4d41c6c1d635` (`ccodex-v0.163.0`).
 
 Validate proxy changes locally with the relevant compilation checks and regression
 tests before reporting completion. Do not compile ccodex locally; use source review,

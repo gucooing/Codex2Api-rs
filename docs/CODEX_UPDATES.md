@@ -1,6 +1,27 @@
 # 官方 Codex 更新维护流程
 
-2026-10-01 起采用“官方稳定版 → `gucooing/codex` 的 `ccodex` 分支 → 本仓库”的顺序。客户端在独立仓库维护，典型本地路径为 `../codex`；官方精确 release commit 与 fork 集成 commit 分别记录。客户端的服务根地址和安装名称是定制差异，不能当作供应端官方协议常量。服务端仍执行下述源码分析、方案裁决和验证流程。
+更新顺序为“官方最新稳定 tag → `gucooing/codex` 的 `ccodex` 分支 → 本仓库”。客户端在独立仓库维护，典型本地路径为 `../codex`；官方 tag commit 与 fork commit 分别记录。客户端的服务地址和安装名称是定制差异，不能当作供应端官方协议常量。服务端仍执行下述源码分析、方案裁决和验证流程。
+
+## ccodex 客户端重建
+
+ccodex 每次都从官方最新稳定发布 tag 指向的完整 commit 重新建立，只使用该 tag 的代码，不使用官方 `main` 或其他未发布的仓库代码。annotated tag 必须解析到 commit；alpha 等预发布 tag 只在用户明确指定时使用。
+
+在该 tag 之上只保留以下差异，其余官方代码保持不变，不加入服务路由层或可配置的服务根：
+
+| 差异 | 内容 |
+| --- | --- |
+| 发布 | `.github/workflows/ccodex.yml`、`scripts/ccodex/*` 和 `codex-cli` npm 打包；推送 `ccodex-v<版本>` tag 后发布 npm `@gucooing/ccodex` 和 GitHub Release |
+| 服务器地址 | 客户端连接的官方服务地址（`auth.openai.com`、`chatgpt.com`、`api.openai.com` 等）替换为 `https://oauth-ai.alsl.xyz/v1/chatgpt`，原路径保留；JWT 声明名、issuer 等协议标识不改 |
+| 与官方隔离 | 命令为 `ccodex`；默认目录为 `~/.ccodex`，可用 `CCODEX_HOME` 或 `CODEX_HOME` 覆盖；更新检查和安装脚本使用 gucooing 渠道；daemon 使用包内入口 `bin/ccodex` |
+
+重建步骤：
+
+1. 查询官方 `openai/codex` 的最新稳定 release，记录 tag、完整 commit 和发布时间。
+2. 在 `../codex` 从该 commit 新建 `ccodex` 分支，重新应用上表的现有 ccodex 提交并解决冲突。
+3. 在该 tag 的代码中搜索官方服务地址，替换新增的地址；把 `scripts/ccodex/upstream.json` 更新为该 tag 及其官方包的 checksum。
+4. 只做源码审查、格式检查和不编译的打包检查（`node --check codex-cli/bin/ccodex.js`、`scripts/ccodex` 单元测试）；Rust 编译由发布 CI 完成。
+5. 打 `ccodex-v<版本>` tag，同一版本的打包修订使用 `+N` 后缀。用户审核后，强制推送 `ccodex` 分支并推送 tag。
+6. 在 AGENTS.md 和[架构说明](ARCHITECTURE.md)中更新官方 tag commit 与 fork commit。服务端是否跟进该版本，按下文流程另行提出方案。
 
 代理的编译检查与 Rust 回归测试在本地执行。ccodex 按用户要求不在本地编译，只执行源码审查、格式和不触发编译的打包检查；Rust 测试、clippy、schema 生成及原生构建均保留为未验证，除非用户另行授权相应验证方式。不要为了获得云端 CI 验证而推送改动或新建分支。检查未完成或失败时如实记录，不能以已推送代替验证通过。
 

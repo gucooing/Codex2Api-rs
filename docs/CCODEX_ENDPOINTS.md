@@ -1,10 +1,10 @@
 # ccodex 服务接口
 
 官方协议基线为 Codex 0.162.1，commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`。
-客户端维护于 gucooing/codex 的 ccodex 分支。下列路径相对配置的 BASE_OAUTH_URL，
-OAuth 服务根示例为 `https://oauth-ai.alsl.xyz/v1/chatgpt`。
+客户端维护于 gucooing/codex 的 ccodex 分支。下列路径相对客户端内置的服务根
+`https://oauth-ai.alsl.xyz/v1/chatgpt`。
 
-客户端共享 HTTP/WS 出口只映射第一方服务地址，保留方法、路径、查询、PKCE、state 和业务正文。
+客户端源码中的官方服务地址替换为该服务根，方法、路径、查询、PKCE、state 和业务正文保持官方原样。
 供应请求继续使用官方地址、供应身份及逐账户指纹。
 
 客户端断开 HTTP 或 WebSocket 连接后，已发往上游的生成继续到终态，并按最终实际用量结算。断连本身不计为平台失败；上游错误、空闲超时与凭据撤销仍按原有规则处理。
