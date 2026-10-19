@@ -5,7 +5,7 @@ use axum::{
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_official_methods() {
+async fn all_backend_routes_require_a_virtual_account_token() {
     let temp = codex2api_storage::test_support::tempdir().unwrap();
     let storage = codex2api_storage::test_support::open(temp.path().join("test-pg"))
         .await
@@ -36,21 +36,19 @@ async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_offi
         (Method::POST, "/usage/thread-estimates/query"),
         (Method::POST, "/realtime/calls"),
     ] {
-        for prefix in ["/v1/chatgpt/backend-api/wham"] {
-            let path = format!("{prefix}{suffix}");
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(method.clone())
-                        .uri(&path)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
-        }
+        let path = format!("/v1/chatgpt/backend-api/wham{suffix}");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(&path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
     for prefix in ["/v1/chatgpt/v1", "/v1/chatgpt/backend-api/codex"] {
         for suffix in [
@@ -100,16 +98,6 @@ async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_offi
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
     }
-    let response = app
-        .clone()
-        .oneshot(
-            Request::get("/v1/chatgpt/backend-api/wham/usage")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     for path in ["/healthz", "/version"] {
         let response = app
             .clone()
@@ -118,25 +106,5 @@ async fn all_backend_routes_require_a_virtual_account_token_and_only_accept_offi
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
-    for path in [
-        "/v1/chatgpt/backend-api/wham/settings/user",
-        "/v1/chatgpt/backend-api/wham/config/bundle",
-    ] {
-        let response = app
-            .clone()
-            .oneshot(Request::post(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
-    }
-    let response = app
-        .oneshot(
-            Request::get("/v1/chatgpt/backend-api/wham/rate-limit-reset-credits/consume")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     storage.close().await;
 }

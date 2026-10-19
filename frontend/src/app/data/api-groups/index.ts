@@ -96,9 +96,10 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
   });
   const [rules, setRules] = useState<ModelRuleDraft[]>(group.models.map(ruleDraft));
   const [modelSearch, setModelSearch] = useState("");
+  const [modelPlatform, setModelPlatform] = useState("");
   const tags = useResource<List<SupplierTag>>("/supplier-tags/options");
   const models = useResource<List<ModelOption>>(
-    `/models/options${query({ search: modelSearch })}`,
+    `/models/options${query({ search: modelSearch, platform: modelPlatform })}`,
     250,
   );
   const busy = actions.isBusy("api-group-save");
@@ -174,6 +175,8 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
     setRule,
     modelSearch,
     setModelSearch,
+    modelPlatform,
+    setModelPlatform,
     tags,
     models,
     busy,

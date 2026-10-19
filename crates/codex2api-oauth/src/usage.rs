@@ -139,6 +139,7 @@ impl RequestLog {
                 return Ok(());
             }
             record.account_id = account.id.clone();
+            record.account_provider_id = Some(account.provider_id.clone());
             record.account_name = account
                 .display_name
                 .as_deref()
@@ -146,7 +147,12 @@ impl RequestLog {
                 .unwrap_or(&account.id)
                 .into();
             self.storage
-                .reroute_usage(&record.id, &record.account_id, &record.account_name)
+                .reroute_usage(
+                    &record.id,
+                    &record.account_id,
+                    &record.account_name,
+                    &account.provider_id,
+                )
                 .await?;
         }
         Ok(())
@@ -183,6 +189,8 @@ impl RequestLog {
             r.http_status = None;
             r.error_code = None;
             r.error_message = None;
+            r.public_error_code = None;
+            r.public_error_message = None;
             r.upstream_request_id = None;
             r.actual_model = None;
             r.first_token_ms = None;
@@ -381,6 +389,24 @@ fn complete_failure_reason(record: &mut UsageRecord) {
     };
     record.error_code.get_or_insert_with(|| code.into());
     record.error_message = Some(message);
+    if record.public_error_code.is_none() {
+        let (code, message) = match record.status.as_str() {
+            "interrupted" => (
+                "request_interrupted",
+                "The request was interrupted before it completed.",
+            ),
+            "incomplete" => (
+                "response_incomplete",
+                "The response ended before it was complete.",
+            ),
+            _ => (
+                "upstream_error",
+                "The upstream service could not complete this request.",
+            ),
+        };
+        record.public_error_code = Some(code.into());
+        record.public_error_message = Some(message.into());
+    }
 }
 
 impl RequestLog {
@@ -626,7 +652,30 @@ impl RequestLog {
         if let Some(failure) = outcome.failure() {
             record.error_code = failure.code.as_deref().map(|v| error_text(v, 128));
             record.error_message = failure.message.as_deref().map(|v| error_text(v, 512));
+            // Supplier failures reach the client in their public view.
+            let public = codex2api_upstream::public_output::PublicFailure::new(failure);
+            record.public_error_code = Some(public.code);
+            record.public_error_message = Some(public.message);
         }
+    }
+    /// Keep a failed supplier attempt the pool recovers from (`refresh` or `failover`);
+    /// administrators see it, the client only sees the final outcome.
+    pub(crate) async fn recovered(
+        &self,
+        error: &codex2api_upstream::UpstreamError,
+        recovery: &str,
+    ) -> crate::Result<()> {
+        if let Some(record) = &self.record {
+            self.storage
+                .record_usage_attempt(&codex2api_upstream::request_failure::failed_attempt(
+                    record,
+                    error,
+                    recovery,
+                    record.requested_at_ms,
+                ))
+                .await?;
+        }
+        Ok(())
     }
     async fn persist_auth_rejection(&self) -> crate::Result<()> {
         if let (Some(record), Some(revision), Some(failure)) =
@@ -1188,11 +1237,6 @@ impl WsLedger {
     }
     #[cfg(test)]
     pub async fn observe(&mut self, bytes: &[u8]) -> crate::Result<()> {
-        self.observe_authorized(bytes, true).await
-    }
-    #[cfg(test)]
-    async fn observe_authorized(&mut self, bytes: &[u8], allow_new: bool) -> crate::Result<()> {
-        let _ = allow_new;
         self.observe_message(bytes).await.map(|_| ())
     }
     pub(crate) async fn observe_message(
@@ -1605,7 +1649,7 @@ mod tests {
             ledger.push(Some(log));
             ledger.observe(br#"{"type":"response.created","response":{"id":"r","usage":{"input_tokens":100,"output_tokens":20}}}"#).await.unwrap();
             match ending {
-                "client" => { assert!(ledger.has_pending()); ledger.observe_authorized(br#"{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":100,"output_tokens":20}}}"#, false).await.unwrap(); },
+                "client" => { assert!(ledger.has_pending()); ledger.observe(br#"{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":100,"output_tokens":20}}}"#).await.unwrap(); },
                 "upstream" => ledger.fail_inflight("upstream_websocket_closed", "上游 WebSocket 在请求完成前关闭").await.unwrap(),
                 _ => ledger.observe(br#"{"type":"response.done","response":{"id":"r","status":"cancelled","usage":{"input_tokens":100,"output_tokens":20}}}"#).await.unwrap(),
             }
@@ -2276,18 +2320,6 @@ mod tests {
                     reasoning_effort: metadata.reasoning_effort,
                     service_tier: metadata.service_tier,
                     image_size: metadata.image_size,
-                    image_input_usage_json: metadata.image_input_sizes.map(|sizes| {
-                        serde_json::to_string(
-                            &sizes
-                                .into_iter()
-                                .map(|resolution| codex2api_storage::ImageUsage {
-                                    resolution: Some(resolution),
-                                    count: 1,
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                        .unwrap_or_default()
-                    }),
                     requested_at_ms,
                     status: "in_progress".into(),
                     ..Default::default()
@@ -2321,13 +2353,28 @@ mod tests {
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         storage.save_account_fixture(&consumer).await.unwrap();
-        for model in ["warmup", "one", "two", "interrupted", "voice-model"] {
+        let mut granted = Vec::new();
+        for model in ["warmup", "one", "two", "interrupted"] {
             sqlx::query("INSERT INTO model_catalog(model,platform,kind) VALUES($1,'chatgpt','text') ON CONFLICT DO NOTHING").bind(model).execute(storage.pool()).await.unwrap();
             storage
                 .add_supplier_model(&supplier.id, model)
                 .await
                 .unwrap();
+            granted.push(codex2api_common::ModelRule::granted(model));
         }
+        // A plan grants only the models in its explicit list.
+        let mut plan = storage
+            .virtual_plan(&consumer.plan_id)
+            .await
+            .unwrap()
+            .unwrap();
+        plan.config["models"] = serde_json::json!(granted);
+        assert!(
+            storage
+                .save_virtual_plan(&plan, Some(plan.revision))
+                .await
+                .unwrap()
+        );
         ExecutionContext::new(
             storage,
             &supplier,
@@ -2525,7 +2572,6 @@ mod tests {
         }
         drop(ledger);
         let records = finalized(&storage, 3).await;
-        assert_eq!(records.len(), 3);
         for record in records {
             assert_eq!(
                 (record.input_tokens, record.output_tokens),

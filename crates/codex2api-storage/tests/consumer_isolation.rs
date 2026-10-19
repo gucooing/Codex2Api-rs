@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 use codex2api_storage::{NewSupplierAccount, PlatformAccount, Storage};
 use serde_json::json;
@@ -29,7 +27,7 @@ async fn consumer(storage: &Storage, id: &str, provider: &str, plan: &str) -> Pl
 }
 
 #[tokio::test]
-async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers() {
+async fn consumer_provider_is_fixed_and_supplier_deletion_keeps_isolated_consumer_data() {
     let temp = codex2api_storage::test_support::tempdir().unwrap();
     let storage = codex2api_storage::test_support::open(temp.path().join("separation-pg"))
         .await
@@ -79,8 +77,6 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
     );
     new.provider_id = "grok".into();
     let supplier = storage.create_account(new).await.unwrap();
-    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES($1,'chatgpt',$2)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
-    assert!(sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,supplier_account_id) VALUES($1,'grok',$2)").bind(&a.id).bind(&supplier.id).execute(storage.pool()).await.is_err());
     storage
         .save_supplier_tag("other-pool", "grok", "Other pool")
         .await
@@ -89,7 +85,12 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         .edit_supplier_tags(&[supplier.id.clone()], &["other-pool".into()], false)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id) VALUES($1,'grok','other-pool') ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id").bind(&b.id).execute(storage.pool()).await.unwrap();
+    assert!(
+        storage
+            .save_pool_route(&b.id, "grok", Some(&["other-pool".into()]), Some(1))
+            .await
+            .unwrap()
+    );
     storage
         .save_virtual_resource(
             &b.id,
@@ -212,10 +213,6 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
 async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
     let temp = codex2api_storage::test_support::tempdir().unwrap();
     let storage = codex2api_storage::test_support::open(temp.path().join("supplier-isolation-pg"))
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO providers(id,name) VALUES('grok','Test') ON CONFLICT DO NOTHING")
-        .execute(storage.pool())
         .await
         .unwrap();
     let mut other =

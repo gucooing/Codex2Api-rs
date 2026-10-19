@@ -28,18 +28,6 @@ async fn setup() -> (
         storage.user(&user.id).await.unwrap().unwrap().wallet_cents,
         0
     );
-    storage
-        .save_supplier_tag("pool", "chatgpt", "Private pool")
-        .await
-        .unwrap();
-    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["sale_price_usd"] = json!("10.25");
-    plan.config["duration_days"] = json!(30);
-    plan.config["supplier_tag_id"] = json!("pool");
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
     (dir, storage, user)
 }
 

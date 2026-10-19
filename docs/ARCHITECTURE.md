@@ -162,8 +162,22 @@ select or impersonate that identity. Request IDs remain fixed across retries of 
 thereby authorized for upstream forwarding.
 
 All OAuth and API-key requests use `usage_records`, the same insert/finalization
-functions, failure fields, queries and statistics. The ledger stores `error_code`
-and administrator-only `error_message`; `http_status` describes the transport.
+functions, failure fields, queries and statistics. The ledger stores the real failure
+in administrator-only `error_code`/`error_message` and the failure the consumer received
+in `public_error_code`/`public_error_message`; `http_status` describes the transport.
+`provider_id` is the platform the request is identified with (the model's vendor label,
+ChatGPT for its protocol operations, or the subscription platform) and is immutable;
+`account_provider_id` is the channel of the supplier that served the final attempt.
+Provider-specific normalization and failure classification always use the serving
+supplier's provider. Each failed supplier attempt the gateway recovers from (credential
+refresh or failover) is kept in administrator-only `usage_attempts`; the consumer sees
+only the request's final outcome. Supplier failures reach consumers through one shared
+policy, `codex2api_upstream::public_output::PublicFailure`, for both listeners: caller
+errors keep their code, parameter and a redacted message; throttling stays a rate-limit
+error with its retry advice; supplier credentials, billing, quota, permissions and pool
+capacity become `503 service_unavailable`; timeouts and transport faults become generic
+upstream errors. Local consumer errors (keys, wallets, subscriptions, limits, validation)
+are already in consumer terms and bypass the policy.
 It does not store `failure_kind` or `failure_status`. Provider classification and
 structured client errors remain part of execution, independent of these ledger fields.
 Gateway admission snapshots

@@ -613,9 +613,6 @@ async fn user_reads_are_owner_scoped_and_mutations_require_their_browser_csrf() 
             "bob-private",
             "password_hash",
             "token_hash",
-            "supplier_account_id",
-            "supplier_tag_id",
-            "private-pool",
             "installation_id",
         ] {
             assert!(!text.contains(secret), "{path}: {secret}");

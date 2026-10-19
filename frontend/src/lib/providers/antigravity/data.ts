@@ -1,9 +1,9 @@
 "use client";
 import { useQuotaClock } from "@/hooks/use-supplier-quotas";
-import { useErrorToast } from "@/lib/actions";
-import { type Json } from "@/lib/api";
+import { useActions, useErrorToast } from "@/lib/actions";
+import { request, type Fingerprint, type Json } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 const text = (value: Json | undefined) =>
   typeof value === "string" || typeof value === "number" ? String(value) : undefined;
@@ -13,6 +13,28 @@ const tierLabel = (tier: Json | undefined) => {
   const entry = record(tier);
   return text(entry?.name) ?? text(entry?.id) ?? text(tier);
 };
+
+/** Fingerprint form: the selected proxy's detected exit timezone fills the field. */
+export function useAntigravityFingerprintFields({
+  value,
+  onChange,
+}: {
+  value: Fingerprint;
+  onChange: (value: Fingerprint) => void;
+}) {
+  const id = useId();
+  const actions = useActions();
+  const busy = actions.isBusy("antigravity-proxy-timezone");
+  const applyProxyTimezone = () =>
+    void actions.run("antigravity-proxy-timezone", async () => {
+      const result = await request<{ timezone: string }>(
+        `/proxies/${encodeURIComponent(value.proxy_id ?? "")}/check/timezone`,
+        { method: "POST", body: {} },
+      );
+      onChange({ ...value, timezone: result.timezone });
+    });
+  return { id, busy, applyProxyTimezone } as const;
+}
 
 /** One quota: a model with its own, or the models sharing a pool (server grouped). */
 type ModelQuota = {

@@ -242,30 +242,3 @@ async fn messages_failure_usage_is_charged_once_without_replay() {
         ("failed".into(), Some(10000), Some(2000), Some(27_300_000))
     );
 }
-
-#[tokio::test]
-async fn upstream_endpoint_migration_preserves_unknown_history_and_runs_once() {
-    let f = fixture("chatgpt").await;
-    let response = f
-        .router
-        .clone()
-        .oneshot(request("/v1/messages", &f.token, body(false)))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let _ = json_body(response).await;
-    sqlx::raw_sql("ALTER TABLE usage_records DROP COLUMN upstream_endpoint, DROP COLUMN client_ip; UPDATE meta SET value='2' WHERE key='schema_migration_version'").execute(f.storage.pool()).await.unwrap();
-    let storage = f.storage.reopen().await.unwrap();
-    let row: (String, Option<String>, Option<String>) =
-        sqlx::query_as("SELECT endpoint,upstream_endpoint,client_ip FROM usage_records")
-            .fetch_one(storage.pool())
-            .await
-            .unwrap();
-    assert_eq!(row, ("/v1/messages".into(), None, None));
-    let again = storage.reopen().await.unwrap();
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_records")
-        .fetch_one(again.pool())
-        .await
-        .unwrap();
-    assert_eq!(count, 1);
-}

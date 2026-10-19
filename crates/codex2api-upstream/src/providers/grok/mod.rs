@@ -114,15 +114,13 @@ impl GrokUpstream {
                 | "settings"
                 | "billing?format=credits"
         ) {
-            return Err(UpstreamError::InvalidRequest(
+            return Err(UpstreamError::Internal(
                 "Unsupported Grok upstream operation".into(),
             ));
         }
         let account = self.auth().storage()?.supplier_account_snapshot(id).await?;
         if account.provider_id != codex2api_common::GROK {
-            return Err(UpstreamError::InvalidRequest(
-                "Supplier provider mismatch".into(),
-            ));
+            return Err(UpstreamError::Internal("Supplier provider mismatch".into()));
         }
         self.auth().refresh_grok(id, false, None).await?;
         let http = self.auth().account_http(id).await?;
@@ -140,7 +138,7 @@ impl GrokUpstream {
         let mut headers = codex2api_suppliers::grok::headers(&http.identity, Some(access))?;
         if let Some(user) = &account.chatgpt_user_id {
             let user = HeaderValue::from_str(user)
-                .map_err(|_| UpstreamError::InvalidRequest("Invalid Grok identity".into()))?;
+                .map_err(|_| UpstreamError::Internal("Invalid Grok identity".into()))?;
             headers.insert("x-userid", user.clone());
             headers.insert("x-grok-user-id", user);
         }

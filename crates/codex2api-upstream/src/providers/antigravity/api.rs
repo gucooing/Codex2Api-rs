@@ -3,7 +3,6 @@
 use crate::protocol::{
     Error as ApiError, InboundRequest, PreparedRequest, Protocol, Result, convert,
 };
-use codex2api_common::version::antigravity as wire;
 use http::HeaderMap;
 use serde_json::Value;
 
@@ -15,9 +14,7 @@ pub(crate) fn prepare(input: &InboundRequest) -> Result<PreparedRequest> {
     }
     let canonical = convert(input.protocol, &input.body)?;
     let body = super::request::gemini(&canonical, &input.headers)?;
-    let mut prepared = PreparedRequest::new(input, Protocol::Responses, body);
-    prepared.upstream_endpoint = Some(wire::PATH_STREAM_GENERATE);
-    Ok(prepared)
+    Ok(PreparedRequest::new(input, Protocol::Responses, body))
 }
 
 pub(crate) fn scheduling(headers: &HeaderMap, body: &Value) -> crate::scheduler::ScheduleRequest {
@@ -56,7 +53,6 @@ mod tests {
             let prepared =
                 prepare(&InboundRequest::new(protocol, body, HeaderMap::new()).unwrap()).unwrap();
             assert_eq!(prepared.upstream, Protocol::Responses);
-            assert_eq!(prepared.endpoint(), wire::PATH_STREAM_GENERATE);
             assert_eq!(prepared.body["model"], "gemini-3-pro-high");
             assert_eq!(
                 prepared.body["request"]["contents"][0]["parts"][0]["text"],

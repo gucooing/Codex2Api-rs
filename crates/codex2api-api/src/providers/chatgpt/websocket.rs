@@ -214,14 +214,8 @@ struct Turn {
 impl Turn {
     fn supplier(&mut self, connection: &Connection) {
         if let Some(log) = &mut self.log {
-            log.record.account_id = connection.context.account.id.clone();
+            log.supplier(&connection.context.account);
             log.record.upstream_endpoint = Some(Protocol::Responses.endpoint().into());
-            log.record.account_name = connection
-                .context
-                .account
-                .display_name
-                .clone()
-                .unwrap_or_else(|| connection.context.account.email.clone().unwrap_or_default());
             log.headers(StatusCode::SWITCHING_PROTOCOLS, &connection.headers);
             log.auth_revision = connection.revision;
         }

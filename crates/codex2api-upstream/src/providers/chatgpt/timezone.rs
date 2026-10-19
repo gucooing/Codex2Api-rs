@@ -14,7 +14,7 @@ fn apply_at(body: &mut Value, timezone: Option<&str>, now: DateTime<Utc>) -> Res
     };
     let zone = timezone
         .parse::<chrono_tz::Tz>()
-        .map_err(|_| UpstreamError::InvalidRequest("Invalid account timezone".into()))?;
+        .map_err(|_| UpstreamError::Internal("Invalid account timezone".into()))?;
     let date = now.with_timezone(&zone).format("%Y-%m-%d").to_string();
     let object = body
         .as_object_mut()

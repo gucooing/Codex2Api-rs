@@ -31,6 +31,7 @@ export type UsageRecord = {
   transport: string;
   stream: boolean | null;
   error_code: string | null;
+  error_reason: string | null;
   multiplier_micros: number;
   wallet_debit_cents: number;
   image_count: number | null;

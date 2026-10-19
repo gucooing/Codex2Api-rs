@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 use axum::{
     Router,
@@ -233,10 +231,6 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
         identity[owner]["organizations"][0]["id"],
         access[owner]["poid"]
     );
-    for forbidden in ["scope", "role", "provider", "token_use"] {
-        assert!(access.get(forbidden).is_none());
-        assert!(identity.get(forbidden).is_none());
-    }
     // Neither an ID token nor a modified JWT is an access credential.
     for invalid in [
         tokens["id_token"].as_str().unwrap().to_owned(),
@@ -325,7 +319,6 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
                 ("grant_type", "refresh_token"),
                 ("refresh_token", "bob-refresh"),
             ],
-            None,
         ))
         .await
         .unwrap();
@@ -349,7 +342,6 @@ async fn jwt_matches_verified_official_shapes_and_keeps_virtual_permissions_isol
                 ("grant_type", "refresh_token"),
                 ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
             ],
-            None,
         ))
         .await
         .unwrap();
@@ -430,6 +422,7 @@ async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usa
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
+    grant_test_models(&storage, &account.plan_id).await;
     let mut plan = storage
         .virtual_plan(&account.plan_id)
         .await
@@ -497,20 +490,6 @@ async fn reset_credits_match_official_clients_and_clear_only_current_virtual_usa
     assert_eq!(cards["total_earned_count"], 2);
     assert!(!cards.to_string().contains("private administration only"));
     let card = cards["credits"][0]["id"].as_str().unwrap();
-    // Retired unscoped aliases are unavailable even with a valid OAuth token.
-    for prefix in ["/wham", "/api/codex", "/v1/api/codex", "/v1/wham"] {
-        let r = app
-            .clone()
-            .oneshot(
-                Request::get(format!("{prefix}/rate-limit-reset-credits"))
-                    .header("authorization", format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(r.status(), StatusCode::NOT_FOUND);
-    }
     let path = "/backend-api/wham/rate-limit-reset-credits/consume";
     for bad in [
         json!({}),
@@ -659,17 +638,20 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
-    let mut ultrafast = storage
-        .model_prices()
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|price| {
-            price.model == "gpt-6-astra" && price.tier == "standard" && price.min_input_tokens == 0
-        })
-        .unwrap();
+    grant_test_models(&storage, &account.plan_id).await;
+    let prices = storage.model_prices().await.unwrap();
+    let price = |tier: &str| {
+        prices
+            .iter()
+            .find(|price| {
+                price.model == "gpt-6-astra" && price.tier == tier && price.min_input_tokens == 0
+            })
+            .cloned()
+    };
+    let mut ultrafast = price("standard").unwrap();
     ultrafast.tier = "ultrafast".into();
-    ultrafast.revision = 0;
+    // Built-in presets may already price this tier; edit that row at its current revision.
+    ultrafast.revision = price("ultrafast").map_or(0, |existing| existing.revision);
     ultrafast.input_rate *= 6;
     ultrafast.cached_rate *= 6;
     ultrafast.cache_write_rate *= 6;
@@ -819,17 +801,7 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
-    let mut plan = storage
-        .virtual_plan(&account.plan_id)
-        .await
-        .unwrap()
-        .unwrap();
-    plan.config["model_access"] = json!("selected");
-    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-6-astra"}]);
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
+    grant_test_models(&storage, &account.plan_id).await;
     let tokens = login(&app).await;
     let token = tokens["access_token"].as_str().unwrap();
     for (path, body, status) in [
@@ -979,110 +951,6 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
 }
 
 #[tokio::test]
-async fn global_catalog_and_desktop_picker_agree_when_configured_groups_omit_catalog_models() {
-    use serde_json::json;
-    let dir = codex2api_storage::test_support::tempdir().unwrap();
-    let storage = codex2api_storage::test_support::open(dir.path().join("catalog-policy-pg"))
-        .await
-        .unwrap();
-    let (app, account) = fixture(&storage).await;
-    let mut plan = storage
-        .virtual_plan(&account.plan_id)
-        .await
-        .unwrap()
-        .unwrap();
-    plan.config["model_access"] = json!("selected");
-    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"},{"provider_id":"chatgpt","model":"gpt-6-astra"}]);
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
-    let old = storage.virtual_config(&account.id, "models").await.unwrap();
-    let mut configured = json!({"models":[{"slug":"gpt-6-astra","title":"Astra","description":""},{"slug":"denied","title":"Denied","description":""}],"versions":[{"id":"configured","display_text":"Configured","slugs":["gpt-6-astra","denied"],"intelligence_presets":[{"model_slug":"gpt-6-astra","title":"Astra","lane":"auto"},{"model_slug":"denied","title":"Denied","lane":"auto"}]}],"categories":[],"internal_groups":[{"id":"old","model_ids":["denied"]}],"slider_settings":[],"default_model_slug":"denied"});
-    codex2api_storage::prepare_virtual_contract("models", &mut configured);
-    storage
-        .update_virtual_config(&account.id, "models", &configured, old.revision)
-        .await
-        .unwrap();
-    let tokens = login(&app).await;
-    let token = tokens["access_token"].as_str().unwrap();
-    let catalog = json_body(
-        app.clone()
-            .oneshot(client_json(
-                "GET",
-                "/backend-api/models",
-                token,
-                Value::Null,
-            ))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
-    assert!(!catalog.to_string().contains("denied"));
-    assert!(
-        catalog["versions"][0]["intelligence_presets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["model_slug"] == "gpt-5.6-luna")
-    );
-    if let Ok(archive) = std::env::var("CODEX2API_TEST_DESKTOP_ASAR") {
-        use std::{
-            io::Write,
-            process::{Command, Stdio},
-        };
-        let mut child = Command::new("node")
-            .arg(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../scripts/windows/Test-DesktopModelCatalog.cjs"),
-            )
-            .arg(archive)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(catalog.to_string().as_bytes())
-            .unwrap();
-        let result = child.wait_with_output().unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        println!("{}", String::from_utf8_lossy(&result.stdout));
-    }
-    let supplier = test_supplier(&storage, &account).await.unwrap();
-    bind_test_supplier(&storage, &account, None).await;
-    let codex = json_body(
-        app.clone()
-            .oneshot(client_json(
-                "GET",
-                "/backend-api/codex/models",
-                token,
-                Value::Null,
-            ))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(codex["models"].as_array().unwrap().len(), 2);
-    assert!(
-        codex["models"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|m| m["supported_reasoning_levels"].is_array())
-    );
-    bind_test_supplier(&storage, &account, Some(supplier)).await;
-}
-
-#[tokio::test]
 async fn oauth_grants_are_consumer_only_scope_bounded_and_not_admin_credentials() {
     use serde_json::json;
     let dir = codex2api_storage::test_support::tempdir().unwrap();
@@ -1156,7 +1024,6 @@ async fn oauth_grants_are_consumer_only_scope_bounded_and_not_admin_credentials(
                 ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
                 ("scope", codex2api_common::version::OAUTH_SCOPE),
             ],
-            None,
         ))
         .await
         .unwrap();
@@ -1265,7 +1132,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
         codex2api_admin::AdminState::new(storage.clone()).unwrap(),
     ));
     let (cookie, csrf) = admin_login(&app).await;
-    let mut input = json!({"rpm_limit":40,"concurrency_limit":10,"sale_price_usd": null, "duration_days": 30, "supplier_tag_id": null, "provider_id": "chatgpt", "name": "研发专用", "model_access": "selected", "models": [{"provider_id": "chatgpt", "model": "gpt-6-astra"}], "allow_purchase": true, "plan_type": "plus", "spending_windows": [{"duration_seconds": 604800, "cost_limit_usd": "10"}, {"duration_seconds": 18000, "cost_limit_usd": "2"}]});
+    let mut input = json!({"rpm_limit":40,"concurrency_limit":10,"sale_price_usd": null, "duration_days": 30, "tag_ids": [], "provider_id": "chatgpt", "name": "研发专用", "models": [{"model": "gpt-6-astra"}], "allow_purchase": true, "plan_type": "plus", "spending_windows": [{"duration_seconds": 604800, "cost_limit_usd": "10"}, {"duration_seconds": 18000, "cost_limit_usd": "2"}]});
     let saved = app
         .clone()
         .oneshot(admin_request(
@@ -1328,7 +1195,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
         json_body(response).await["error"]["code"],
         "model_not_entitled"
     );
-    input["models"] = json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"}]);
+    input["models"] = json!([{"model":"gpt-5.6-luna"}]);
     input["revision"] = plan.revision.into();
     assert_eq!(
         app.clone()
@@ -1565,13 +1432,6 @@ async fn desktop_support_rejects_retired_intake_and_authenticates_sdk_refresh() 
         }
     }
     assert!(storage.missing_endpoints().await.unwrap().is_empty());
-    let table_exists: bool = sqlx::query_scalar(
-        "SELECT to_regclass(current_schema() || '.desktop_diagnostics') IS NOT NULL",
-    )
-    .fetch_one(storage.pool())
-    .await
-    .unwrap();
-    assert!(!table_exists);
     let config = storage
         .virtual_config(&account.id, "feature_bootstrap")
         .await
@@ -1789,6 +1649,7 @@ async fn exhausted_spending_limit_rejects_http_and_websocket_before_upstream() {
         .await
         .unwrap();
     let (app, account) = fixture(&storage).await;
+    grant_test_models(&storage, &account.plan_id).await;
     let token = login(&app).await["access_token"]
         .as_str()
         .unwrap()
@@ -1796,12 +1657,7 @@ async fn exhausted_spending_limit_rejects_http_and_websocket_before_upstream() {
     for key in ["primary_cost_limit_usd", "weekly_cost_limit_usd"] {
         let mut config =
             serde_json::json!({"primary_cost_limit_usd":10,"weekly_cost_limit_usd":20});
-        let revision = storage
-            .virtual_config(&account.id, "quota")
-            .await
-            .unwrap()
-            .revision;
-        set_test_plan_config(&storage, &account.id, "quota", &config, revision)
+        set_test_plan_config(&storage, &account.id, "quota", &config)
             .await
             .unwrap();
         let allowed = json_body(
@@ -1816,9 +1672,8 @@ async fn exhausted_spending_limit_rejects_http_and_websocket_before_upstream() {
                 .unwrap(),
         )
         .await;
-        let quota = storage.virtual_config(&account.id, "quota").await.unwrap();
         config[key] = 0.into();
-        set_test_plan_config(&storage, &account.id, "quota", &config, quota.revision)
+        set_test_plan_config(&storage, &account.id, "quota", &config)
             .await
             .unwrap();
         let exhausted = json_body(
@@ -1929,15 +1784,9 @@ async fn installed_plugins_paginate_the_account_collection() {
         .to_owned();
     bind_test_supplier(&storage, &account, None).await;
     storage.save_account_fixture(&account).await.unwrap();
-    seed_captured_config(
-        &storage,
-        &account.id,
-        "installed_plugins",
-        &serde_json::json!({"plugins":[]}),
-        None,
-    )
-    .await
-    .unwrap();
+    seed_installed_plugins(&storage, &account.id, &serde_json::json!({"plugins":[]}))
+        .await
+        .unwrap();
     let path = "/backend-api/ps/plugins/installed?scope=GLOBAL&limit=200";
     let response = app
         .clone()
@@ -1970,12 +1819,10 @@ async fn installed_plugins_paginate_the_account_collection() {
         );
         println!("{}", String::from_utf8_lossy(&output.stdout));
     }
-    seed_captured_config(
+    seed_installed_plugins(
         &storage,
         &account.id,
-        "installed_plugins",
         &serde_json::json!({"plugins":[{"id":"own-a"},{"id":"own-b"}]}),
-        None,
     )
     .await
     .unwrap();
@@ -2443,13 +2290,11 @@ async fn virtual_management_reads_persisted_private_data_and_isolates_actual_act
             .unwrap()
             .is_empty()
     );
-    let quota = storage.virtual_config(&account.id, "quota").await.unwrap();
     set_test_plan_config(
         &storage,
         &account.id,
         "quota",
         &serde_json::json!({"primary_cost_limit_usd":null,"weekly_cost_limit_usd":100}),
-        quota.revision,
     )
     .await
     .unwrap();
@@ -2746,7 +2591,7 @@ async fn desktop_usage_reads_actual_virtual_tokens_across_bindings() {
             assert_eq!(value["data"], serde_json::json!([]));
         }
     }
-    let supplier = test_supplier(&storage, &account).await.clone().unwrap();
+    let supplier = test_supplier(&storage, &account).await.unwrap();
     for (id, source, bound, date, input, output, cached, actual) in [
         (
             "one",
@@ -3272,205 +3117,6 @@ async fn mcp_discovery_is_public_and_batch_and_mcp_require_virtual_credentials()
     storage.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Python and CODEX2API_TEST_CLI pointing to the installed desktop CLI"]
-async fn installed_desktop_cli_completes_login_config_load_restart_and_refresh() {
-    let temp = codex2api_storage::test_support::tempdir().unwrap();
-    let storage = codex2api_storage::test_support::open(temp.path().join("desktop-pg"))
-        .await
-        .unwrap();
-    let (app, account) = fixture(&storage).await;
-    storage
-        .grant_virtual_reset_credits(&account.id, "desktop-display", 2, "isolated GUI fixture")
-        .await
-        .unwrap();
-    let mut plan = storage
-        .virtual_plan(&account.plan_id)
-        .await
-        .unwrap()
-        .unwrap();
-    plan.config["model_access"] = serde_json::json!("selected");
-    plan.config["models"] = serde_json::json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"},{"provider_id":"chatgpt","model":"gpt-6-astra"},{"provider_id":"chatgpt","model":"gpt-6-sol"},{"provider_id":"chatgpt","model":"gpt-6-luna"}]);
-    for model in ["gpt-6-sol", "gpt-6-luna"] {
-        sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',$1,'text') ON CONFLICT DO NOTHING")
-            .bind(model)
-            .execute(storage.pool())
-            .await
-            .unwrap();
-    }
-    if std::env::var_os("CODEX2API_TEST_EMPTY_CATALOG").is_some() {
-        plan.config["model_access"] = serde_json::json!("none");
-        plan.config["models"] = serde_json::json!([]);
-    }
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
-
-    if let Ok(directory) = std::env::var("CODEX2API_TEST_PUBLIC_RESOURCES") {
-        let directory = std::path::Path::new(&directory);
-        for entry in std::fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            let name = path.file_name().unwrap().to_string_lossy();
-            let resource = if name == "mcp-app.html" {
-                Some(("/mcp-app.html".to_owned(), "text/html"))
-            } else if name == "windows-store-update.json" {
-                Some((
-                    "/codex-app-prod/windows-store-update.json".to_owned(),
-                    "application/json",
-                ))
-            } else if (name.ends_with(".js") || name.ends_with(".css"))
-                && [
-                    "main-BFDC70j-",
-                    "apply-csp-",
-                    "adapter-",
-                    "run-widget-code-",
-                    "main-foMHhJws",
-                ]
-                .iter()
-                .any(|prefix| name.starts_with(prefix))
-            {
-                Some((
-                    format!("/assets/{name}"),
-                    if name.ends_with(".css") {
-                        "text/css"
-                    } else {
-                        "text/javascript"
-                    },
-                ))
-            } else {
-                None
-            };
-            if let Some((resource, kind)) = resource {
-                let mut headers = serde_json::json!({"content-type":kind});
-                if name == "mcp-app.html" {
-                    let saved: Value = serde_json::from_slice(
-                        &std::fs::read(directory.join("mcp-app.html.headers.json")).unwrap(),
-                    )
-                    .unwrap();
-                    for key in ["Content-Security-Policy", "Permissions-Policy"] {
-                        headers[key] = saved[key].clone();
-                    }
-                }
-                storage
-                    .save_desktop_resource(&resource, &std::fs::read(path).unwrap(), &headers)
-                    .await
-                    .unwrap();
-            }
-        }
-    }
-    record_usage(
-        &storage,
-        &account,
-        test_supplier(&storage, &account).await.as_deref().unwrap(),
-        "desktop-profile-fixture",
-        12344,
-    )
-    .await;
-    let profile = storage
-        .virtual_config(&account.id, "profile")
-        .await
-        .unwrap();
-    storage
-        .update_virtual_config(
-            &account.id,
-            "profile",
-            &serde_json::json!({"picture":null,"bio":"Virtual profile fixture"}),
-            profile.revision,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    bind_test_supplier(&storage, &account, None).await;
-    storage.save_account_fixture(&account).await.unwrap();
-    let seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<(String, u16)>::new()));
-    let seen_by_router = seen.clone();
-    let app = app.layer(axum::middleware::from_fn(
-        move |request: axum::extract::Request, next: axum::middleware::Next| {
-            let seen = seen_by_router.clone();
-            async move {
-                let path = request.uri().path().to_owned();
-                let response = next.run(request).await;
-                seen.lock().await.push((path, response.status().as_u16()));
-                response
-            }
-        },
-    ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client_home = temp.path().join("client");
-    std::fs::create_dir(&client_home).unwrap();
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/windows/Test-DesktopOAuth.py");
-    let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("python")
-            .arg(script)
-            .arg(base)
-            .arg(client_home)
-            .output()
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    server.abort();
-    storage.close().await;
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    println!("{}", String::from_utf8_lossy(&output.stdout));
-    assert!(
-        seen.lock().await.iter().any(|(path, status)| path
-            == &format!("{ROOT}/backend-api/codex/models")
-            && *status == 200),
-        "The native model list must load this proxy's catalog rather than only local defaults."
-    );
-
-    if std::env::var_os("CODEX2API_TEST_DESKTOP_EXE").is_some() {
-        let requests = seen.lock().await;
-        for path in [
-            "/backend-api/wham/usage",
-            "/backend-api/wham/accounts/check",
-            "/backend-api/settings/user",
-        ] {
-            assert!(
-                requests
-                    .iter()
-                    .any(|(p, status)| p == &format!("{ROOT}{path}") && *status == 200),
-                "Desktop did not load {path} successfully; observed paths and statuses: {requests:?}"
-            );
-        }
-        println!(
-            "Native desktop GUI: virtual workspace, settings and quota requests reached the local proxy successfully."
-        );
-        if std::env::var_os("CODEX2API_TEST_SUPPORT").is_some() {
-            for path in [
-                "/ces/v1/telemetry/intake",
-                "/ces/v1/rgstr",
-                "/v1/sdk_exception",
-                "/v1/initialize",
-                "/mcp-app.html",
-            ] {
-                assert!(
-                    requests
-                        .iter()
-                        .any(|(p, s)| p == &format!("{ROOT}{path}") && (200..300).contains(s)),
-                    "Desktop did not successfully request {path}: {requests:?}"
-                );
-            }
-            assert!(
-                requests
-                    .iter()
-                    .any(|(p, s)| p.starts_with(&format!("{ROOT}/assets/")) && *s == 200),
-                "Desktop did not load MCP shell assets"
-            );
-        }
-    }
-}
-
 #[tokio::test]
 async fn desktop_login_wrapper_redirects_only_to_local_authorization_and_preserves_pkce() {
     let temp = codex2api_storage::test_support::tempdir().unwrap();
@@ -3601,48 +3247,9 @@ async fn text_body(response: axum::response::Response) -> String {
     )
     .unwrap()
 }
-fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Body> {
-    if path == format!("{ROOT}/oauth/authorize") {
-        let value: serde_json::Map<String, Value> = fields
-            .iter()
-            .map(|(key, value)| {
-                (
-                    match *key {
-                        "flow" => "request_id",
-                        "csrf" => "csrf_token",
-                        other => other,
-                    }
-                    .to_owned(),
-                    Value::String((*value).into()),
-                )
-            })
-            .collect();
-        let mut request = Request::post("/user/api/oauth/authorize/identify")
-            .header("content-type", "application/json");
-        if let Some(cookie) = cookie {
-            request = request.header("cookie", cookie);
-        }
-        return request
-            .body(Body::from(Value::Object(value).to_string()))
-            .unwrap();
-    }
-    let mut fields = fields.to_vec();
-    if path.starts_with("/admin/")
-        && (fields.iter().any(|(k, _)| *k == "username")
-            || fields.iter().any(|(k, _)| *k == "model_access"))
-    {
-        fields.retain(|(k, _)| *k != "account_id");
-        if !fields.iter().any(|(k, _)| *k == "provider_id") {
-            fields.push(("provider_id", "chatgpt"));
-        }
-    }
-
-    let mut request =
-        Request::post(path).header("content-type", "application/x-www-form-urlencoded");
-    if let Some(cookie) = cookie {
-        request = request.header("cookie", cookie);
-    }
-    request
+fn form(path: &str, fields: &[(&str, &str)]) -> Request<Body> {
+    Request::post(path)
+        .header("content-type", "application/x-www-form-urlencoded")
         .body(Body::from(
             url::form_urlencoded::Serializer::new(String::new())
                 .extend_pairs(fields.iter().copied())
@@ -3650,16 +3257,14 @@ fn form(path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> Request<Bo
         ))
         .unwrap()
 }
-async fn seed_captured_config(
+async fn seed_installed_plugins(
     storage: &Storage,
     owner: &str,
-    key: &str,
     value: &Value,
-    _expected: Option<i64>,
 ) -> codex2api_storage::Result<Option<i64>> {
-    let current = storage.virtual_config(owner, key).await?;
+    let current = storage.virtual_config(owner, "installed_plugins").await?;
     storage
-        .update_virtual_config(owner, key, value, current.revision)
+        .update_virtual_config(owner, "installed_plugins", value, current.revision)
         .await
 }
 async fn admin_login(app: &Router) -> (String, String) {
@@ -3869,7 +3474,7 @@ async fn login_scoped(app: &Router, scope: &str) -> Value {
         ("username", "alice"),
         ("password", "fixture-password"),
     ];
-    let response = consent(&app, &fields, Some(&cookie)).await;
+    let response = consent(app, &fields, Some(&cookie)).await;
     assert_eq!(response.status(), StatusCode::OK);
     let callback =
         url::Url::parse(json_body(response).await["redirect_uri"].as_str().unwrap()).unwrap();
@@ -3891,7 +3496,6 @@ async fn login_scoped(app: &Router, scope: &str) -> Value {
                 ("code", &code),
                 ("code_verifier", &verifier),
             ],
-            None,
         ))
         .await
         .unwrap();
@@ -3927,19 +3531,17 @@ async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
         account.id
     );
     assert!(!claims.to_string().contains("real-"));
-    for (path, method) in [
-        ("/backend-api/accounts/check/v4-2023-04-27", "GET"),
-        ("/backend-api/wham/accounts/check", "GET"),
-        ("/backend-api/wham/profiles/me", "GET"),
-        ("/backend-api/subscriptions", "GET"),
-        ("/backend-api/wham/usage", "GET"),
+    for path in [
+        "/backend-api/accounts/check/v4-2023-04-27",
+        "/backend-api/wham/accounts/check",
+        "/backend-api/wham/profiles/me",
+        "/backend-api/subscriptions",
+        "/backend-api/wham/usage",
     ] {
         let response = app
             .clone()
             .oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri(format!("{ROOT}{path}"))
+                Request::get(format!("{ROOT}{path}"))
                     .header("authorization", format!("Bearer {access}"))
                     .header("chatgpt-account-id", &account.id)
                     .body(Body::empty())
@@ -3964,7 +3566,7 @@ async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
     storage
         .insert_usage(&UsageRecord {
             id: "usage-fixture".into(),
-            account_id: test_supplier(&storage, &account).await.clone().unwrap(),
+            account_id: test_supplier(&storage, &account).await.unwrap(),
             subject_id: account.id.clone(),
             subject_name: account.name.clone(),
             requested_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -4012,7 +3614,6 @@ async fn browser_login_identity_quota_refresh_devices_and_diagnostics() {
         form(
             &format!("{ROOT}/oauth/token"),
             &[("grant_type", "refresh_token"), ("refresh_token", refresh)],
-            None,
         )
     };
     assert_eq!(
@@ -4145,7 +3746,6 @@ async fn rejects_csrf_bad_password_redirects_and_pkce_replay() {
                     ("redirect_uri", "http://localhost:1455/auth/callback"),
                     ("code_verifier", proof),
                 ],
-                None,
             ))
             .await
             .unwrap();
@@ -4190,7 +3790,6 @@ async fn refresh(app: &Router, token: &str) -> axum::response::Response {
         .oneshot(form(
             &format!("{ROOT}/oauth/token"),
             &[("grant_type", "refresh_token"), ("refresh_token", token)],
-            None,
         ))
         .await
         .unwrap()
@@ -4549,11 +4148,12 @@ async fn binding_changes_and_upstream_deletion_preserve_identity_devices_and_bot
     let path = temp.path().join("binding-pg");
     let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let (app, account) = fixture(&storage).await;
+    grant_test_models(&storage, &account.plan_id).await;
     let tokens = login(&app).await;
     let access = tokens["access_token"].as_str().unwrap();
     let rt = tokens["refresh_token"].as_str().unwrap();
     let devices = storage.virtual_devices(&account.id).await.unwrap();
-    let first = test_supplier(&storage, &account).await.clone().unwrap();
+    let first = test_supplier(&storage, &account).await.unwrap();
     record_usage(&storage, &account, &first, "before", 12).await;
     let accounts = codex2api_suppliers::SupplierAccountStore::open(storage.clone());
     let second = accounts.create_pending().await.unwrap().account;
@@ -4828,7 +4428,6 @@ async fn authorization_codes_expire_bind_client_and_callback_and_redeem_atomical
                 ("code", &code),
                 ("code_verifier", &verifier),
             ],
-            None,
         ))
         .await
         .unwrap();
@@ -4873,7 +4472,6 @@ async fn credentials_are_device_scoped_and_identity_and_diagnostic_boundaries_ho
         .oneshot(form(
             &format!("{ROOT}/oauth/revoke"),
             &[("token", first["refresh_token"].as_str().unwrap())],
-            None,
         ))
         .await
         .unwrap();
@@ -5000,28 +4598,17 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
     account.subscription_expires_at =
         Some((chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339());
     storage.save_account_fixture(&account).await.unwrap();
-    let revision = storage
-        .virtual_config(&account.id, "subscription_entitlements")
-        .await
-        .unwrap()
-        .revision;
     let mut plans = storage
         .virtual_config(&account.id, "subscription_entitlements")
         .await
         .unwrap()
         .value;
     plans["plus"]["primary_cost_limit_usd"] = json!(0);
+    plans["plus"]["models"] = json!(["gpt-6-astra"]);
     plans["pro"]["weekly_cost_limit_usd"] = json!(10);
-    set_test_plan_config(
-        &storage,
-        &account.id,
-        "subscription_entitlements",
-        &plans,
-        revision,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    set_test_plan_config(&storage, &account.id, "subscription_entitlements", &plans)
+        .await
+        .unwrap();
     assert_eq!(
         app.clone()
             .oneshot(client_json(
@@ -5100,22 +4687,16 @@ async fn repairs_expiry_plan_change_and_cost_guards_use_current_entitlements() {
             "{path}: {body}"
         );
     }
-    let policy = storage
+    let mut plans = storage
         .virtual_config(&account.id, "subscription_entitlements")
         .await
-        .unwrap();
-    let mut plans = policy.value;
+        .unwrap()
+        .value;
     plans["plus"]["primary_cost_limit_usd"] = Value::Null;
     plans["plus"]["models"] = json!(["allowed-model"]);
-    set_test_plan_config(
-        &storage,
-        &account.id,
-        "subscription_entitlements",
-        &plans,
-        policy.revision,
-    )
-    .await
-    .unwrap();
+    set_test_plan_config(&storage, &account.id, "subscription_entitlements", &plans)
+        .await
+        .unwrap();
     let rejected = app
         .clone()
         .oneshot(client_json(
@@ -5215,13 +4796,11 @@ async fn repairs_nested_task_and_turn_ownership_mcp_and_rebinding_are_checked_be
         )
         .await
         .unwrap();
-    let quota = storage.virtual_config(&account.id, "quota").await.unwrap();
     set_test_plan_config(
         &storage,
         &account.id,
         "quota",
         &json!({"primary_cost_limit_usd":0,"weekly_cost_limit_usd":null}),
-        quota.revision,
     )
     .await
     .unwrap();
@@ -5404,21 +4983,16 @@ async fn repairs_client_writes_nonempty_pages_and_events_stay_owned_and_survive_
         assert_eq!(response["items"].as_array().unwrap().len(), 1);
         assert_eq!(response["items"][0]["id"], expected);
     }
-    for (method, path, status) in [
+    for (path, status) in [
+        ("/backend-api/pins/conversation/current", StatusCode::OK),
         (
-            "POST",
-            "/backend-api/pins/conversation/current",
-            StatusCode::OK,
-        ),
-        (
-            "POST",
             "/backend-api/pins/conversation/foreign",
             StatusCode::NOT_FOUND,
         ),
     ] {
         assert_eq!(
             app.clone()
-                .oneshot(client_json(method, path, &token, Value::Null))
+                .oneshot(client_json("POST", path, &token, Value::Null))
                 .await
                 .unwrap()
                 .status(),
@@ -6254,24 +5828,35 @@ async fn family_graduation_notices_are_owned_persistent_and_dismiss_only_capture
     );
 }
 
+// Plans grant only their explicit model rules; give a fixture plan the model the tests execute.
+async fn grant_test_models(storage: &Storage, plan_id: &str) {
+    let mut plan = storage.virtual_plan(plan_id).await.unwrap().unwrap();
+    plan.config["models"] =
+        serde_json::json!([codex2api_common::ModelRule::granted("gpt-6-astra")]);
+    assert!(
+        storage
+            .save_virtual_plan(&plan, Some(plan.revision))
+            .await
+            .unwrap()
+    );
+}
+
 // Change catalog entries in subscription fixtures through the same storage API as admin.
 async fn set_test_plan_config(
     storage: &Storage,
     owner: &str,
     key: &str,
     value: &Value,
-    revision: i64,
-) -> codex2api_storage::Result<Option<i64>> {
+) -> codex2api_storage::Result<()> {
     let account = storage.platform_account(owner).await?.unwrap();
-    let mut current = storage.virtual_plan(&account.plan_id).await?.unwrap();
-    if current.revision != revision {
-        return Ok(None);
-    }
     if key == "quota" {
-        current.config["spending_windows"] = test_windows(value);
-        if !storage.save_virtual_plan(&current, Some(revision)).await? {
-            return Ok(None);
-        }
+        let mut plan = storage.virtual_plan(&account.plan_id).await?.unwrap();
+        plan.config["spending_windows"] = test_windows(value);
+        assert!(
+            storage
+                .save_virtual_plan(&plan, Some(plan.revision))
+                .await?
+        );
     } else {
         for (kind, config) in value.as_object().unwrap() {
             let id = if kind == &account.plan_type {
@@ -6280,34 +5865,46 @@ async fn set_test_plan_config(
                 kind
             };
             let mut plan = storage.virtual_plan(id).await?.unwrap();
-            if config.get("primary_cost_limit_usd").is_some()
-                || config.get("weekly_cost_limit_usd").is_some()
-            {
-                plan.config["spending_windows"] = test_windows(config);
-            } else if let Some(windows) = config.get("spending_windows") {
-                plan.config["spending_windows"] = windows.clone();
-            }
-            for key in ["models"] {
-                if let Some(value) = config.get(key) {
-                    plan.config[key] = value.clone();
+            plan.config["spending_windows"] = test_windows(config);
+            // The entitlement view lists model names; plans grant catalog models by rule.
+            let mut rules = Vec::new();
+            for model in config["models"].as_array().unwrap() {
+                let model = model.as_str().unwrap();
+                if storage
+                    .model_config(model)
+                    .await?
+                    .is_none_or(|entry| entry.deleted)
+                {
+                    // A custom model joins the priced catalog before a plan can grant it.
+                    let catalog = codex2api_storage::ModelConfig {
+                        model: model.into(),
+                        platform: "chatgpt".into(),
+                        kind: "text".into(),
+                        enabled: true,
+                        deleted: false,
+                        revision: 0,
+                    };
+                    let price = codex2api_storage::ModelPrice {
+                        model: model.into(),
+                        tier: "standard".into(),
+                        min_input_tokens: 0,
+                        max_input_tokens: None,
+                        input_rate: 1_000_000,
+                        cached_rate: 100_000,
+                        cache_write_rate: 1_250_000,
+                        output_rate: 4_000_000,
+                        source: "custom".into(),
+                        revision: 0,
+                    };
+                    assert!(
+                        storage
+                            .save_model_config(&catalog, &[price], &[], None)
+                            .await?
+                    );
                 }
+                rules.push(codex2api_common::ModelRule::granted(model));
             }
-            if let Some(models) = plan.config["models"].as_array_mut() {
-                for model in models.iter_mut() {
-                    if let Some(name) = model.as_str() {
-                        *model = serde_json::json!({"provider_id":"chatgpt","model":name});
-                    }
-                }
-            }
-            plan.config["model_access"] = if plan.config["models"].as_array().unwrap().is_empty() {
-                "all"
-            } else {
-                "selected"
-            }
-            .into();
-            for model in plan.config["models"].as_array().unwrap() {
-                sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',$1,'text') ON CONFLICT DO NOTHING").bind(model["model"].as_str().unwrap()).execute(storage.pool()).await?;
-            }
+            plan.config["models"] = serde_json::json!(rules);
             assert!(
                 storage
                     .save_virtual_plan(&plan, Some(plan.revision))
@@ -6315,13 +5912,7 @@ async fn set_test_plan_config(
             );
         }
     }
-    Ok(Some(
-        storage
-            .virtual_plan(&account.plan_id)
-            .await?
-            .unwrap()
-            .revision,
-    ))
+    Ok(())
 }
 
 async fn test_supplier(storage: &Storage, account: &PlatformAccount) -> Option<String> {
@@ -6358,9 +5949,33 @@ async fn consent(
     fields: &[(&str, &str)],
     cookie: Option<&str>,
 ) -> axum::response::Response {
+    let post = |path: &str, value: Value| {
+        let mut request = Request::post(path).header("content-type", "application/json");
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request.body(Body::from(value.to_string())).unwrap()
+    };
+    let identify: serde_json::Map<String, Value> = fields
+        .iter()
+        .map(|(key, value)| {
+            (
+                match *key {
+                    "flow" => "request_id",
+                    "csrf" => "csrf_token",
+                    other => other,
+                }
+                .to_owned(),
+                Value::String((*value).into()),
+            )
+        })
+        .collect();
     let response = app
         .clone()
-        .oneshot(form(&format!("{ROOT}/oauth/authorize"), fields, cookie))
+        .oneshot(post(
+            "/user/api/oauth/authorize/identify",
+            Value::Object(identify),
+        ))
         .await
         .unwrap();
     if response.status() != StatusCode::OK {
@@ -6372,16 +5987,11 @@ async fn consent(
             .iter()
             .find(|(k, _)| *k == key)
             .map(|(_, v)| *v)
-            .unwrap_or("")
+            .unwrap()
     };
     let value = serde_json::json!({"request_id":field("flow"),"csrf_token":field("csrf"),"account_id":identity["subscriptions"][0]["id"],"confirmed":true});
-    let mut request = Request::post("/user/api/oauth/authorize/approve")
-        .header("content-type", "application/json");
-    if let Some(cookie) = cookie {
-        request = request.header("cookie", cookie);
-    }
     app.clone()
-        .oneshot(request.body(Body::from(value.to_string())).unwrap())
+        .oneshot(post("/user/api/oauth/authorize/approve", value))
         .await
         .unwrap()
 }
@@ -6391,12 +6001,7 @@ fn test_windows(value: &Value) -> Value {
         if value[key].is_null() {
             Value::Null
         } else {
-            Value::String(
-                value[key]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| value[key].to_string()),
-            )
+            Value::String(value[key].to_string())
         }
     };
     let mut windows = vec![

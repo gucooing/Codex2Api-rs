@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 use axum::{
     Json, Router,
@@ -241,7 +239,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .await
         .unwrap();
     let mut free = storage.plan_fixture("grok").await.unwrap();
-    free.config = json!({"model_access":"all","models":[],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"10"}]});
+    free.config = json!({"models":[{"model":"grok-4.7"}],"spending_windows":[{"duration_seconds":2592000,"cost_limit_usd":"10"}]});
     storage
         .save_virtual_plan(&free, Some(free.revision))
         .await
@@ -342,6 +340,12 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     custom_price.revision = 0;
     storage
         .save_model_config(&custom, &[custom_price], &[], None)
+        .await
+        .unwrap();
+    let mut plan = storage.virtual_plan(&free.id).await.unwrap().unwrap();
+    plan.config["models"] = json!([{"model":"grok-4.7"},{"model":custom_model}]);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
         .await
         .unwrap();
 

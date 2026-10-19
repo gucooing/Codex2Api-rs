@@ -32,18 +32,13 @@ async fn handle(
 ) -> Result<Response> {
     let headers = request.headers().clone();
     let body = decode(request, edit).await?;
-    codex2api_upstream::RequestFailureLog::metadata(&codex2api_upstream::request_metadata_value(
-        &body,
-    ));
-    let prepared = crate::InboundRequest::new(
-        if edit {
-            crate::Protocol::ImageEdit
-        } else {
-            crate::Protocol::ImageGeneration
-        },
-        body,
-        headers.clone(),
-    )?;
+    let protocol = if edit {
+        crate::Protocol::ImageEdit
+    } else {
+        crate::Protocol::ImageGeneration
+    };
+    crate::identify(&state, protocol, &body).await?;
+    let prepared = crate::InboundRequest::new(protocol, body, headers.clone())?;
     crate::execute_prepared(
         state,
         credential.principal,

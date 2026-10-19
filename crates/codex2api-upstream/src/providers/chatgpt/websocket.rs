@@ -156,7 +156,7 @@ impl UpstreamClient {
         Option<crate::WorkspaceConnection>,
     )> {
         if !endpoint.is_response() {
-            return Err(UpstreamError::InvalidRequest(
+            return Err(UpstreamError::Internal(
                 "Endpoint does not support WebSocket.".into(),
             ));
         }

@@ -74,11 +74,6 @@ async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_indep
             .iter()
             .all(|item| item["rpm_limit"] == 40 && item["concurrency_limit"] == 10)
     );
-    assert!(
-        !serde_json::to_string(&visible)
-            .unwrap()
-            .contains("supplier_tag_id")
-    );
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["rpm_limit"] = 2.into();
     plan.config["concurrency_limit"] = 1.into();

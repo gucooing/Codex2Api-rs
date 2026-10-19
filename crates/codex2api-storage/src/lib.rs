@@ -11,7 +11,7 @@ mod admission_cache;
 mod api_access;
 mod api_admission;
 pub use admission_cache::{AdmissionError, ApiLimits, ApiPermit};
-pub use api_admission::chatgpt_only_endpoint;
+pub use api_admission::{chatgpt_only_endpoint, ledger_platform};
 mod api_groups;
 mod usage_wallet;
 pub use api_access::{ApiKeyView, ApiPrincipal, CreatedApiKey};
@@ -148,8 +148,8 @@ pub use types::{
     SupplierAccountUpdate, SupplierRuntime, SupplierStatus, SupplierTokens,
 };
 pub use usage::{
-    AccountDailyUsage, AccountUsageSummary, SupplierCycleUsage, USAGE_PAGE_SIZE, UsageFilter,
-    UsagePage, UsageRecord, UsageSource, VirtualDailyModelTokens, table_page_size,
+    AccountDailyUsage, AccountUsageSummary, SupplierCycleUsage, USAGE_PAGE_SIZE, UsageAttempt,
+    UsageFilter, UsagePage, UsageRecord, UsageSource, VirtualDailyModelTokens, table_page_size,
 };
 pub use virtual_client_state::VirtualClientState;
 pub use virtual_management::{VirtualConfigSpec, validate_virtual_config, virtual_config_specs};

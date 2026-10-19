@@ -140,12 +140,7 @@ pub(crate) async fn forward(
             ));
         }
         let provider = context.account.provider_id.clone();
-        log.record.account_id = context.account.id.clone();
-        log.record.account_name = context
-            .account
-            .display_name
-            .clone()
-            .unwrap_or_else(|| context.account.email.clone().unwrap_or_default());
+        log.supplier(&context.account);
         // A refresh retries this supplier once without releasing its reserved slot.
         loop {
             // Each attempt is built for the selected account; its body moves into the transport.
@@ -155,10 +150,11 @@ pub(crate) async fn forward(
                 .storage
                 .supplier_auth_revision(&context.account.id)
                 .await?;
-            log.record.http_status = None;
+            log.begin_attempt();
             let result = async {
                 let inbound = owned_headers(state, &route, &context, &prepared.headers).await?;
-                let endpoint = prepared.endpoint();
+                // The ledger records the canonical protocol path, never a supplier wire path.
+                let endpoint = prepared.upstream.endpoint();
                 state
                     .storage
                     .set_usage_upstream_endpoint(&log.record.id, endpoint)
@@ -220,8 +216,9 @@ pub(crate) async fn forward(
                                 }
                                 // Output or usage proves this attempt ran. Never duplicate it on
                                 // another supplier or refresh and execute the request again.
-                                log.fail_upstream(&error);
-                                return Err(error.into());
+                                let error = crate::ApiError::from(error);
+                                log.fail(&error);
+                                return Err(error);
                             }
                         }
                     }
@@ -229,8 +226,9 @@ pub(crate) async fn forward(
                     let Some(mut failure) =
                         error.supplier_failure_for(&provider, chrono::Utc::now().timestamp())
                     else {
-                        log.fail_upstream(&error);
-                        return Err(error.into());
+                        let error = crate::ApiError::from(error);
+                        log.fail(&error);
+                        return Err(error);
                     };
                     if failure == SupplierFailure::Authentication
                         && refreshed.insert(context.account.id.clone())
@@ -243,7 +241,10 @@ pub(crate) async fn forward(
                         )
                         .await?
                         {
-                            None => continue,
+                            None => {
+                                log.recovered(&error, "refresh").await?;
+                                continue;
+                            }
                             Some(rejection) => failure = rejection,
                         }
                     }
@@ -257,6 +258,7 @@ pub(crate) async fn forward(
                     state
                         .storage
                         .report_supplier_result(&context.account.id, false, None);
+                    log.recovered(&error, "failover").await?;
                     excluded.push(context.account.id.clone());
                     break;
                 }

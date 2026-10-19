@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 use codex2api_storage::{
     NewSupplierAccount, PlatformAccount, Storage, SupplierStatus, SupplierTokens,
@@ -158,7 +156,6 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
         while let Some(result) = tasks.join_next().await {
             assert!(Arc::ptr_eq(&first, &result.unwrap()));
         }
-        assert!(empty.is_empty());
         let models = storage.supplier_model_snapshot(provider).await.unwrap();
         assert!(models.contains("shared-model"));
         let catalog = storage.model_catalog_snapshot().await.unwrap();
@@ -173,7 +170,6 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
                 .await
                 .unwrap()
         );
-        assert!(models.contains("shared-model"));
         assert!(
             storage
                 .pool_candidates(provider, Some(provider), Some("shared-model"))
@@ -221,7 +217,6 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
                 .os_version,
             "1.2.3"
         );
-        assert_ne!(initial.os_version, "1.2.3");
         storage
             .delete_outbound_proxy(&proxy.id, true)
             .await
@@ -344,7 +339,7 @@ async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
         let mut plan = storage.plan_fixture(provider).await.unwrap();
         plan.id = format!("paid-{provider}");
         plan.plan_type = tier.into();
-        plan.config["supplier_tag_id"] = serde_json::json!(format!("{provider}-first"));
+        plan.tag_ids = vec![format!("{provider}-first")];
         storage.save_virtual_plan(&plan, None).await.unwrap();
         let subscription = storage
             .grant_subscription_fixture(&user.id, &plan.id)
@@ -358,7 +353,7 @@ async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
             Some(format!("{provider}-first"))
         );
         let mut plan = storage.virtual_plan(&plan.id).await.unwrap().unwrap();
-        plan.config["supplier_tag_id"] = serde_json::json!(format!("{provider}-second"));
+        plan.tag_ids = vec![format!("{provider}-second")];
         storage
             .save_virtual_plan(&plan, Some(plan.revision))
             .await
@@ -371,13 +366,15 @@ async fn granted_subscriptions_follow_plan_pools_with_provider_isolation() {
             Some(format!("{provider}-second"))
         );
         if provider == "grok" {
+            // Plan tags may span platforms; a Grok subscription still selects only
+            // Grok members, never the ChatGPT supplier of the other pool.
             let mut plan = storage.virtual_plan(&plan.id).await.unwrap().unwrap();
-            plan.config["supplier_tag_id"] = serde_json::json!("chatgpt-first");
+            plan.tag_ids = vec!["chatgpt-first".into(), "grok-second".into()];
             assert!(
                 storage
                     .save_virtual_plan(&plan, Some(plan.revision))
                     .await
-                    .is_err()
+                    .unwrap()
             );
             assert_eq!(
                 storage

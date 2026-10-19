@@ -182,7 +182,7 @@ impl UpstreamClient {
             endpoint.prepare_value(body, &inbound, &installation, timezone.as_deref())
         })
         .await
-        .map_err(|e| crate::UpstreamError::InvalidRequest(e.to_string()))??;
+        .map_err(|e| crate::UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(endpoint.method(), &url, prepared, provider_version)
             .await
     }
@@ -199,7 +199,7 @@ impl UpstreamClient {
             endpoint.prepare(&body, &inbound, &installation_id, timezone.as_deref())
         })
         .await
-        .map_err(|e| crate::UpstreamError::InvalidRequest(e.to_string()))??;
+        .map_err(|e| crate::UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(
             endpoint.method(),
             &endpoint.url(),

@@ -8,8 +8,12 @@ pub type Result<T> = std::result::Result<T, UpstreamError>;
 /// Errors talking to official Codex `/responses`.
 #[derive(Debug, Error)]
 pub enum UpstreamError {
+    /// The caller's request cannot be served as sent; the message is for the caller.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// A fault of this service or its stored supplier data, never of the caller's request.
+    #[error("internal error: {0}")]
+    Internal(String),
     #[error("request body exceeds the configured size limit")]
     RequestTooLarge,
     #[error("unsupported request Content-Encoding")]
@@ -69,6 +73,7 @@ impl UpstreamError {
         let (status, code, message) = match self {
             Self::Unauthorized => (401, "upstream_unauthorized", "上游授权失效"),
             Self::InvalidRequest(_) => (400, "invalid_request_error", "请求参数无效"),
+            Self::Internal(_) => (500, "internal_error", "服务内部错误"),
             Self::RequestTooLarge => (413, "request_too_large", "请求超过大小限制"),
             Self::UnsupportedEncoding => (415, "unsupported_encoding", "请求编码不受支持"),
             Self::StreamIdleTimeout => (504, "upstream_timeout", "等待上游响应超时"),
@@ -110,6 +115,41 @@ impl UpstreamError {
             _ => (502, "upstream_error", "上游请求未能完成"),
         };
         F::new(Some(status), Some(code), Some(message))
+    }
+
+    /// The consumer's view of this error after the gateway's handling. Credential and
+    /// supplier state stay private whatever status a token endpoint reported.
+    pub fn public_failure(&self) -> crate::public_output::PublicFailure {
+        use crate::public_output::PublicFailure as P;
+        match self {
+            Self::Status { status, body, .. } => P::from_error(
+                Some(*status),
+                &serde_json::from_str(body).unwrap_or_default(),
+            ),
+            Self::InvalidRequest(message) => P::new(&crate::ResponseFailure::new(
+                Some(400),
+                Some("invalid_request_error"),
+                Some(message),
+            )),
+            Self::RequestTooLarge
+            | Self::UnsupportedEncoding
+            | Self::Stream(_)
+            | Self::StreamIdleTimeout
+            | Self::Http(_)
+            | Self::Json(_) => P::new(&self.failure()),
+            Self::Unauthorized
+            | Self::MissingAccessToken(_)
+            | Self::Refresh(_)
+            | Self::Auth(_)
+            | Self::GrokAuth(_)
+            | Self::AntigravityAuth(_)
+            | Self::WorkspaceRouting(_)
+            | Self::WorkspaceChanged
+            | Self::SupplierAccount(_) => P::unavailable(),
+            Self::Internal(_) | Self::Storage(_) | Self::Encoding(_) | Self::InvalidHeader(_) => {
+                P::internal()
+            }
+        }
     }
 
     pub fn status(status: reqwest::StatusCode, body: impl Into<String>) -> Self {

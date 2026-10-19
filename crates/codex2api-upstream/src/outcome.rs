@@ -58,9 +58,15 @@ impl ResponseFailure {
                 | "organization_usage_limit_exceeded"
                 | "virtual_quota_exceeded",
             ) => Some(K::QuotaExhausted),
-            Some("context_length_exceeded" | "invalid_prompt" | "invalid_request_error") => {
-                Some(K::InvalidRequest)
-            }
+            Some(
+                "context_length_exceeded"
+                | "invalid_prompt"
+                | "invalid_request_error"
+                | "cyber_policy"
+                | "bio_policy"
+                | "misalignment_policy_violation"
+                | "prompt_blocked",
+            ) => Some(K::InvalidRequest),
             Some("usage_not_included" | "permission_error") => Some(K::Permission),
             Some("upstream_timeout" | "stream_idle_timeout") => Some(K::Timeout),
             Some(

@@ -294,7 +294,7 @@ pub(crate) async fn send(
         Protocol::ImageGeneration => crate::Endpoint::ImageGeneration,
         Protocol::ImageEdit => crate::Endpoint::ImageEdit,
         _ => {
-            return Err(crate::UpstreamError::InvalidRequest(
+            return Err(crate::UpstreamError::Internal(
                 "Unsupported ChatGPT API operation".into(),
             ));
         }

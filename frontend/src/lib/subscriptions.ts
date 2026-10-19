@@ -1,3 +1,4 @@
+import * as antigravity from "./providers/antigravity/subscriptions";
 import * as chatgpt from "./providers/chatgpt/subscriptions";
 import * as grok from "./providers/grok/subscriptions";
 export const subscriptionChoices = chatgpt.subscriptionChoices;
@@ -10,5 +11,7 @@ export function subscriptionLabel(value: unknown, provider = "chatgpt"): string 
 export function supplierSubscriptionLabel(value: unknown, provider = "chatgpt"): string {
   return provider === "grok"
     ? grok.supplierSubscriptionLabel(value)
-    : chatgpt.subscriptionLabel(value);
+    : provider === "antigravity"
+      ? antigravity.supplierSubscriptionLabel(value)
+      : chatgpt.subscriptionLabel(value);
 }

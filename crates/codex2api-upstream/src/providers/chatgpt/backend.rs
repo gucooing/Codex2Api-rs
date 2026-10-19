@@ -206,7 +206,7 @@ impl UpstreamClient {
             endpoint.prepare(&body, &inbound, &installation_id)
         })
         .await
-        .map_err(|e| UpstreamError::InvalidRequest(e.to_string()))??;
+        .map_err(|e| UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(endpoint.method(), url.as_str(), prepared, false)
             .await
     }

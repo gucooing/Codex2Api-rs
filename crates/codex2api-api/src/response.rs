@@ -149,7 +149,7 @@ async fn unary(
     prepared: &PreparedRequest,
 ) -> Result<Value> {
     let mut value = read_json(response).await?;
-    codex2api_upstream::providers::normalize_event(&log.record.provider_id, &mut value);
+    codex2api_upstream::providers::normalize_event(log.supplier_provider(), &mut value);
     log.measure(&value, prepared.upstream);
     let failed = matches!(
         ResponseOutcome::from_value(&value, None),
@@ -355,7 +355,7 @@ async fn consume_stream(
         if value.get("type").is_none() && !event.event.is_empty() && event.event != "message" {
             value["type"] = event.event.into();
         }
-        codex2api_upstream::providers::normalize_event(&log.record.provider_id, &mut value);
+        codex2api_upstream::providers::normalize_event(log.supplier_provider(), &mut value);
         if matches!(
             value["type"].as_str(),
             Some("codex.rate_limits" | "rate_limits.updated")
@@ -448,7 +448,7 @@ async fn consume_stream(
 
 async fn observe_terminal_failure(state: &ApiState, log: &ApiLog, value: &Value) -> Result<()> {
     if let Some(failure) = codex2api_upstream::classify_provider_failure(
-        &log.record.provider_id,
+        log.supplier_provider(),
         None,
         value,
         &HeaderMap::new(),

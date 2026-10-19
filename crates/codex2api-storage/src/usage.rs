@@ -15,6 +15,9 @@ pub struct UsageRecord {
     pub id: String,
     pub account_id: String,
     pub account_name: String,
+    /// Channel of the supplier account that served the final attempt. `provider_id`
+    /// remains the platform the request is identified with.
+    pub account_provider_id: Option<String>,
     pub subject_id: String,
     pub subject_name: String,
     #[sqlx(default)]
@@ -63,8 +66,15 @@ pub struct UsageRecord {
     pub requested_at_ms: i64,
     pub status: String,
     pub http_status: Option<i64>,
+    /// The real failure, for administrators.
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    /// The failure the consumer received after the gateway's error handling.
+    pub public_error_code: Option<String>,
+    pub public_error_message: Option<String>,
+    /// Supplier attempts the gateway recovered from, oldest first; administrators only.
+    #[sqlx(skip)]
+    pub attempts: Vec<UsageAttempt>,
     pub cost_nano_usd: Option<i64>,
     pub billing_status: String,
     pub billing_model: Option<String>,
@@ -83,6 +93,7 @@ impl Default for UsageRecord {
             id: Default::default(),
             account_id: Default::default(),
             account_name: Default::default(),
+            account_provider_id: None,
             subject_id: Default::default(),
             subject_name: Default::default(),
             consumer_name: Default::default(),
@@ -126,6 +137,9 @@ impl Default for UsageRecord {
             http_status: Default::default(),
             error_code: None,
             error_message: None,
+            public_error_code: None,
+            public_error_message: None,
+            attempts: Vec::new(),
             cost_nano_usd: Default::default(),
             billing_status: Default::default(),
             billing_model: Default::default(),
@@ -135,6 +149,27 @@ impl Default for UsageRecord {
             cost_calculation: None,
         }
     }
+}
+
+/// A supplier attempt that failed and that the gateway recovered from by refreshing
+/// the credential or by failing over to another supplier. The request's final attempt
+/// is the usage record itself.
+#[derive(Clone, Debug, Default, FromRow, serde::Serialize)]
+pub struct UsageAttempt {
+    pub usage_record_id: String,
+    /// Assigned in order when the attempt is recorded.
+    pub attempt: i32,
+    pub account_id: String,
+    pub account_name: String,
+    pub account_provider_id: String,
+    pub upstream_endpoint: Option<String>,
+    pub http_status: Option<i64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    /// `refresh` retried the same supplier; `failover` selected another one.
+    pub recovery: String,
+    pub started_at_ms: i64,
+    pub total_ms: i64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -332,12 +367,27 @@ impl Storage {
         .await?;
         Ok(())
     }
-    pub async fn reroute_usage(&self, id: &str, account: &str, name: &str) -> Result<()> {
+    pub async fn reroute_usage(
+        &self,
+        id: &str,
+        account: &str,
+        name: &str,
+        provider: &str,
+    ) -> Result<()> {
         self.write_request(crate::request_writer::Write::Reroute {
             id: id.into(),
             supplier: account.into(),
             name: name.into(),
+            provider: provider.into(),
         })
+        .await?;
+        Ok(())
+    }
+    /// Keep a failed supplier attempt the gateway is about to recover from.
+    pub async fn record_usage_attempt(&self, attempt: &UsageAttempt) -> Result<()> {
+        self.write_request(crate::request_writer::Write::Attempt(Box::new(
+            attempt.clone(),
+        )))
         .await?;
         Ok(())
     }
@@ -420,7 +470,7 @@ impl Storage {
     }
     /// Called once by the process at startup; a prior process cannot still own these requests.
     pub async fn recover_interrupted_usage(&self) -> Result<u64> {
-        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(extract(epoch FROM clock_timestamp())*1000 AS BIGINT),status='interrupted',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
+        Ok(sqlx::query("UPDATE usage_records SET completed_at_ms=CAST(extract(epoch FROM clock_timestamp())*1000 AS BIGINT),status='interrupted',error_code=COALESCE(error_code,'process_restarted'),error_message=COALESCE(error_message,'服务重启，请求未完成'),public_error_code=COALESCE(public_error_code,'request_interrupted'),public_error_message=COALESCE(public_error_message,'The request was interrupted before it completed.'),billing_status=CASE WHEN billing_status='pending' THEN 'missing_usage' ELSE billing_status END WHERE status='in_progress'")
             .execute(self.pool())
             .await?.rows_affected())
     }
@@ -473,7 +523,24 @@ impl Storage {
             .build_query_as::<UsageRecord>()
             .fetch_all(&mut *tx)
             .await?;
+        let ids = records.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+        let attempts: Vec<UsageAttempt> = sqlx::query_as(
+            "SELECT * FROM usage_attempts WHERE usage_record_id=ANY($1) ORDER BY usage_record_id,attempt",
+        )
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await?;
         tx.commit().await?;
+        let mut by_record = std::collections::HashMap::<String, Vec<UsageAttempt>>::new();
+        for attempt in attempts {
+            by_record
+                .entry(attempt.usage_record_id.clone())
+                .or_default()
+                .push(attempt);
+        }
+        for record in &mut records {
+            record.attempts = by_record.remove(&record.id).unwrap_or_default();
+        }
         for record in &mut records {
             if let Some(snapshot) = record
                 .pricing_snapshot_json

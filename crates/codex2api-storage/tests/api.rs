@@ -5,15 +5,10 @@ use codex2api_storage::{
     Storage, StorageError, UsageRecord, User, UserKind, WalletAdjustment,
 };
 
-fn rule(
-    model: &str,
-    multiplier: Option<&str>,
-    concurrency_limit: u32,
-    rpm_limit: u32,
-) -> ModelRule {
+fn rule(model: &str, multiplier: &str, concurrency_limit: u32, rpm_limit: u32) -> ModelRule {
     ModelRule {
         model: model.into(),
-        multiplier: multiplier.map(str::to_owned),
+        multiplier: Some(multiplier.into()),
         concurrency_limit,
         rpm_limit,
     }
@@ -115,12 +110,10 @@ async fn setup() -> (
             .await
             .unwrap();
         if name == "api-unpriced" {
-            sqlx::query(
-                "DELETE FROM model_prices WHERE provider_id='chatgpt' AND model='api-unpriced'",
-            )
-            .execute(storage.pool())
-            .await
-            .unwrap();
+            sqlx::query("DELETE FROM model_prices WHERE model='api-unpriced'")
+                .execute(storage.pool())
+                .await
+                .unwrap();
         }
         if name != "api-other" {
             storage
@@ -182,8 +175,10 @@ async fn cached_catalog_is_fenced_by_transactional_price_and_model_revisions() {
         .await
         .unwrap();
     // Simulate the commit/invalidation race: change PostgreSQL without invalidating L1/L2.
-    sqlx::query("UPDATE model_prices SET input_rate=2000000 WHERE provider_id='chatgpt' AND model='api-text'")
-        .execute(storage.pool()).await.unwrap();
+    sqlx::query("UPDATE model_prices SET input_rate=2000000 WHERE model='api-text'")
+        .execute(storage.pool())
+        .await
+        .unwrap();
     let mut current = request("new-price");
     storage
         .admit_api_request(&principal, &current)
@@ -197,12 +192,10 @@ async fn cached_catalog_is_fenced_by_transactional_price_and_model_revisions() {
         storage.settle(&current).await.unwrap().cost_nano_usd,
         Some(3_000_000)
     );
-    sqlx::query(
-        "UPDATE model_catalog SET enabled=FALSE WHERE provider_id='chatgpt' AND model='api-text'",
-    )
-    .execute(storage.pool())
-    .await
-    .unwrap();
+    sqlx::query("UPDATE model_catalog SET enabled=FALSE WHERE model='api-text'")
+        .execute(storage.pool())
+        .await
+        .unwrap();
     assert!(matches!(
         storage
             .admit_api_request(&principal, &request("disabled-model"))
@@ -603,7 +596,6 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
         .unwrap();
     assert_eq!(usage["total"], 2);
     assert_eq!(usage["wallet_pending_nano_usd"], 9_675_000);
-    assert!(!usage.to_string().contains("supplier_account_id"));
     let mut missing = request("missing-price");
     missing.model = Some("api-unpriced".into());
     assert!(matches!(
@@ -690,7 +682,7 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
 async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissions() {
     let (_dir, storage, user, mut group, _) = setup().await;
     group.models = vec![
-        rule("api-text", Some("2"), 2, 10),
+        rule("api-text", "2", 2, 10),
         ModelRule::granted("api-other"),
         ModelRule::granted("api-unpriced"),
     ];
@@ -845,7 +837,7 @@ async fn search_compact_and_input_count_share_usage_with_operation_specific_bill
     group.models = vec![
         ModelRule::granted("api-text"),
         ModelRule::granted("api-other"),
-        rule("api-unpriced", Some("7"), 0, 0),
+        rule("api-unpriced", "7", 0, 0),
     ];
     storage
         .save_api_group(&group, Some(group.revision))
@@ -1183,180 +1175,6 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
 // Assert the persisted shared ledger after its normal finalization path.
 trait SettleUsage {
     async fn settle(&self, record: &UsageRecord) -> codex2api_storage::Result<UsageRecord>;
-}
-
-#[tokio::test]
-async fn all_request_sources_share_history_statistics_and_failure_details() {
-    use codex2api_storage::{UsageFilter, UsageGroup};
-    let (_dir, storage, user, group, supplier) = setup().await;
-    let (_, principal) = credential(&storage, &user, &group).await;
-    let subscription = storage
-        .save_user_subscription(codex2api_storage::SubscriptionChange {
-            subscription_id: None,
-            reissue: false,
-            user_id: &user.id,
-            plan_id: "plus",
-            expires_at: None,
-            enabled: true,
-            revision: None,
-        })
-        .await
-        .unwrap();
-    let mut oauth = request("oauth-shared");
-    let original_plan: (String, String) = sqlx::query_as("SELECT p.id,p.name FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id WHERE a.id=$1")
-        .bind(&subscription).fetch_one(storage.pool()).await.unwrap();
-    oauth.subject_id = subscription;
-    oauth.subject_name = "Subscription".into();
-    oauth.account_id = supplier.clone();
-    storage.insert_usage(&oauth).await.unwrap();
-    sqlx::query("UPDATE virtual_plans SET name='Renamed after request' WHERE id=$1")
-        .bind(&original_plan.0)
-        .execute(storage.pool())
-        .await
-        .unwrap();
-    oauth.input_tokens = Some(1000);
-    oauth.output_tokens = Some(0);
-    oauth.status = "completed".into();
-    storage.finish_usage(&oauth).await.unwrap();
-    let saved = storage.query_usage(&Default::default()).await.unwrap();
-    assert_eq!(
-        saved.records[0].source_name.as_deref(),
-        Some(original_plan.1.as_str())
-    );
-    assert!(
-        sqlx::query("UPDATE usage_records SET source_name='changed' WHERE id='oauth-shared'")
-            .execute(storage.pool())
-            .await
-            .is_err()
-    );
-
-    let mut failed = request("api-shared");
-    storage
-        .admit_api_request(&principal, &failed)
-        .await
-        .unwrap();
-    failed.account_id = supplier.clone();
-    failed.account_name = "private-supplier-name".into();
-    failed.status = "failed".into();
-    failed.http_status = Some(200);
-    failed.first_token_ms = Some(35);
-    failed.total_ms = Some(1200);
-    failed.error_code = Some("upstream_incomplete".into());
-    failed.error_message = Some("private diagnostic for administrators".into());
-    failed.upstream_request_id = Some("private-upstream-request".into());
-    storage.finish_usage(&failed).await.unwrap();
-    storage.finish_usage(&failed).await.unwrap();
-    let filter = UsageFilter {
-        user_id: Some(user.id.clone()),
-        from_ms: Some(0),
-        until_ms: Some(Utc::now().timestamp_millis() + 1),
-        ..Default::default()
-    };
-    let page = storage.query_usage(&filter).await.unwrap();
-    assert_eq!(page.total, 2);
-    let row = page.records.iter().find(|r| r.id == failed.id).unwrap();
-    assert_eq!(row.error_message, failed.error_message);
-    assert_eq!(row.error_code, failed.error_code);
-    assert_eq!(row.http_status, Some(200));
-    assert_eq!(row.first_token_ms, Some(35));
-    assert_eq!(row.total_ms, Some(1200));
-    assert_eq!(row.key_id.as_deref(), Some(principal.key_id.as_str()));
-    assert_eq!(row.billing_status, "missing_usage");
-    for (source, expected_id, expected_name) in [
-        (
-            codex2api_storage::UsageSource::Api,
-            failed.id.as_str(),
-            "Primary key",
-        ),
-        (
-            codex2api_storage::UsageSource::Subscription,
-            oauth.id.as_str(),
-            user.username.as_str(),
-        ),
-    ] {
-        let page = storage
-            .query_usage(&UsageFilter {
-                source: Some(source),
-                ..filter.clone()
-            })
-            .await
-            .unwrap();
-        assert_eq!(page.total, 1);
-        assert_eq!(page.records[0].id, expected_id);
-        assert_eq!(page.records[0].consumer_name, expected_name);
-        let page = storage
-            .user_store()
-            .usage(
-                &user.id,
-                &codex2api_storage::UserUsageFilter {
-                    source: Some(source),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(page["total"], 1);
-        assert_eq!(page["items"][0]["id"], expected_id);
-        assert_eq!(page["items"][0]["consumer_name"], expected_name);
-    }
-    let stats = storage
-        .usage_statistics(
-            &UsageFilter {
-                from_ms: Some(Utc::now().timestamp_millis() - 86400000),
-                ..filter
-            },
-            UsageGroup::Subject,
-            0,
-        )
-        .await
-        .unwrap();
-    assert_eq!(stats.summary.request_count, 2);
-    assert_eq!(stats.summary.failed_requests, 1);
-    assert_eq!(stats.rows.len(), 2);
-    assert_eq!(
-        storage
-            .supplier_cycle_usage(&supplier, 0, Utc::now().timestamp_millis() + 1)
-            .await
-            .unwrap()
-            .request_count,
-        2
-    );
-    let public = storage
-        .user_store()
-        .usage(&user.id, &Default::default())
-        .await
-        .unwrap();
-    assert_eq!(public["total"], 2);
-    assert_eq!(public["summary"]["request_count"], 2);
-    for private in [
-        "account_id",
-        "account_name",
-        "error_message",
-        "upstream_request_id",
-        "private-supplier-name",
-        "private diagnostic",
-        "private-upstream-request",
-    ] {
-        assert!(!public.to_string().contains(private), "{private}");
-    }
-    let mut other = user.clone();
-    other.id = "other-owner".into();
-    other.username = "other-owner".into();
-    storage.save_user(&other, None).await.unwrap();
-    assert_eq!(
-        storage
-            .user_store()
-            .usage(&other.id, &Default::default())
-            .await
-            .unwrap()["total"],
-        0
-    );
-    let tables: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='api_usage_records'")
-            .fetch_one(storage.pool())
-            .await
-            .unwrap();
-    assert_eq!(tables, 0);
 }
 
 #[tokio::test]

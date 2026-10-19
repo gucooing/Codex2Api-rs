@@ -218,7 +218,7 @@ impl UpstreamClient {
             prepare_responses(&body, &headers, &installation_id, timezone.as_deref())
         })
         .await
-        .map_err(|e| UpstreamError::InvalidRequest(e.to_string()))??;
+        .map_err(|e| UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(http::Method::POST, url, prepared, true)
             .await
     }

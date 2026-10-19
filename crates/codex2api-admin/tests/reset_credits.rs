@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 mod common;
 use axum::http::StatusCode;

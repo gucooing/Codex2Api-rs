@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 use codex2api_common::{ExecutionKind, PolicyError};
 use codex2api_oauth::admission::{ExecutionRequest, ExecutionService, ServiceError};
@@ -21,14 +19,14 @@ fn request(model: &str) -> ExecutionRequest<'_> {
     }
 }
 
-async fn consumer(storage: &Storage, id: &str) -> PlatformAccount {
+async fn consumer(storage: &Storage) -> PlatformAccount {
     let account = PlatformAccount {
         provider_id: "chatgpt".into(),
-        id: id.into(),
-        username: id.into(),
+        id: "consumer".into(),
+        username: "consumer".into(),
         password_hash: "fixture".into(),
-        name: id.into(),
-        email: format!("{id}@example.test"),
+        name: "consumer".into(),
+        email: "consumer@example.test".into(),
         plan_type: "plus".into(),
         plan_id: "plus".into(),
         subscription_expires_at: None,
@@ -49,18 +47,7 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
     let storage = codex2api_storage::test_support::open(temp.path().join("image-prices-pg"))
         .await
         .unwrap();
-    let account = consumer(&storage, "consumer").await;
-    let mut plan = storage
-        .virtual_plan(&account.plan_id)
-        .await
-        .unwrap()
-        .unwrap();
-    plan.config["model_access"] = json!("all");
-    plan.config["spending_windows"] = json!([{"duration_seconds":604800,"cost_limit_usd":"1"}]);
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
+    let account = consumer(&storage).await;
     let model = codex2api_storage::ModelConfig {
         platform: "chatgpt".into(),
         model: "fixture-image".into(),
@@ -76,6 +63,17 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
     };
     storage
         .save_model_config(&model, &[], std::slice::from_ref(&price), None)
+        .await
+        .unwrap();
+    let mut plan = storage
+        .virtual_plan(&account.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.config["models"] = json!([{"model":"fixture-image"}]);
+    plan.config["spending_windows"] = json!([{"duration_seconds":604800,"cost_limit_usd":"1"}]);
+    storage
+        .save_virtual_plan(&plan, Some(plan.revision))
         .await
         .unwrap();
     let service = ExecutionService::new(storage.clone());
@@ -141,15 +139,14 @@ async fn configured_search_price_allows_limited_accounts_without_bypassing_model
     let storage = codex2api_storage::test_support::open(temp.path().join("search-pg"))
         .await
         .unwrap();
-    let account = consumer(&storage, "consumer").await;
+    let account = consumer(&storage).await;
     let mut plan = storage
         .virtual_plan(&account.plan_id)
         .await
         .unwrap()
         .unwrap();
     plan.config["spending_windows"] = json!([{"duration_seconds":604800,"cost_limit_usd":"1"}]);
-    plan.config["model_access"] = json!("selected");
-    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-6-astra"}]);
+    plan.config["models"] = json!([{"model":"gpt-6-astra"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -220,14 +217,13 @@ async fn model_permissions_are_exact_current_and_provider_scoped() {
     let storage = codex2api_storage::test_support::open(temp.path().join("policy-pg"))
         .await
         .unwrap();
-    let account = consumer(&storage, "consumer").await;
+    let account = consumer(&storage).await;
     let mut plan = storage
         .virtual_plan(&account.plan_id)
         .await
         .unwrap()
         .unwrap();
-    plan.config["model_access"] = json!("selected");
-    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-5.6-luna"}]);
+    plan.config["models"] = json!([{"model":"gpt-5.6-luna"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -281,14 +277,13 @@ async fn expired_subscriptions_never_fall_back_to_another_plan() {
     let storage = codex2api_storage::test_support::open(temp.path().join("expiry-pg"))
         .await
         .unwrap();
-    let mut account = consumer(&storage, "consumer").await;
+    let mut account = consumer(&storage).await;
     let mut plan = storage
         .virtual_plan(&account.plan_id)
         .await
         .unwrap()
         .unwrap();
-    plan.config["model_access"] = json!("selected");
-    plan.config["models"] = json!([{"provider_id":"chatgpt","model":"gpt-6-astra"}]);
+    plan.config["models"] = json!([{"model":"gpt-6-astra"}]);
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -328,32 +323,4 @@ async fn expired_subscriptions_never_fall_back_to_another_plan() {
             .unwrap()
             .enabled
     );
-}
-
-#[tokio::test]
-async fn all_models_means_configured_and_enabled_and_consumer_disable_is_immediate() {
-    let temp = codex2api_storage::test_support::tempdir().unwrap();
-    let storage = codex2api_storage::test_support::open(temp.path().join("all-pg"))
-        .await
-        .unwrap();
-    let mut account = consumer(&storage, "consumer").await;
-    let service = ExecutionService::new(storage.clone());
-    assert!(matches!(
-        service
-            .authorize(&account.id, "chatgpt", request("not-configured"))
-            .await,
-        Err(ServiceError::Policy(PolicyError::ModelUnavailable))
-    ));
-    service
-        .authorize(&account.id, "chatgpt", request("gpt-6-astra"))
-        .await
-        .unwrap();
-    account.enabled = false;
-    storage.save_account_fixture(&account).await.unwrap();
-    assert!(matches!(
-        service
-            .authorize(&account.id, "chatgpt", request("gpt-6-astra"))
-            .await,
-        Err(ServiceError::Policy(PolicyError::SubscriptionRequired))
-    ));
 }

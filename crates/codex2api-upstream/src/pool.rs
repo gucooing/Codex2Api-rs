@@ -53,7 +53,7 @@ impl UpstreamPool {
                     .await?;
             }
             _ => {
-                return Err(crate::UpstreamError::InvalidRequest(
+                return Err(crate::UpstreamError::Internal(
                     "Unsupported provider".into(),
                 ));
             }
@@ -133,7 +133,7 @@ impl UpstreamPool {
                     .await?;
             }
             _ => {
-                return Err(crate::UpstreamError::InvalidRequest(
+                return Err(crate::UpstreamError::Internal(
                     "Unsupported provider".into(),
                 ));
             }

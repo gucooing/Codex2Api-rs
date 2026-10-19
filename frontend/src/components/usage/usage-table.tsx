@@ -170,7 +170,10 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       role="cell"
                     >
                       {record.account_name}
-                      <CardDescription>{record.provider_id}</CardDescription>
+                      <CardDescription>
+                        {record.account_provider_id ?? record.provider_id}
+                        {record.attempts.length > 0 ? ` · 重试 ${record.attempts.length} 次` : ""}
+                      </CardDescription>
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("来源")}

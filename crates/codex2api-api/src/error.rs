@@ -10,9 +10,12 @@ pub type Result<T> = std::result::Result<T, ApiError>;
 #[derive(Debug)]
 pub struct ApiError {
     pub(crate) status: StatusCode,
+    /// What the caller receives.
     pub(crate) body: Value,
     pub(crate) headers: HeaderMap,
     pub(crate) diagnostic: Option<String>,
+    /// The real supplier failure behind `body`, kept for the administrator ledger.
+    pub(crate) cause: Option<codex2api_upstream::ResponseFailure>,
 }
 
 impl std::fmt::Display for ApiError {
@@ -36,6 +39,33 @@ impl ApiError {
             body: json!({"error":{"type":kind,"code":code,"message":message.into(),"param":null}}),
             headers: HeaderMap::new(),
             diagnostic: None,
+            cause: None,
+        }
+    }
+    /// A supplier failure as the caller sees it after the gateway's handling. Retry
+    /// advice is forwarded only when the public view is throttling.
+    fn supplier(
+        cause: codex2api_upstream::ResponseFailure,
+        public: codex2api_upstream::public_output::PublicFailure,
+        error: Value,
+        retry: Option<&HeaderMap>,
+    ) -> Self {
+        let mut headers = HeaderMap::new();
+        if public.throttled()
+            && let Some(retry) = retry
+        {
+            for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
+                if let Some(value) = retry.get(name) {
+                    headers.insert(name, value.clone());
+                }
+            }
+        }
+        Self {
+            status: public.status_code(),
+            body: json!({ "error": error }),
+            headers,
+            diagnostic: None,
+            cause: Some(cause),
         }
     }
     pub(crate) fn bad_request(message: impl Into<String>) -> Self {
@@ -68,14 +98,19 @@ impl ApiError {
             "The upstream stream ended without a complete response.",
         )
     }
+    /// A supplier failure event or reply body as the caller sees it.
     pub(crate) fn upstream_value(value: &Value) -> Self {
-        let failure = codex2api_upstream::ResponseFailure::from_error(None, value);
+        Self::upstream_reply(None, value, &HeaderMap::new())
+    }
+    /// `http_status` and `headers` belong to the supplier's HTTP reply, when there was one.
+    fn upstream_reply(http_status: Option<u16>, value: &Value, headers: &HeaderMap) -> Self {
+        let (public, error) = codex2api_upstream::public_output::failure(http_status, value);
         let raw = value
             .pointer("/response/error")
             .filter(|v| !v.is_null())
             .or_else(|| value.get("error").filter(|v| !v.is_null()))
             .unwrap_or(value);
-        let mut headers = HeaderMap::new();
+        let mut retry = headers.clone();
         for source in [
             value.get("headers"),
             value.pointer("/response/headers"),
@@ -92,7 +127,8 @@ impl ApiError {
                     if !matches!(
                         name.as_str(),
                         "retry-after" | "retry-after-ms" | "x-should-retry"
-                    ) {
+                    ) || retry.contains_key(&name)
+                    {
                         continue;
                     }
                     let text = match value {
@@ -101,18 +137,17 @@ impl ApiError {
                         _ => continue,
                     };
                     if let Ok(value) = http::HeaderValue::from_str(&text) {
-                        headers.insert(name, value);
+                        retry.insert(name, value);
                     }
                 }
             }
         }
-        Self {
-            status: StatusCode::from_u16(failure.status.unwrap_or(502))
-                .unwrap_or(StatusCode::BAD_GATEWAY),
-            body: json!({"error":codex2api_upstream::public_output::error(raw)}),
-            headers,
-            diagnostic: None,
-        }
+        Self::supplier(
+            codex2api_upstream::ResponseFailure::from_error(http_status, value),
+            public,
+            error,
+            Some(&retry),
+        )
     }
 }
 impl IntoResponse for ApiError {
@@ -153,17 +188,24 @@ impl From<codex2api_upstream::scheduler::SchedulerError> for ApiError {
             E::Storage(error) => error.into(),
             E::Upstream(error) => error.into(),
             E::ConsumerInvalid => Self::invalid_key(),
+            // Pool state is the service's own; the caller sees its public view.
             E::Rejected {
                 status,
                 code,
                 message,
                 ..
             } => {
-                let mut error = Self::new(status, code.unwrap_or("supplier_unavailable"), message);
-                if status == StatusCode::TOO_MANY_REQUESTS {
-                    error.headers.insert("retry-after", "1".parse().unwrap());
-                }
-                error
+                let cause = codex2api_upstream::ResponseFailure::new(
+                    Some(status.as_u16()),
+                    code,
+                    Some(&message),
+                );
+                let public = codex2api_upstream::public_output::PublicFailure::new(&cause);
+                let retry = public.throttled().then(|| {
+                    HeaderMap::from_iter([(http::header::RETRY_AFTER, "1".parse().unwrap())])
+                });
+                let error = public.error();
+                Self::supplier(cause, public, error, retry.as_ref())
             }
         }
     }
@@ -207,6 +249,7 @@ impl From<codex2api_upstream::UpstreamError> for ApiError {
     fn from(value: codex2api_upstream::UpstreamError) -> Self {
         use codex2api_upstream::UpstreamError as E;
         match value {
+            // The caller's own request: the message is meant for the caller.
             E::InvalidRequest(message) => Self::bad_request(message),
             E::RequestTooLarge => Self::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -218,44 +261,27 @@ impl From<codex2api_upstream::UpstreamError> for ApiError {
                 "unsupported_encoding",
                 "Unsupported request Content-Encoding.",
             ),
+            E::Storage(error) => error.into(),
+            E::Internal(message) => {
+                tracing::error!(%message, "API gateway internal failure");
+                Self::internal().with_diagnostic(&format!("internal error: {message}"))
+            }
             E::Status {
                 status,
                 body,
                 headers,
                 ..
-            } => {
-                let value: Value = serde_json::from_str(&body).unwrap_or_default();
-                let mut error = Self::upstream_value(&value);
-                if let Ok(status) = StatusCode::from_u16(status)
-                    && (status.is_client_error() || status.is_server_error())
-                {
-                    error.status = status;
-                }
-                for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
-                    if let Some(value) = headers.get(name) {
-                        error.headers.insert(name, value.clone());
-                    }
-                }
-                error
-            }
+            } => Self::upstream_reply(
+                Some(status),
+                &serde_json::from_str(&body).unwrap_or_default(),
+                &headers,
+            ),
             other => {
                 let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&other);
-                let failure = other.failure();
-                let mut response = Self::new(
-                    StatusCode::from_u16(failure.status.unwrap_or(502))
-                        .unwrap_or(StatusCode::BAD_GATEWAY),
-                    failure.code.as_deref().unwrap_or("upstream_error"),
-                    "The upstream service could not complete this request.",
-                )
-                .with_diagnostic(&diagnostic);
-                if let Some(headers) = other.retry_headers() {
-                    for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
-                        if let Some(value) = headers.get(name) {
-                            response.headers.insert(name, value.clone());
-                        }
-                    }
-                }
-                response
+                let public = other.public_failure();
+                let error = public.error();
+                Self::supplier(other.failure(), public, error, other.retry_headers())
+                    .with_diagnostic(&diagnostic)
             }
         }
     }
@@ -288,6 +314,7 @@ impl From<codex2api_upstream::protocol::Error> for ApiError {
             body: error.body,
             headers: HeaderMap::new(),
             diagnostic: None,
+            cause: None,
         }
     }
 }

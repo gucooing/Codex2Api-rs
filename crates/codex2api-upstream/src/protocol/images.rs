@@ -144,7 +144,6 @@ pub fn prepared(mut body: Value, edit: bool, headers: http::HeaderMap) -> Prepar
         body,
         inbound: protocol,
         upstream: protocol,
-        upstream_endpoint: None,
         stream: false,
         include_usage: false,
         metadata: None,

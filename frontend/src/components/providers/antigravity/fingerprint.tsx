@@ -1,5 +1,5 @@
 "use client";
-import { useId } from "react";
+import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import type { Fingerprint, ProxyOption } from "@/lib/api";
+import { useAntigravityFingerprintFields } from "@/lib/providers/antigravity/data";
 
 const OS_TYPES = [
   ["windows", "Windows"],
@@ -25,7 +26,7 @@ export function AntigravityFingerprintFields({
   onChange: (value: Fingerprint) => void;
   proxies: ProxyOption[];
 }) {
-  const id = useId();
+  const { id, busy, applyProxyTimezone } = useAntigravityFingerprintFields({ value, onChange });
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Field>
@@ -87,11 +88,24 @@ export function AntigravityFingerprintFields({
       </Field>
       <Field>
         <FieldLabel htmlFor={`${id}-timezone`}>时区</FieldLabel>
-        <Input
-          id={`${id}-timezone`}
-          value={value.timezone}
-          onChange={(e) => onChange({ ...value, timezone: e.target.value })}
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            id={`${id}-timezone`}
+            value={value.timezone}
+            onChange={(e) => onChange({ ...value, timezone: e.target.value })}
+          />
+          {value.proxy_id && proxies.some((proxy) => proxy.id === value.proxy_id) && (
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0"
+              disabled={busy}
+              onClick={applyProxyTimezone}
+            >
+              应用代理时区
+            </Button>
+          )}
+        </div>
       </Field>
     </div>
   );

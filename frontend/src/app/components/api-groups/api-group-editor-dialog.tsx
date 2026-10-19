@@ -50,6 +50,8 @@ export function ApiGroupEditorDialog({
     setRule,
     modelSearch,
     setModelSearch,
+    modelPlatform,
+    setModelPlatform,
     tags,
     models,
     toggleTag,
@@ -194,6 +196,8 @@ export function ApiGroupEditorDialog({
                   baseMultiplier={value.multiplier}
                   search={modelSearch}
                   onSearch={setModelSearch}
+                  platform={modelPlatform}
+                  onPlatform={setModelPlatform}
                   onToggle={toggleModel}
                   onSelectVisible={selectVisible}
                   onRule={setRule}

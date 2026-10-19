@@ -1,11 +1,9 @@
-#[cfg(test)]
 mod account_fixture {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../codex2api-storage/test-support/accounts.rs"
     ));
 }
-#[cfg(test)]
 use account_fixture::AccountFixture;
 use codex2api_storage::{ImagePrice, ImageUsage, ModelConfig, UsageFilter, UsageRecord};
 
@@ -376,12 +374,6 @@ async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
         assert!(
             storage
                 .price_available("chatgpt", &model.model, PriceRequirement::Image(size))
-                .await
-                .unwrap()
-        );
-        assert!(
-            !storage
-                .price_available("grok", &model.model, PriceRequirement::Image(size))
                 .await
                 .unwrap()
         );

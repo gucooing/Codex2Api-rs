@@ -640,6 +640,27 @@ mod tests {
                 .sync_supported_models(&codex2api_upstream::supported_models())
                 .await
                 .unwrap();
+            // A plan grants only the models in its explicit list.
+            let owner = state
+                .storage
+                .platform_account(&oauth.virtual_account_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let mut plan = state
+                .storage
+                .virtual_plan(&owner.plan_id)
+                .await
+                .unwrap()
+                .unwrap();
+            plan.config["models"] = json!([codex2api_common::ModelRule::granted("gpt-5.5")]);
+            assert!(
+                state
+                    .storage
+                    .save_virtual_plan(&plan, Some(plan.revision))
+                    .await
+                    .unwrap()
+            );
             let (started, start) = tokio::sync::oneshot::channel();
             let (finish, ready) = tokio::sync::oneshot::channel();
             let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -840,6 +861,27 @@ mod tests {
             .sync_supported_models(&codex2api_upstream::supported_models())
             .await
             .unwrap();
+        // A plan grants only the models in its explicit list.
+        let owner = state
+            .storage
+            .platform_account(&oauth.virtual_account_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut plan = state
+            .storage
+            .virtual_plan(&owner.plan_id)
+            .await
+            .unwrap()
+            .unwrap();
+        plan.config["models"] = json!([codex2api_common::ModelRule::granted("gpt-5.5")]);
+        assert!(
+            state
+                .storage
+                .save_virtual_plan(&plan, Some(plan.revision))
+                .await
+                .unwrap()
+        );
         if !available {
             state
                 .storage

@@ -1,16 +1,7 @@
-#[cfg(test)]
-mod account_fixture {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../codex2api-storage/test-support/accounts.rs"
-    ));
-}
-#[cfg(test)]
-use account_fixture::AccountFixture;
 use chrono::{Duration, Utc};
 use codex2api_storage::{
-    CheckoutInput, CouponInput, OrderFilter, OrderRequest, PlatformAccount, Storage,
-    SubscriptionChange, SubscriptionOrder, User,
+    CheckoutInput, CouponInput, OrderFilter, OrderRequest, Storage, SubscriptionChange,
+    SubscriptionOrder, User,
 };
 use serde_json::json;
 
@@ -44,7 +35,7 @@ async fn setup() -> (
         let mut plan = storage.virtual_plan(id).await.unwrap().unwrap();
         plan.config["sale_price_usd"] = json!(price);
         plan.config["duration_days"] = json!(30);
-        plan.config["supplier_tag_id"] = json!("private-pool");
+        plan.tag_ids = vec!["private-pool".into()];
         storage
             .save_virtual_plan(&plan, Some(plan.revision))
             .await
@@ -165,17 +156,11 @@ async fn order_payment_does_not_stale_relative_wallet_adjustments() {
 async fn purchased_subscriptions_follow_current_plan_pools_without_changing_history() {
     use codex2api_storage::{NewSupplierAccount, SupplierTokens};
     let (dir, storage, user) = setup().await;
-    for tag in ["replacement", "free-pool"] {
-        storage
-            .save_supplier_tag(tag, "chatgpt", tag)
-            .await
-            .unwrap();
-    }
-    for (id, tag) in [
-        ("s1", "private-pool"),
-        ("s2", "replacement"),
-        ("s3", "free-pool"),
-    ] {
+    storage
+        .save_supplier_tag("replacement", "chatgpt", "replacement")
+        .await
+        .unwrap();
+    for (id, tag) in [("s1", "private-pool"), ("s2", "replacement")] {
         let mut supplier = NewSupplierAccount::pending_identity(id, "Linux", "6", "x86_64", "{}");
         supplier.id = Some(id.into());
         supplier.chatgpt_account_id = Some(id.into());
@@ -235,7 +220,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .bind(&subscription.id).fetch_all(storage.pool()).await.unwrap();
 
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["supplier_tag_id"] = json!("replacement");
+    plan.tag_ids = vec!["replacement".into()];
     assert!(
         storage
             .save_virtual_plan(&plan, Some(plan.revision))
@@ -264,6 +249,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .as_deref(),
         Some("s2")
     );
+    // The plan binds the tag and the subscription route inherits it.
     assert_eq!(
         storage
             .supplier_tags()
@@ -273,7 +259,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .find(|t| t.id == "replacement")
             .unwrap()
             .binding_count,
-        1
+        2
     );
     assert!(
         storage
@@ -354,7 +340,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         route.revision
     );
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["supplier_tag_id"] = serde_json::Value::Null;
+    plan.tag_ids.clear();
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -582,13 +568,7 @@ async fn orders_quote_before_debit_and_pay_idempotently_under_contention() {
             .is_err()
     );
     let visible = first.view(false).unwrap().to_string();
-    for secret in [
-        "private-pool",
-        "supplier_tag_id",
-        "request_signature",
-        "password",
-        "username",
-    ] {
+    for secret in ["private-pool", "request_signature", "password", "username"] {
         assert!(!visible.contains(secret));
     }
     storage.close().await;
@@ -776,20 +756,6 @@ async fn order_ownership_expiration_cancellation_and_closed_sales_reject_payment
         &(Utc::now() + Duration::days(15)).to_rfc3339(),
     )
     .await;
-    let standalone = PlatformAccount {
-        id: "independent".into(),
-        provider_id: "chatgpt".into(),
-        username: "independent".into(),
-        password_hash: "fixture".into(),
-        name: "Independent".into(),
-        email: "independent@example.test".into(),
-        plan_id: "plus".into(),
-        plan_type: "plus".into(),
-        subscription_expires_at: None,
-        enabled: true,
-        created_at: Utc::now().to_rfc3339(),
-    };
-    storage.save_account_fixture(&standalone).await.unwrap();
     let expiring = quote(&storage, &user, Some(&subscription_id), "pro")
         .await
         .unwrap();
@@ -844,7 +810,6 @@ async fn catalog_preview_confirmation_and_payment_require_published_priced_plans
     for (price, published) in [(None, true), (Some("30"), false), (None, false)] {
         let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
         plan.config["sale_price_usd"] = json!("30");
-        plan.config["supplier_tag_id"] = json!(null);
         plan.allow_purchase = true;
         storage
             .save_virtual_plan(&plan, Some(plan.revision))
@@ -927,7 +892,6 @@ async fn catalog_preview_confirmation_and_payment_require_published_priced_plans
     assert_eq!(listed.total, 1);
     assert_eq!(listed.items[0]["id"], "plus");
     assert!(listed.items[0]["sale_price_usd"].is_string());
-    assert!(listed.items[0].get("supplier_tag_id").is_none());
     assert_eq!(
         quote(&storage, &user, None, "plus")
             .await
@@ -994,12 +958,6 @@ async fn administrator_reissue_establishes_an_explicit_new_price_snapshot() {
 #[tokio::test]
 async fn coupons_reserve_only_on_confirmation_and_capture_discount_without_supplier_requirement() {
     let (_dir, storage, user) = setup().await;
-    let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
-    plan.config["supplier_tag_id"] = serde_json::Value::Null;
-    storage
-        .save_virtual_plan(&plan, Some(plan.revision))
-        .await
-        .unwrap();
     let now = Utc::now().timestamp_millis();
     let coupon = storage
         .save_coupon(

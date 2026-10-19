@@ -77,7 +77,7 @@ export function duration(value: number | null | undefined) {
   return `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分` : ""}`;
 }
 export function usageFailure(record: UsageRecord) {
-  return record.error_code || "此历史记录未保存失败原因";
+  return record.error_reason || record.error_code || "此历史记录未保存失败原因";
 }
 
 export const usageStatuses = [

@@ -32,11 +32,10 @@ impl Error {
         }
     }
     pub fn upstream_value(value: &Value) -> Self {
-        let failure = crate::ResponseFailure::from_error(None, value);
+        let (public, error) = crate::public_output::failure(None, value);
         Self {
-            status: StatusCode::from_u16(failure.status.unwrap_or(502))
-                .unwrap_or(StatusCode::BAD_GATEWAY),
-            body: json!({"error":crate::public_output::error(value.get("error").unwrap_or(value))}),
+            status: public.status_code(),
+            body: json!({"error":error}),
         }
     }
 }
@@ -122,8 +121,6 @@ pub struct PreparedRequest {
     pub inbound: Protocol,
     /// The protocol of the events the adapter delivers back.
     pub upstream: Protocol,
-    /// The supplier wire operation recorded in the ledger when it is not the protocol path.
-    pub upstream_endpoint: Option<&'static str>,
     pub stream: bool,
     pub include_usage: bool,
     pub metadata: Option<Value>,
@@ -135,17 +132,12 @@ impl PreparedRequest {
             headers: HeaderMap::new(),
             inbound: input.protocol,
             upstream,
-            upstream_endpoint: None,
             stream: input.stream,
             include_usage: input.include_usage,
             metadata: (input.protocol != Protocol::Messages)
                 .then(|| input.metadata.clone())
                 .flatten(),
         }
-    }
-    pub fn endpoint(&self) -> &'static str {
-        self.upstream_endpoint
-            .unwrap_or_else(|| self.upstream.endpoint())
     }
 }
 
@@ -299,7 +291,7 @@ pub async fn send(
                 .await
         }
         codex2api_common::ANTIGRAVITY => pool.antigravity().generate(&account.id, body).await,
-        _ => Err(crate::UpstreamError::InvalidRequest(
+        _ => Err(crate::UpstreamError::Internal(
             "Unsupported supplier platform".into(),
         )),
     }

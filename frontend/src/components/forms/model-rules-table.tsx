@@ -4,6 +4,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -13,10 +20,12 @@ import {
 } from "@/components/ui/table";
 import type { ModelOption } from "@/lib/api";
 import type { ModelRuleDraft } from "@/lib/model-rules";
-import { platformLabel } from "@/lib/providers";
+import { platformLabel, platformOptions } from "@/lib/providers";
 
-/** Manual model grants with per-model multiplier and per-user limits; selected models
- * stay listed while the search narrows the catalog candidates. */
+/** Manual model grants with per-model multiplier and per-user limits. Rows keep the
+ * catalog order whether or not they are checked; the search and platform narrow the
+ * catalog candidates, and a granted model the catalog no longer offers stays listed
+ * after them while it matches the search and no platform is chosen. */
 export function ModelRulesTable({
   id,
   options,
@@ -25,6 +34,8 @@ export function ModelRulesTable({
   baseMultiplier,
   search,
   onSearch,
+  platform,
+  onPlatform,
   onToggle,
   onSelectVisible,
   onRule,
@@ -37,25 +48,29 @@ export function ModelRulesTable({
   baseMultiplier: string;
   search: string;
   onSearch: (value: string) => void;
+  platform: string;
+  onPlatform: (value: string) => void;
   onToggle: (model: string, checked: boolean) => void;
   onSelectVisible: (checked: boolean) => void;
   onRule: (model: string, field: keyof Omit<ModelRuleDraft, "model">, value: string) => void;
   disabled: boolean;
 }) {
   const visible = options ?? [];
+  const term = search.trim().toLowerCase();
   const rows = [
-    ...rules.map((rule) => ({
-      model: rule.model,
-      platform: visible.find((option) => option.model === rule.model)?.platform ?? null,
-      enabled: visible.find((option) => option.model === rule.model)?.enabled ?? true,
+    ...visible.map((option) => ({
+      model: option.model,
+      platform: option.platform,
+      enabled: option.enabled,
     })),
-    ...visible
-      .filter((option) => !rules.some((rule) => rule.model === option.model))
-      .map((option) => ({
-        model: option.model,
-        platform: option.platform,
-        enabled: option.enabled,
-      })),
+    ...rules
+      .filter(
+        (rule) =>
+          !platform &&
+          rule.model.toLowerCase().includes(term) &&
+          !visible.some((option) => option.model === rule.model),
+      )
+      .map((rule) => ({ model: rule.model, platform: null, enabled: true })),
   ];
   return (
     <FieldSet disabled={disabled} className="gap-3">
@@ -68,6 +83,25 @@ export function ModelRulesTable({
             value={search}
             onChange={(event) => onSearch(event.target.value)}
           />
+        </Field>
+        <Field className="w-36">
+          <FieldLabel htmlFor={id + "-model-platform"}>平台</FieldLabel>
+          <Select
+            value={platform || "all"}
+            onValueChange={(next) => onPlatform(next === "all" ? "" : next)}
+          >
+            <SelectTrigger id={id + "-model-platform"} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="all">全部平台</SelectItem>
+              {platformOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <Button
           type="button"

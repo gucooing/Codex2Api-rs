@@ -10,6 +10,10 @@ pub(crate) struct ApiLog {
     pub(crate) record: UsageRecord,
     pub(crate) lifecycle: ResponseLifecycle,
     pub(crate) auth_revision: Option<i64>,
+    /// When the current supplier attempt started.
+    attempt_started: i64,
+    /// The failure the caller received, once one was sent or decided.
+    public: Option<(String, String)>,
     started: Instant,
     settled: bool,
     authoritative_model: bool,
@@ -23,11 +27,54 @@ impl ApiLog {
             record,
             lifecycle: ResponseLifecycle::default(),
             auth_revision: None,
+            attempt_started: chrono::Utc::now().timestamp_millis(),
+            public: None,
             started,
             settled: false,
             authoritative_model: false,
             timing: None,
         }
+    }
+    /// Attribute the current attempt to the selected supplier account.
+    pub(crate) fn supplier(&mut self, account: &codex2api_storage::SupplierAccount) {
+        self.record.account_id = account.id.clone();
+        self.record.account_name = account
+            .display_name
+            .clone()
+            .unwrap_or_else(|| account.email.clone().unwrap_or_default());
+        self.record.account_provider_id = Some(account.provider_id.clone());
+    }
+    /// Provider of the supplier serving the current attempt. It selects the adapter's
+    /// normalization and failure rules; `record.provider_id` stays the platform the
+    /// request is identified with.
+    pub(crate) fn supplier_provider(&self) -> &str {
+        self.record
+            .account_provider_id
+            .as_deref()
+            .unwrap_or_default()
+    }
+    /// Start another upstream attempt on the current supplier.
+    pub(crate) fn begin_attempt(&mut self) {
+        self.record.http_status = None;
+        self.attempt_started = chrono::Utc::now().timestamp_millis();
+    }
+    /// Keep a failed supplier attempt that the gateway recovers from by refreshing its
+    /// credential (`refresh`) or by selecting another supplier (`failover`). The
+    /// administrator sees it; the caller only sees the request's final outcome.
+    pub(crate) async fn recovered(
+        &self,
+        error: &codex2api_upstream::UpstreamError,
+        recovery: &str,
+    ) -> Result<()> {
+        self.storage
+            .record_usage_attempt(&codex2api_upstream::request_failure::failed_attempt(
+                &self.record,
+                error,
+                recovery,
+                self.attempt_started,
+            ))
+            .await?;
+        Ok(())
     }
     pub(crate) fn set_timing(&mut self, timing: Option<codex2api_upstream::ResponseTiming>) {
         self.timing = timing;
@@ -64,6 +111,14 @@ impl ApiLog {
         }
         self.measure(value, upstream);
         if self.lifecycle.observe(value, None) {
+            // A supplier's own failure event reaches the caller in its public view.
+            if self.public.is_none()
+                && let Some(failure) = self.lifecycle.outcome().and_then(ResponseOutcome::failure)
+            {
+                self.public = Some(public_view(
+                    &codex2api_upstream::public_output::PublicFailure::new(failure),
+                ));
+            }
             return true;
         }
         let completed = match upstream {
@@ -140,26 +195,32 @@ impl ApiLog {
     }
     pub(crate) fn fail(&mut self, error: &ApiError) {
         if self.record.transport == "http" && self.record.http_status.is_none() {
-            self.record.http_status = Some(i64::from(error.status.as_u16()));
+            let status = error.cause.as_ref().and_then(|cause| cause.status);
+            self.record.http_status = Some(i64::from(status.unwrap_or(error.status.as_u16())));
         }
         // A malformed/unsupported response must fail before it is released, even
         // if its body claimed completion. A settled generation is immutable.
         if !self.settled && self.successful() {
             self.lifecycle = ResponseLifecycle::default();
         }
-        let mut failure = ResponseFailure::from_error(Some(error.status.as_u16()), &error.body);
+        // The ledger keeps the real failure; the caller's view is what `error` sends.
+        let mut failure = error.cause.clone().unwrap_or_else(|| {
+            ResponseFailure::from_error(Some(error.status.as_u16()), &error.body)
+        });
         if let Some(message) = &error.diagnostic {
             failure.message = Some(message.clone());
         }
-        self.lifecycle.fail(failure);
-    }
-    pub(crate) fn fail_upstream(&mut self, error: &codex2api_upstream::UpstreamError) {
-        let mut failure = error.failure();
-        if !matches!(error, codex2api_upstream::UpstreamError::Status { .. }) {
-            failure.message = Some(codex2api_upstream::request_failure::error_diagnostic(error));
-        }
-        if self.record.transport == "http" && self.record.http_status.is_none() {
-            self.record.http_status = failure.status.map(i64::from);
+        if self.lifecycle.outcome().is_none() || self.public.is_none() {
+            self.public = Some((
+                error.body["error"]["code"]
+                    .as_str()
+                    .unwrap_or("request_failed")
+                    .into(),
+                error.body["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+            ));
         }
         self.lifecycle.fail(failure);
     }
@@ -204,16 +265,34 @@ impl ApiLog {
             .into();
         self.record.total_ms =
             Some(self.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
-        if let Some(failure) = outcome.and_then(ResponseOutcome::failure) {
+        let public = if let Some(failure) = outcome.and_then(ResponseOutcome::failure) {
             self.record.error_code = failure.code.clone();
             self.record.error_message = failure
                 .message
                 .as_deref()
-                .map(|message| message.chars().take(512).collect());
+                .map(|message| codex2api_upstream::request_failure::diagnostic_text(message, 512));
+            Some(self.public.clone().unwrap_or_else(|| {
+                public_view(&codex2api_upstream::public_output::PublicFailure::new(
+                    failure,
+                ))
+            }))
         } else if outcome.is_none() {
             self.record.error_code = Some("request_interrupted".into());
             self.record.error_message = Some("请求处理已中断".into());
-        }
+            Some((
+                "request_interrupted".into(),
+                "The request was interrupted before it completed.".into(),
+            ))
+        } else {
+            None
+        };
+        (
+            self.record.public_error_code,
+            self.record.public_error_message,
+        ) = match public {
+            Some((code, message)) => (Some(code), Some(message.chars().take(512).collect())),
+            None => (None, None),
+        };
     }
     pub(crate) fn successful(&self) -> bool {
         matches!(
@@ -222,6 +301,10 @@ impl ApiLog {
         )
     }
 }
+fn public_view(public: &codex2api_upstream::public_output::PublicFailure) -> (String, String) {
+    (public.code.clone(), public.message.clone())
+}
+
 impl Drop for ApiLog {
     fn drop(&mut self) {
         if self.settled {

@@ -44,7 +44,6 @@ impl Gate {
 struct Mock {
     requests: Mutex<Vec<(String, http::HeaderMap, Value)>>,
     status: Mutex<Option<u16>>,
-    reply: Mutex<Option<(String, String)>>,
     ai_status: Mutex<Option<u16>>,
     gate: Arc<Gate>,
     truncate: AtomicBool,
@@ -61,7 +60,6 @@ impl codex2api_upstream::HttpTransport for Mock {
         let built = request.build();
         let gate = self.gate.clone();
         let status = *self.status.lock().unwrap();
-        let reply = self.reply.lock().unwrap().clone();
         let ai_status = *self.ai_status.lock().unwrap();
         let truncate = self.truncate.load(Ordering::Relaxed);
         let failed_usage = self.failed_usage.load(Ordering::Relaxed);
@@ -114,7 +112,8 @@ impl codex2api_upstream::HttpTransport for Mock {
                 assert_eq!(request.url().host_str(), Some("cli-chat-proxy.grok.com"));
                 assert!(request.url().path().starts_with("/v1/"));
                 assert_eq!(request.headers()["x-xai-token-auth"], "xai-grok-cli");
-            } else {
+            } else if !request.url().path().starts_with("/v1internal:") {
+                // Antigravity requests are checked against Cloud Code Assist below.
                 let host = if request.url().path().ends_with("/responses/input_tokens") {
                     "api.openai.com"
                 } else {
@@ -203,14 +202,6 @@ impl codex2api_upstream::HttpTransport for Mock {
                     .unwrap()
                     .into());
             }
-            let body = decoded.unwrap();
-            if let Some((content_type, body)) = reply {
-                return Ok(http::Response::builder()
-                    .header("content-type", content_type)
-                    .body(reqwest::Body::from(body))
-                    .unwrap()
-                    .into());
-            }
             if request.url().path().ends_with("/alpha/search") {
                 return Ok(http::Response::builder().header("content-type", "application/json")
                     .body(reqwest::Body::from(json!({"output":"Found a real fixture result", "encrypted_output":"search-context", "results":[{"title":"Fixture", "url":"https://example.test/", "metadata":{"account":"public result"}}]}).to_string())).unwrap().into());
@@ -240,27 +231,13 @@ impl codex2api_upstream::HttpTransport for Mock {
                 if let Some(ai_status) = ai_status {
                     value["error"]["status_code"] = ai_status.into();
                 }
-                let (content_type, body) = if body["stream"] == true {
-                    (
-                        "text/event-stream",
-                        format!(
-                            "data: {}\n\n",
-                            json!({"type":"response.failed","response":value})
-                        ),
-                    )
-                } else {
-                    ("application/json", value.to_string())
-                };
+                let body = format!(
+                    "data: {}\n\n",
+                    json!({"type":"response.failed","response":value})
+                );
                 return Ok(http::Response::builder()
-                    .header("content-type", content_type)
+                    .header("content-type", "text/event-stream")
                     .body(reqwest::Body::from(body))
-                    .unwrap()
-                    .into());
-            }
-            if body["stream"] != true {
-                return Ok(http::Response::builder()
-                    .header("content-type", "application/json")
-                    .body(reqwest::Body::from(response_value().to_string()))
                     .unwrap()
                     .into());
             }
@@ -333,7 +310,13 @@ async fn fixture(provider: &str) -> Fixture {
         .await
         .unwrap();
     let model = ModelConfig {
-        platform: provider.into(),
+        // Catalog platforms label the model's vendor; Antigravity is a supplier
+        // channel, so the model it serves keeps a vendor label.
+        platform: if provider == codex2api_common::ANTIGRAVITY {
+            codex2api_common::GEMINI.into()
+        } else {
+            provider.into()
+        },
         model: "custom-model".into(),
         kind: "text".into(),
         enabled: true,
@@ -892,99 +875,6 @@ async fn supplier_throttle_is_forwarded_without_failover_or_persistent_ban() {
 }
 
 #[tokio::test]
-async fn api_model_catalog_uses_platform_policy_and_execution_stays_in_the_group_pool() {
-    let fixture = fixture("chatgpt").await;
-    let config = ModelConfig {
-        platform: "chatgpt".into(),
-        model: "catalog-only".into(),
-        kind: "text".into(),
-        enabled: true,
-        deleted: false,
-        revision: 0,
-    };
-    let mut price = fixture
-        .storage
-        .model_prices()
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|price| price.model == "custom-model")
-        .unwrap();
-    price.model = config.model.clone();
-    fixture
-        .storage
-        .save_model_config(&config, &[price], &[], None)
-        .await
-        .unwrap();
-    add_supplier(&fixture.storage, "chatgpt", "outside-group").await;
-    fixture
-        .storage
-        .add_supplier_model("outside-group", &config.model)
-        .await
-        .unwrap();
-    for token in ["oauth-access", "eyJhbGciOiJSUzI1NiJ9.web-session"] {
-        let response = fixture
-            .router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/models")
-                    .header("authorization", format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-    let response = fixture
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/models")
-                .header("authorization", format!("Bearer {}", fixture.token))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let value = json_body(response).await;
-    let models = value["data"].as_array().unwrap();
-    assert!(models.iter().any(|model| model["id"] == "custom-model"));
-    assert!(models.iter().any(|model| model["id"] == "catalog-only"));
-    assert!(models.iter().all(|model| model["owned_by"] == "chatgpt"));
-    assert!(!value.to_string().contains("supplier"));
-    assert!(fixture.mock.requests.lock().unwrap().is_empty());
-    let response = fixture
-        .router
-        .clone()
-        .oneshot(request(
-            "/v1/responses",
-            &fixture.token,
-            json!({"model":"catalog-only","input":"Hello","stream":false}),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        json_body(response).await["error"]["code"],
-        "supplier_model_unavailable"
-    );
-    assert!(fixture.mock.requests.lock().unwrap().is_empty());
-    assert_eq!(
-        fixture
-            .storage
-            .user("user")
-            .await
-            .unwrap()
-            .unwrap()
-            .wallet_cents,
-        100
-    );
-}
-
-#[tokio::test]
 async fn truncated_stream_is_not_reported_as_success_or_free_usage() {
     let fixture = fixture("chatgpt").await;
     fixture.mock.truncate.store(true, Ordering::Release);
@@ -1216,6 +1106,19 @@ async fn images_use_each_platform_transport_and_bill_actual_count() {
                 .add_supplier_model("supplier", "custom-image")
                 .await
                 .unwrap();
+            // API groups grant only the catalog models they list.
+            let group = fixture.storage.api_group("group").await.unwrap().unwrap();
+            let mut granted = group.clone();
+            granted
+                .models
+                .push(codex2api_common::ModelRule::granted("custom-image"));
+            assert!(
+                fixture
+                    .storage
+                    .save_api_group(&granted, Some(group.revision))
+                    .await
+                    .unwrap()
+            );
             let path = if edit {
                 "/v1/images/edits"
             } else {
@@ -1665,7 +1568,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
             .unwrap();
         assert_eq!(
             public["items"][0]["upstream_endpoint"],
-            "/v1internal:streamGenerateContent"
+            "/v1/responses"
         );
         let calls = fixture.mock.requests.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -1707,7 +1610,17 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
         assert_eq!(gemini["contents"][0]["role"], "user");
         assert_eq!(gemini["contents"][0]["parts"][0]["text"], "Hello");
         assert_eq!(gemini["generationConfig"]["temperature"], 0.4);
-        assert_eq!(gemini["generationConfig"]["maxOutputTokens"], 123);
+        // Messages callers default to medium reasoning effort; its 8192-token
+        // thinking budget raises the output limit to budget + 1000.
+        let max_output: u64 = if path == "/v1/messages" {
+            8192 + 1000
+        } else {
+            123
+        };
+        assert_eq!(
+            gemini["generationConfig"]["maxOutputTokens"], max_output,
+            "{path}"
+        );
         assert!(
             gemini["systemInstruction"]["parts"][0]["text"]
                 .as_str()

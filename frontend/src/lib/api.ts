@@ -232,6 +232,7 @@ export type UsageRecord = {
   completed_at_ms: number | null;
   account_id: string;
   account_name: string;
+  account_provider_id: string | null;
   subject_id: string;
   subject_name: string;
   consumer_name: string;
@@ -263,11 +264,26 @@ export type UsageRecord = {
   status: string;
   error_code: string | null;
   error_message: string | null;
+  public_error_code: string | null;
+  public_error_message: string | null;
+  attempts: UsageAttempt[];
   cost_nano_usd: number | null;
   http_status: number | null;
   billing_status: string;
   billing_calculation: import("./usage-calculation").UsageCalculation | null;
   cost_calculation: import("./usage-calculation").UsageCalculation | null;
+};
+export type UsageAttempt = {
+  attempt: number;
+  account_name: string;
+  account_provider_id: string;
+  upstream_endpoint: string | null;
+  http_status: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  recovery: "refresh" | "failover";
+  started_at_ms: number;
+  total_ms: number;
 };
 export type UsagePage = {
   records: UsageRecord[];

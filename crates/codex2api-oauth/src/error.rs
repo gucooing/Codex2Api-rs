@@ -228,26 +228,6 @@ pub fn openai_json(error_type: &str, message: impl Into<String>, code: Option<&s
     )
 }
 
-/// Map an upstream HTTP error body to OpenAI-style JSON, preserving upstream
-/// `{ "error": ... }` payloads when present.
-pub fn map_upstream_status_body(status: StatusCode, body: &str) -> Response {
-    if let Ok(value) = serde_json::from_str::<Value>(body) {
-        let error = value
-            .pointer("/response/error")
-            .filter(|value| !value.is_null())
-            .or_else(|| value.get("error").filter(|value| !value.is_null()))
-            .or_else(|| value.get("detail"))
-            .unwrap_or(&value);
-        return (
-            status,
-            Json(json!({"error":crate::public_output::error(error)})),
-        )
-            .into_response();
-    }
-    let message = default_message_for_status(status).to_string();
-    openai_response(status, error_type_for_status(status), message, None)
-}
-
 pub fn upstream_error_response(err: UpstreamError) -> Response {
     if let UpstreamError::Status {
         status,
@@ -256,39 +236,41 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
         ..
     } = err
     {
-        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-        let mut response = map_upstream_status_body(status, &body);
+        let value = serde_json::from_str::<Value>(&body).unwrap_or_default();
+        let (public, error) = codex2api_upstream::public_output::failure(Some(status), &value);
+        let mut response = (public.status_code(), Json(json!({ "error": error }))).into_response();
         codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
+        let retry: &[&str] = if public.throttled() {
+            &["retry-after", "retry-after-ms", "x-should-retry"]
+        } else {
+            &[]
+        };
         for name in [
             "x-request-id",
             "x-oai-request-id",
             "cf-ray",
-            "retry-after",
-            "retry-after-ms",
-            "x-should-retry",
             "openai-model",
             "x-openai-model",
-        ] {
-            for value in headers.get_all(name) {
-                response.headers_mut().append(name, value.clone());
+        ]
+        .iter()
+        .chain(retry)
+        {
+            for value in headers.get_all(*name) {
+                response.headers_mut().append(*name, value.clone());
             }
         }
         return response;
     }
-    let failure = err.failure();
-    let status =
-        StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY);
-    let message = match &err {
-        UpstreamError::InvalidRequest(message) => message.clone(),
-        _ => "The service could not complete this request.".into(),
-    };
-    let mut response = openai_response(
-        status,
-        error_type_for_status(status),
-        message,
-        failure.code.as_deref(),
-    );
-    if let Some(headers) = err.retry_headers() {
+    // Supplier credentials and state stay private; the client sees the public view.
+    let public = err.public_failure();
+    let mut response = (
+        public.status_code(),
+        Json(json!({ "error": public.error() })),
+    )
+        .into_response();
+    if public.throttled()
+        && let Some(headers) = err.retry_headers()
+    {
         for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
             if let Some(value) = headers.get(name) {
                 response.headers_mut().insert(name, value.clone());
@@ -296,30 +278,6 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
         }
     }
     response
-}
-
-pub fn error_type_for_status(status: StatusCode) -> &'static str {
-    match status.as_u16() {
-        400 | 404 | 409 | 413 | 415 | 422 => "invalid_request_error",
-        401 => "authentication_error",
-        403 => "permission_error",
-        429 => "rate_limit_error",
-        _ => "api_error",
-    }
-}
-
-fn default_message_for_status(status: StatusCode) -> &'static str {
-    match status.as_u16() {
-        400 => "Bad request.",
-        401 => "Unauthorized.",
-        402 => "Payment Required.",
-        403 => "Forbidden.",
-        404 => "Not found.",
-        409 => "Conflict.",
-        429 => "Rate limit exceeded.",
-        500..=599 => "Upstream server error.",
-        _ => "Request failed.",
-    }
 }
 
 fn service_error_response(error: crate::admission::ServiceError) -> Response {
@@ -410,7 +368,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn refresh_errors_keep_their_status_instead_of_becoming_unauthorized() {
+    async fn refresh_errors_stay_private_and_keep_their_real_status_for_the_ledger() {
         for status in [400, 401, 403, 429, 503] {
             let error = UpstreamError::Refresh(codex2api_suppliers::AuthError::RefreshRejected {
                 status,
@@ -426,37 +384,42 @@ mod tests {
             });
             let failure = error.failure();
             assert_eq!(failure.authentication_invalid(), status == 401);
-            assert_eq!(upstream_error_response(error).status().as_u16(), status);
+            assert_eq!(failure.status, Some(status));
+            assert_eq!(
+                upstream_error_response(error).status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
         }
     }
 
     #[test]
     fn preserves_upstream_error_object() {
         let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
-        let response = map_upstream_status_body(StatusCode::SERVICE_UNAVAILABLE, body);
+        let response =
+            upstream_error_response(UpstreamError::status(StatusCode::SERVICE_UNAVAILABLE, body));
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
-    async fn payment_errors_keep_the_status_and_detail_code_without_private_diagnostics() {
+    async fn supplier_payment_errors_become_service_unavailable_without_details() {
         use axum::body::to_bytes;
-        let response = map_upstream_status_body(
-            StatusCode::PAYMENT_REQUIRED,
+        for body in [
             r#"{"detail":{"code":"deactivated_workspace","message":"private supplier billing details"}}"#,
-        );
-        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
-        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
-        let value: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["error"]["code"], "deactivated_workspace");
-        assert!(!String::from_utf8_lossy(&bytes).contains("private supplier"));
-        let response = map_upstream_status_body(StatusCode::PAYMENT_REQUIRED, "Payment Required");
-        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
-        let value: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["error"]["message"], "Payment Required.");
+            "Payment Required",
+        ] {
+            let response =
+                upstream_error_response(UpstreamError::status(StatusCode::PAYMENT_REQUIRED, body));
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["error"]["code"], "service_unavailable");
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(!text.contains("private supplier") && !text.contains("deactivated_workspace"));
+        }
     }
 
     #[tokio::test]
-    async fn handshake_errors_preserve_classification_and_retry_headers_without_supplier_state() {
+    async fn caller_errors_keep_their_reason_without_supplier_headers_or_auth_statuses() {
         use axum::body::to_bytes;
         use axum::http::{HeaderMap, HeaderValue};
         let body = json!({"error":{"code":"invalid_prompt", "message":"中文🦀".repeat(700)}});
@@ -481,10 +444,11 @@ mod tests {
                 body.to_string(),
                 headers,
             ));
-            assert_eq!(response.status().as_u16(), status);
-            assert_eq!(response.headers()["retry-after"], "7");
+            // A caller error never carries a status the client treats as auth or backoff.
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{status}");
             assert_eq!(response.headers()["x-request-id"], "request-fixture");
             for key in [
+                "retry-after",
                 "x-error-json",
                 "x-openai-authorization-error",
                 "x-oai-request-id",
@@ -498,7 +462,7 @@ mod tests {
             let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let value = serde_json::from_slice::<Value>(&bytes).unwrap();
             assert_eq!(value["error"]["code"], "invalid_prompt");
-            assert!(!value.to_string().contains("中文"));
+            assert!(value["error"]["message"].as_str().unwrap().chars().count() <= 512);
         }
     }
 }

@@ -77,8 +77,10 @@ pub(crate) fn duration_seconds(text: &str) -> Option<f64> {
     total.is_finite().then_some(total)
 }
 
-/// Fields read from either Google's raw envelope or our normalized one.
+/// Fields read from Google's raw envelope, our normalized one, or a `response.failed`
+/// event whose normalized error sits in `response.error`.
 struct Parsed<'a> {
+    status: Option<u16>,
     rpc_status: Option<&'a str>,
     reason: Option<&'a str>,
     model: Option<String>,
@@ -88,13 +90,17 @@ struct Parsed<'a> {
 
 fn parse(value: &Value) -> Parsed<'_> {
     let error = value
-        .get("error")
+        .pointer("/response/error")
+        .or_else(|| value.get("error"))
         .filter(|v| v.is_object())
         .unwrap_or(value);
     let details = error["details"].as_array();
     let detail = |kind: &str| details.into_iter().flatten().find(|d| d["@type"] == kind);
     let info = detail(ERROR_INFO);
     Parsed {
+        status: [&value["status"], &error["status"], &error["code"]]
+            .into_iter()
+            .find_map(|status| status.as_u64().and_then(|n| u16::try_from(n).ok())),
         rpc_status: error["rpc_status"]
             .as_str()
             .or_else(|| error["status"].as_str()),
@@ -175,7 +181,7 @@ pub fn classify_failure(
         return Some(SupplierFailure::Authentication);
     }
     let parsed = parse(value);
-    let status = status.or_else(|| value["status"].as_u64().and_then(|n| u16::try_from(n).ok()));
+    let status = status.or(parsed.status);
     if status != Some(429) && parsed.rpc_status != Some("RESOURCE_EXHAUSTED") {
         return None;
     }
@@ -250,9 +256,11 @@ mod tests {
         assert_eq!(normalized["error"]["code"], "rate_limit_exceeded");
         assert_eq!(normalized["error"]["type"], "rate_limit_error");
         assert_eq!(normalized["headers"]["retry-after"], "290");
-        for value in [&raw, &normalized] {
+        // A mid-stream failure arrives as a response.failed event without an HTTP status.
+        let event = json!({"type":"response.failed","response":{"status":"failed","error":normalized["error"]}});
+        for (status, value) in [(Some(429), &raw), (Some(429), &normalized), (None, &event)] {
             assert_eq!(
-                classify_failure(Some(429), value, &HeaderMap::new(), 100),
+                classify_failure(status, value, &HeaderMap::new(), 100),
                 Some(SupplierFailure::QuotaExhausted {
                     until: 390,
                     code: "rate_limit_exceeded".into(),

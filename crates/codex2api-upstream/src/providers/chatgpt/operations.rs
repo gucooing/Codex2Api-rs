@@ -414,7 +414,7 @@ impl UpstreamClient {
             prepare_raw_chatgpt(&prepare_method, mcp, body, inbound, &installation)
         })
         .await
-        .map_err(|e| UpstreamError::InvalidRequest(e.to_string()))??;
+        .map_err(|e| UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(method, url.as_str(), prepared, false)
             .await
     }
@@ -431,7 +431,7 @@ impl UpstreamClient {
         let prepared =
             tokio::task::spawn_blocking(move || endpoint.prepare(&body, &inbound, &installation))
                 .await
-                .map_err(|e| UpstreamError::InvalidRequest(e.to_string()))??;
+                .map_err(|e| UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(endpoint.method(), url.as_str(), prepared, false)
             .await
     }
@@ -448,7 +448,7 @@ impl UpstreamClient {
             Endpoint::Compact.prepare(&body, &inbound, &installation, None)
         })
         .await
-        .map_err(|e| UpstreamError::InvalidRequest(e.to_string()))??;
+        .map_err(|e| UpstreamError::Internal(e.to_string()))??;
         self.send_prepared(Method::POST, url.as_str(), prepared, true)
             .await
     }

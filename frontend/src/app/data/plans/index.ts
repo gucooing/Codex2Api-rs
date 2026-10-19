@@ -70,9 +70,10 @@ export function usePlanEditor({
   const [rpmText, setRpmText] = useState(String(plan.rpm_limit));
   const [concurrencyText, setConcurrencyText] = useState(String(plan.concurrency_limit));
   const [search, setSearch] = useState("");
+  const [modelPlatform, setModelPlatform] = useState("");
   const [rules, setRules] = useState<ModelRuleDraft[]>(plan.models.map(ruleDraft));
   const models = useResource<List<ModelOption>>(
-    `/models/options${query({ search, plan_id: plan.id })}`,
+    `/models/options${query({ search, platform: modelPlatform, plan_id: plan.id })}`,
     250,
   );
   const tags = useResource<List<SupplierTag>>("/supplier-tags/options");
@@ -141,6 +142,8 @@ export function usePlanEditor({
     tiers,
     search,
     setSearch,
+    modelPlatform,
+    setModelPlatform,
     models,
     tags,
     rules,

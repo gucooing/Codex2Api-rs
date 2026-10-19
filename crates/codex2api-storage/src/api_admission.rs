@@ -8,10 +8,21 @@ pub fn chatgpt_only_endpoint(endpoint: &str) -> bool {
     matches!(endpoint, "/v1/alpha/search" | "/v1/responses/input_tokens")
 }
 
+/// The platform an API ledger row identifies its request with: ChatGPT for its
+/// protocol operations, otherwise the requested model's vendor label. It is fixed at
+/// admission; the serving supplier can change across attempts and is recorded as the
+/// row's account, never as this platform.
+pub fn ledger_platform<'a>(endpoint: &str, label: &'a str) -> &'a str {
+    if chatgpt_only_endpoint(endpoint) {
+        codex2api_common::CHATGPT
+    } else {
+        label
+    }
+}
+
 impl Storage {
     /// Admit the request and open its ledger row. The returned record carries the
-    /// platform the ledger identifies the request with: the ChatGPT platform for its
-    /// protocol operations, otherwise the requested model's platform label.
+    /// [`ledger_platform`] of the request.
     pub async fn admit_api_request(
         &self,
         principal: &ApiPrincipal,
@@ -76,11 +87,7 @@ impl Storage {
                 code: "model_not_available",
                 message: "该 API 组不支持此模型",
             })?;
-        let platform = if chatgpt_only_endpoint(&record.endpoint) {
-            codex2api_common::CHATGPT.to_owned()
-        } else {
-            config.platform.clone()
-        };
+        let platform = ledger_platform(&record.endpoint, &config.platform).to_owned();
         let multiplier = match requirement {
             PriceRequirement::Operation(_) => "1",
             _ => current.group.model_multiplier(model),

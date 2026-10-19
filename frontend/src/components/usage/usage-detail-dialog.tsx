@@ -54,13 +54,23 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
         <FieldGroup className="grid gap-3 sm:grid-cols-2">
           {[
             ["消费账户", selected?.consumer_name],
-            ["供应账户", selected?.account_name],
+            [
+              "供应账户",
+              selected
+                ? `${selected.account_name}${selected.account_provider_id ? ` · ${selected.account_provider_id}` : ""}`
+                : null,
+            ],
             ["计费倍率", selected ? `${selected.multiplier_micros / 1e6}×` : null],
             ["消费", selected ? money(usageConsumption(selected)) : null],
             ["请求模型", selected?.model],
             ["实际模型", selected?.actual_model],
             ["HTTP 状态码", selected?.http_status],
-            ...(selected && failedUsage(selected) ? [["错误码", selected.error_code || "-"]] : []),
+            ...(selected && failedUsage(selected)
+              ? [
+                  ["错误码", selected.error_code || "-"],
+                  ["用户看到的错误", selected.public_error_code || "-"],
+                ]
+              : []),
             [
               "请求状态",
               selected
@@ -98,6 +108,29 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
                 {usageFailure(selected)}
               </FieldDescription>
             </Field>
+            {selected.public_error_message && (
+              <Field>
+                <FieldTitle>用户看到的原因</FieldTitle>
+                <FieldDescription className="whitespace-pre-wrap break-words">
+                  {selected.public_error_message}
+                </FieldDescription>
+              </Field>
+            )}
+          </FieldGroup>
+        )}
+        {selected && selected.attempts.length > 0 && (
+          <FieldGroup className="gap-3 border-t pt-3">
+            {selected.attempts.map((attempt) => (
+              <Field key={attempt.attempt}>
+                <FieldTitle>
+                  第 {attempt.attempt} 次尝试 · {attempt.recovery === "refresh" ? "刷新授权后重试" : "切换供应账户"}
+                </FieldTitle>
+                <FieldDescription className="whitespace-pre-wrap break-words">
+                  {`${attempt.account_name} · ${attempt.account_provider_id} · HTTP ${attempt.http_status ?? "-"} · ${attempt.error_code ?? "-"} · ${duration(attempt.total_ms)}`}
+                  {attempt.error_message ? `\n${attempt.error_message}` : ""}
+                </FieldDescription>
+              </Field>
+            ))}
           </FieldGroup>
         )}
         {selected && (

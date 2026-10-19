@@ -55,6 +55,8 @@ export function PlanEditor({
     tiers,
     search,
     setSearch,
+    modelPlatform,
+    setModelPlatform,
     models,
     tags,
     rules,
@@ -344,6 +346,8 @@ export function PlanEditor({
                   baseMultiplier="1"
                   search={search}
                   onSearch={setSearch}
+                  platform={modelPlatform}
+                  onPlatform={setModelPlatform}
                   onToggle={toggleModel}
                   onSelectVisible={selectVisible}
                   onRule={setRule}

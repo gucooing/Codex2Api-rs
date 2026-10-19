@@ -173,16 +173,7 @@ async fn handle(
         tokio::task::spawn_blocking(move || codex2api_upstream::decode_body(&body, &inbound))
             .await
             .map_err(|_| ApiError::internal())??;
-    let metadata = codex2api_upstream::request_metadata_value(&value);
-    codex2api_upstream::RequestFailureLog::metadata(&metadata);
-    if let Some(config) = match metadata.model.as_deref() {
-        Some(model) if codex2api_common::valid_model(model) => {
-            state.storage.model_config(model).await?
-        }
-        _ => None,
-    } {
-        codex2api_upstream::RequestFailureLog::provider(&config.platform);
-    }
+    identify(&state, protocol, &value).await?;
     let prepared = InboundRequest::new(protocol, value, headers.clone())?;
     execute_prepared(
         state,
@@ -192,6 +183,24 @@ async fn handle(
         prepared,
     )
     .await
+}
+/// Identify a decoded request in the rejection ledger with the same platform rule as
+/// admission, so a request refused before execution is attributed like an admitted one.
+pub(crate) async fn identify(state: &ApiState, protocol: Protocol, body: &Value) -> Result<()> {
+    let metadata = codex2api_upstream::request_metadata_value(body);
+    codex2api_upstream::RequestFailureLog::metadata(&metadata);
+    if let Some(config) = match metadata.model.as_deref() {
+        Some(model) if codex2api_common::valid_model(model) => {
+            state.storage.model_config(model).await?
+        }
+        _ => None,
+    } {
+        codex2api_upstream::RequestFailureLog::provider(codex2api_storage::ledger_platform(
+            protocol.endpoint(),
+            &config.platform,
+        ));
+    }
+    Ok(())
 }
 pub(crate) fn boolean(value: &Value, key: &str, default: bool) -> Result<bool> {
     match value.get(key) {

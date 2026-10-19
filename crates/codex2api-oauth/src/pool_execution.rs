@@ -180,6 +180,9 @@ where
                 {
                     match recover_stream_auth(state, &ctx, revision).await? {
                         None => {
+                            if let Some(log) = log {
+                                log.recovered(&error, "refresh").await?;
+                            }
                             continue;
                         }
                         Some(rejection) => failure = rejection,
@@ -187,6 +190,7 @@ where
                 }
                 observe(state, &ctx.account.id, revision, &failure).await?;
                 if let Some(log) = log {
+                    log.recovered(&error, "failover").await?;
                     log.supplier_attempt_failed();
                 }
                 excluded.push(ctx.account.id.clone());

@@ -50,9 +50,7 @@ impl AntigravityUpstream {
         let storage = self.auth.storage()?;
         if storage.supplier_account_snapshot(id).await?.provider_id != codex2api_common::ANTIGRAVITY
         {
-            return Err(UpstreamError::InvalidRequest(
-                "Supplier provider mismatch".into(),
-            ));
+            return Err(UpstreamError::Internal("Supplier provider mismatch".into()));
         }
         let credentials = self.auth.refresh(id, false, None).await?;
         let revision = storage
@@ -104,7 +102,7 @@ impl AntigravityUpstream {
                 Err(error) => return Err(error),
             }
         }
-        Err(UpstreamError::InvalidRequest(
+        Err(UpstreamError::Internal(
             "Antigravity has no service root configured".into(),
         ))
     }

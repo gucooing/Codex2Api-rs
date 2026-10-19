@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::BTreeSet;
 
-/// One model of the shared catalog. `platform` labels where the model comes from
-/// (ChatGPT, Grok, Antigravity); supplier tags and model lists decide execution.
+/// One model of the shared catalog. `platform` is the vendor label that identifies
+/// the model (one of `codex2api_common::MODEL_PLATFORMS`); supplier channels such
+/// as Antigravity are never labels. Supplier tags and model lists decide execution.
 #[derive(Clone, Debug, FromRow, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub model: String,

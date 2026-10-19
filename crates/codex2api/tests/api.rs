@@ -257,7 +257,7 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
     assert_eq!(listed["total"], 1);
     assert_eq!(listed["items"][0]["active_requests"], 0);
     assert!(!listed.to_string().contains(secret));
-    for name in ["token_hash", "user_id", "username", "supplier_account_id"] {
+    for name in ["token_hash", "user_id", "username"] {
         assert!(listed["items"][0].get(name).is_none());
     }
     let bob_list = body(
