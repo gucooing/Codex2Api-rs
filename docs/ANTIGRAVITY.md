@@ -26,25 +26,25 @@ Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 An
 
 ## 模型、额度与计价
 
-供应账户“可用模型”的“同步上游模型”调用官方 `v1internal:fetchAvailableModels` 并替换该账户的上游模型。官方模型标识以 `-extra-low`、`-low`、`-medium`、`-high`、`-extra-high` 结尾的推理强度变体属于同一个模型，同步时合并为去掉后缀的基础模型，例如 `claude-opus-5-5-low`、`-medium`、`-high` 合并为 `claude-opus-5-5`；基础模型的描述保存该账户实际返回的全部上游标识。其他后缀（如 `-thinking`、`-agent`、`-lite`）是独立模型，原样保留。同步只改变供应账户的可用模型，从不写入计费配置：统一内置模型表在启动时登记的模型之外，需要计费的模型由管理员在计费配置中添加。内置 Claude 模型使用 Anthropic 的模型标识（如 `claude-opus-5-5`），与 Antigravity 的基础模型名一致。
+供应账户“可用模型”的“同步上游模型”调用官方 `v1internal:fetchAvailableModels` 并替换该账户的上游模型。模型按官方返回的显示名称分组：去掉末尾的推理强度标签 `(Low)`、`(Medium)`、`(High)` 后显示名称相同的上游标识属于同一个模型，包括显示名称完全相同的别名标识。上游标识本身不表示推理强度，例如显示名称 `Gemini 3.5 Flash (High)`、`(Medium)`、`(Low)` 分别对应 `gemini-3-flash-agent`、`gemini-3.5-flash-low`、`gemini-3.5-flash-extra-low`，而 `gemini-2.5-flash`、`gemini-2.5-flash-thinking`、`gemini-3.5-flash-lite` 都显示为 `Gemini 3.5 Flash Lite`。客户端使用的模型名由显示名称转换：小写，空格与连字符合并为一个连字符，其他标点去掉，例如 `gemini-3.5-flash`、`gemini-3.5-flash-lite`、`gpt-oss-120b`、`claude-opus-5.5`；统一内置模型表的 Gemini 与 Claude 模型名使用同一形式。其他标签（如 `(Thinking)`）属于模型名称，没有显示名称的标识以标识本身为名。模型描述保存每个推理强度对应的上游标识、不带强度标签的上游标识（多个别名时优先与模型名相同的标识，否则取字典序第一个）与所属额度池。同步只改变供应账户的可用模型，从不写入计费配置：统一内置模型表在启动时登记的模型之外，需要计费的模型由管理员在计费配置中添加。
 
-请求使用基础模型名，推理强度通过协议自身的参数传入：Responses 的 `reasoning.effort`、Chat Completions 的 `reasoning_effort`、Messages 的 `output_config.effort`（缺省 `medium`，关闭思考为 `none`）。对有推理强度变体的模型，传输层把请求的强度对应的后缀拼到模型名上：`minimal` 对应 `-extra-low`，`low`、`medium`、`high` 对应同名后缀，`xhigh` 对应 `-extra-high`；未指定强度时使用不带后缀的基础标识。拼出的标识必须出现在所选供应账户的上游模型中才会转发，否则直接返回 400 并列出该模型支持的推理强度，不降级、不替换为其他强度。推理强度在选中供应账户之后校验，同一号池的账户应返回相同的变体；选中账户缺少所请求的强度时请求失败，不切换账户。没有推理强度变体的模型按原名转发，推理强度映射为 `thinkingConfig` 思考预算。用量记录保存基础模型名与请求的推理强度。
+请求使用客户端模型名，推理强度通过协议自身的参数传入：Responses 的 `reasoning.effort`、Chat Completions 的 `reasoning_effort`、Messages 的 `output_config.effort`（缺省 `medium`，关闭思考为 `none`）。有推理强度变体的模型只接受所选供应账户实际返回的强度标签：`low`、`medium`、`high` 分别对应 `(Low)`、`(Medium)`、`(High)` 的上游标识；未指定强度时使用不带强度标签的上游标识。没有对应标识时直接返回 400 并列出该模型支持的推理强度，不降级、不替换为其他强度。推理强度在选中供应账户之后校验，同一号池的账户应返回相同的变体；选中账户缺少所请求的强度时请求失败，不切换账户。没有推理强度变体的模型发送其上游标识，推理强度映射为 `thinkingConfig` 思考预算。用量记录保存客户端模型名与请求的推理强度。
 
 统一内置模型表的 Gemini 与 Claude 价格来自 Google 与 Anthropic 的官方公开价格并按长上下文档位分段；GPT-OSS 等没有官方价格的模型保持未定价，不会被当作免费。价格快照在请求开始时冻结，输入、缓存读取、缓存写入、输出各结算一次。
 
-官方额度按模型返回 `quotaInfo.remainingFraction` 与 `resetTime`。供应账户详情的“官方额度”按官方模型标识逐个显示已用比例与重置倒计时，读取既有 PostgreSQL 快照，“从官方刷新”才请求官方。刷新结果按基础模型写入模型冷却：基础模型的全部变体都报告剩余为 0 且重置时间在未来时进入冷却，直到其中最早的重置时间；任一变体剩余大于 0 时立即恢复。列表与定时任务不请求官方。
+额度属于模型或额度池，不属于上游标识或推理强度：`fetchAvailableModels` 在每个上游标识下重复报告所属额度的 `quotaInfo.remainingFraction` 与 `resetTime`。`modelProvider` 为 `MODEL_PROVIDER_ANTHROPIC` 或 `MODEL_PROVIDER_OPENAI` 的模型（Claude 与 GPT-OSS）共用额度池 `anthropic-openai`，Gemini 等 Google 模型各自计算。官方 JSON 省略为 0 的 `remainingFraction`，因此有 `resetTime` 或 `isExhausted` 而没有比例表示额度已用完；两者都没有表示官方未报告额度。供应账户详情的“官方额度”每个额度一行（额度池一行列出其全部模型），显示其上游标识中最低的剩余比例与最早的重置时间，读取既有 PostgreSQL 快照，“从官方刷新”才请求官方。刷新结果写入模型冷却：额度已用完且重置时间在未来时，该额度的全部模型进入冷却直到重置；仍有余量时全部恢复。列表与定时任务不请求官方。Pro/Ultra 的基础额度每 5 小时刷新，另有按模型家族的周上限；周上限由 `retrieveUserQuotaSummary` 提供，本服务不读取。
 
 ## 错误处理与调度
 
 | 上游情况 | 处理 |
 | --- | --- |
 | HTTP 401 | 记录授权失效并切号；成功的重新授权清除失效状态 |
-| 429 `RESOURCE_EXHAUSTED`，`RetryInfo.retryDelay` 不少于 7 秒，或消息含 exhausted your capacity／quota exceeded | 记录本次请求的基础模型的冷却直到重置时间并切号，不采用 Google 报告的变体或厂商模型名 |
+| 429 `RESOURCE_EXHAUSTED`，`RetryInfo.retryDelay` 不少于 7 秒，或消息含 exhausted your capacity／quota exceeded | 记录本次请求的模型及其额度池全部模型的冷却直到重置时间并切号，不采用 Google 报告的上游或厂商模型名 |
 | 其他 429 与短暂等待 | 返回结构化错误与 `Retry-After`，由客户端退避，不改供应状态 |
 | 403、400 类请求错误 | 保留错误，不刷新身份，不切号 |
 | 5xx、503 容量不足、连接失败或超时 | 保留状态与重试指示，由客户端决定重试，不改供应状态 |
 
-模型冷却保存在 `supplier_model_cooldowns`，以账户、模型和凭据版本为键。号池索引取账户冷却与模型冷却中较晚者，因此同一账户的其他模型继续参与调度；冷却到期自动结束，官方读取报告仍有余量或重新授权立即清除，管理端“重置状态”同样清除。普通限流不写入冷却，也不切换供应账户。供应详情“账户资料”显示当前有效的模型冷却。
+模型冷却保存在 `supplier_model_cooldowns`，以账户、模型和凭据版本为键；模型描述声明同一 `quota_pool` 的模型一起冷却、一起恢复。号池索引取账户冷却与模型冷却中较晚者，因此同一账户的其他模型继续参与调度；冷却到期自动结束，官方读取报告仍有余量或重新授权立即清除，管理端“重置状态”同样清除。普通限流不写入冷却，也不切换供应账户。供应详情“账户资料”显示当前有效的模型冷却。
 
 ## 导入导出
 

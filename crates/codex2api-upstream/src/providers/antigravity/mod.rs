@@ -10,7 +10,7 @@ use codex2api_suppliers::antigravity::{
 };
 use http::HeaderValue;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 pub(crate) mod api;
 pub mod errors;
@@ -116,14 +116,7 @@ impl AntigravityUpstream {
             .storage()?
             .supplier_model_descriptor(id, model)
             .await?;
-        let variants: Vec<&str> = descriptor
-            .as_ref()
-            .and_then(|descriptor| descriptor["upstream_models"].as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect();
-        resolve_model(model, effort, &variants).map_err(UpstreamError::InvalidRequest)
+        resolve_model(model, effort, descriptor.as_ref()).map_err(UpstreamError::InvalidRequest)
     }
 
     /// A streamed generation; the reply is a Responses event stream or a normalized error.
@@ -218,27 +211,33 @@ impl AntigravityUpstream {
         Ok((authorized, raw))
     }
 
-    /// Replace the account's upstream models. Reasoning-effort variants collapse into
-    /// their base model, whose descriptor keeps the upstream IDs a request can reach.
-    /// Discovery changes supplier availability only, never the billing catalog.
+    /// Replace the account's upstream models with Antigravity's models: upstream IDs
+    /// are grouped by display name, and each model's descriptor records the ID that
+    /// serves each reasoning effort and the ID for requests without one. Discovery
+    /// changes supplier availability only, never the billing catalog.
     pub async fn discover_supplier_models(&self, id: &str) -> Result<Value> {
         let (authorized, raw) = self.fetch_models(id).await?;
-        let mut variants = BTreeMap::<&str, Vec<&str>>::new();
-        for name in raw["models"].as_object().expect("validated").keys() {
-            if !codex2api_common::valid_model(name) {
-                return Err(UpstreamError::InvalidRequest(
-                    "Antigravity returned an invalid model identifier".into(),
-                ));
-            }
-            variants
-                .entry(models::effort_variant(name).0)
-                .or_default()
-                .push(name);
+        let catalog = raw["models"].as_object().expect("validated");
+        if !catalog
+            .keys()
+            .all(|model| codex2api_common::valid_model(model))
+        {
+            return Err(UpstreamError::InvalidRequest(
+                "Antigravity returned an invalid model identifier".into(),
+            ));
         }
-        let descriptors: Vec<Value> = variants
+        let descriptors: Vec<Value> = models::model_groups(catalog)
             .into_iter()
-            .map(|(model, upstream)| {
-                json!({"id":model,"model":model,"object":"model","upstream_models":upstream})
+            .map(|group| {
+                let mut descriptor = json!({"id":group.model,"model":group.model,"object":"model",
+                    "name":group.name,"efforts":group.efforts});
+                if let Some(upstream) = group.upstream_model {
+                    descriptor["upstream_model"] = upstream.into();
+                }
+                if let Some(pool) = group.quota_pool {
+                    descriptor["quota_pool"] = pool.into();
+                }
+                descriptor
             })
             .collect();
         let storage = self.auth.storage()?;
@@ -251,72 +250,141 @@ impl AntigravityUpstream {
         Ok(json!({"items":storage.supplier_models(id).await?}))
     }
 
-    /// A fresh official quota read, applied to the account's models. A model cools
-    /// down until its earliest reset once every variant is reported empty, and
-    /// recovers as soon as any variant has quota left.
+    /// A fresh official quota read, applied to the account's models: every model of a
+    /// spent quota cools down until its reset, and every model of a quota with some
+    /// left recovers.
     pub async fn quota(&self, id: &str) -> Result<Value> {
         let (authorized, raw) = self.fetch_models(id).await?;
         let storage = self.auth.storage()?;
         let now = chrono::Utc::now().timestamp();
-        let mut quotas = BTreeMap::<&str, (bool, Option<i64>)>::new();
-        for (name, info) in raw["models"].as_object().expect("validated") {
-            let Some(remaining) = info["quotaInfo"]["remainingFraction"].as_f64() else {
-                continue;
-            };
-            let reset = info["quotaInfo"]["resetTime"]
-                .as_str()
-                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.timestamp())
-                .filter(|t| *t > now);
-            let (available, earliest) = quotas.entry(models::effort_variant(name).0).or_default();
-            if remaining > 0.0 {
-                *available = true;
-            } else if let Some(reset) = reset {
-                *earliest = Some(earliest.map_or(reset, |current| current.min(reset)));
-            }
-        }
-        for (model, (available, reset)) in quotas {
-            if available {
-                storage.recover_supplier_model_quota(id, model).await?;
-            } else if let Some(until) = reset {
-                storage
-                    .exhaust_supplier_model_quota(id, authorized.revision, model, until, "quota")
-                    .await?;
+        for quota in model_quotas(&raw) {
+            for model in &quota.models {
+                match (quota.remaining_fraction, quota.reset_at) {
+                    (Some(remaining), _) if remaining > 0.0 => {
+                        storage.recover_supplier_model_quota(id, model).await?
+                    }
+                    (Some(_), Some(until)) if until > now => {
+                        storage
+                            .exhaust_supplier_model_quota(
+                                id,
+                                authorized.revision,
+                                model,
+                                until,
+                                "quota",
+                            )
+                            .await?
+                    }
+                    _ => {}
+                }
             }
         }
         Ok(raw)
     }
 }
 
-/// The upstream ID for a routed `model` among the upstream IDs discovery grouped
-/// under it. A model with reasoning-effort variants accepts exactly the variant its
-/// effort's suffix names, or its own ID when the request names no effort and the
-/// account lists it; every other combination is refused before it reaches
-/// Antigravity. A model without effort variants is sent as named.
+/// One quota of an official catalog read: a model with its own quota, or the models
+/// sharing a quota pool.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ModelQuota {
+    /// The quota pool, or the model that has its own quota.
+    pub key: String,
+    /// Display names of the models drawing from the quota.
+    pub name: String,
+    /// Client-facing names of those models.
+    pub models: Vec<String>,
+    pub upstream_models: Vec<String>,
+    /// Lowest remaining fraction any of the upstream IDs reports.
+    pub remaining_fraction: Option<f64>,
+    /// Earliest reset among them, as a Unix timestamp.
+    pub reset_at: Option<i64>,
+}
+
+/// Antigravity reports quota under every upstream ID, while the quota belongs to the
+/// model or to its pool: each quota takes the lowest fraction and earliest reset any of
+/// its upstream IDs report.
+pub fn model_quotas(raw: &Value) -> Vec<ModelQuota> {
+    let Some(catalog) = raw["models"].as_object() else {
+        return Vec::new();
+    };
+    let mut quotas = std::collections::BTreeMap::<String, (Vec<String>, ModelQuota)>::new();
+    for group in models::model_groups(catalog) {
+        let key = group
+            .quota_pool
+            .map_or_else(|| group.model.clone(), str::to_owned);
+        let (names, quota) = quotas.entry(key.clone()).or_insert_with(|| {
+            let quota = ModelQuota {
+                key,
+                name: String::new(),
+                models: Vec::new(),
+                upstream_models: Vec::new(),
+                remaining_fraction: None,
+                reset_at: None,
+            };
+            (Vec::new(), quota)
+        });
+        for info in group
+            .upstream_models
+            .iter()
+            .filter_map(|id| catalog.get(id))
+        {
+            if let Some(fraction) = models::remaining_fraction(info) {
+                quota.remaining_fraction = Some(
+                    quota
+                        .remaining_fraction
+                        .map_or(fraction, |current| current.min(fraction)),
+                );
+            }
+            if let Some(at) = info["quotaInfo"]["resetTime"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                .map(|time| time.timestamp())
+            {
+                quota.reset_at = Some(quota.reset_at.map_or(at, |current| current.min(at)));
+            }
+        }
+        names.push(group.name);
+        quota.models.push(group.model);
+        quota.upstream_models.extend(group.upstream_models);
+    }
+    quotas
+        .into_values()
+        .map(|(names, mut quota)| {
+            quota.name = names.join(" · ");
+            quota
+        })
+        .collect()
+}
+
+/// The upstream ID for a routed `model` from the descriptor discovery stored. A model
+/// with reasoning-effort variants accepts exactly the efforts Antigravity lists, or no
+/// effort when it lists an ID without one; every other combination is refused before
+/// it reaches Antigravity. A model without effort variants sends its upstream ID, or
+/// its own name when it has no descriptor, and keeps the effort as a thinking budget.
 fn resolve_model(
     model: &str,
     effort: Option<&str>,
-    variants: &[&str],
+    descriptor: Option<&Value>,
 ) -> std::result::Result<String, String> {
-    let efforts: Vec<&str> = models::EFFORTS
-        .into_iter()
-        .filter(|effort| {
-            variants
-                .iter()
-                .any(|variant| models::effort_variant(variant) == (model, Some(*effort)))
-        })
-        .collect();
-    if efforts.is_empty() {
-        return Ok(model.to_owned());
-    }
-    let requested = match effort {
-        Some(effort) => models::effort_model(model, effort),
-        None => Some(model.to_owned()),
+    let descriptor = descriptor.unwrap_or(&Value::Null);
+    let upstream = descriptor["upstream_model"].as_str();
+    let Some(efforts) = descriptor["efforts"]
+        .as_object()
+        .filter(|efforts| !efforts.is_empty())
+    else {
+        return Ok(upstream.unwrap_or(model).to_owned());
     };
-    if let Some(upstream) = requested.filter(|upstream| variants.contains(&upstream.as_str())) {
-        return Ok(upstream);
+    let selected = match effort {
+        Some(effort) => efforts.get(effort).and_then(Value::as_str),
+        None => upstream,
+    };
+    if let Some(selected) = selected {
+        return Ok(selected.to_owned());
     }
-    let supported = efforts.join(", ");
+    let supported = models::EFFORTS
+        .into_iter()
+        .filter(|effort| efforts.contains_key(*effort))
+        .collect::<Vec<_>>()
+        .join(", ");
     Err(match effort {
         Some(effort) => format!(
             "Model {model} does not support reasoning effort '{effort}'; supported values: {supported}"
@@ -327,42 +395,84 @@ fn resolve_model(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_model;
+    use super::{model_quotas, resolve_model};
+    use serde_json::json;
 
     #[test]
     fn effort_variants_forward_only_the_exact_requested_effort() {
-        let opus = [
-            "claude-opus-5-5-high",
-            "claude-opus-5-5-low",
-            "claude-opus-5-5-medium",
-        ];
+        let flash = json!({"efforts":{"high":"gemini-3-flash-agent",
+            "low":"gemini-3.5-flash-extra-low","medium":"gemini-3.5-flash-low"}});
         assert_eq!(
-            resolve_model("claude-opus-5-5", Some("high"), &opus).unwrap(),
-            "claude-opus-5-5-high"
+            resolve_model("gemini-3.5-flash", Some("high"), Some(&flash)).unwrap(),
+            "gemini-3-flash-agent"
         );
-        let refused = resolve_model("claude-opus-5-5", Some("xhigh"), &opus).unwrap_err();
-        assert!(refused.contains("'xhigh'") && refused.contains("low, medium, high"));
+        assert_eq!(
+            resolve_model("gemini-3.5-flash", Some("medium"), Some(&flash)).unwrap(),
+            "gemini-3.5-flash-low"
+        );
+        let refused = resolve_model("gemini-3.5-flash", Some("xhigh"), Some(&flash)).unwrap_err();
+        assert!(
+            refused.contains("'xhigh'") && refused.contains("low, medium, high"),
+            "{refused}"
+        );
         for effort in [None, Some("none"), Some("minimal")] {
-            assert!(resolve_model("claude-opus-5-5", effort, &opus).is_err());
+            assert!(resolve_model("gemini-3.5-flash", effort, Some(&flash)).is_err());
         }
-        let flash = ["gemini-3.5-flash-extra-low", "gemini-3.5-flash-low"];
+        // An ID without an effort label serves requests that name no effort.
+        let tiered =
+            json!({"efforts":{"high":"gemini-3.6-flash-high"},"upstream_model":"gemini-3.6-flash"});
         assert_eq!(
-            resolve_model("gemini-3.5-flash", Some("minimal"), &flash).unwrap(),
-            "gemini-3.5-flash-extra-low"
-        );
-        // A base ID Antigravity lists serves requests without an effort.
-        let tiered = ["gemini-3.6-flash", "gemini-3.6-flash-high"];
-        assert_eq!(
-            resolve_model("gemini-3.6-flash", None, &tiered).unwrap(),
+            resolve_model("gemini-3.6-flash", None, Some(&tiered)).unwrap(),
             "gemini-3.6-flash"
         );
-        assert!(resolve_model("gemini-3.6-flash", Some("low"), &tiered).is_err());
-        // Models without effort variants keep the effort as a thinking budget.
-        for variants in [&["gemini-2.5-pro"][..], &[][..]] {
-            assert_eq!(
-                resolve_model("gemini-2.5-pro", Some("high"), variants).unwrap(),
-                "gemini-2.5-pro"
-            );
-        }
+        assert!(resolve_model("gemini-3.6-flash", Some("low"), Some(&tiered)).is_err());
+        // Without effort variants the chosen alias is sent and the effort stays a budget.
+        let lite = json!({"efforts":{},"upstream_model":"gemini-3.5-flash-lite"});
+        assert_eq!(
+            resolve_model("gemini-3.5-flash-lite", Some("high"), Some(&lite)).unwrap(),
+            "gemini-3.5-flash-lite"
+        );
+        assert_eq!(
+            resolve_model("custom-model", Some("high"), None).unwrap(),
+            "custom-model"
+        );
+    }
+
+    #[test]
+    fn quota_belongs_to_the_model_or_its_pool_not_its_upstream_ids() {
+        let raw = json!({"models":{
+            "gemini-3-flash-agent":{"displayName":"Gemini 3.5 Flash (High)",
+                "quotaInfo":{"resetTime":"2026-10-20T05:00:00Z"}},
+            "gemini-3.5-flash-low":{"displayName":"Gemini 3.5 Flash (Medium)",
+                "quotaInfo":{"remainingFraction":0.4,"resetTime":"2026-10-20T06:00:00Z"}},
+            "claude-opus-5-5-high":{"displayName":"Claude Opus 5.5 (High)",
+                "modelProvider":"MODEL_PROVIDER_ANTHROPIC","quotaInfo":{"remainingFraction":0.5}},
+            "gpt-oss-120b-medium":{"displayName":"GPT-OSS 120B (Medium)",
+                "modelProvider":"MODEL_PROVIDER_OPENAI","quotaInfo":{"remainingFraction":0.75}}
+        }});
+        let quotas = model_quotas(&raw);
+        assert_eq!(quotas.len(), 2);
+        let flash = quotas
+            .iter()
+            .find(|quota| quota.key == "gemini-3.5-flash")
+            .unwrap();
+        assert_eq!(flash.models, ["gemini-3.5-flash"]);
+        assert_eq!(flash.remaining_fraction, Some(0.0));
+        assert_eq!(
+            flash.reset_at,
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-20T05:00:00Z")
+                    .unwrap()
+                    .timestamp()
+            )
+        );
+        assert_eq!(flash.upstream_models.len(), 2);
+        let pool = quotas
+            .iter()
+            .find(|quota| quota.key == codex2api_common::providers::antigravity::THIRD_PARTY_POOL)
+            .unwrap();
+        assert_eq!(pool.models, ["claude-opus-5.5", "gpt-oss-120b"]);
+        assert_eq!(pool.name, "Claude Opus 5.5 · GPT-OSS 120B");
+        assert_eq!((pool.remaining_fraction, pool.reset_at), (Some(0.5), None));
     }
 }

@@ -26,7 +26,7 @@ async fn builtin_models_register_enabled_with_prices_once_and_restarts_are_idemp
     assert!(
         prices
             .iter()
-            .any(|p| p.model == "claude-haiku-5-5" && p.min_input_tokens == 100_001)
+            .any(|p| p.model == "claude-haiku-5.5" && p.min_input_tokens == 100_001)
     );
     let models = [supported("gpt-6.1-sol"), supported("future-supported")];
     let (a, b) = tokio::join!(

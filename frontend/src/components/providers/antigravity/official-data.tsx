@@ -53,7 +53,7 @@ export function AntigravityOfficialData({
             </TableHeader>
             <TableBody>
               {models.map((item) => (
-                <TableRow key={item.model}>
+                <TableRow key={item.key}>
                   <TableCell>
                     <div className="font-medium">{item.name}</div>
                     <div className="text-xs text-muted-foreground">{item.model}</div>

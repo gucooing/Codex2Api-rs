@@ -2,6 +2,18 @@ use crate::{Result, Storage};
 use serde::Serialize;
 use sqlx::FromRow;
 
+/// The models sharing a quota with model `model` of account `account` (SQL
+/// placeholders): the model itself and every model of that account whose descriptor
+/// names the same `quota_pool`, so one quota's models cool down and recover together.
+fn pool_models(model: &str, account: &str) -> String {
+    format!(
+        "SELECT {model}::text AS model UNION SELECT m.model FROM supplier_models m
+         WHERE m.account_id={account} AND m.descriptor_json::jsonb->>'quota_pool'=(
+             SELECT s.descriptor_json::jsonb->>'quota_pool' FROM supplier_models s
+             WHERE s.account_id={account} AND s.model={model})"
+    )
+}
+
 #[derive(Debug, Clone, Default, FromRow, Serialize)]
 pub struct SupplierHealth {
     pub error_message: Option<String>,
@@ -165,7 +177,8 @@ impl Storage {
     }
 
     /// A model-scoped exhaustion observed with the credential revision of that attempt.
-    /// Other models of the account stay schedulable; a newer login discards the record.
+    /// The account's models whose descriptor names the same `quota_pool` share it;
+    /// other models stay schedulable, and a newer login discards the record.
     pub async fn exhaust_supplier_model_quota(
         &self,
         id: &str,
@@ -176,13 +189,15 @@ impl Storage {
     ) -> Result<()> {
         let mut tx = self.pool().begin().await?;
         crate::storage::lock_supplier(&mut tx, id).await?;
-        sqlx::query(
+        sqlx::query(&format!(
             "INSERT INTO supplier_model_cooldowns(account_id,model,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at)
-             SELECT id,$1,$2,auth_revision,$3,floor(extract(epoch FROM clock_timestamp()))::bigint FROM supplier_accounts WHERE id=$4 AND auth_revision=$5
+             SELECT a.id,p.model,$2,a.auth_revision,$3,floor(extract(epoch FROM clock_timestamp()))::bigint
+             FROM supplier_accounts a CROSS JOIN ({}) p WHERE a.id=$4 AND a.auth_revision=$5
              ON CONFLICT(account_id,model) DO UPDATE SET
              cooldown_until=CASE WHEN supplier_model_cooldowns.cooldown_auth_revision=excluded.cooldown_auth_revision THEN GREATEST(supplier_model_cooldowns.cooldown_until,excluded.cooldown_until) ELSE excluded.cooldown_until END,
              cooldown_auth_revision=excluded.cooldown_auth_revision,cooldown_code=excluded.cooldown_code,cooldown_observed_at=excluded.cooldown_observed_at",
-        )
+            pool_models("$1", "$4")
+        ))
         .bind(model)
         .bind(until)
         .bind(code)
@@ -197,15 +212,18 @@ impl Storage {
         Ok(())
     }
 
-    /// An official read reported the model available again before its recorded reset.
+    /// An official read reported the model available again before its recorded reset;
+    /// the models sharing its quota pool recover with it.
     pub async fn recover_supplier_model_quota(&self, id: &str, model: &str) -> Result<()> {
-        let changed =
-            sqlx::query("DELETE FROM supplier_model_cooldowns WHERE account_id=$1 AND model=$2")
-                .bind(id)
-                .bind(model)
-                .execute(self.pool())
-                .await?
-                .rows_affected();
+        let changed = sqlx::query(&format!(
+            "DELETE FROM supplier_model_cooldowns WHERE account_id=$1 AND model IN ({})",
+            pool_models("$2", "$1")
+        ))
+        .bind(id)
+        .bind(model)
+        .execute(self.pool())
+        .await?
+        .rows_affected();
         if changed > 0 {
             self.runtime
                 .snapshots

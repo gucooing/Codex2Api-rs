@@ -14,6 +14,16 @@ const tierLabel = (tier: Json | undefined) => {
   return text(entry?.name) ?? text(entry?.id) ?? text(tier);
 };
 
+/** One quota: a model with its own, or the models sharing a pool (server grouped). */
+type ModelQuota = {
+  key: string;
+  name: string;
+  models: string[];
+  upstream_models: string[];
+  remaining_fraction: number | null;
+  reset_at: number | null;
+};
+
 /** Official details (loadCodeAssist) and the per-model quota read (fetchAvailableModels). */
 export function useAntigravityOfficialData({
   id,
@@ -26,9 +36,12 @@ export function useAntigravityOfficialData({
 }) {
   const [refresh, setRefresh] = useState(0);
   const now = useQuotaClock();
-  const resource = useResource<{ value: Json; observed_at?: string; refresh_error?: string }>(
-    `/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`,
-  );
+  const resource = useResource<{
+    value: Json;
+    observed_at?: string;
+    refresh_error?: string;
+    models?: ModelQuota[] | null;
+  }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
   useErrorToast(resource.error);
   useErrorToast(resource.data?.refresh_error);
   const value = record(resource.data?.value);
@@ -42,21 +55,17 @@ export function useAntigravityOfficialData({
       Array.isArray(allowed) ? allowed.map(tierLabel).filter(Boolean).join("、") : undefined,
     ],
   ];
-  const models = Object.entries(record(value?.models) ?? {})
-    .map(([model, info]) => {
-      const entry = record(info);
-      const quota = record(entry?.quotaInfo);
-      const remaining =
-        typeof quota?.remainingFraction === "number" ? quota.remainingFraction : null;
-      const reset = text(quota?.resetTime);
-      const resetAt = reset ? Date.parse(reset) / 1000 : Number.NaN;
-      return {
-        model,
-        name: text(entry?.displayName) ?? model,
-        usedPercent: remaining == null ? null : Math.min(100, Math.max(0, (1 - remaining) * 100)),
-        resetAt: Number.isFinite(resetAt) ? resetAt : null,
-      };
-    })
+  const models = (resource.data?.models ?? [])
+    .map((item) => ({
+      key: item.key,
+      model: item.models.join(" · "),
+      name: item.name,
+      usedPercent:
+        item.remaining_fraction == null
+          ? null
+          : Math.min(100, Math.max(0, (1 - item.remaining_fraction) * 100)),
+      resetAt: item.reset_at,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return { setRefresh, now, resource, fields, models } as const;
 }

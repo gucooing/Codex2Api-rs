@@ -308,8 +308,11 @@ pub async fn official(
             Some(error),
         ),
     };
+    // Antigravity reports quota under every upstream ID; the view lists each model once.
+    let models = (section == SupplierInfoSection::Quota)
+        .then(|| codex2api_upstream::antigravity::model_quotas(&snapshot.value));
     Ok(Json(
-        json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":error,"quota":Value::Null}),
+        json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":error,"quota":Value::Null,"models":models}),
     ))
 }
 

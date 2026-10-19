@@ -1807,7 +1807,7 @@ async fn antigravity_effort_variants_forward_only_the_reported_variant() {
                 revision,
                 &[
                     json!({"id":"custom-model","model":"custom-model","object":"model",
-                    "upstream_models":["custom-model-high","custom-model-low"]})
+                    "name":"Custom Model","efforts":{"high":"custom-model-high","low":"custom-model-low"}})
                 ],
             )
             .await
