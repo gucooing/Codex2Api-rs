@@ -37,17 +37,7 @@ impl Storage {
                 return Err(StorageError::InvalidAdminUpdate("内置模型配置无效"));
             }
             let prices = (model.kind == "text")
-                .then(|| {
-                    preset_model_prices(model.preset_key()).map(|prices| {
-                        prices
-                            .into_iter()
-                            .map(|price| ModelPrice {
-                                model: model.model.clone(),
-                                ..price
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
+                .then(|| preset_model_prices(&model.model))
                 .flatten();
             let created = sqlx::query("INSERT INTO model_catalog(model,platform,kind,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(model) DO NOTHING")
                 .bind(&model.model).bind(&model.platform).bind(&model.kind).bind(prices.is_some())

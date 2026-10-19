@@ -26,16 +26,20 @@ Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 An
 
 ## 模型、额度与计价
 
-供应账户“可用模型”的“同步上游模型”调用官方 `v1internal:fetchAvailableModels`，按返回的模型标识、显示名称和能力替换该账户的上游模型；同步时把能识别厂商（Gemini、Claude、GPT、Grok）的新模型按厂商标签登记到计费目录，归一化后能匹配统一内置模型表中的模型名时默认启用并带价格，否则保持未定价；识别不出厂商的模型只保留在该账户的可用模型中，需要时在计费配置里手动添加。该表的 Gemini 与 Claude 价格来自 Google 与 Anthropic 的官方公开价格并按长上下文档位分段；GPT-OSS 等没有官方价格的模型保持未定价，不会被当作免费。价格快照在请求开始时冻结，输入、缓存读取、缓存写入、输出各结算一次。
+供应账户“可用模型”的“同步上游模型”调用官方 `v1internal:fetchAvailableModels` 并替换该账户的上游模型。官方模型标识以 `-extra-low`、`-low`、`-medium`、`-high`、`-extra-high` 结尾的推理强度变体属于同一个模型，同步时合并为去掉后缀的基础模型，例如 `claude-opus-5-5-low`、`-medium`、`-high` 合并为 `claude-opus-5-5`；基础模型的描述保存该账户实际返回的全部上游标识。其他后缀（如 `-thinking`、`-agent`、`-lite`）是独立模型，原样保留。同步只改变供应账户的可用模型，从不写入计费配置：统一内置模型表在启动时登记的模型之外，需要计费的模型由管理员在计费配置中添加。内置 Claude 模型使用 Anthropic 的模型标识（如 `claude-opus-5-5`），与 Antigravity 的基础模型名一致。
 
-官方额度按模型返回 `quotaInfo.remainingFraction` 与 `resetTime`。供应账户详情的“官方额度”逐模型显示已用比例与重置倒计时，读取既有 PostgreSQL 快照，“从官方刷新”才请求官方。刷新结果同时写入模型冷却：剩余为 0 且重置时间在未来的模型进入冷却，剩余大于 0 的模型立即恢复。列表与定时任务不请求官方。
+请求使用基础模型名，推理强度通过协议自身的参数传入：Responses 的 `reasoning.effort`、Chat Completions 的 `reasoning_effort`、Messages 的 `output_config.effort`（缺省 `medium`，关闭思考为 `none`）。对有推理强度变体的模型，传输层把请求的强度对应的后缀拼到模型名上：`minimal` 对应 `-extra-low`，`low`、`medium`、`high` 对应同名后缀，`xhigh` 对应 `-extra-high`；未指定强度时使用不带后缀的基础标识。拼出的标识必须出现在所选供应账户的上游模型中才会转发，否则直接返回 400 并列出该模型支持的推理强度，不降级、不替换为其他强度。推理强度在选中供应账户之后校验，同一号池的账户应返回相同的变体；选中账户缺少所请求的强度时请求失败，不切换账户。没有推理强度变体的模型按原名转发，推理强度映射为 `thinkingConfig` 思考预算。用量记录保存基础模型名与请求的推理强度。
+
+统一内置模型表的 Gemini 与 Claude 价格来自 Google 与 Anthropic 的官方公开价格并按长上下文档位分段；GPT-OSS 等没有官方价格的模型保持未定价，不会被当作免费。价格快照在请求开始时冻结，输入、缓存读取、缓存写入、输出各结算一次。
+
+官方额度按模型返回 `quotaInfo.remainingFraction` 与 `resetTime`。供应账户详情的“官方额度”按官方模型标识逐个显示已用比例与重置倒计时，读取既有 PostgreSQL 快照，“从官方刷新”才请求官方。刷新结果按基础模型写入模型冷却：基础模型的全部变体都报告剩余为 0 且重置时间在未来时进入冷却，直到其中最早的重置时间；任一变体剩余大于 0 时立即恢复。列表与定时任务不请求官方。
 
 ## 错误处理与调度
 
 | 上游情况 | 处理 |
 | --- | --- |
 | HTTP 401 | 记录授权失效并切号；成功的重新授权清除失效状态 |
-| 429 `RESOURCE_EXHAUSTED`，`RetryInfo.retryDelay` 不少于 7 秒，或消息含 exhausted your capacity／quota exceeded | 记录该模型的冷却直到重置时间并切号；错误未指明模型时按本次请求的模型记录 |
+| 429 `RESOURCE_EXHAUSTED`，`RetryInfo.retryDelay` 不少于 7 秒，或消息含 exhausted your capacity／quota exceeded | 记录本次请求的基础模型的冷却直到重置时间并切号，不采用 Google 报告的变体或厂商模型名 |
 | 其他 429 与短暂等待 | 返回结构化错误与 `Retry-After`，由客户端退避，不改供应状态 |
 | 403、400 类请求错误 | 保留错误，不刷新身份，不切号 |
 | 5xx、503 容量不足、连接失败或超时 | 保留状态与重试指示，由客户端决定重试，不改供应状态 |

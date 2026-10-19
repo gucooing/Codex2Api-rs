@@ -26,7 +26,7 @@ async fn builtin_models_register_enabled_with_prices_once_and_restarts_are_idemp
     assert!(
         prices
             .iter()
-            .any(|p| p.model == "claude-haiku-5.5" && p.min_input_tokens == 100_001)
+            .any(|p| p.model == "claude-haiku-5-5" && p.min_input_tokens == 100_001)
     );
     let models = [supported("gpt-6.1-sol"), supported("future-supported")];
     let (a, b) = tokio::join!(
@@ -214,32 +214,33 @@ async fn newly_verified_prices_enable_only_untouched_pending_records() {
             .enabled
     );
     // A seeded, never edited, unpriced row carries the pending marker and is enabled.
-    sqlx::query("INSERT INTO model_catalog(model,platform,kind,enabled) VALUES('gpt-5.6-sol-copy','chatgpt','text',FALSE)")
-        .execute(storage.pool())
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO meta(key,value) VALUES('model_preset_pending:gpt-5.6-sol-copy','1')")
-        .execute(storage.pool())
-        .await
-        .unwrap();
-    let mut copy = supported("gpt-5.6-sol-copy");
-    copy.preset_key = Some("gpt-5.6-sol".into());
+    for statement in [
+        "DELETE FROM model_prices WHERE model='gpt-5.6-sol'",
+        "UPDATE model_catalog SET enabled=FALSE,revision=1 WHERE model='gpt-5.6-sol'",
+        "INSERT INTO meta(key,value) VALUES('model_preset_pending:gpt-5.6-sol','1')",
+    ] {
+        sqlx::query(statement)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+    }
+    let seeded = supported("gpt-5.6-sol");
     assert_eq!(
         storage
-            .sync_supported_models(&[copy.clone()])
+            .sync_supported_models(std::slice::from_ref(&seeded))
             .await
             .unwrap(),
         1
     );
     assert!(
         storage
-            .model_config("gpt-5.6-sol-copy")
+            .model_config("gpt-5.6-sol")
             .await
             .unwrap()
             .unwrap()
             .enabled
     );
-    assert_eq!(storage.sync_supported_models(&[copy]).await.unwrap(), 0);
+    assert_eq!(storage.sync_supported_models(&[seeded]).await.unwrap(), 0);
 }
 
 #[tokio::test]

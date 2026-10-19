@@ -247,7 +247,6 @@ async fn thousand_suppliers_three_thousand_requests() {
             platform: provider.into(),
             model: model.into(),
             kind: "text".into(),
-            preset_key: None,
         }])
         .await
         .unwrap();

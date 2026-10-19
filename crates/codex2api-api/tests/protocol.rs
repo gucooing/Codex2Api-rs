@@ -1789,3 +1789,70 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
         98
     );
 }
+
+#[tokio::test]
+async fn antigravity_effort_variants_forward_only_the_reported_variant() {
+    let fixture = fixture("antigravity").await;
+    let revision = fixture
+        .storage
+        .supplier_auth_revision("supplier")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        fixture
+            .storage
+            .sync_supplier_models(
+                "supplier",
+                revision,
+                &[
+                    json!({"id":"custom-model","model":"custom-model","object":"model",
+                    "upstream_models":["custom-model-high","custom-model-low"]})
+                ],
+            )
+            .await
+            .unwrap()
+    );
+    let generate = |effort: Option<&str>| {
+        let mut body = json!({"model":"custom-model","input":"Hello"});
+        if let Some(effort) = effort {
+            body["reasoning"] = json!({"effort":effort});
+        }
+        request("/v1/responses", &fixture.token, body)
+    };
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(generate(Some("high")))
+        .await
+        .unwrap();
+    let status = response.status();
+    let value = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["model"], "custom-model");
+    assert_eq!(
+        fixture.mock.requests.lock().unwrap()[0].2["model"],
+        "custom-model-high"
+    );
+    // A missing or unreported effort is refused before anything reaches Antigravity.
+    for (effort, refusal) in [
+        (Some("medium"), "does not support reasoning effort 'medium'"),
+        (None, "requires a reasoning effort"),
+    ] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(generate(effort))
+            .await
+            .unwrap();
+        let status = response.status();
+        let value = json_body(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+        let message = value["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(refusal) && message.contains("low, high"),
+            "{message}"
+        );
+    }
+    assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
+}

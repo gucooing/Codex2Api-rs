@@ -223,7 +223,8 @@ fn session_id(canonical: &Value, headers: &HeaderMap) -> String {
     format!("-{value}")
 }
 
-/// `{"model", "request"}`; the account-bound envelope is added by the transport.
+/// `{"model", "reasoning_effort", "request"}`; the transport resolves the account's
+/// upstream model from the effort and adds the account-bound envelope.
 pub(crate) fn gemini(canonical: &Value, headers: &HeaderMap) -> Result<Value> {
     let model = canonical["model"]
         .as_str()
@@ -411,7 +412,8 @@ pub(crate) fn gemini(canonical: &Value, headers: &HeaderMap) -> Result<Value> {
     if !tools.is_empty() {
         request["tools"] = tools.into();
     }
-    Ok(json!({"model":model,"request":request}))
+    let effort = canonical.pointer("/reasoning/effort");
+    Ok(json!({"model":model,"reasoning_effort":effort,"request":request}))
 }
 
 #[cfg(test)]
@@ -438,6 +440,7 @@ mod tests {
             "thinking":{"type":"enabled","budget_tokens":4000}});
         let value = gemini(&canonical(Protocol::Messages, body), &HeaderMap::new()).unwrap();
         assert_eq!(value["model"], "claude-sonnet-4-6");
+        assert_eq!(value["reasoning_effort"], "medium");
         let request = &value["request"];
         let parts = &request["systemInstruction"]["parts"];
         assert!(

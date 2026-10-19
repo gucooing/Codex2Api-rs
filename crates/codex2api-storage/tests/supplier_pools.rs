@@ -45,7 +45,6 @@ async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
             platform: "chatgpt".into(),
             model: "gpt-5.5".into(),
             kind: "text".into(),
-            preset_key: None,
         }])
         .await
         .unwrap();
@@ -132,7 +131,6 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
                 platform: provider.into(),
                 model: "shared-model".into(),
                 kind: "text".into(),
-                preset_key: None,
             }])
             .await
             .unwrap();

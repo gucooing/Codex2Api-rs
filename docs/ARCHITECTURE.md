@@ -144,7 +144,10 @@ Antigravity converts the canonical Responses request to the Cloud Code Assist
 Gemini wire inside `providers/antigravity/` (request, events, schema and error
 modules) and sends the desktop client's v1internal envelope; its stream is
 converted back into Responses events before any shared code sees it, so the
-API layer handles only the canonical contract.
+API layer handles only the canonical contract. Antigravity discovery folds
+reasoning-effort variants into one base model per account; the transport sends
+the variant named by the request's effort and refuses any model and effort
+combination the selected account did not report.
 Image JSON and multipart inputs go through the corresponding provider builder.
 Protocol conversion preserves the native tool, multimodal and replay payloads;
 provider validation remains authoritative for unsupported extensions. Search,
@@ -479,9 +482,9 @@ Retry-After time. When timing is absent, a sixty-second retry cooldown is used;
 it is not presented as an official quota reset. Fresh main quota responses can
 also record exhaustion; model-specific additional windows do not disable the whole
 account. Antigravity quota is per model: an explicit `RESOURCE_EXHAUSTED` with a reset
-wait of seven seconds or more, or the official per-model quota read reporting no
-remaining fraction, records a cooldown in `supplier_model_cooldowns` for that model and
-credential revision. Other models of the account stay schedulable, the pool index applies
+wait of seven seconds or more for the routed base model, or the official quota read
+reporting no remaining fraction for every effort variant of a base model, records a
+cooldown in `supplier_model_cooldowns` for that base model and credential revision. Other models of the account stay schedulable, the pool index applies
 the later of the account and model cooldowns, and a fresh read reporting remaining quota,
 a new login or the administrator reset clears it. Short waits are forwarded as ordinary
 throttling with `Retry-After`. A fresh ChatGPT response explicitly allowing execution or reporting usable

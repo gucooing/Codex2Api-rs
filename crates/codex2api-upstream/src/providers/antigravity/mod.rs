@@ -2,6 +2,7 @@
 //! frozen identity and Google OAuth. Shared code only ever receives Responses events.
 use crate::{Result, SupplierAuthRevision, UpstreamError};
 use bytes::Bytes;
+use codex2api_common::providers::antigravity as models;
 use codex2api_common::version::antigravity as wire;
 use codex2api_suppliers::antigravity::{
     AntigravityAuthError, AntigravityAuthService, AntigravityCredentials,
@@ -9,7 +10,7 @@ use codex2api_suppliers::antigravity::{
 };
 use http::HeaderValue;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 pub(crate) mod api;
 pub mod errors;
@@ -108,8 +109,32 @@ impl AntigravityUpstream {
         ))
     }
 
+    /// The upstream ID serving a routed model on this account; see [`resolve_model`].
+    async fn upstream_model(&self, id: &str, model: &str, effort: Option<&str>) -> Result<String> {
+        let descriptor = self
+            .auth
+            .storage()?
+            .supplier_model_descriptor(id, model)
+            .await?;
+        let variants: Vec<&str> = descriptor
+            .as_ref()
+            .and_then(|descriptor| descriptor["upstream_models"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        resolve_model(model, effort, &variants).map_err(UpstreamError::InvalidRequest)
+    }
+
     /// A streamed generation; the reply is a Responses event stream or a normalized error.
     pub async fn generate(&self, id: &str, body: Value) -> Result<reqwest::Response> {
+        let model = body["model"]
+            .as_str()
+            .ok_or_else(|| UpstreamError::InvalidRequest("model is required".into()))?
+            .to_owned();
+        let upstream = self
+            .upstream_model(id, &model, body["reasoning_effort"].as_str())
+            .await?;
         let mut authorized = self.authorized(id).await?;
         if authorized.credentials.project_id.is_none() {
             self.auth.refresh_profile(id).await?;
@@ -123,12 +148,8 @@ impl AntigravityUpstream {
                 .ok_or(UpstreamError::AntigravityAuth(
                     AntigravityAuthError::MissingProject,
                 ))?;
-        let model = body["model"]
-            .as_str()
-            .ok_or_else(|| UpstreamError::InvalidRequest("model is required".into()))?
-            .to_owned();
         let envelope = json!({"project":project,"requestId":format!("{}{}", wire::REQUEST_ID_PREFIX, uuid::Uuid::new_v4()),
-            "userAgent":wire::ENVELOPE_USER_AGENT,"requestType":wire::REQUEST_TYPE_AGENT,"model":model,"request":body["request"]});
+            "userAgent":wire::ENVELOPE_USER_AGENT,"requestType":wire::REQUEST_TYPE_AGENT,"model":upstream,"request":body["request"]});
         let timing = crate::ResponseTiming::default();
         let response = self
             .post(
@@ -141,10 +162,8 @@ impl AntigravityUpstream {
         if !response.status().is_success() {
             let status = response.status();
             let mut normalized = errors::normalize(status.as_u16(), &response.bytes().await?);
-            // Quota is per model; an error that names none still concerns this generation's model.
-            if normalized["error"].get("model").is_none() {
-                normalized["error"]["model"] = model.as_str().into();
-            }
+            // Quota cools the routed model, whichever variant or vendor name Google reports.
+            normalized["error"]["model"] = model.as_str().into();
             let mut rebuilt = http::Response::builder()
                 .status(status)
                 .header(http::header::CONTENT_TYPE, "application/json")
@@ -199,48 +218,29 @@ impl AntigravityUpstream {
         Ok((authorized, raw))
     }
 
-    /// Replace the account's upstream models and register newly seen models of a
-    /// recognizable vendor in the billing catalog; a family with a known official
-    /// price starts enabled.
+    /// Replace the account's upstream models. Reasoning-effort variants collapse into
+    /// their base model, whose descriptor keeps the upstream IDs a request can reach.
+    /// Discovery changes supplier availability only, never the billing catalog.
     pub async fn discover_supplier_models(&self, id: &str) -> Result<Value> {
         let (authorized, raw) = self.fetch_models(id).await?;
-        let mut descriptors = Vec::new();
-        let mut supported = Vec::new();
-        for (name, info) in raw["models"].as_object().expect("validated") {
+        let mut variants = BTreeMap::<&str, Vec<&str>>::new();
+        for name in raw["models"].as_object().expect("validated").keys() {
             if !codex2api_common::valid_model(name) {
                 return Err(UpstreamError::InvalidRequest(
                     "Antigravity returned an invalid model identifier".into(),
                 ));
             }
-            let mut descriptor = json!({"id":name,"model":name,"object":"model"});
-            for (key, source) in [
-                ("name", "displayName"),
-                ("supports_thinking", "supportsThinking"),
-                ("supports_images", "supportsImages"),
-                ("max_output_tokens", "maxOutputTokens"),
-                ("recommended", "recommended"),
-            ] {
-                if let Some(value) = info.get(source) {
-                    descriptor[key] = value.clone();
-                }
-            }
-            descriptors.push(descriptor);
-            // Only a model with a recognizable vendor joins the billing catalog automatically.
-            let Some(platform) = codex2api_common::providers::antigravity::platform_label(
-                info["displayName"].as_str().unwrap_or(name.as_str()),
-            ) else {
-                continue;
-            };
-            supported.push(codex2api_common::SupportedModel {
-                platform: platform.into(),
-                model: name.clone(),
-                kind: "text".into(),
-                preset_key: info["displayName"]
-                    .as_str()
-                    .and_then(codex2api_common::providers::antigravity::family)
-                    .or_else(|| codex2api_common::providers::antigravity::family(name)),
-            });
+            variants
+                .entry(models::effort_variant(name).0)
+                .or_default()
+                .push(name);
         }
+        let descriptors: Vec<Value> = variants
+            .into_iter()
+            .map(|(model, upstream)| {
+                json!({"id":model,"model":model,"object":"model","upstream_models":upstream})
+            })
+            .collect();
         let storage = self.auth.storage()?;
         if !storage
             .sync_supplier_models(id, authorized.revision, &descriptors)
@@ -248,16 +248,17 @@ impl AntigravityUpstream {
         {
             return Err(UpstreamError::WorkspaceChanged);
         }
-        storage.sync_supported_models(&supported).await?;
         Ok(json!({"items":storage.supplier_models(id).await?}))
     }
 
-    /// A fresh official quota read. Models reported empty cool down until their reset;
-    /// models reported available recover immediately.
+    /// A fresh official quota read, applied to the account's models. A model cools
+    /// down until its earliest reset once every variant is reported empty, and
+    /// recovers as soon as any variant has quota left.
     pub async fn quota(&self, id: &str) -> Result<Value> {
         let (authorized, raw) = self.fetch_models(id).await?;
         let storage = self.auth.storage()?;
         let now = chrono::Utc::now().timestamp();
+        let mut quotas = BTreeMap::<&str, (bool, Option<i64>)>::new();
         for (name, info) in raw["models"].as_object().expect("validated") {
             let Some(remaining) = info["quotaInfo"]["remainingFraction"].as_f64() else {
                 continue;
@@ -267,16 +268,101 @@ impl AntigravityUpstream {
                 .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
                 .map(|t| t.timestamp())
                 .filter(|t| *t > now);
-            match reset {
-                Some(until) if remaining <= 0.0 => {
-                    storage
-                        .exhaust_supplier_model_quota(id, authorized.revision, name, until, "quota")
-                        .await?
-                }
-                _ if remaining > 0.0 => storage.recover_supplier_model_quota(id, name).await?,
-                _ => {}
+            let (available, earliest) = quotas.entry(models::effort_variant(name).0).or_default();
+            if remaining > 0.0 {
+                *available = true;
+            } else if let Some(reset) = reset {
+                *earliest = Some(earliest.map_or(reset, |current| current.min(reset)));
+            }
+        }
+        for (model, (available, reset)) in quotas {
+            if available {
+                storage.recover_supplier_model_quota(id, model).await?;
+            } else if let Some(until) = reset {
+                storage
+                    .exhaust_supplier_model_quota(id, authorized.revision, model, until, "quota")
+                    .await?;
             }
         }
         Ok(raw)
+    }
+}
+
+/// The upstream ID for a routed `model` among the upstream IDs discovery grouped
+/// under it. A model with reasoning-effort variants accepts exactly the variant its
+/// effort's suffix names, or its own ID when the request names no effort and the
+/// account lists it; every other combination is refused before it reaches
+/// Antigravity. A model without effort variants is sent as named.
+fn resolve_model(
+    model: &str,
+    effort: Option<&str>,
+    variants: &[&str],
+) -> std::result::Result<String, String> {
+    let efforts: Vec<&str> = models::EFFORTS
+        .into_iter()
+        .filter(|effort| {
+            variants
+                .iter()
+                .any(|variant| models::effort_variant(variant) == (model, Some(*effort)))
+        })
+        .collect();
+    if efforts.is_empty() {
+        return Ok(model.to_owned());
+    }
+    let requested = match effort {
+        Some(effort) => models::effort_model(model, effort),
+        None => Some(model.to_owned()),
+    };
+    if let Some(upstream) = requested.filter(|upstream| variants.contains(&upstream.as_str())) {
+        return Ok(upstream);
+    }
+    let supported = efforts.join(", ");
+    Err(match effort {
+        Some(effort) => format!(
+            "Model {model} does not support reasoning effort '{effort}'; supported values: {supported}"
+        ),
+        None => format!("Model {model} requires a reasoning effort; supported values: {supported}"),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_model;
+
+    #[test]
+    fn effort_variants_forward_only_the_exact_requested_effort() {
+        let opus = [
+            "claude-opus-5-5-high",
+            "claude-opus-5-5-low",
+            "claude-opus-5-5-medium",
+        ];
+        assert_eq!(
+            resolve_model("claude-opus-5-5", Some("high"), &opus).unwrap(),
+            "claude-opus-5-5-high"
+        );
+        let refused = resolve_model("claude-opus-5-5", Some("xhigh"), &opus).unwrap_err();
+        assert!(refused.contains("'xhigh'") && refused.contains("low, medium, high"));
+        for effort in [None, Some("none"), Some("minimal")] {
+            assert!(resolve_model("claude-opus-5-5", effort, &opus).is_err());
+        }
+        let flash = ["gemini-3.5-flash-extra-low", "gemini-3.5-flash-low"];
+        assert_eq!(
+            resolve_model("gemini-3.5-flash", Some("minimal"), &flash).unwrap(),
+            "gemini-3.5-flash-extra-low"
+        );
+        // A base ID Antigravity lists serves requests without an effort.
+        let tiered = ["gemini-3.6-flash", "gemini-3.6-flash-high"];
+        assert_eq!(
+            resolve_model("gemini-3.6-flash", None, &tiered).unwrap(),
+            "gemini-3.6-flash"
+        );
+        assert!(resolve_model("gemini-3.6-flash", Some("low"), &tiered).is_err());
+        // Models without effort variants keep the effort as a thinking budget.
+        for variants in [&["gemini-2.5-pro"][..], &[][..]] {
+            assert_eq!(
+                resolve_model("gemini-2.5-pro", Some("high"), variants).unwrap(),
+                "gemini-2.5-pro"
+            );
+        }
     }
 }

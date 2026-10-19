@@ -111,8 +111,9 @@ functionCall／functionResponse）、`systemInstruction`（客户端身份提示
 `functionDeclarations`、`toolConfig` 以及由会话种子派生的 `sessionId`。响应事件按 Gemini 候选项
 转换为 Responses 的 reasoning、message 与 function_call 项；`finishReason` 映射为 completed、
 incomplete（`max_output_tokens` 或 `content_filter`）或 failed，用量取 `promptTokenCount`（含缓存）、
-`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`。细节见
-[Antigravity 渠道](ANTIGRAVITY.md)。
+`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`。有推理强度变体的模型以基础
+模型名调用，信封 `model` 为基础模型名拼接所请求推理强度的后缀，必须是所选账户实际返回的上游标识，
+否则返回 400 并列出支持的推理强度。细节见 [Antigravity 渠道](ANTIGRAVITY.md)。
 
 后台持久化作业、生成 `n>1`、查询/删除已存储响应不是 Codex 订阅协议提供的能力。
 固定 Images 协议不提供 mask、流式输出或托管图片 URL；对应请求明确返回不支持，

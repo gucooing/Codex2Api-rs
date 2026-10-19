@@ -90,7 +90,6 @@ async fn fixture_for(
             platform: provider.into(),
             model: "fixture-model".into(),
             kind: "text".into(),
-            preset_key: None,
         }])
         .await
         .unwrap();

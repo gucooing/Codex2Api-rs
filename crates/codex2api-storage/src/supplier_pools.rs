@@ -5,6 +5,10 @@ use std::{
     time::Duration,
 };
 
+/// Projection of `supplier_tags t` with its member count and the subscription
+/// routes, plans and API groups that bind it.
+pub(crate) const TAG_COLUMNS: &str = "t.*,(SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,((SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_ids ? t.id)+(SELECT COUNT(*) FROM virtual_plan_tags p WHERE p.tag_id=t.id)+(SELECT COUNT(*) FROM api_group_tags g WHERE g.tag_id=t.id)) AS binding_count";
+
 #[derive(Clone, Debug, FromRow, serde::Serialize)]
 pub struct SupplierTag {
     pub id: String,
@@ -266,12 +270,9 @@ impl Storage {
             .is_some())
     }
     pub async fn supplier_tags(&self) -> Result<Vec<SupplierTag>> {
-        Ok(sqlx::query_as(
-            "SELECT t.*,
-            (SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,
-            ((SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_ids ? t.id)+(SELECT COUNT(*) FROM virtual_plan_tags p WHERE p.tag_id=t.id)+(SELECT COUNT(*) FROM api_group_tags g WHERE g.tag_id=t.id)) AS binding_count
-            FROM supplier_tags t ORDER BY t.provider_id,t.name,t.id",
-        )
+        Ok(sqlx::query_as(&format!(
+            "SELECT {TAG_COLUMNS} FROM supplier_tags t ORDER BY t.provider_id,t.name,t.id"
+        ))
         .fetch_all(self.pool())
         .await?)
     }

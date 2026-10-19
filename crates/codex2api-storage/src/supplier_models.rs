@@ -263,6 +263,24 @@ impl Storage {
         ]);
         Ok(true)
     }
+    /// The descriptor discovery stored for one of the account's models; `None` when
+    /// the account does not list the model.
+    pub async fn supplier_model_descriptor(&self, id: &str, model: &str) -> Result<Option<Value>> {
+        self.runtime
+            .snapshots
+            .read(format!("supplier-models:{id}:{model}"), async {
+                let raw: Option<String> = sqlx::query_scalar(
+                    "SELECT descriptor_json FROM supplier_models WHERE account_id=$1 AND model=$2",
+                )
+                .bind(id)
+                .bind(model)
+                .fetch_optional(self.pool())
+                .await?;
+                let value = raw.map(|raw| serde_json::from_str(&raw)).transpose()?;
+                Ok((value, std::time::Duration::from_secs(30)))
+            })
+            .await
+    }
     pub async fn supplier_supports_model(&self, id: &str, model: &str) -> Result<bool> {
         Ok(self.supplier_model_snapshot(id).await?.contains(model))
     }

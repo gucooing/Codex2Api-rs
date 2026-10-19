@@ -296,7 +296,6 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
             platform: "grok".into(),
             model: "grok-4.7".into(),
             kind: "text".into(),
-            preset_key: None,
         }])
         .await
         .unwrap();
