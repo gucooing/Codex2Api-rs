@@ -800,7 +800,7 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let identity =
             AccountIdentity::new("test-account", "test-installation", HostRuntime::generate());
-        let expected_ua = identity.user_agent.clone();
+        let expected_ua = identity.official_user_agent();
         let client = UpstreamClient::new(
             identity,
             "test-token".into(),
@@ -880,7 +880,10 @@ mod tests {
             }
             assert_eq!(received_headers["authorization"], "Bearer test-token");
             assert_eq!(received_headers["originator"], "codex_cli_rs");
-            assert_eq!(received_headers["version"], "0.162.1");
+            assert_eq!(
+                received_headers["version"],
+                codex2api_common::version::CODEX_PACKAGE_VERSION
+            );
             for name in ["forwarded", "via", "x-forwarded-for", "x-custom"] {
                 assert!(!received_headers.contains_key(name), "{name}");
             }

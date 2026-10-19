@@ -99,8 +99,6 @@ impl SupplierAccountStore {
         let storage = self.storage()?;
         let mut new = NewSupplierAccount::pending_identity(
             identity.installation_id.clone(),
-            identity.originator.clone(),
-            identity.user_agent.clone(),
             identity.os_type.clone(),
             identity.os_version.clone(),
             identity.arch.clone(),
@@ -125,8 +123,6 @@ impl SupplierAccountStore {
         }
         let mut new = NewSupplierAccount::pending_identity(
             &identity.installation_id,
-            &identity.originator,
-            &identity.user_agent,
             &identity.os_type,
             &identity.os_version,
             &identity.arch,

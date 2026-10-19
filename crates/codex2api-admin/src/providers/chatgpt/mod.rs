@@ -16,6 +16,16 @@ pub(crate) mod billing;
 mod services;
 pub(crate) mod transfer;
 pub(crate) use services::{quota, sync_models};
+pub(crate) fn request_identity(
+    account: &SupplierAccount,
+) -> Result<(&'static str, String), ApiError> {
+    let identity =
+        AccountIdentity::from_account(account).map_err(|_| ApiError::bad("账户指纹无效"))?;
+    Ok((
+        codex2api_common::version::DEFAULT_ORIGINATOR,
+        identity.official_user_agent(),
+    ))
+}
 pub(crate) async fn subscription_expiration(
     s: &AdminState,
     id: &str,
@@ -47,11 +57,7 @@ impl Fingerprint {
             os_type: a.os_type.clone(),
             os_version: a.os_version.clone(),
             arch: a.arch.clone(),
-            terminal: a
-                .official_user_agent()
-                .split_once(") ")
-                .map_or("unknown", |(_, s)| s)
-                .into(),
+            terminal: a.terminal.clone(),
             proxy_id: None,
             timezone: a.http_fingerprint.timezone.clone().unwrap_or_default(),
         }
@@ -82,13 +88,7 @@ impl Fingerprint {
             }
         }
         let runtime = HostRuntime {
-            originator: codex2api_common::version::DEFAULT_ORIGINATOR.into(),
-            user_agent: codex2api_common::version::official_user_agent(
-                self.os_type.trim(),
-                self.os_version.trim(),
-                self.arch.trim(),
-                self.terminal.trim(),
-            ),
+            terminal: self.terminal.trim().into(),
             os_type: self.os_type.trim().into(),
             os_version: self.os_version.trim().into(),
             arch: self.arch.trim().into(),
@@ -119,14 +119,11 @@ pub async fn fingerprint(
     fp.os_type = identity.os_type.clone();
     fp.os_version = identity.os_version.clone();
     fp.arch = identity.arch.clone();
-    fp.user_agent = identity.official_user_agent();
-    fp.originator = codex2api_common::version::DEFAULT_ORIGINATOR.into();
+    fp.terminal = identity.terminal.clone();
     fp.timezone = identity.http_fingerprint.timezone;
     a.os_type = fp.os_type.clone();
     a.os_version = fp.os_version.clone();
     a.arch = fp.arch.clone();
-    a.originator = fp.originator.clone();
-    a.user_agent = fp.user_agent.clone();
     a.http_fingerprint_json = fp.to_json().map_err(|_| ApiError::bad("指纹配置无效"))?;
     a.proxy_id = f.proxy_id.filter(|v| !v.is_empty());
     s.storage.save_account_fingerprint(&a).await?;

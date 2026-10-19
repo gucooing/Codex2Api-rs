@@ -17,6 +17,8 @@ use tower::ServiceExt;
 
 #[path = "grok/scheduling.rs"]
 mod grok_scheduling;
+#[path = "messages/mod.rs"]
+mod messages;
 
 #[derive(Default)]
 struct Gate {
@@ -42,6 +44,7 @@ impl Gate {
 struct Mock {
     requests: Mutex<Vec<(String, http::HeaderMap, Value)>>,
     status: Mutex<Option<u16>>,
+    reply: Mutex<Option<(String, String)>>,
     ai_status: Mutex<Option<u16>>,
     gate: Arc<Gate>,
     truncate: AtomicBool,
@@ -53,14 +56,12 @@ struct Mock {
 fn response_value() -> Value {
     json!({"object":"response","id":"resp_fixture","created_at":100,"model":"custom-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":10000,"output_tokens":5000,"input_tokens_details":{"cached_tokens":2000},"output_tokens_details":{"reasoning_tokens":1000}},"supplier_account_id":"private-supplier"})
 }
-fn chat_value() -> Value {
-    json!({"object":"chat.completion","id":"chatcmpl_fixture","created":100,"model":"custom-model","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10000,"completion_tokens":5000,"prompt_tokens_details":{"cached_tokens":2000},"completion_tokens_details":{"reasoning_tokens":1000}}})
-}
 impl codex2api_upstream::HttpTransport for Mock {
     fn send(&self, request: reqwest::RequestBuilder) -> codex2api_upstream::HttpFuture {
         let built = request.build();
         let gate = self.gate.clone();
         let status = *self.status.lock().unwrap();
+        let reply = self.reply.lock().unwrap().clone();
         let ai_status = *self.ai_status.lock().unwrap();
         let truncate = self.truncate.load(Ordering::Relaxed);
         let failed_usage = self.failed_usage.load(Ordering::Relaxed);
@@ -136,12 +137,7 @@ impl codex2api_upstream::HttpTransport for Mock {
                     value["error"]["status_code"] = ai_status.into();
                 }
                 if failed_usage {
-                    let response = if request.url().path().ends_with("/chat/completions") {
-                        chat_value()
-                    } else {
-                        response_value()
-                    };
-                    value["usage"] = response["usage"].clone();
+                    value["usage"] = response_value()["usage"].clone();
                     value["status"] = "completed".into();
                 }
                 if partial_output {
@@ -160,6 +156,13 @@ impl codex2api_upstream::HttpTransport for Mock {
                     .into());
             }
             let body = decoded.unwrap();
+            if let Some((content_type, body)) = reply {
+                return Ok(http::Response::builder()
+                    .header("content-type", content_type)
+                    .body(reqwest::Body::from(body))
+                    .unwrap()
+                    .into());
+            }
             if request.url().path().ends_with("/alpha/search") {
                 return Ok(http::Response::builder().header("content-type", "application/json")
                     .body(reqwest::Body::from(json!({"output":"Found a real fixture result", "encrypted_output":"search-context", "results":[{"title":"Fixture", "url":"https://example.test/", "metadata":{"account":"public result"}}]}).to_string())).unwrap().into());
@@ -181,7 +184,6 @@ impl codex2api_upstream::HttpTransport for Mock {
             if request.url().path().contains("/images/") {
                 return Ok(http::Response::builder().header("content-type","application/json").body(reqwest::Body::from(json!({"created":100,"data":[{"url":"https://example.test/one.png","width":1024,"height":1024},{"url":"https://example.test/two.png","width":1024,"height":1024}],"usage":{"input_tokens":123,"output_tokens":456,"input_tokens_details":{"cached_tokens":23}}}).to_string())).unwrap().into());
             }
-            let native_chat = request.url().path().ends_with("/chat/completions");
             if failed_usage {
                 let mut value = response_value();
                 value["status"] = "failed".into();
@@ -210,41 +212,19 @@ impl codex2api_upstream::HttpTransport for Mock {
             if body["stream"] != true {
                 return Ok(http::Response::builder()
                     .header("content-type", "application/json")
-                    .body(reqwest::Body::from(
-                        if native_chat {
-                            chat_value()
-                        } else {
-                            response_value()
-                        }
-                        .to_string(),
-                    ))
+                    .body(reqwest::Body::from(response_value().to_string()))
                     .unwrap()
                     .into());
             }
-            let (first, last) = if native_chat {
-                let first = format!(
-                    "data: {}\n\ndata: {}\n\n",
-                    json!({"object":"chat.completion.chunk","id":"chatcmpl_fixture","model":"custom-model","created":100,"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}),
-                    json!({"object":"chat.completion.chunk","id":"chatcmpl_fixture","model":"custom-model","created":100,"choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}],"usage":null})
-                );
-                let last = format!(
-                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                    json!({"object":"chat.completion.chunk","id":"chatcmpl_fixture","model":"custom-model","created":100,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}),
-                    json!({"object":"chat.completion.chunk","id":"chatcmpl_fixture","model":"custom-model","created":100,"choices":[],"usage":chat_value()["usage"]})
-                );
-                (first, last)
-            } else {
-                let first = format!(
-                    "data: {}\n\ndata: {}\n\n",
-                    json!({"type":"response.created","response":{"id":"resp_fixture","model":"custom-model","created_at":100,"status":"in_progress"}}),
-                    json!({"type":"response.output_text.delta","delta":"Hello"})
-                );
-                let last = format!(
-                    "data: {}\n\n",
-                    json!({"type":"response.completed","response":response_value()})
-                );
-                (first, last)
-            };
+            let first = format!(
+                "data: {}\n\ndata: {}\n\n",
+                json!({"type":"response.created","response":{"id":"resp_fixture","model":"custom-model","created_at":100,"status":"in_progress"}}),
+                json!({"type":"response.output_text.delta","delta":"Hello"})
+            );
+            let last = format!(
+                "data: {}\n\n",
+                json!({"type":"response.completed","response":response_value()})
+            );
             let bytes =
                 futures::stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(first)) })
                     .chain(futures::stream::once(async move {
@@ -390,8 +370,6 @@ async fn add_supplier(storage: &Storage, provider: &str, id: &str) {
         (
             NewSupplierAccount::pending_identity(
                 &identity.installation_id,
-                &identity.originator,
-                &identity.user_agent,
                 &identity.os_type,
                 &identity.os_version,
                 &identity.arch,
@@ -411,10 +389,7 @@ async fn add_supplier(storage: &Storage, provider: &str, id: &str) {
             id,
             uuid::Uuid::new_v4().to_string(),
             codex2api_suppliers::HostRuntime {
-                originator: "codex_cli_rs".into(),
-                user_agent: codex2api_common::version::official_user_agent(
-                    "Linux", "6", "x86_64", "fixture",
-                ),
+                terminal: "fixture".into(),
                 os_type: "Linux".into(),
                 os_version: "6".into(),
                 arch: "x86_64".into(),
@@ -423,8 +398,6 @@ async fn add_supplier(storage: &Storage, provider: &str, id: &str) {
         (
             NewSupplierAccount::pending_identity(
                 &identity.installation_id,
-                &identity.originator,
-                &identity.user_agent,
                 &identity.os_type,
                 &identity.os_version,
                 &identity.arch,
@@ -668,11 +641,8 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                         .fetch_one(fixture.storage.pool())
                         .await
                         .unwrap();
-                assert_eq!(
-                    ttft.is_some(),
-                    provider == "chatgpt" || stream,
-                    "{provider} stream={stream}"
-                );
+                // Both supplier clients always stream upstream, so TTFT is observable.
+                assert!(ttft.is_some(), "{provider} stream={stream}");
                 assert_eq!(
                     record,
                     (
@@ -733,17 +703,10 @@ async fn both_platforms_and_protocols_settle_actual_usage_before_completion() {
                 } else {
                     assert!(body.get("client_metadata").is_none());
                     assert_eq!(body["temperature"], 0.4);
-                    assert_eq!(
-                        body[if chat {
-                            "max_tokens"
-                        } else {
-                            "max_output_tokens"
-                        }],
-                        123
-                    );
-                    if !chat {
-                        assert_eq!(body["store"], false);
-                    }
+                    assert_eq!(path, "/v1/responses");
+                    assert_eq!(body["max_output_tokens"], 123);
+                    assert_eq!(body["stream"], true);
+                    assert_eq!(body["store"], false);
                     assert!(!headers.contains_key("chatgpt-account-id"));
                     assert!(!headers.contains_key("x-codex-installation-id"));
                     assert!(!headers.contains_key("originator"));
@@ -1467,6 +1430,16 @@ async fn api_rewrite_public_contracts() {
         .insert("session-id", "caller-session".parse().unwrap());
     call.headers_mut()
         .insert("thread-id", "caller-thread".parse().unwrap());
+    // A loopback reverse proxy forwards the caller; a spoofed first hop is ignored.
+    call.extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            40000,
+        ))));
+    call.headers_mut().insert(
+        "x-forwarded-for",
+        "203.0.113.66, 198.51.100.23".parse().unwrap(),
+    );
     let response = f.router.clone().oneshot(call).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let value = json_body(response).await;
@@ -1524,11 +1497,18 @@ async fn api_rewrite_public_contracts() {
             .count(),
         4
     );
+    let chat = records
+        .records
+        .iter()
+        .find(|r| r.endpoint == "/v1/chat/completions")
+        .unwrap();
+    assert_eq!(chat.client_ip.as_deref(), Some("198.51.100.23"));
     let search = records
         .records
         .iter()
         .find(|r| r.endpoint == "/v1/alpha/search")
         .unwrap();
+    assert_eq!(search.client_ip, None);
     assert_eq!(search.cost_nano_usd, Some(20_000_000));
     let count = records
         .records

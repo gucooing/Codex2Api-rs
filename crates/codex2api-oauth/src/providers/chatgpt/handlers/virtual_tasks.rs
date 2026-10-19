@@ -367,6 +367,7 @@ pub(crate) async fn forward(
                 "/backend-api/wham/tasks",
                 "http",
             )
+            .with_upstream_endpoint("/backend-api/wham/tasks")
             .with_user_agent(&headers)
             .with_supplier_permit(ctx.permit.take())
             .start(
@@ -585,8 +586,6 @@ mod tests {
         }
         let mut supplier = codex2api_storage::NewSupplierAccount::pending_identity(
             "installation",
-            "originator",
-            "ua",
             "os",
             "version",
             "arch",

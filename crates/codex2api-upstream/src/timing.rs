@@ -11,20 +11,33 @@ use serde_json::Value;
 
 tokio::task_local! { static REQUEST_CLOCK: RequestClock; }
 
+/// Arrival time and resolved caller address of one inbound request.
 #[derive(Clone, Copy, Debug)]
 pub struct RequestClock {
     pub started: Instant,
     pub requested_at_ms: i64,
+    pub client: Option<std::net::IpAddr>,
 }
 impl Default for RequestClock {
     fn default() -> Self {
         Self {
             started: Instant::now(),
             requested_at_ms: chrono::Utc::now().timestamp_millis(),
+            client: None,
         }
     }
 }
 impl RequestClock {
+    pub fn arrival(client: Option<std::net::IpAddr>) -> Self {
+        Self {
+            client,
+            ..Self::default()
+        }
+    }
+    /// The caller address recorded on usage rows.
+    pub fn client_ip(&self) -> Option<String> {
+        self.client.map(|ip| ip.to_string())
+    }
     pub fn current() -> Option<Self> {
         REQUEST_CLOCK.try_with(|clock| *clock).ok()
     }
@@ -438,6 +451,7 @@ mod tests {
         let second = RequestClock {
             started: first.started + Duration::from_secs(1),
             requested_at_ms: first.requested_at_ms + 1000,
+            client: None,
         };
         let one = first.scope(async {
             tokio::spawn(RequestClock::inherit(async {

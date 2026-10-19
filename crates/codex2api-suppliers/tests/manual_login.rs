@@ -231,10 +231,7 @@ async fn refresh_token_login_uses_the_draft_identity_proxy_and_persists_only_the
         uuid::Uuid::new_v4().to_string(),
         new_installation_id(),
         HostRuntime {
-            originator: codex2api_common::version::DEFAULT_ORIGINATOR.into(),
-            user_agent: codex2api_common::version::official_user_agent(
-                "Ubuntu", "24.4.0", "aarch64", "tmux",
-            ),
+            terminal: "tmux".into(),
             os_type: "Ubuntu".into(),
             os_version: "24.4.0".into(),
             arch: "aarch64".into(),

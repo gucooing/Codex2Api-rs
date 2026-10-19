@@ -107,6 +107,10 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
         let failure = ResponseOutcome::from_value(&event, None).unwrap();
         assert_eq!(failure.failure().unwrap().kind.as_str(), kind, "{name}");
         assert_eq!(failure.failure().unwrap().status, status, "{name}");
+        let mut event = event;
+        if kind == "incomplete" {
+            event["response"]["usage"] = json!({"input_tokens":70,"output_tokens":12,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":4}});
+        }
         for transport in ["http", "websocket"] {
             let id = format!("{name}-{transport}");
             let mut log = RequestLog::begin(
@@ -144,6 +148,9 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
                 assert_eq!(output.as_ref(), body.as_bytes());
             } else {
                 log.parse(&serde_json::to_vec(&event).unwrap());
+                if kind == "incomplete" {
+                    log.parse(br#"{"type":"response.completed","response":{"usage":{"input_tokens":999,"output_tokens":999}}}"#);
+                }
                 log.finish("completed");
             }
             count += 1;
@@ -161,6 +168,17 @@ async fn sse_and_ws_share_event_outcomes_independent_of_http_success() {
                 assert_eq!(record.error_code.as_deref(), Some("content_filter"));
             }
             assert_eq!(record.http_status, (transport == "http").then_some(200));
+            if kind == "incomplete" {
+                assert_eq!(
+                    (
+                        record.input_tokens,
+                        record.output_tokens,
+                        record.cached_tokens,
+                        record.reasoning_tokens
+                    ),
+                    (Some(70), Some(12), Some(20), Some(4))
+                );
+            }
         }
     }
     storage.close().await;

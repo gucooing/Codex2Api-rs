@@ -6,20 +6,18 @@ use codex2api_suppliers::AccountIdentity;
 
 use crate::error::Result;
 
-/// Official header names used by logged-in Codex CLI.
-pub const ORIGINATOR_HEADER: &str = "originator";
-pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
-pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
-pub const SESSION_ID_HEADER: &str = "session-id";
-pub const THREAD_ID_HEADER: &str = "thread-id";
-pub const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
-pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
-pub const X_CODEX_WINDOW_ID_HEADER: &str = "x-codex-window-id";
-pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
-pub const X_CODEX_GUARDIAN_HEADER: &str = "x-codex-guardian";
-pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
-pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
-pub const ACCEPT_EVENT_STREAM: &str = "text/event-stream";
+pub use codex2api_common::version::{
+    HEADER_ACCEPT_SSE as ACCEPT_EVENT_STREAM,
+    HEADER_CHATGPT_ACCOUNT_ID as CHATGPT_ACCOUNT_ID_HEADER,
+    HEADER_CLIENT_REQUEST_ID as X_CLIENT_REQUEST_ID_HEADER,
+    HEADER_GUARDIAN as X_CODEX_GUARDIAN_HEADER,
+    HEADER_INSTALLATION_ID as X_CODEX_INSTALLATION_ID_HEADER,
+    HEADER_ORIGINATOR as ORIGINATOR_HEADER,
+    HEADER_PARENT_THREAD_ID as X_CODEX_PARENT_THREAD_ID_HEADER,
+    HEADER_SESSION_ID as SESSION_ID_HEADER, HEADER_SUBAGENT as X_OPENAI_SUBAGENT_HEADER,
+    HEADER_THREAD_ID as THREAD_ID_HEADER, HEADER_TURN_METADATA as X_CODEX_TURN_METADATA_HEADER,
+    HEADER_TURN_STATE as X_CODEX_TURN_STATE_HEADER, HEADER_WINDOW_ID as X_CODEX_WINDOW_ID_HEADER,
+};
 
 /// Per-request headers matching official Codex CLI.
 ///
@@ -141,7 +139,7 @@ pub fn default_headers(
         );
     }
     headers.insert(
-        "version",
+        codex2api_common::version::HEADER_VERSION,
         HeaderValue::from_static(codex2api_common::version::CODEX_PACKAGE_VERSION),
     );
     Ok(headers)
@@ -190,20 +188,20 @@ pub(crate) fn protocol_headers(inbound: &HeaderMap) -> HeaderMap {
         X_CODEX_GUARDIAN_HEADER,
         X_CODEX_PARENT_THREAD_ID_HEADER,
         X_OPENAI_SUBAGENT_HEADER,
-        "x-codex-beta-features",
-        "x-openai-internal-codex-responses-lite",
-        "x-openai-memgen-request",
-        "x-codex-routing-hint",
-        "x-responsesapi-include-timing-metrics",
+        codex2api_common::version::HEADER_BETA_FEATURES,
+        codex2api_common::version::HEADER_RESPONSES_LITE,
+        codex2api_common::version::HEADER_MEMGEN,
+        codex2api_common::version::HEADER_ROUTING_HINT,
+        codex2api_common::version::HEADER_TIMING_METRICS,
         "traceparent",
         "tracestate",
-        "x-codex-inference-call-id",
-        "x-oai-attestation",
-        "x-openai-internal-codex-residency",
-        "x-openai-fedramp",
-        "openai-organization",
-        "openai-project",
-        "openai-beta",
+        codex2api_common::version::HEADER_INFERENCE_CALL_ID,
+        codex2api_common::version::HEADER_ATTESTATION,
+        codex2api_common::version::HEADER_RESIDENCY,
+        codex2api_common::version::HEADER_FEDRAMP,
+        codex2api_common::version::HEADER_ORGANIZATION,
+        codex2api_common::version::HEADER_PROJECT,
+        codex2api_common::version::HEADER_OPENAI_BETA,
     ] {
         for value in inbound.get_all(name) {
             headers.append(name, value.clone());
@@ -231,7 +229,10 @@ mod tests {
         let identity = AccountIdentity::new("a", "installation", HostRuntime::generate());
         let headers = default_headers(&identity, "token", Some("account")).unwrap();
         assert_eq!(headers["originator"], "codex_cli_rs");
-        assert_eq!(headers["version"], "0.162.1");
+        assert_eq!(
+            headers["version"],
+            codex2api_common::version::CODEX_PACKAGE_VERSION
+        );
         assert_eq!(headers["authorization"], "Bearer token");
         assert_eq!(headers["chatgpt-account-id"], "account");
         assert_eq!(

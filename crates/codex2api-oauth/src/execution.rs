@@ -74,6 +74,7 @@ pub(crate) struct ExecutionContext {
     owner_id: String,
     owner_name: String,
     pub(crate) endpoint: String,
+    upstream_endpoint: Option<String>,
     transport: &'static str,
     user_agent: Option<String>,
 }
@@ -102,9 +103,15 @@ impl ExecutionContext {
             owner_id: owner_id.into(),
             owner_name: owner_name.into(),
             endpoint: endpoint.into(),
+            upstream_endpoint: None,
             transport,
             user_agent: None,
         }
+    }
+
+    pub fn with_upstream_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.upstream_endpoint = Some(endpoint.into());
+        self
     }
 
     pub fn with_supplier_permit(
@@ -222,6 +229,7 @@ impl ExecutionContext {
             subject_id: self.owner_id.clone(),
             subject_name: self.owner_name.clone(),
             endpoint: self.endpoint.clone(),
+            upstream_endpoint: self.upstream_endpoint.clone(),
             transport: self.transport.into(),
             user_agent: self.user_agent.clone(),
             stream: Some(self.transport == "websocket" || metadata.stream.unwrap_or(false)),

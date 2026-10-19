@@ -18,8 +18,8 @@ use codex2api_common::version::{
 };
 
 /// Official loopback callback path used by Codex CLI.
-pub const CALLBACK_PATH: &str = "/auth/callback";
-pub const CANCEL_PATH: &str = "/cancel";
+pub use codex2api_common::version::OAUTH_CALLBACK_PATH as CALLBACK_PATH;
+pub use codex2api_common::version::OAUTH_CANCEL_PATH as CANCEL_PATH;
 
 const REVOKE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const TOKEN_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -51,12 +51,20 @@ impl Default for OAuthConfig {
 
 impl OAuthConfig {
     pub fn authorize_url(&self) -> String {
-        format!("{}/oauth/authorize", self.issuer.trim_end_matches('/'))
+        format!(
+            "{}{}",
+            self.issuer.trim_end_matches('/'),
+            codex2api_common::version::OAUTH_AUTHORIZE_PATH
+        )
     }
 
     pub fn token_endpoint(&self) -> String {
         if self.token_url.is_empty() {
-            format!("{}/oauth/token", self.issuer.trim_end_matches('/'))
+            format!(
+                "{}{}",
+                self.issuer.trim_end_matches('/'),
+                codex2api_common::version::OAUTH_TOKEN_PATH
+            )
         } else {
             self.token_url.clone()
         }
@@ -64,7 +72,11 @@ impl OAuthConfig {
 
     pub fn revoke_endpoint(&self) -> String {
         if self.revoke_url.is_empty() {
-            format!("{}/oauth/revoke", self.issuer.trim_end_matches('/'))
+            format!(
+                "{}{}",
+                self.issuer.trim_end_matches('/'),
+                codex2api_common::version::OAUTH_REVOKE_PATH
+            )
         } else {
             self.revoke_url.clone()
         }
@@ -170,7 +182,10 @@ pub fn build_authorize_url(
         ("scope", cfg.scope.as_str()),
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
-        ("originator", DEFAULT_ORIGINATOR),
+        (
+            codex2api_common::version::HEADER_ORIGINATOR,
+            DEFAULT_ORIGINATOR,
+        ),
     ];
     let qs = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(query)
@@ -347,7 +362,10 @@ pub async fn revoke_tokens(
     let resp = http
         .post(&endpoint)
         .header("Content-Type", "application/json")
-        .header("originator", DEFAULT_ORIGINATOR)
+        .header(
+            codex2api_common::version::HEADER_ORIGINATOR,
+            DEFAULT_ORIGINATOR,
+        )
         .timeout(REVOKE_HTTP_TIMEOUT)
         .json(&request)
         .send()

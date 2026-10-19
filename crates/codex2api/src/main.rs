@@ -23,6 +23,9 @@ async fn main() -> Result<()> {
     let api_bind = std::env::var("CODEX2API_API_BIND").unwrap_or_else(|_| "127.0.0.1:8083".into());
     let database_url = std::env::var("CODEX2API_DATABASE_URL")
         .map_err(|_| anyhow::anyhow!("CODEX2API_DATABASE_URL is required"))?;
+    codex2api_upstream::ClientIpPolicy::from_env()
+        .map_err(anyhow::Error::msg)?
+        .install();
 
     tracing::info!(
         commit = CODEX_REF_COMMIT,
@@ -87,9 +90,13 @@ async fn main() -> Result<()> {
     let quota_monitor = apps.spawn_quota_monitor();
     let result = tokio::try_join!(
         async {
-            axum::serve(oauth_listener, apps.oauth)
-                .with_graceful_shutdown(wait_shutdown(shutdown_rx))
-                .await
+            axum::serve(
+                oauth_listener,
+                apps.oauth
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(wait_shutdown(shutdown_rx))
+            .await
         },
         async {
             axum::serve(admin_listener, apps.admin)
@@ -102,9 +109,13 @@ async fn main() -> Result<()> {
                 .await
         },
         async {
-            axum::serve(api_listener, apps.api)
-                .with_graceful_shutdown(wait_shutdown(api_shutdown))
-                .await
+            axum::serve(
+                api_listener,
+                apps.api
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(wait_shutdown(api_shutdown))
+            .await
         }
     );
     signal.abort();

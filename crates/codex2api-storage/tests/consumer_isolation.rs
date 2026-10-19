@@ -75,8 +75,6 @@ async fn consumer_provider_is_fixed_and_supplier_binding_cannot_cross_providers(
         "fixture",
         "fixture",
         "fixture",
-        "fixture",
-        "fixture",
         "{}",
     );
     new.provider_id = "grok".into();
@@ -134,15 +132,8 @@ async fn route_clear_and_supplier_deletion_keep_monotonic_revisions() {
         .await
         .unwrap();
     let account = consumer(&storage, "consumer", "chatgpt", "plus").await;
-    let mut supplier = NewSupplierAccount::pending_identity(
-        "installation",
-        "originator",
-        "ua",
-        "os",
-        "version",
-        "arch",
-        "{}",
-    );
+    let mut supplier =
+        NewSupplierAccount::pending_identity("installation", "os", "version", "arch", "{}");
     supplier.chatgpt_account_id = Some("official".into());
     supplier.chatgpt_user_id = Some("official-user".into());
     let supplier = storage
@@ -227,15 +218,8 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
         .execute(storage.pool())
         .await
         .unwrap();
-    let mut other = NewSupplierAccount::pending_identity(
-        "other-installation",
-        "originator",
-        "ua",
-        "os",
-        "version",
-        "arch",
-        "{}",
-    );
+    let mut other =
+        NewSupplierAccount::pending_identity("other-installation", "os", "version", "arch", "{}");
     other.provider_id = "grok".into();
     other.chatgpt_account_id = Some("official".into());
     assert!(storage.create_account(other.clone()).await.is_err());
@@ -261,8 +245,6 @@ async fn supplier_identity_and_login_conflicts_cannot_cross_providers() {
         .unwrap();
     let mut official = NewSupplierAccount::pending_identity(
         "official-installation",
-        "originator",
-        "ua",
         "os",
         "version",
         "arch",

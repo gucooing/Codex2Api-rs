@@ -63,8 +63,6 @@ impl Storage {
                 email: a.email,
                 plan_type: a.plan_type,
                 installation_id: a.installation_id,
-                originator: a.originator,
-                user_agent: a.user_agent,
                 os_type: a.os_type,
                 os_version: a.os_version,
                 arch: a.arch,
@@ -147,11 +145,11 @@ impl Storage {
             None
         };
         sqlx::query("INSERT INTO supplier_accounts(id,provider_id,status,display_name,chatgpt_account_id,chatgpt_user_id,
-            email,plan_type,installation_id,originator,user_agent,os_type,os_version,arch,http_fingerprint_json,
-            proxy_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)")
+            email,plan_type,installation_id,os_type,os_version,arch,http_fingerprint_json,
+            proxy_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)")
             .bind(&id).bind(&a.provider_id).bind(a.status.as_str()).bind(&a.display_name)
             .bind(&a.chatgpt_account_id).bind(&a.chatgpt_user_id).bind(&a.email).bind(&a.plan_type)
-            .bind(&a.installation_id).bind(&a.originator).bind(&a.user_agent).bind(&a.os_type)
+            .bind(&a.installation_id).bind(&a.os_type)
             .bind(&a.os_version).bind(&a.arch).bind(&a.http_fingerprint_json).bind(proxy_id).bind(&now).bind(&now)
             .execute(&mut *tx).await?;
         if let Some(t) = &item.tokens {

@@ -261,8 +261,6 @@ async fn thousand_suppliers_three_thousand_requests() {
             (
                 NewSupplierAccount::pending_identity(
                     identity.installation_id.clone(),
-                    identity.originator.clone(),
-                    identity.user_agent.clone(),
                     identity.os_type.clone(),
                     identity.os_version.clone(),
                     identity.arch.clone(),
@@ -282,11 +280,7 @@ async fn thousand_suppliers_three_thousand_requests() {
                 id.clone(),
                 uuid::Uuid::new_v4().to_string(),
                 codex2api_suppliers::HostRuntime {
-                    originator: "codex_cli_rs".into(),
-                    user_agent: format!(
-                        "codex_cli_rs/{} (Linux 6; x86_64) fixture",
-                        codex2api_common::version::CODEX_PACKAGE_VERSION
-                    ),
+                    terminal: "fixture".into(),
                     os_type: "Linux".into(),
                     os_version: "6".into(),
                     arch: "x86_64".into(),
@@ -295,8 +289,6 @@ async fn thousand_suppliers_three_thousand_requests() {
             (
                 NewSupplierAccount::pending_identity(
                     identity.installation_id.clone(),
-                    identity.originator.clone(),
-                    identity.user_agent.clone(),
                     identity.os_type.clone(),
                     identity.os_version.clone(),
                     identity.arch.clone(),

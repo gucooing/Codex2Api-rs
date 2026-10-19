@@ -6,7 +6,7 @@ use sqlx::FromRow;
 
 use crate::error::{Result, StorageError};
 
-/// SupplierAccount lifecycle stored in `accounts.status`.
+/// SupplierAccount lifecycle stored in `supplier_accounts.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SupplierStatus {
@@ -77,8 +77,6 @@ pub struct SupplierAccount {
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub installation_id: String,
-    pub originator: String,
-    pub user_agent: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -91,6 +89,7 @@ pub struct SupplierAccount {
 
 /// Fields required to insert an account row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NewSupplierAccount {
     pub provider_id: String,
     pub id: Option<String>,
@@ -101,8 +100,6 @@ pub struct NewSupplierAccount {
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub installation_id: String,
-    pub originator: String,
-    pub user_agent: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -113,8 +110,6 @@ impl NewSupplierAccount {
     // The frozen supplier identity is persisted as these independent fields.
     pub fn pending_identity(
         installation_id: impl Into<String>,
-        originator: impl Into<String>,
-        user_agent: impl Into<String>,
         os_type: impl Into<String>,
         os_version: impl Into<String>,
         arch: impl Into<String>,
@@ -130,8 +125,6 @@ impl NewSupplierAccount {
             email: None,
             plan_type: None,
             installation_id: installation_id.into(),
-            originator: originator.into(),
-            user_agent: user_agent.into(),
             os_type: os_type.into(),
             os_version: os_version.into(),
             arch: arch.into(),
@@ -149,8 +142,6 @@ pub struct SupplierAccountUpdate {
     pub chatgpt_user_id: Option<String>,
     pub email: Option<String>,
     pub plan_type: Option<String>,
-    pub originator: Option<String>,
-    pub user_agent: Option<String>,
     pub os_type: Option<String>,
     pub os_version: Option<String>,
     pub arch: Option<String>,

@@ -7,7 +7,12 @@ pub(crate) fn router(state: crate::OAuthState) -> axum::Router {
         .merge(grok::router(state))
         .layer(axum::middleware::from_fn(
             |request: axum::extract::Request, next: axum::middleware::Next| async move {
-                codex2api_upstream::RequestClock::default()
+                let peer = request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|info| info.0);
+                let client = codex2api_upstream::client_ip(peer, request.headers());
+                codex2api_upstream::RequestClock::arrival(client)
                     .scope(next.run(request))
                     .await
             },

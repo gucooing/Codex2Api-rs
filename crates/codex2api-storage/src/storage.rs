@@ -19,7 +19,7 @@ pub const DEFAULT_ADMIN_SESSION_TTL: Duration =
 pub const DEFAULT_OAUTH_PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, \
-     plan_type, installation_id, originator, user_agent, os_type, os_version, arch, \
+     plan_type, installation_id, os_type, os_version, arch, \
      http_fingerprint_json, proxy_id, created_at, updated_at, last_used_at";
 
 #[derive(Clone)]
@@ -44,8 +44,6 @@ struct AccountRow {
     email: Option<String>,
     plan_type: Option<String>,
     installation_id: String,
-    originator: String,
-    user_agent: String,
     os_type: String,
     os_version: String,
     arch: String,
@@ -70,8 +68,6 @@ impl TryFrom<AccountRow> for SupplierAccount {
             email: row.email,
             plan_type: row.plan_type,
             installation_id: row.installation_id,
-            originator: row.originator,
-            user_agent: row.user_agent,
             os_type: row.os_type,
             os_version: row.os_version,
             arch: row.arch,
@@ -145,7 +141,6 @@ impl Storage {
             jwt_keys: std::sync::Arc::new(std::array::from_fn(|_| tokio::sync::OnceCell::new())),
         };
         storage.initialize().await?;
-        storage.stamp_codex_ref().await?;
         storage.ensure_default_admin().await?;
         Ok(storage)
     }
@@ -160,6 +155,24 @@ impl Storage {
     }
 
     async fn initialize(&self) -> Result<()> {
+        let migrations = [
+            (
+                1_i64,
+                include_str!("../migrations/0001_current_contracts.sql"),
+            ),
+            (
+                2_i64,
+                include_str!("../migrations/0002_supplier_identity_inputs.sql"),
+            ),
+            (
+                3_i64,
+                include_str!("../migrations/0003_usage_upstream_endpoint.sql"),
+            ),
+            (
+                4_i64,
+                include_str!("../migrations/0004_usage_client_ip.sql"),
+            ),
+        ];
         let mut tx = self.pool.begin().await?;
         // Schema initialization and migrations share one transaction and schema lock.
         sqlx::query(
@@ -178,11 +191,11 @@ impl Storage {
             sqlx::raw_sql(include_str!("../seed.sql"))
                 .execute(&mut *tx)
                 .await?;
+            sqlx::query("INSERT INTO meta(key,value) VALUES('schema_migration_version',$1)")
+                .bind(migrations.last().expect("migration list").0.to_string())
+                .execute(&mut *tx)
+                .await?;
         }
-        let migrations = [(
-            1_i64,
-            include_str!("../migrations/0001_current_contracts.sql"),
-        )];
         let applied: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key='schema_migration_version'")
                 .fetch_optional(&mut *tx)
@@ -206,26 +219,6 @@ impl Storage {
                 .bind(version.to_string()).execute(&mut *tx).await?;
         }
         tx.commit().await?;
-        Ok(())
-    }
-
-    async fn stamp_codex_ref(&self) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO meta (key, value) VALUES ($1, $2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind("codex_ref_commit")
-        .bind(codex2api_common::version::CODEX_REF_COMMIT)
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            "INSERT INTO meta (key, value) VALUES ($1, $2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind("codex_ref_repo")
-        .bind(codex2api_common::version::CODEX_REPO)
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
@@ -583,9 +576,9 @@ impl Storage {
         sqlx::query(
             "INSERT INTO supplier_accounts (
                 provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
-                installation_id, originator, user_agent, os_type, os_version, arch,
+                installation_id, os_type, os_version, arch,
                 http_fingerprint_json, created_at, updated_at, last_used_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL)",
         )
         .bind(&new.provider_id)
         .bind(&id)
@@ -596,8 +589,6 @@ impl Storage {
         .bind(&new.email)
         .bind(&new.plan_type)
         .bind(&new.installation_id)
-        .bind(&new.originator)
-        .bind(&new.user_agent)
         .bind(&new.os_type)
         .bind(&new.os_version)
         .bind(&new.arch)
@@ -639,9 +630,9 @@ impl Storage {
         let sql = format!(
             "INSERT INTO supplier_accounts (
                 id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, plan_type,
-                installation_id, originator, user_agent, os_type, os_version, arch,
+                installation_id, os_type, os_version, arch,
                 http_fingerprint_json, proxy_id, created_at, updated_at, provider_id
-             ) VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+             ) VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
              ON CONFLICT(provider_id,chatgpt_account_id,chatgpt_user_id) DO UPDATE SET
                 status = CASE WHEN supplier_accounts.status='pending' THEN 'active' ELSE supplier_accounts.status END,
                 display_name = COALESCE(excluded.display_name, supplier_accounts.display_name),
@@ -661,8 +652,6 @@ impl Storage {
             .bind(new.email)
             .bind(new.plan_type)
             .bind(new.installation_id)
-            .bind(new.originator)
-            .bind(new.user_agent)
             .bind(new.os_type)
             .bind(new.os_version)
             .bind(new.arch)
@@ -826,12 +815,6 @@ impl Storage {
         if let Some(plan_type) = update.plan_type {
             account.plan_type = empty_to_none(Some(plan_type));
         }
-        if let Some(originator) = update.originator {
-            account.originator = originator;
-        }
-        if let Some(user_agent) = update.user_agent {
-            account.user_agent = user_agent;
-        }
         if let Some(os_type) = update.os_type {
             account.os_type = os_type;
         }
@@ -903,10 +886,10 @@ impl Storage {
         let res = sqlx::query(
             "UPDATE supplier_accounts SET
                 status = $1, display_name = $2, chatgpt_account_id = $3, chatgpt_user_id = $4,
-                email = $5, plan_type = $6, originator = $7, user_agent = $8, os_type = $9,
-                os_version = $10, arch = $11, http_fingerprint_json = $12,
-                updated_at = $13, last_used_at = $14
-             WHERE id = $15",
+                email = $5, plan_type = $6, os_type = $7,
+                os_version = $8, arch = $9, http_fingerprint_json = $10,
+                updated_at = $11, last_used_at = $12
+             WHERE id = $13",
         )
         .bind(account.status.as_str())
         .bind(&account.display_name)
@@ -914,8 +897,6 @@ impl Storage {
         .bind(&account.chatgpt_user_id)
         .bind(&account.email)
         .bind(&account.plan_type)
-        .bind(&account.originator)
-        .bind(&account.user_agent)
         .bind(&account.os_type)
         .bind(&account.os_version)
         .bind(&account.arch)
@@ -943,11 +924,9 @@ impl Storage {
         account: &SupplierAccount,
     ) -> Result<SupplierAccount> {
         let result = sqlx::query(
-            "UPDATE supplier_accounts SET originator = $1, user_agent = $2, os_type = $3, os_version = $4,
-             arch = $5, http_fingerprint_json = $6, proxy_id = $7, updated_at = $8 WHERE id = $9",
+            "UPDATE supplier_accounts SET os_type = $1, os_version = $2,
+             arch = $3, http_fingerprint_json = $4, proxy_id = $5, updated_at = $6 WHERE id = $7",
         )
-        .bind(&account.originator)
-        .bind(&account.user_agent)
         .bind(&account.os_type)
         .bind(&account.os_version)
         .bind(&account.arch)

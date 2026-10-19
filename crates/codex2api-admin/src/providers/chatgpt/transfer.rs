@@ -53,8 +53,6 @@ pub(crate) fn from_sub2api(source: &Sub2apiAccount) -> Result<SupplierTransferAc
     );
     let mut account = NewSupplierAccount::pending_identity(
         &identity.installation_id,
-        &identity.originator,
-        &identity.user_agent,
         &identity.os_type,
         &identity.os_version,
         &identity.arch,
@@ -91,21 +89,6 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
     let a = &mut item.account;
     let mut fingerprint = HttpFingerprint::from_json(&a.http_fingerprint_json)
         .map_err(|_| ApiError::bad("ChatGPT 指纹无效"))?;
-    let terminal = fingerprint
-        .user_agent
-        .split_once(") ")
-        .map(|(_, t)| t)
-        .filter(|t| !t.trim().is_empty() && t.len() <= 128 && !t.chars().any(char::is_control))
-        .ok_or_else(|| ApiError::bad("ChatGPT 终端指纹无效"))?;
-    a.originator = codex2api_common::version::DEFAULT_ORIGINATOR.into();
-    a.user_agent = codex2api_common::version::official_user_agent(
-        &a.os_type,
-        &a.os_version,
-        &a.arch,
-        terminal,
-    );
-    fingerprint.originator = a.originator.clone();
-    fingerprint.user_agent = a.user_agent.clone();
     fingerprint.os_type = a.os_type.clone();
     fingerprint.os_version = a.os_version.clone();
     fingerprint.arch = a.arch.clone();

@@ -8,6 +8,7 @@ pub const ISSUER: &str = "https://auth.x.ai";
 pub const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 pub const BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 pub const TOKEN_AUTH: &str = "xai-grok-cli";
+pub const ORIGINATOR: &str = "grok-pager";
 pub const SCOPE: &str = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write workspaces:read workspaces:write";
 pub const ACCESS_TOKEN_TTL: i64 = 3600;
 
@@ -19,3 +20,14 @@ pub fn user_agent(os: &str, arch: &str) -> String {
     };
     format!("grok-pager/{VERSION} grok-shell/{VERSION} ({os}; {arch})")
 }
+
+pub const HEADER_CLIENT_VERSION: &str = "x-grok-client-version";
+pub const HEADER_CLIENT_IDENTIFIER: &str = "x-grok-client-identifier";
+pub const HEADER_CLIENT_MODE: &str = "x-grok-client-mode";
+pub const HEADER_TOKEN_AUTH: &str = "x-xai-token-auth";
+pub const CLIENT_MODE: &str = "interactive";
+
+pub const OAUTH_AUTHORIZE_PATH: &str = "/oauth2/authorize";
+pub const OAUTH_TOKEN_PATH: &str = "/oauth2/token";
+pub const OAUTH_REVOKE_PATH: &str = "/oauth2/revoke";
+pub const OAUTH_DEVICE_PATH: &str = "/oauth2/device/code";

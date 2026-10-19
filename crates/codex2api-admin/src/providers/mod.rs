@@ -12,6 +12,16 @@ use axum::{
 };
 use serde_json::Value;
 
+pub(crate) fn request_identity(
+    account: &codex2api_storage::SupplierAccount,
+) -> Result<(&'static str, String), ApiError> {
+    match account.provider_id.as_str() {
+        codex2api_common::CHATGPT => chatgpt::request_identity(account),
+        codex2api_common::GROK => grok::request_identity(account),
+        _ => Err(ApiError::bad("不支持的渠道")),
+    }
+}
+
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ApiError> {
     serde_json::from_value(value).map_err(|_| ApiError::bad("渠道请求字段无效"))
 }

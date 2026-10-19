@@ -30,15 +30,8 @@ async fn fixture_for(
     let storage = codex2api_storage::test_support::open(directory.path().join("scheduler-pg"))
         .await
         .unwrap();
-    let mut supplier = NewSupplierAccount::pending_identity(
-        "installation",
-        "codex_cli_rs",
-        "fixture",
-        "Linux",
-        "6",
-        "x86_64",
-        "{}",
-    );
+    let mut supplier =
+        NewSupplierAccount::pending_identity("installation", "Linux", "6", "x86_64", "{}");
     supplier.id = Some("supplier".into());
     supplier.provider_id = provider.into();
     supplier.chatgpt_account_id = Some("workspace".into());

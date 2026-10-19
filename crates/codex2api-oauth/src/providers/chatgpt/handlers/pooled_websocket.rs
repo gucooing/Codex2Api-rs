@@ -41,6 +41,14 @@ fn context(
         &format!("/v1/{}", endpoint.codex_path()),
         "websocket",
     )
+    .with_upstream_endpoint(format!(
+        "/v1/{}",
+        if endpoint.is_response() {
+            Endpoint::Responses.codex_path()
+        } else {
+            endpoint.codex_path()
+        }
+    ))
     .with_user_agent(headers)
     .with_supplier_permit(conn.ctx.permit.take())
 }
@@ -155,9 +163,14 @@ pub(super) async fn connect(
     ] {
         response_headers.remove(name);
     }
+    let caller = codex2api_upstream::RequestClock::current().and_then(|clock| clock.client);
     let mut response = upgrade
         .max_message_size(codex2api_upstream::MAX_REQUEST_BYTES)
-        .on_upgrade(move |client| bridge(client, connection, state, oauth, endpoint, headers));
+        .on_upgrade(move |client| {
+            // Upgraded turns run outside the request task; keep its resolved caller address.
+            codex2api_upstream::RequestClock::arrival(caller)
+                .scope(bridge(client, connection, state, oauth, endpoint, headers))
+        });
     response.headers_mut().extend(response_headers);
     Ok(response)
 }
@@ -225,6 +238,7 @@ async fn bridge(
         "websocket",
         &format!("/v1/{}", endpoint.codex_path()),
     );
+    let caller = codex2api_upstream::RequestClock::current().and_then(|clock| clock.client);
     let mut ledger = WsLedger::new(context(&state, &oauth, &mut conn, endpoint, &headers));
     ledger.response_headers(&conn.headers);
     let ledger = tokio::sync::Mutex::new(ledger);
@@ -333,7 +347,7 @@ async fn bridge(
             }
             tokio::select! {
                 incoming = client.next(), if connected => {
-                    let clock = codex2api_upstream::RequestClock::default();
+                    let clock = codex2api_upstream::RequestClock::arrival(caller);
                     let Some(Ok(message)) = incoming else {
                         connected = false;
                         continue;

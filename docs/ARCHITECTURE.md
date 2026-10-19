@@ -3,9 +3,9 @@
 ## Official protocol baseline
 
 - Official repository: https://github.com/openai/codex
-- Release: `0.162.1` / `rust-v0.162.1`
-- Commit: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`
-- Commit time: `2026-10-09T17:39:05Z`
+- Release: `0.163.0` / `rust-v0.163.0`
+- Commit: `83086188ae0614bd882818ff1aa23f3194962012`
+- Commit time: `2026-10-15T18:57:07Z`
 - Reference-only checkout: `reference/codex`; constants: `crates/codex2api-common/src/version.rs`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
 - Client base: official `rust-v0.163.0` (`83086188ae0614bd882818ff1aa23f3194962012`)
@@ -23,6 +23,11 @@ Client Rust compilation, tests, schema generation and native runtime validation
 remain unverified under the no-local-ccodex-compilation policy. Full `just fmt`
 and Bazel lock validation are also unverified because those tools are unavailable;
 the completed local client checks cover source, direct Rust formatting and static packaging.
+Grok endpoint source tests also pass in an isolated Rust 1.95.0 manifest. Its full
+workspace/pinned-toolchain validation remains unverified because an existing Git
+dependency could not be fetched. npm checks cover Windows installation and execution;
+the POSIX permission assertion is skipped there. Correction tags publish distinct npm
+revision versions while retaining the native protocol version.
 
 ## Process and crates
 
@@ -86,7 +91,7 @@ The two inference listeners have different contracts. `codex2api-oauth` serves c
 accepts the corresponding client's protocol, checks its account and subscription,
 and preserves conversation contents, protocol events and client request IDs while
 normalizing supplier identity. The API-key listener accepts public Responses,
-Chat Completions and image APIs and constructs a new official-client request.
+Chat Completions, Messages and image APIs and constructs a new official-client request.
 Client OAuth credentials identify the selected subscription. Supplier credentials
 are resolved separately by the supplier service and upstream transport. Standard
 API callers authenticate with API keys and use their own admission and settlement.
@@ -95,10 +100,10 @@ API callers authenticate with API keys and use their own admission and settlemen
 flowchart LR
     A[Public API request] --> B[API key and group]
     B --> C[Public API parsing]
-    C --> D[Provider request builder]
-    D --> E[Price snapshot and API admission]
+    C --> E[Price snapshot and API admission]
     E --> F[Supplier selection]
-    F --> G[Account-bound official transport]
+    F --> D[Upstream protocol adapter for selected account]
+    D --> G[Account-bound official transport]
     G --> H[Provider events and actual usage]
     H --> I[Wallet settlement]
     I --> J[Public JSON or stream completion]
@@ -106,18 +111,35 @@ flowchart LR
     L --> F
 ```
 
-`codex2api-api/src/request.rs` separates caller response preferences from inference input,
-validates public controls and separates local metadata from upstream input. It
-neither selects a supplier nor supplies credentials. Provider adapters convert
-protocol semantics without dropping opaque tool or multimodal payloads.
-`PreparedRequest` carries the provider body, validated dynamic headers, local
-response metadata, upstream operation and downstream output mode.
+`codex2api-upstream/src/protocol/request.rs` validates a public request once,
+separates caller response preferences and local metadata from inference input,
+and neither selects a supplier nor supplies credentials. Both official
+subscriptions use Responses upstream; the protocol is fixed per provider and never
+inferred from model descriptors or names. After selection, the request is converted
+once into the canonical Responses request: `protocol/responses.rs`,
+`protocol/chat/responses.rs` and `protocol/messages/responses.rs` serve Responses,
+Chat and Messages callers, each with its request conversion and event conversion back.
+Responses callers pass through the same canonicalization because standard clients
+vary. There is no intermediate pivot format. `PreparedRequest` carries the provider body, validated
+dynamic headers, local response metadata and the inbound and upstream protocols.
 
-ChatGPT converts Chat messages, tools and results to the pinned Codex Responses
-shape. Its upstream request uses `stream=true` and `store=false`; API callers may
-still choose JSON or SSE. The adapter preserves supplied session/thread/window metadata and headers
-without deriving new caller identities from suppliers or API keys. Grok independently builds its Responses or Chat request,
-including its own parameter names, reasoning replay shape and stream options.
+Both providers always request a stream, as their official clients do. The API
+response loop measures supplier events in their own protocol for the ledger,
+converts each event once into the caller's protocol, and either streams it or
+collects it into the caller protocol's JSON reply. Terminal events are delivered
+only after settlement. Events and request bodies move through the pipeline by
+value: same-protocol events are forwarded without copies, text accumulates in
+place, and each attempt's body moves into the transport.
+
+ChatGPT builds the pinned Codex Responses request shape: `stream=true`,
+`store=false`, instructions as a developer input item and encrypted reasoning
+included. SDK controls the subscription endpoint does not accept are not sent.
+The adapter preserves supplied session/thread/window metadata and headers
+without deriving new caller identities from suppliers or API keys. Grok builds
+the Responses request in Grok Build's shape: official models declare
+`api_backend: responses` in the pinned client's `xai-grok-models/default_models.json`,
+system-level input uses the system role, `store=false` and encrypted reasoning is
+included. Conversion runs after selection and is rebuilt on failover.
 Image JSON and multipart inputs go through the corresponding provider builder.
 Protocol conversion preserves the native tool, multimodal and replay payloads;
 provider validation remains authoritative for unsupported extensions. Search,
@@ -178,9 +200,10 @@ Foreign keys and PL/pgSQL triggers enforce role, ownership and ledger immutabili
 
 Each supplier has its own row, installation UUID, frozen OS/architecture/terminal,
 HTTP fingerprint, tokens, cookie jar, HTTP clients and session state. There are no
-per-supplier CODEX_HOME files. Loading validates the stored fingerprint against the
-current protocol constants; startup does not rewrite stored identity. The account's
-device never comes from the proxy host.
+per-supplier CODEX_HOME files. Stored fingerprints contain only account-specific inputs
+and state. User-Agent and originator are derived from shared provider constants when
+creating transport clients; they are not supplier account columns or fingerprint fields.
+The account's device never comes from the proxy host.
 
 Supplier ownership is `(provider_id, chatgpt_account_id, chatgpt_user_id)`.
 A workspace can have several users, and one user can have several workspaces.
@@ -364,16 +387,21 @@ credentials and account-local HTTP clients remain provider-owned.
 ## Upstream identity and transport
 
 The supplier UA formula is
-`codex_cli_rs/0.162.1 ({os_type} {os_version}; {arch}) {terminal_token}`.
+`codex_cli_rs/0.163.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
 Official headers include `originator`, `User-Agent`, bearer authorization,
 `ChatGPT-Account-ID` and `x-codex-installation-id`; request-specific session,
 thread, turn and request IDs retain their actual lifecycle.
 
 User-Agent, the provider `version` header and catalog `client_version` share the
-pinned release version. Startup aligns only the ChatGPT supplier UA strings in
-`supplier_accounts.user_agent` and `http_fingerprint_json` before creating account
-transports. It preserves installation IDs, OS, architecture, terminal, proxy,
-timezone and unknown fingerprint fields, and leaves other providers unchanged.
+pinned release version from `codex2api-common/src/providers/chatgpt/version.rs`.
+Each provider owns its official endpoint and header constants in common; consumers
+reference those definitions. ChatGPT UA combines the current version with stored
+OS, architecture and terminal inputs. Grok uses its independent version and formula.
+Version upgrades rebuild account-bound clients on process restart without rewriting
+supplier identity. Schema initialization uses the current schema; existing databases
+apply numbered SQL migrations atomically. Removing derived identity fields preserves
+installation IDs, frozen inputs, cookies, credentials and manual enablement. Historical
+request/device User-Agents remain observed records and are never rewritten.
 
 OAuth uses `https://auth.openai.com`, client ID
 `app_EMoamEEZ73f0CkXaXp7hrann`, and the pinned official scopes.
@@ -768,8 +796,19 @@ reported usage determine the record and charge. Normal upstream failures, idle
 timeouts and credential revocation checks still apply. Disconnection itself does
 not mark a platform failure or finalize a partial charge.
 
-Request records contain the downstream User-Agent, model, actual model, token counts, cost snapshot, timing,
-structured error cause and official upstream request ID. They do not retain prompts,
+Request records contain the downstream User-Agent, caller IP, model, actual model, token counts, cost snapshot, timing,
+structured error cause and official upstream request ID.
+
+The OAuth and API listeners resolve the caller IP once at ingress and carry it in
+the request context to every usage row, including WebSocket turns. Forwarding
+headers count only when the direct TCP peer is inside `CODEX2API_TRUSTED_PROXIES`
+(default: loopback, private and link-local networks; `none` trusts no proxy).
+Headers in `CODEX2API_CLIENT_IP_HEADERS` (default `X-Forwarded-For,X-Real-IP`) are
+tried in order. Forwarded-for hops from all header instances are walked from the
+nearest proxy back to the first untrusted address. An invalid hop abandons that
+header, and an all-trusted chain yields its farthest hop. Without a usable header
+the peer address is recorded. IPv4-mapped IPv6 addresses are stored as IPv4, and
+an unobserved address stays empty. They do not retain prompts,
 response text, image bytes or credentials. Error text is bounded and redacted.
 Authenticated inference requests rejected before execution, including body-size,
 decoding and local admission failures, also enter the same ledger with their HTTP

@@ -176,15 +176,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         ("s2", "replacement"),
         ("s3", "free-pool"),
     ] {
-        let mut supplier = NewSupplierAccount::pending_identity(
-            id,
-            "codex_cli_rs",
-            "fixture",
-            "Linux",
-            "6",
-            "x86_64",
-            "{}",
-        );
+        let mut supplier = NewSupplierAccount::pending_identity(id, "Linux", "6", "x86_64", "{}");
         supplier.id = Some(id.into());
         supplier.chatgpt_account_id = Some(id.into());
         supplier.chatgpt_user_id = Some(format!("user-{id}"));

@@ -87,7 +87,9 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                 "消费账户",
                 "来源",
                 "类型",
-                "模型 / 接口",
+                "模型",
+                "接口",
+                "IP",
                 "推理强度 / 速度",
                 "用量",
                 "费用",
@@ -97,8 +99,8 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                 <TableHead
                   hidden={!tableColumns0.isVisible(label)}
                   className={
-                    ["模型 / 接口", "用量", "时间 / 状态"].includes(label)
-                      ? label === "模型 / 接口"
+                    ["模型", "用量", "时间 / 状态"].includes(label)
+                      ? label === "模型"
                         ? ""
                         : "max-md:w-20"
                       : ""
@@ -174,12 +176,12 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       role="cell"
                       className="whitespace-nowrap text-xs"
                     >
-                      {usageType(record.stream)}
+                      {usageType(record.stream, record.transport)}
                     </TableCell>
                     <TableCell
-                      hidden={!tableColumns0.isVisible("模型 / 接口")}
+                      hidden={!tableColumns0.isVisible("模型")}
                       className=" max-md:overflow-hidden"
-                      data-label="模型 / 接口"
+                      data-label="模型"
                       role="cell"
                     >
                       {mobile ? (
@@ -215,11 +217,29 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                               ? `${record.model} → ${record.actual_model}`
                               : (record.actual_model ?? record.model ?? "-")}
                           </strong>
-                          <CardDescription className="whitespace-nowrap text-xs">
-                            {record.endpoint} · {record.transport}
-                          </CardDescription>
                         </div>
                       )}
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("接口")}
+                      data-label="接口"
+                      role="cell"
+                      className="whitespace-nowrap text-xs"
+                    >
+                      <div>
+                        <strong>入站:</strong> {record.endpoint || "—"}
+                      </div>
+                      <div>
+                        <strong>上游:</strong> {record.upstream_endpoint ?? "—"}
+                      </div>
+                    </TableCell>
+                    <TableCell
+                      hidden={!tableColumns0.isVisible("IP")}
+                      data-label="IP"
+                      role="cell"
+                      className="whitespace-nowrap text-xs"
+                    >
+                      {record.client_ip ?? "—"}
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("推理强度 / 速度")}

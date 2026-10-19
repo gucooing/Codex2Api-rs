@@ -114,7 +114,7 @@ impl CookieStore for AccountCookieStore {
 pub fn identity_headers(identity: &AccountIdentity) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "originator",
+        codex2api_common::version::HEADER_ORIGINATOR,
         HeaderValue::from_static(codex2api_common::version::DEFAULT_ORIGINATOR),
     );
     headers.insert(

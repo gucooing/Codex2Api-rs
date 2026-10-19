@@ -2,7 +2,7 @@
 //!
 //! The ChatGPT provider talks to official Codex servers with the same request
 //! identity as a logged-in Codex CLI at commit
-//! `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`.
+//! `83086188ae0614bd882818ff1aa23f3194962012`.
 //!
 //! Transport uses stock reqwest and the pinned WebSocket transport dependencies.
 //! This crate does not spoof TLS/JA3.
@@ -46,11 +46,13 @@ pub(crate) use providers::chatgpt::proxy;
 pub(crate) use providers::chatgpt::request;
 pub(crate) use providers::chatgpt::routing;
 mod stream;
+mod client_ip;
 mod timing;
 mod transport;
 pub(crate) use providers::chatgpt::timezone;
 pub(crate) use providers::chatgpt::websocket;
 pub use stream::{buffered_sse_lines, sse_data};
+pub use client_ip::{ClientIpPolicy, client_ip};
 pub use timing::{RequestClock, ResponseTiming, TokenProtocol};
 pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
 
@@ -85,3 +87,6 @@ mod response;
 pub use response::ResponseFormat;
 
 pub mod scheduler;
+
+/// Public protocol adapters; chosen only after supplier selection.
+pub mod protocol;

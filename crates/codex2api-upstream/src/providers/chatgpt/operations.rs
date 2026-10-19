@@ -24,18 +24,18 @@ pub enum ChatgptEndpoint {
 impl ChatgptEndpoint {
     pub fn path(self) -> &'static str {
         match self {
-            Self::AccountsCheck => "/backend-api/accounts/check/v4-2023-04-27",
-            Self::Subscriptions => "/backend-api/subscriptions",
-            Self::Privacy => "/backend-api/settings/account_user_setting",
-            Self::FeaturedPlugins => "/backend-api/plugins/featured",
-            Self::Plugins => "/backend-api/ps/plugins/list",
-            Self::InstalledPlugins => "/backend-api/ps/plugins/installed",
-            Self::SuggestedPlugins => "/backend-api/ps/plugins/suggested/codex",
-            Self::AnalyticsEvents => "/backend-api/codex/analytics-events/events",
-            Self::StatsigBootstrap => "/backend-api/wham/statsig/bootstrap",
-            Self::Traces => "/backend-api/o11y/v1/traces",
-            Self::ConnectorDirectory => "/backend-api/connectors/directory/list",
-            Self::SiteStatus => "/backend-api/aura/site_status",
+            Self::AccountsCheck => codex2api_common::version::CHATGPT_PATH_ACCOUNTS_CHECK,
+            Self::Subscriptions => codex2api_common::version::CHATGPT_PATH_SUBSCRIPTIONS,
+            Self::Privacy => codex2api_common::version::CHATGPT_PATH_PRIVACY,
+            Self::FeaturedPlugins => codex2api_common::version::CHATGPT_PATH_FEATURED_PLUGINS,
+            Self::Plugins => codex2api_common::version::CHATGPT_PATH_PLUGINS,
+            Self::InstalledPlugins => codex2api_common::version::CHATGPT_PATH_INSTALLED_PLUGINS,
+            Self::SuggestedPlugins => codex2api_common::version::CHATGPT_PATH_SUGGESTED_PLUGINS,
+            Self::AnalyticsEvents => codex2api_common::version::CHATGPT_PATH_ANALYTICS_EVENTS,
+            Self::StatsigBootstrap => codex2api_common::version::CHATGPT_PATH_STATSIG_BOOTSTRAP,
+            Self::Traces => codex2api_common::version::CHATGPT_PATH_TRACES,
+            Self::ConnectorDirectory => codex2api_common::version::CHATGPT_PATH_CONNECTOR_DIRECTORY,
+            Self::SiteStatus => codex2api_common::version::CHATGPT_PATH_SITE_STATUS,
         }
     }
 
@@ -55,7 +55,12 @@ impl ChatgptEndpoint {
     }
 
     pub fn url(self, account_id: &str, query: Option<&str>) -> Result<reqwest::Url> {
-        let mut url = reqwest::Url::parse(&format!("https://chatgpt.com{}", self.path())).unwrap();
+        let mut url = reqwest::Url::parse(&format!(
+            "{}{}",
+            codex2api_common::version::CHATGPT_ORIGIN,
+            self.path()
+        ))
+        .unwrap();
         let parsed = reqwest::Url::parse(&format!("https://local/?{}", query.unwrap_or("")))
             .map_err(|_| UpstreamError::InvalidRequest("Invalid query string".into()))?;
         let pairs: Vec<_> = parsed.query_pairs().collect();
@@ -181,11 +186,17 @@ impl ChatgptEndpoint {
                 Self::AnalyticsEvents | Self::Traces | Self::ConnectorDirectory | Self::SiteStatus
             )
         {
-            headers.insert("origin", HeaderValue::from_static("https://chatgpt.com"));
-            headers.insert("referer", HeaderValue::from_static("https://chatgpt.com/"));
+            headers.insert(
+                "origin",
+                HeaderValue::from_static(codex2api_common::version::CHATGPT_ORIGIN),
+            );
+            headers.insert(
+                "referer",
+                HeaderValue::from_static(codex2api_common::version::CHATGPT_REFERER),
+            );
         } else {
             headers.insert(
-                "originator",
+                codex2api_common::version::HEADER_ORIGINATOR,
                 HeaderValue::from_static(codex2api_common::version::DEFAULT_ORIGINATOR),
             );
             if self.is_plugin() && self != Self::FeaturedPlugins {
@@ -258,8 +269,11 @@ fn raw_chatgpt_url(method: &Method, path: &str, query: Option<&str>) -> Result<r
             "Unsupported ChatGPT endpoint.".into(),
         ));
     }
-    let mut url =
-        reqwest::Url::parse(&format!("https://chatgpt.com{path}")).expect("validated path");
+    let mut url = reqwest::Url::parse(&format!(
+        "{}{path}",
+        codex2api_common::version::CHATGPT_ORIGIN
+    ))
+    .expect("validated path");
     let mut query_url = reqwest::Url::parse("https://local/").unwrap();
     query_url.set_query(query);
     if plugin.is_some() {
@@ -283,7 +297,7 @@ fn prepare_raw_chatgpt(
     crate::strip_hop_by_hop_headers(&mut inbound);
     let mut headers = normalize_protocol_headers(&inbound, installation)?;
     headers.insert(
-        "originator",
+        codex2api_common::version::HEADER_ORIGINATOR,
         HeaderValue::from_static(codex2api_common::version::DEFAULT_ORIGINATOR),
     );
     headers.insert("oai-product-sku", HeaderValue::from_static("codex"));
@@ -344,7 +358,7 @@ impl UpstreamClient {
         }
         let mut headers = normalize_protocol_headers(&inbound, &self.identity().installation_id)?;
         headers.insert(
-            "originator",
+            codex2api_common::version::HEADER_ORIGINATOR,
             HeaderValue::from_static(codex2api_common::version::DEFAULT_ORIGINATOR),
         );
         headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -352,8 +366,14 @@ impl UpstreamClient {
             "accept",
             HeaderValue::from_static("application/json, text/event-stream"),
         );
-        headers.insert("origin", HeaderValue::from_static("https://chatgpt.com"));
-        headers.insert("referer", HeaderValue::from_static("https://chatgpt.com/"));
+        headers.insert(
+            "origin",
+            HeaderValue::from_static(codex2api_common::version::CHATGPT_ORIGIN),
+        );
+        headers.insert(
+            "referer",
+            HeaderValue::from_static(codex2api_common::version::CHATGPT_REFERER),
+        );
         for name in [
             "x-conduit-token",
             "x-oai-turn-trace-id",
@@ -369,7 +389,7 @@ impl UpstreamClient {
         let value = decode_body(&body, &inbound)?;
         self.send_prepared(
             Method::POST,
-            &format!("https://chatgpt.com{path}"),
+            &format!("{}{path}", codex2api_common::version::CHATGPT_ORIGIN),
             PreparedRequest {
                 headers,
                 body: Bytes::from(serde_json::to_vec(&value)?),

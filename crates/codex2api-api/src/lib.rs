@@ -1,10 +1,12 @@
-//! API-key authentication, OpenAI protocol adaptation, per-user API limits and wallet billing.
+//! API ingress, API-key admission, dispatch and wallet settlement.
+//! Supplier request and response conversion belongs to codex2api-upstream.
 //! Supplier scheduling and OAuth subscriptions remain independent application domains.
+mod dispatch;
 mod error;
 mod execution;
 mod images;
 mod providers;
-mod request;
+mod response;
 mod runtime;
 mod usage;
 
@@ -49,45 +51,7 @@ pub(crate) struct ApiCredential {
     pub(crate) token: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Protocol {
-    Responses,
-    ChatCompletions,
-    Compact,
-    InputTokens,
-    Search,
-}
-impl Protocol {
-    fn endpoint(self) -> &'static str {
-        match self {
-            Self::Responses => "/v1/responses",
-            Self::ChatCompletions => "/v1/chat/completions",
-            Self::Compact => "/v1/responses/compact",
-            Self::InputTokens => "/v1/responses/input_tokens",
-            Self::Search => "/v1/alpha/search",
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OutputMode {
-    Responses,
-    ChatFromResponses,
-    ChatCompletions,
-    Images,
-    Compact,
-    InputTokens,
-    Search,
-}
-pub(crate) struct PreparedRequest {
-    pub(crate) body: Value,
-    pub(crate) headers: HeaderMap,
-    pub(crate) endpoint: &'static str,
-    pub(crate) upstream_path: &'static str,
-    pub(crate) output: OutputMode,
-    pub(crate) stream: bool,
-    pub(crate) include_usage: bool,
-    pub(crate) metadata: Option<Value>,
-}
+pub(crate) use codex2api_upstream::protocol::{InboundRequest, PreparedRequest, Protocol};
 
 pub fn router(state: ApiState) -> Router {
     let mut router = Router::new()
@@ -97,6 +61,7 @@ pub fn router(state: ApiState) -> Router {
     for protocol in [
         Protocol::Responses,
         Protocol::ChatCompletions,
+        Protocol::Messages,
         Protocol::Compact,
         Protocol::InputTokens,
         Protocol::Search,
@@ -116,9 +81,15 @@ pub fn router(state: ApiState) -> Router {
         ))
         .route("/healthz", get(|| async { Json(json!({"ok":true})) }))
         .layer(DefaultBodyLimit::max(codex2api_upstream::MAX_REQUEST_BYTES))
+        .layer(axum::middleware::from_fn(messages_errors))
         .layer(axum::middleware::from_fn(
             |request: Request, next: Next| async move {
-                codex2api_upstream::RequestClock::default()
+                let peer = request
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|info| info.0);
+                let client = codex2api_upstream::client_ip(peer, request.headers());
+                codex2api_upstream::RequestClock::arrival(client)
                     .scope(next.run(request))
                     .await
             },
@@ -149,26 +120,8 @@ async fn require_key(
     mut request: Request,
     next: Next,
 ) -> Result<Response> {
-    let values = request
-        .headers()
-        .get_all(http::header::AUTHORIZATION)
-        .iter()
-        .collect::<Vec<_>>();
-    if values.len() != 1 {
-        return Err(ApiError::invalid_key());
-    }
-    let (scheme, token) = values[0]
-        .to_str()
-        .ok()
-        .and_then(|value| value.split_once(' '))
-        .ok_or_else(ApiError::invalid_key)?;
-    if !scheme.eq_ignore_ascii_case("bearer")
-        || token.is_empty()
-        || token.bytes().any(|b| b.is_ascii_whitespace())
-    {
-        return Err(ApiError::invalid_key());
-    }
-    let token = token.to_owned();
+    let token =
+        credential_token(request.headers(), request.uri().path() == "/v1/messages")?.to_owned();
     let principal = state
         .storage
         .authenticate_api_key(&token)
@@ -230,11 +183,18 @@ async fn handle(
     codex2api_upstream::RequestFailureLog::metadata(&codex2api_upstream::request_metadata_value(
         &value,
     ));
-    let prepared = match credential.principal.group.provider_id.as_str() {
-        codex2api_common::CHATGPT => providers::chatgpt::prepare(protocol, value, &headers)?,
-        codex2api_common::GROK => providers::grok::prepare(protocol, value, &headers)?,
-        _ => return Err(ApiError::bad_request("Unsupported API group platform")),
-    };
+    // ChatGPT keeps stored-response continuation only on its native WebSocket transport.
+    if credential.principal.group.provider_id == codex2api_common::CHATGPT
+        && protocol == Protocol::Responses
+        && value
+            .get("previous_response_id")
+            .is_some_and(|v| !v.is_null())
+    {
+        return Err(ApiError::bad_request(
+            "previous_response_id requires the Responses WebSocket transport for ChatGPT",
+        ));
+    }
+    let prepared = InboundRequest::new(protocol, value, headers.clone())?;
     execute_prepared(
         state,
         credential.principal,
@@ -250,4 +210,67 @@ pub(crate) fn boolean(value: &Value, key: &str, default: bool) -> Result<bool> {
         Some(Value::Bool(value)) => Ok(*value),
         _ => Err(ApiError::bad_request(format!("{key} must be a boolean"))),
     }
+}
+
+fn credential_token(headers: &HeaderMap, messages: bool) -> Result<&str> {
+    let authorization = headers
+        .get_all(http::header::AUTHORIZATION)
+        .iter()
+        .collect::<Vec<_>>();
+    let keys = headers.get_all("x-api-key").iter().collect::<Vec<_>>();
+    let token = if !authorization.is_empty() {
+        if authorization.len() != 1 {
+            return Err(ApiError::invalid_key());
+        }
+        let (scheme, token) = authorization[0]
+            .to_str()
+            .ok()
+            .and_then(|v| v.split_once(' '))
+            .ok_or_else(ApiError::invalid_key)?;
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            return Err(ApiError::invalid_key());
+        }
+        if messages
+            && (!keys.is_empty() && (keys.len() != 1 || keys[0].to_str().ok() != Some(token)))
+        {
+            return Err(ApiError::invalid_key());
+        }
+        token
+    } else if messages && keys.len() == 1 {
+        keys[0].to_str().map_err(|_| ApiError::invalid_key())?
+    } else {
+        return Err(ApiError::invalid_key());
+    };
+    if token.is_empty() || token.bytes().any(|b| b.is_ascii_whitespace()) {
+        return Err(ApiError::invalid_key());
+    }
+    Ok(token)
+}
+async fn messages_errors(request: Request, next: Next) -> Response {
+    let messages = request.uri().path() == "/v1/messages";
+    let response = next.run(request).await;
+    if !messages || response.status().is_success() {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let value = axum::body::to_bytes(body, codex2api_upstream::MAX_REQUEST_BYTES)
+        .await
+        .ok()
+        .and_then(|v| serde_json::from_slice::<Value>(&v).ok())
+        .unwrap_or_else(|| {
+            ApiError::new(
+                parts.status,
+                "invalid_request_error",
+                "The request could not be completed.",
+            )
+            .body
+        });
+    let value = codex2api_upstream::protocol::messages::error(parts.status, &value);
+    let mut response = Response::from_parts(parts, axum::body::Body::from(value.to_string()));
+    response.headers_mut().remove(http::header::CONTENT_LENGTH);
+    response.headers_mut().insert(
+        http::header::CONTENT_TYPE,
+        "application/json".parse().unwrap(),
+    );
+    response
 }

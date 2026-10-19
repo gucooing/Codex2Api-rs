@@ -31,6 +31,7 @@ impl RequestFailureLog {
         let clock = crate::RequestClock::current().unwrap_or_default();
         record.id = uuid::Uuid::new_v4().to_string();
         record.requested_at_ms = clock.requested_at_ms;
+        record.client_ip = clock.client_ip();
         Self {
             state: Arc::new(Mutex::new(State {
                 record,

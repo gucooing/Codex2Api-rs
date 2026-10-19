@@ -109,15 +109,19 @@ pub fn normalize_response_identity(
         .is_some_and(|v| v == "reviewer")
     {
         body.as_object_mut().unwrap().remove("service_tier");
-        headers.remove("x-codex-routing-hint");
-    } else if !headers.contains_key("x-codex-routing-hint")
+        headers.remove(codex2api_common::version::HEADER_ROUTING_HINT);
+    } else if !headers.contains_key(codex2api_common::version::HEADER_ROUTING_HINT)
         && let Some(model) = body.get("model").and_then(Value::as_str)
     {
         let hint = match body.get("service_tier").and_then(Value::as_str) {
             Some(tier) => format!("model={model};tier={tier}"),
             None => format!("model={model}"),
         };
-        insert_header(&mut headers, "x-codex-routing-hint", &hint);
+        insert_header(
+            &mut headers,
+            codex2api_common::version::HEADER_ROUTING_HINT,
+            &hint,
+        );
     }
     Ok(headers)
 }
@@ -215,9 +219,9 @@ mod tests {
         let original = json!({"model":"custom-astra","service_tier":"ultrafast","stream":true,"input":[
             {"type":"message","id":"msg_stable","role":"developer","content":[{"type":"input_text","text":"Fixture instructions"}]},
             {"type":"additional_tools","id":"at_stable","role":"developer","tools":[{"type":"function","name":"fixture_tool","parameters":{"type":"object"}}]},
-            {"type":"message","role":"assistant","phase":"partial_answer","content":[{"type":"output_text","text":"Partial fixture"}]},
+            {"type":"message","role":"assistant","phase":"partial_answer","status":"completed","encrypted_content":"encrypted-fixture","content":[{"type":"output_text","text":"Partial fixture","annotations":[],"logprobs":[]}]},
             {"type":"compaction_trigger"}
-        ],"previous_response_id":"resp_previous","future_field":{"keep":true}});
+        ],"include":["reasoning.encrypted_content","output.encrypted_content"],"previous_response_id":"resp_previous","future_field":{"keep":true},"client_metadata":{"x-codex-turn-metadata":"{\"history_initialization\":\"fork\"}"}});
         let prepared = prepare_responses(
             &serde_json::to_vec(&original).unwrap(),
             &HeaderMap::new(),
@@ -235,6 +239,11 @@ mod tests {
         );
         assert_eq!(value["previous_response_id"], "resp_previous");
         assert_eq!(value["future_field"], original["future_field"]);
+        assert_eq!(value["include"], original["include"]);
+        assert_eq!(
+            value["client_metadata"]["x-codex-turn-metadata"],
+            original["client_metadata"]["x-codex-turn-metadata"]
+        );
         assert!(value.get("instructions").is_none());
     }
 

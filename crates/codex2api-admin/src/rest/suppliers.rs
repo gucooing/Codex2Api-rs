@@ -69,8 +69,11 @@ pub(super) fn router() -> Router<AdminState> {
         .route("/suppliers/{id}/relogin", post(crate::providers::relogin))
 }
 
-pub(crate) fn dto(a: &SupplierAccount) -> Value {
-    json!({"id":a.id,"provider_id":a.provider_id,"proxy_id":a.proxy_id,"status":a.status,"display_name":a.display_name,"chatgpt_account_id":a.chatgpt_account_id,"chatgpt_user_id":a.chatgpt_user_id,"email":a.email,"plan_type":a.plan_type,"installation_id":a.installation_id,"originator":a.originator,"user_agent":a.user_agent,"os_type":a.os_type,"os_version":a.os_version,"arch":a.arch,"created_at":a.created_at,"updated_at":a.updated_at,"last_used_at":a.last_used_at})
+pub(crate) fn dto(a: &SupplierAccount) -> Result<Value, ApiError> {
+    let (originator, user_agent) = crate::providers::request_identity(a)?;
+    Ok(
+        json!({"id":a.id,"provider_id":a.provider_id,"proxy_id":a.proxy_id,"status":a.status,"display_name":a.display_name,"chatgpt_account_id":a.chatgpt_account_id,"chatgpt_user_id":a.chatgpt_user_id,"email":a.email,"plan_type":a.plan_type,"installation_id":a.installation_id,"originator":originator,"user_agent":user_agent,"os_type":a.os_type,"os_version":a.os_version,"arch":a.arch,"created_at":a.created_at,"updated_at":a.updated_at,"last_used_at":a.last_used_at}),
+    )
 }
 fn cached_username(value: &Value) -> Option<String> {
     value
@@ -82,7 +85,7 @@ fn cached_username(value: &Value) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value, ApiError> {
-    let mut value = dto(a);
+    let mut value = dto(a)?;
     value["subscription_expires_at"] =
         json!(crate::providers::subscription_expiration(s, a).await?);
     value["username"] = json!(

@@ -69,7 +69,7 @@ pub(crate) async fn forward(
         &credential.name,
         path,
         "http",
-    ).with_user_agent(&headers).with_supplier_permit(ctx.permit.take());
+    ).with_upstream_endpoint(path).with_user_agent(&headers).with_supplier_permit(ctx.permit.take());
     if path == "/backend-api/f/conversation/prepare" || value.get("model").is_some() {
         execution
             .authorize(

@@ -33,8 +33,12 @@ pub struct UsageRecord {
     pub wallet_debit_cents: i64,
     pub completed_at_ms: Option<i64>,
     pub endpoint: String,
+    /// Canonical upstream API path; absent until a supplier request is attempted.
+    pub upstream_endpoint: Option<String>,
     pub transport: String,
     pub user_agent: Option<String>,
+    /// Caller address resolved behind trusted proxies; unknown when not observed.
+    pub client_ip: Option<String>,
     pub stream: Option<bool>,
     pub model: Option<String>,
     pub actual_model: Option<String>,
@@ -95,8 +99,10 @@ impl Default for UsageRecord {
             wallet_debit_cents: 0,
             completed_at_ms: None,
             endpoint: Default::default(),
+            upstream_endpoint: None,
             transport: Default::default(),
             user_agent: None,
+            client_ip: None,
             stream: None,
             model: Default::default(),
             actual_model: Default::default(),
@@ -316,6 +322,16 @@ fn account_usage_summary(
 }
 
 impl Storage {
+    pub async fn set_usage_upstream_endpoint(&self, id: &str, endpoint: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE usage_records SET upstream_endpoint=$1 WHERE id=$2 AND status='in_progress'",
+        )
+        .bind(endpoint)
+        .bind(id)
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
     pub async fn reroute_usage(&self, id: &str, account: &str, name: &str) -> Result<()> {
         self.write_request(crate::request_writer::Write::Reroute {
             id: id.into(),

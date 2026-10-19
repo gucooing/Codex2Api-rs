@@ -3,11 +3,10 @@ use codex2api_storage::SupplierAccount;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GrokIdentity {
     pub account_id: String,
     pub installation_id: String,
-    pub originator: String,
-    pub user_agent: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -40,12 +39,9 @@ impl GrokIdentity {
         arch: String,
         timezone: Option<String>,
     ) -> Self {
-        let user_agent = codex2api_common::version::grok::user_agent(&os_type, &arch);
         Self {
             account_id,
             installation_id,
-            originator: "grok-pager".into(),
-            user_agent,
             os_type,
             os_version,
             arch,

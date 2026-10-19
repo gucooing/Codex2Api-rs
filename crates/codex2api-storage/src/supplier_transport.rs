@@ -7,8 +7,6 @@ pub struct SupplierTransportSnapshot {
     pub id: String,
     pub provider_id: String,
     pub installation_id: String,
-    pub originator: String,
-    pub user_agent: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -28,7 +26,7 @@ impl Storage {
             .snapshots
             .read(key.clone(), async {
                 let mut value: SupplierTransportSnapshot = sqlx::query_as(
-                    "SELECT a.id,a.provider_id,a.installation_id,a.originator,a.user_agent,
+                    "SELECT a.id,a.provider_id,a.installation_id,
              a.os_type,a.os_version,a.arch,a.http_fingerprint_json,p.url AS proxy_url
              FROM supplier_accounts a LEFT JOIN outbound_proxies p ON p.id=a.proxy_id WHERE a.id=$1",
                 )

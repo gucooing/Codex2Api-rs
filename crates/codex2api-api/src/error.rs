@@ -280,3 +280,14 @@ mod tests {
         assert!(!error.body.to_string().contains("private"));
     }
 }
+
+impl From<codex2api_upstream::protocol::Error> for ApiError {
+    fn from(error: codex2api_upstream::protocol::Error) -> Self {
+        Self {
+            status: error.status,
+            body: error.body,
+            headers: HeaderMap::new(),
+            diagnostic: None,
+        }
+    }
+}

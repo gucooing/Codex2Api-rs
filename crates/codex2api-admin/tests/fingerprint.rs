@@ -33,17 +33,29 @@ async fn fingerprint_validation_persistence_and_transport_are_account_isolated()
     assert_eq!(detail["fingerprint"]["timezone"], "Asia/Taipei");
     assert_eq!(saved.installation_id, a.installation_id);
     assert_eq!(
-        saved.originator,
+        detail["originator"],
         codex2api_common::version::DEFAULT_ORIGINATOR
     );
     assert_eq!(saved.os_type, "Windows");
-    assert!(saved.user_agent.contains("Windows Terminal/1"));
+    assert!(
+        detail["user_agent"]
+            .as_str()
+            .unwrap()
+            .contains("Windows Terminal/1")
+    );
+    let frozen: serde_json::Value = serde_json::from_str(&saved.http_fingerprint_json).unwrap();
+    assert_eq!(frozen["terminal"], "Windows Terminal/1");
+    assert!(frozen.get("user_agent").is_none());
     assert!(std::sync::Arc::ptr_eq(
         &b_http,
         &f.state.auth.account_http(&b.id).await.unwrap()
     ));
     assert_eq!(
-        f.storage.require_account(&b.id).await.unwrap().user_agent,
-        b.user_agent
+        f.storage
+            .require_account(&b.id)
+            .await
+            .unwrap()
+            .http_fingerprint_json,
+        b.http_fingerprint_json
     );
 }

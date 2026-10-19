@@ -53,6 +53,8 @@ pub fn request_metadata_value(value: &Value) -> RequestMetadata {
             .map(str::to_owned),
         reasoning_effort: value
             .pointer("/reasoning/effort")
+            .or_else(|| value.get("reasoning_effort"))
+            .or_else(|| value.pointer("/output_config/effort"))
             .and_then(Value::as_str)
             .map(|s| s.chars().take(64).collect()),
         service_tier: value

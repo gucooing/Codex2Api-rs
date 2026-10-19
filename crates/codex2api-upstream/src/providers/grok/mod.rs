@@ -337,3 +337,6 @@ pub fn prepare(body: &[u8], inbound: &HeaderMap) -> Result<Value> {
 pub fn encoded(value: &Value) -> Result<Bytes> {
     Ok(Bytes::from(serde_json::to_vec(value)?))
 }
+
+pub(crate) mod api;
+pub(crate) mod api_images;

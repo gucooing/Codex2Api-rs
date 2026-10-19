@@ -1,6 +1,6 @@
 # ccodex 服务接口
 
-官方协议基线为 Codex 0.162.1，commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`。
+官方协议基线为 Codex 0.163.0，commit `83086188ae0614bd882818ff1aa23f3194962012`。
 客户端维护于 gucooing/codex 的 ccodex 分支。下列路径相对客户端内置的服务根
 `https://oauth-ai.alsl.xyz/v1/chatgpt`。
 

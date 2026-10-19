@@ -1,5 +1,5 @@
 //! xAI image JSON is sent through the existing isolated Grok subscription transport.
-use crate::{ApiError, PreparedRequest, Result, images};
+use crate::protocol::{Error as ApiError, PreparedRequest, Result, images};
 use serde_json::{Value, json};
 
 pub(crate) fn prepare(
@@ -95,7 +95,7 @@ pub(crate) fn prepare(
     Ok(images::prepared(
         body,
         edit,
-        super::outbound_headers(inbound),
+        super::api::outbound_headers(inbound),
     ))
 }
 

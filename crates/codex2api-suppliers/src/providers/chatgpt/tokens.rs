@@ -378,7 +378,7 @@ pub fn refresh_http_client(user_agent: &str) -> Result<reqwest::Client> {
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
-                "originator",
+                codex2api_common::version::HEADER_ORIGINATOR,
                 reqwest::header::HeaderValue::from_static(
                     codex2api_common::version::DEFAULT_ORIGINATOR,
                 ),

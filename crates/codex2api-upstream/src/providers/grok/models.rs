@@ -35,7 +35,6 @@ pub fn descriptors(value: &Value) -> Result<Vec<Value>> {
                 vec!["context_window", "contextWindow", "totalContextTokens"],
             ),
             ("context_windows", vec!["context_windows", "contextWindows"]),
-            ("api_backend", vec!["api_backend", "apiBackend"]),
             (
                 "supports_backend_search",
                 vec!["supports_backend_search", "supportsBackendSearch"],
@@ -76,7 +75,11 @@ pub fn descriptors(value: &Value) -> Result<Vec<Value>> {
                 descriptor[key] = value.clone();
             }
         }
-        let backend = descriptor["api_backend"]
+        // Grok Build remote/client.rs reads only the top-level backend, camel case first.
+        let backend = row
+            .get("apiBackend")
+            .or_else(|| row.get("api_backend"))
+            .unwrap_or(&Value::Null)
             .as_str()
             .unwrap_or("chat_completions")
             .to_owned();

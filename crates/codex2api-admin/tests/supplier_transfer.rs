@@ -174,10 +174,8 @@ async fn sub2api_import_skips_unsupported_types_preserves_identity_and_never_ech
         .find(|a| a.display_name.as_deref() == Some("bob"))
         .unwrap();
     assert_ne!(alice.installation_id, bob.installation_id);
-    assert_eq!(alice.originator, "codex_cli_rs");
     let grok = rows.iter().find(|a| a.provider_id == "grok").unwrap();
     assert_eq!(grok.chatgpt_account_id.as_deref(), Some("team:team-1"));
-    assert_eq!(grok.originator, "grok-pager");
     let tokens = f
         .storage
         .load_supplier_tokens(&grok.id)

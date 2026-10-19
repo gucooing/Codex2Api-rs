@@ -65,10 +65,11 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
                   (selected.status === "client_stopped" ? "（客户端停止）" : "")
                 : "-",
             ],
-            ["接口", selected?.endpoint],
-            ["传输方式", selected?.transport],
+            ["入站接口", selected?.endpoint],
+            ["上游接口", selected?.upstream_endpoint ?? "—"],
+            ["IP", selected?.client_ip ?? "—"],
             ["来源", usageSourceDetail(selected)],
-            ["类型", usageType(selected?.stream)],
+            ["类型", usageType(selected?.stream, selected?.transport)],
             ["首 Token 延迟", duration(selected?.first_token_ms)],
             ["总耗时", duration(selected?.total_ms)],
           ].map(([label, value]) => (

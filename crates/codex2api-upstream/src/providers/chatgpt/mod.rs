@@ -14,3 +14,6 @@ pub(crate) mod timezone;
 pub(crate) mod websocket;
 
 mod model_discovery;
+
+pub(crate) mod api;
+pub(crate) mod api_images;

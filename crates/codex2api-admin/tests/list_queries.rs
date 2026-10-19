@@ -436,8 +436,6 @@ async fn supplier_models_read_only_their_own_snapshot() {
     let f = Fixture::new().await;
     let mut input = codex2api_storage::NewSupplierAccount::pending_identity(
         "list-grok-installation",
-        "grok-test",
-        "grok-test",
         "Windows",
         "test",
         "x64",

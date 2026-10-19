@@ -6,7 +6,7 @@ export const failedUsage = (record: Pick<UsageRecord, "status">) =>
 export function isTextUsage(record: Pick<UsageRecord, "endpoint" | "image_count">) {
   return (
     record.image_count == null &&
-    ["/responses", "/responses/compact", "/chat/completions"].some((path) =>
+    ["/responses", "/responses/compact", "/chat/completions", "/messages"].some((path) =>
       record.endpoint.endsWith(path),
     )
   );
@@ -116,8 +116,8 @@ export function usageResult(record: Pick<UsageRecord, "status">) {
   return usageStatus(record.status).label;
 }
 
-export const usageType = (stream: boolean | null | undefined) =>
-  stream == null ? "—" : stream ? "流式" : "同步";
+export const usageType = (stream: boolean | null | undefined, transport?: string | null) =>
+  (transport || "—") + "/" + (stream == null ? "—" : stream ? "流式" : "同步");
 
 export function usageSource(kind: string | undefined) {
   if (kind === "api_key") return "Api";

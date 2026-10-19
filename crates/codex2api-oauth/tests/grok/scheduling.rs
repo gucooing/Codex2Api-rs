@@ -103,8 +103,6 @@ async fn fixture_with_issuer(issuer: Option<&str>) -> Fixture {
         let identity = codex2api_suppliers::grok::GrokIdentity::generate();
         let mut account = NewSupplierAccount::pending_identity(
             &identity.installation_id,
-            &identity.originator,
-            &identity.user_agent,
             &identity.os_type,
             &identity.os_version,
             &identity.arch,

@@ -91,16 +91,16 @@ pub fn headers(identity: &AccountIdentity, access: Option<&str>) -> Result<Heade
             .map_err(anyhow::Error::from)?,
     );
     headers.insert(
-        "x-grok-client-version",
+        wire::HEADER_CLIENT_VERSION,
         HeaderValue::from_static(wire::VERSION),
     );
     headers.insert(
-        "x-grok-client-identifier",
-        HeaderValue::from_static("grok-pager"),
+        wire::HEADER_CLIENT_IDENTIFIER,
+        HeaderValue::from_static(wire::ORIGINATOR),
     );
     headers.insert(
-        "x-grok-client-mode",
-        HeaderValue::from_static("interactive"),
+        wire::HEADER_CLIENT_MODE,
+        HeaderValue::from_static(wire::CLIENT_MODE),
     );
     if let Some(access) = access {
         headers.insert(
@@ -108,7 +108,7 @@ pub fn headers(identity: &AccountIdentity, access: Option<&str>) -> Result<Heade
             HeaderValue::from_str(&format!("Bearer {access}")).map_err(anyhow::Error::from)?,
         );
         headers.insert(
-            "x-xai-token-auth",
+            wire::HEADER_TOKEN_AUTH,
             HeaderValue::from_static(wire::TOKEN_AUTH),
         );
     }
@@ -231,8 +231,9 @@ impl GrokAuthService {
     ) -> Result<Tokens> {
         let response = http
             .post(format!(
-                "{}/oauth2/token",
-                self.grok_config.issuer.trim_end_matches('/')
+                "{}{}",
+                self.grok_config.issuer.trim_end_matches('/'),
+                wire::OAUTH_TOKEN_PATH
             ))
             .headers(headers(identity, None)?)
             .timeout(Duration::from_secs(30))
@@ -479,8 +480,6 @@ impl GrokAuthService {
         }
         let mut new = NewSupplierAccount::pending_identity(
             &identity.installation_id,
-            &identity.originator,
-            &identity.user_agent,
             &identity.os_type,
             &identity.os_version,
             &identity.arch,
@@ -580,8 +579,9 @@ impl GrokAuthService {
             let response = http
                 .raw
                 .post(format!(
-                    "{}/oauth2/device/code",
-                    self.grok_config.issuer.trim_end_matches('/')
+                    "{}{}",
+                    self.grok_config.issuer.trim_end_matches('/'),
+                    wire::OAUTH_DEVICE_PATH
                 ))
                 .headers(headers(&identity, None)?)
                 .header("x-grok-client-surface", "ui")
@@ -621,8 +621,9 @@ impl GrokAuthService {
             json!({"status":"pending","method":"device","state":state,"verification_url":url,"user_code":value["user_code"],"interval":interval})
         } else {
             let mut url = url::Url::parse(&format!(
-                "{}/oauth2/authorize",
-                self.grok_config.issuer.trim_end_matches('/')
+                "{}{}",
+                self.grok_config.issuer.trim_end_matches('/'),
+                wire::OAUTH_AUTHORIZE_PATH
             ))
             .map_err(anyhow::Error::from)?;
             url.query_pairs_mut().extend_pairs([
@@ -704,8 +705,9 @@ impl GrokAuthService {
                     .http
                     .raw
                     .post(format!(
-                        "{}/oauth2/token",
-                        self.grok_config.issuer.trim_end_matches('/')
+                        "{}{}",
+                        self.grok_config.issuer.trim_end_matches('/'),
+                        wire::OAUTH_TOKEN_PATH
                     ))
                     .headers(headers(&d.identity, None)?)
                     .header("x-grok-client-surface", "ui")
@@ -902,8 +904,9 @@ impl GrokAuthService {
             .ok_or(AuthError::MissingRefreshToken)?;
         http.raw
             .post(format!(
-                "{}/oauth2/revoke",
-                self.grok_config.issuer.trim_end_matches('/')
+                "{}{}",
+                self.grok_config.issuer.trim_end_matches('/'),
+                wire::OAUTH_REVOKE_PATH
             ))
             .headers(headers(&http.identity, None)?)
             .timeout(Duration::from_secs(30))

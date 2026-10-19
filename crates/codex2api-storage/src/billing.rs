@@ -398,6 +398,7 @@ fn charge_scaled(
     if !record.endpoint.ends_with("/responses")
         && !record.endpoint.ends_with("/responses/compact")
         && !record.endpoint.ends_with("/chat/completions")
+        && !record.endpoint.ends_with("/messages")
     {
         return (None, "unsupported", model, None);
     }

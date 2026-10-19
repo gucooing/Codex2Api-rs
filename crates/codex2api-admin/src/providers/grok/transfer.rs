@@ -60,8 +60,6 @@ pub(crate) fn from_sub2api(source: &Sub2apiAccount) -> Result<SupplierTransferAc
     let identity = GrokIdentity::generate();
     let mut account = NewSupplierAccount::pending_identity(
         &identity.installation_id,
-        &identity.originator,
-        &identity.user_agent,
         &identity.os_type,
         &identity.os_version,
         &identity.arch,
@@ -109,8 +107,6 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
         previous.timezone,
     );
     a.id = Some(identity.account_id.clone());
-    a.originator = identity.originator.clone();
-    a.user_agent = identity.user_agent.clone();
     a.http_fingerprint_json = identity
         .fingerprint_json()
         .map_err(|_| ApiError::bad("Grok 指纹无效"))?;

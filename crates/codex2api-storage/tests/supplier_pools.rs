@@ -211,17 +211,17 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             Some("http://127.0.0.1:12346/")
         );
         let mut account = storage.require_account(provider).await.unwrap();
-        account.user_agent = "updated-fingerprint".into();
+        account.os_version = "1.2.3".into();
         storage.save_account_fingerprint(&account).await.unwrap();
         assert_eq!(
             storage
                 .supplier_transport_snapshot(provider)
                 .await
                 .unwrap()
-                .user_agent,
-            "updated-fingerprint"
+                .os_version,
+            "1.2.3"
         );
-        assert_ne!(initial.user_agent, "updated-fingerprint");
+        assert_ne!(initial.os_version, "1.2.3");
         storage
             .delete_outbound_proxy(&proxy.id, true)
             .await
@@ -276,15 +276,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
     }
 }
 async fn supplier_for(storage: &Storage, id: &str, provider: &str) {
-    let mut new = NewSupplierAccount::pending_identity(
-        id,
-        "codex_cli_rs",
-        "fixture",
-        "Linux",
-        "6",
-        "x86_64",
-        "{}",
-    );
+    let mut new = NewSupplierAccount::pending_identity(id, "Linux", "6", "x86_64", "{}");
     new.id = Some(id.into());
     new.provider_id = provider.into();
     new.chatgpt_account_id = Some(id.into());

@@ -1,5 +1,5 @@
 //! Metadata-only usage observation and exactly-once API wallet settlement.
-use crate::{ApiError, OutputMode, Result};
+use crate::{ApiError, Protocol, Result};
 use codex2api_storage::{Storage, UsageRecord};
 use codex2api_upstream::{ResponseFailure, ResponseLifecycle, ResponseOutcome};
 use serde_json::{Value, json};
@@ -9,9 +9,7 @@ pub(crate) struct ApiLog {
     storage: Storage,
     pub(crate) record: UsageRecord,
     pub(crate) lifecycle: ResponseLifecycle,
-    pub(crate) chat_finished: bool,
     pub(crate) auth_revision: Option<i64>,
-    chat_choices: std::collections::BTreeMap<u64, bool>,
     started: Instant,
     settled: bool,
     authoritative_model: bool,
@@ -24,9 +22,7 @@ impl ApiLog {
             storage,
             record,
             lifecycle: ResponseLifecycle::default(),
-            chat_finished: false,
             auth_revision: None,
-            chat_choices: Default::default(),
             started,
             settled: false,
             authoritative_model: false,
@@ -61,32 +57,22 @@ impl ApiLog {
                     .map(str::to_owned)
             });
     }
-    pub(crate) fn observe(&mut self, value: &Value, mode: OutputMode) -> bool {
+    /// `upstream` is the supplier protocol whose events are being measured.
+    pub(crate) fn observe(&mut self, value: &Value, upstream: Protocol) -> bool {
         if self.lifecycle.outcome().is_some() {
             return false;
         }
-        self.measure(value, mode);
+        self.measure(value, upstream);
         if self.lifecycle.observe(value, None) {
             return true;
         }
-        let completed = match mode {
-            OutputMode::ChatCompletions => {
-                for choice in value["choices"].as_array().into_iter().flatten() {
-                    let finished = !choice["finish_reason"].is_null();
-                    self.chat_finished |= finished;
-                    let index = choice["index"].as_u64().unwrap_or(0);
-                    *self.chat_choices.entry(index).or_default() |= finished;
-                }
-                value["object"] == "chat.completion"
-                    && !self.chat_choices.is_empty()
-                    && self.chat_choices.values().all(|finished| *finished)
-            }
-            OutputMode::Images => {
+        let completed = match upstream {
+            Protocol::ImageGeneration | Protocol::ImageEdit => {
                 value["data"].is_array() && self.record.image_count.is_some_and(|count| count > 0)
             }
-            OutputMode::Compact => value["output"].is_array(),
-            OutputMode::InputTokens => value["input_tokens"].as_u64().is_some(),
-            OutputMode::Search => {
+            Protocol::Compact => value["output"].is_array(),
+            Protocol::InputTokens => value["input_tokens"].as_u64().is_some(),
+            Protocol::Search => {
                 value["output"].is_string()
                     && value
                         .get("encrypted_output")
@@ -95,7 +81,7 @@ impl ApiLog {
                         .get("results")
                         .is_none_or(|v| v.is_null() || v.is_array())
             }
-            OutputMode::Responses | OutputMode::ChatFromResponses => false,
+            Protocol::Responses | Protocol::ChatCompletions | Protocol::Messages => false,
         };
         completed
             && self
@@ -103,7 +89,7 @@ impl ApiLog {
                 .observe(&json!({"type":"response.completed"}), None)
     }
     /// Preserve measurements in physical HTTP failures without trusting a success-shaped body.
-    pub(crate) fn measure(&mut self, value: &Value, mode: OutputMode) {
+    pub(crate) fn measure(&mut self, value: &Value, upstream: Protocol) {
         self.record.generation_observed |=
             codex2api_upstream::scheduler::generation_observed(value);
         let response = value.get("response").unwrap_or(value);
@@ -116,22 +102,13 @@ impl ApiLog {
             }
         }
         let usage = &response["usage"];
-        if mode == OutputMode::ChatCompletions {
-            self.tokens(
-                &usage["prompt_tokens"],
-                &usage["completion_tokens"],
-                &usage["prompt_tokens_details"],
-                &usage["completion_tokens_details"],
-            );
-        } else {
-            self.tokens(
-                &usage["input_tokens"],
-                &usage["output_tokens"],
-                &usage["input_tokens_details"],
-                &usage["output_tokens_details"],
-            );
-        }
-        if mode == OutputMode::Images {
+        self.tokens(
+            &usage["input_tokens"],
+            &usage["output_tokens"],
+            &usage["input_tokens_details"],
+            &usage["output_tokens_details"],
+        );
+        if upstream.image() {
             crate::images::observe_usage(&mut self.record, response);
         }
     }
@@ -159,15 +136,6 @@ impl ApiLog {
         }
         if let Some(value) = measurement(&output_details["reasoning_tokens"]) {
             self.record.reasoning_tokens = Some(value);
-        }
-    }
-    pub(crate) fn done(&mut self, mode: OutputMode) {
-        if mode == OutputMode::ChatCompletions
-            && !self.chat_choices.is_empty()
-            && self.chat_choices.values().all(|finished| *finished)
-        {
-            self.lifecycle
-                .observe(&json!({"type":"response.completed"}), None);
         }
     }
     pub(crate) fn fail(&mut self, error: &ApiError) {

@@ -2,7 +2,7 @@
 //! ChatGPT/Codex and Grok own independent provider implementations.
 //!
 //! ChatGPT behavior matches official Codex CLI at the pinned commit
-//! `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`.
+//! `83086188ae0614bd882818ff1aa23f3194962012`.
 //!
 //! The library never opens a system browser. Callers (admin UI) receive
 //! an authorization URL or device code and present it to the user.

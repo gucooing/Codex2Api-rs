@@ -11,8 +11,7 @@ use crate::account_error::Result;
 /// regenerated. They are not read from the proxy host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostRuntime {
-    pub originator: String,
-    pub user_agent: String,
+    pub terminal: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -137,16 +136,8 @@ impl HostRuntime {
     }
 
     fn from_profile(profile: &RuntimeProfile) -> Self {
-        let originator = codex2api_common::version::DEFAULT_ORIGINATOR.to_string();
-        let user_agent = sanitize_user_agent(codex2api_common::version::official_user_agent(
-            profile.os_type,
-            profile.os_version,
-            profile.arch,
-            profile.terminal,
-        ));
         Self {
-            originator,
-            user_agent,
+            terminal: profile.terminal.to_string(),
             os_type: profile.os_type.to_string(),
             os_version: profile.os_version.to_string(),
             arch: profile.arch.to_string(),
@@ -165,8 +156,7 @@ impl HostRuntime {
 pub struct HttpFingerprint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
-    pub originator: String,
-    pub user_agent: String,
+    pub terminal: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -178,9 +168,8 @@ pub struct HttpFingerprint {
 impl HttpFingerprint {
     pub fn from_runtime(runtime: &HostRuntime, installation_id: impl Into<String>) -> Self {
         Self {
-            originator: runtime.originator.clone(),
             timezone: None,
-            user_agent: runtime.user_agent.clone(),
+            terminal: runtime.terminal.clone(),
             os_type: runtime.os_type.clone(),
             os_version: runtime.os_version.clone(),
             arch: runtime.arch.clone(),
@@ -199,22 +188,18 @@ impl HttpFingerprint {
             return Err(crate::account_error::AccountError::InvalidHttpFingerprint);
         }
         let fingerprint: Self = serde_json::from_str(trimmed)?;
-        let terminal = fingerprint
-            .user_agent
-            .split_once(") ")
-            .map(|(_, terminal)| terminal)
-            .filter(|terminal| !terminal.trim().is_empty())
-            .ok_or(crate::account_error::AccountError::InvalidHttpFingerprint)?;
-        let expected = sanitize_user_agent(codex2api_common::version::official_user_agent(
-            &fingerprint.os_type,
-            &fingerprint.os_version,
-            &fingerprint.arch,
-            terminal,
-        ));
-        if fingerprint.originator != codex2api_common::version::DEFAULT_ORIGINATOR
-            || fingerprint.user_agent != expected
-        {
-            return Err(crate::account_error::AccountError::InvalidHttpFingerprint);
+        for (value, max) in [
+            (&fingerprint.os_type, 128),
+            (&fingerprint.os_version, 128),
+            (&fingerprint.arch, 128),
+            (&fingerprint.terminal, 256),
+        ] {
+            if value.trim().is_empty()
+                || value.len() > max
+                || !value.bytes().all(|b| (b' '..=b'~').contains(&b))
+            {
+                return Err(crate::account_error::AccountError::InvalidHttpFingerprint);
+            }
         }
         Ok(fingerprint)
     }
@@ -222,14 +207,13 @@ impl HttpFingerprint {
 
 /// Isolated Codex request identity for one upstream account.
 ///
-/// Persisted on the `accounts` PostgreSQL row. Upstream headers are built from the
+/// Inputs are persisted on the `supplier_accounts` PostgreSQL row. Headers combine shared constants with the
 /// frozen [`HttpFingerprint`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountIdentity {
     pub account_id: String,
     pub installation_id: String,
-    pub originator: String,
-    pub user_agent: String,
+    pub terminal: String,
     pub os_type: String,
     pub os_version: String,
     pub arch: String,
@@ -247,8 +231,7 @@ impl AccountIdentity {
         Self {
             account_id: account_id.into(),
             installation_id,
-            originator: runtime.originator,
-            user_agent: runtime.user_agent,
+            terminal: runtime.terminal,
             os_type: runtime.os_type,
             os_version: runtime.os_version,
             arch: runtime.arch,
@@ -261,8 +244,7 @@ impl AccountIdentity {
         Ok(Self {
             account_id: account.id.clone(),
             installation_id: account.installation_id.clone(),
-            originator: http_fingerprint.originator.clone(),
-            user_agent: http_fingerprint.user_agent.clone(),
+            terminal: http_fingerprint.terminal.clone(),
             os_type: http_fingerprint.os_type.clone(),
             os_version: http_fingerprint.os_version.clone(),
             arch: http_fingerprint.arch.clone(),
@@ -272,8 +254,7 @@ impl AccountIdentity {
 
     pub fn runtime(&self) -> HostRuntime {
         HostRuntime {
-            originator: self.originator.clone(),
-            user_agent: self.user_agent.clone(),
+            terminal: self.terminal.clone(),
             os_type: self.os_type.clone(),
             os_version: self.os_version.clone(),
             arch: self.arch.clone(),
@@ -285,8 +266,7 @@ impl AccountIdentity {
         Ok(Self {
             account_id: account.id.clone(),
             installation_id: account.installation_id.clone(),
-            originator: http_fingerprint.originator.clone(),
-            user_agent: http_fingerprint.user_agent.clone(),
+            terminal: http_fingerprint.terminal.clone(),
             os_type: http_fingerprint.os_type.clone(),
             os_version: http_fingerprint.os_version.clone(),
             arch: http_fingerprint.arch.clone(),
@@ -298,9 +278,14 @@ impl AccountIdentity {
         self.http_fingerprint.to_json()
     }
 
-    /// Use the persisted fingerprint, validated when the account is loaded.
+    /// Combine the current provider constants with this account's frozen inputs.
     pub fn official_user_agent(&self) -> String {
-        self.http_fingerprint.user_agent.clone()
+        sanitize_user_agent(codex2api_common::version::official_user_agent(
+            &self.http_fingerprint.os_type,
+            &self.http_fingerprint.os_version,
+            &self.http_fingerprint.arch,
+            &self.http_fingerprint.terminal,
+        ))
     }
 }
 

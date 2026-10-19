@@ -29,6 +29,7 @@ pub struct SupplierModel {
 }
 
 impl Storage {
+    /// Account-local descriptor returned by the authenticated model discovery.
     pub async fn supplier_scheduling(&self, id: &str) -> Result<SupplierScheduling> {
         Ok(sqlx::query_as(
             "SELECT concurrency,priority,load_factor,revision

@@ -8,7 +8,7 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d` (2026-10-09T17:39:05Z)
+- commit: `83086188ae0614bd882818ff1aa23f3194962012` (2026-10-15T18:57:07Z)
 - constants: `crates/codex2api-common/src/version.rs`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
@@ -57,7 +57,7 @@ validation are complete.
   Missing configuration or failed initial connection must stop startup. Do not add
   in-process substitutes when Redis is absent or unavailable.
 - Isolated persistent per-account identity and HTTP fingerprint in PostgreSQL (no `$CODEX_HOME` files).
-- HTTP fingerprint: official header names/formula; originator + UA version are constants; OS/terminal are random per account then frozen. Do not use the proxy host. Do not forge TLS/JA3.
+- HTTP fingerprint: official header names/formula; OS, architecture and terminal are random per account then frozen. Persist only account-specific identity inputs and state; assemble the User-Agent at runtime from those inputs and the provider's shared constants. Do not persist the derived User-Agent, its package version or fixed originator as account configuration. Do not use the proxy host. Do not forge TLS/JA3.
 - Admin web: one user, username/password, default `admin` / `admin`.
 - OAuth clients, the standard AI API gateway, user web/API and administrator web/API have separate routers and
   configurable listening ports in the same process. Build the two Next.js
@@ -133,8 +133,24 @@ validation are complete.
 
 ## Official constants (do not invent)
 
+Provider-wide fixed values (release/UA version, originator, official URLs, OAuth
+client ID/scopes, header names and protocol paths) have one definition in
+`codex2api-common/src/providers/<provider>/`; all runtime callers reference those
+constants or shared builders. Do not scatter literal copies across handlers,
+transport, identity generation or storage. Keep ChatGPT and Grok constants
+independent. Administrator-configured service origins remain configuration and
+must not replace official supplier constants.
+
+Routine version upgrades change the shared version definition and rebuild the
+process, not stored supplier identities. Removing existing persisted fixed values
+requires a one-time atomic SQL migration that preserves each account's original
+installation ID, OS, architecture, terminal, cookies and credentials. Extract
+missing account-specific inputs before removing derived fields; reject invalid
+data rather than inventing a replacement fingerprint. Do not add runtime legacy
+readers or repeat UA data migrations for future releases.
+
 - originator: `codex_cli_rs`
-- package version in UA: `0.162.1`
+- package version in UA: `0.163.0`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`

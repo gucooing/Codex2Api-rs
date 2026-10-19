@@ -55,6 +55,15 @@ async fn team_members_and_personal_subscriptions_keep_separate_credentials_and_f
         assert_eq!(saved.account.id, draft.account_id);
         assert_eq!(saved.account.installation_id, draft.installation_id);
         assert_eq!(saved.account.plan_type.as_deref(), Some(plan));
+        let frozen: serde_json::Value =
+            serde_json::from_str(&saved.account.http_fingerprint_json).unwrap();
+        assert!(frozen.get("user_agent").is_none());
+        assert!(frozen.get("originator").is_none());
+        assert_eq!(frozen["terminal"], draft.terminal);
+        assert_eq!(
+            saved.identity.official_user_agent(),
+            draft.official_user_agent()
+        );
         originals.push((saved.account, auth));
     }
     assert_eq!(storage.list_accounts().await.unwrap().len(), 3);

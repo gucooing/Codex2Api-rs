@@ -204,6 +204,7 @@ impl RequestLog {
     ) -> crate::Result<Self> {
         let start = if let Some(clock) = codex2api_upstream::RequestClock::current() {
             record.requested_at_ms = clock.requested_at_ms;
+            record.client_ip = clock.client_ip();
             clock.started
         } else {
             start
@@ -2477,6 +2478,64 @@ mod tests {
         assert!(row.first_token_ms.is_some());
         assert!(row.total_ms >= row.first_token_ms);
         server.abort();
+        storage.close().await;
+    }
+
+    #[tokio::test]
+    async fn websocket_interrupt_acknowledgements_preserve_terminal_usage_in_either_order() {
+        let dir = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(dir.path().join("interrupts-pg"))
+            .await
+            .unwrap();
+        let ledger = tokio::sync::Mutex::new(WsLedger::new(
+            execution_context(storage.clone(), "/v1/responses", "websocket").await,
+        ));
+        for (index, (ack, first)) in [("accepted", true), ("accepted", false), ("failed", true)]
+            .into_iter()
+            .enumerate()
+        {
+            let id = format!("interrupt-{index}");
+            ws_start(
+                &ledger,
+                &serde_json::json!({"type":"response.create","model":"one"}),
+                None,
+            )
+            .await
+            .unwrap();
+            ledger
+                .lock()
+                .await
+                .observe_value(&serde_json::json!({"type":"response.created","response":{"id":id}}))
+                .await
+                .unwrap();
+            ws_start(
+                &ledger,
+                &serde_json::json!({"type":"response.interrupt","response_id":id}),
+                None,
+            )
+            .await
+            .unwrap();
+            let ack =
+                serde_json::json!({"type":format!("response.interrupt.{ack}"),"response_id":id});
+            let end = serde_json::json!({"type":"response.incomplete","response":{"id":id,"status":"incomplete","incomplete_details":{"reason":"interrupted"},"usage":{"input_tokens":100,"output_tokens":20}}});
+            for event in if first { [&ack, &end] } else { [&end, &ack] } {
+                ledger.lock().await.observe_value(event).await.unwrap();
+            }
+            assert!(!ledger.lock().await.has_pending());
+            // A duplicated final event and subsequent transport teardown must not settle twice.
+            ledger.lock().await.observe_value(&end).await.unwrap();
+        }
+        drop(ledger);
+        let records = finalized(&storage, 3).await;
+        assert_eq!(records.len(), 3);
+        for record in records {
+            assert_eq!(
+                (record.input_tokens, record.output_tokens),
+                (Some(100), Some(20))
+            );
+            assert_eq!(record.status, "incomplete");
+            assert_eq!(record.error_code.as_deref(), Some("interrupted"));
+        }
         storage.close().await;
     }
 

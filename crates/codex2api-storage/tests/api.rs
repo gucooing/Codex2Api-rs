@@ -49,8 +49,6 @@ async fn setup() -> (
             "fixture",
             "fixture",
             "fixture",
-            "fixture",
-            "fixture",
             "{}",
         ))
         .await

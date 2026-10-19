@@ -26,27 +26,30 @@ pub enum Endpoint {
 impl Endpoint {
     pub fn codex_path(self) -> &'static str {
         match self {
-            Self::Responses => "responses",
-            Self::Compact => "responses/compact",
-            Self::InputTokens => "responses/input_tokens",
-            Self::Guardian => "guardian",
-            Self::GuardianClassifier => "guardian-classifier",
-            Self::Models => "models",
-            Self::Usage => "wham/usage",
-            Self::MemorySummary => "memories/trace_summarize",
-            Self::Search => "alpha/search",
-            Self::ImageGeneration => "images/generations",
-            Self::ImageEdit => "images/edits",
+            Self::Responses => codex2api_common::version::CODEX_PATH_RESPONSES,
+            Self::Compact => codex2api_common::version::CODEX_PATH_COMPACT,
+            Self::InputTokens => codex2api_common::version::CODEX_PATH_INPUT_TOKENS,
+            Self::Guardian => codex2api_common::version::CODEX_PATH_GUARDIAN,
+            Self::GuardianClassifier => codex2api_common::version::CODEX_PATH_GUARDIAN_CLASSIFIER,
+            Self::Models => codex2api_common::version::CODEX_PATH_MODELS,
+            Self::Usage => codex2api_common::version::CODEX_PATH_USAGE,
+            Self::MemorySummary => codex2api_common::version::CODEX_PATH_MEMORY_SUMMARY,
+            Self::Search => codex2api_common::version::CODEX_PATH_SEARCH,
+            Self::ImageGeneration => codex2api_common::version::CODEX_PATH_IMAGE_GENERATION,
+            Self::ImageEdit => codex2api_common::version::CODEX_PATH_IMAGE_EDIT,
         }
     }
 
     pub fn url(self) -> String {
         match self {
             Self::Guardian | Self::GuardianClassifier => {
-                format!("{CHATGPT_CODEX_BASE_URL}/responses")
+                format!(
+                    "{CHATGPT_CODEX_BASE_URL}{}",
+                    codex2api_common::version::RESPONSES_PATH
+                )
             }
-            Self::InputTokens => "https://api.openai.com/v1/responses/input_tokens".into(),
-            Self::Usage => "https://chatgpt.com/backend-api/wham/usage".into(),
+            Self::InputTokens => codex2api_common::version::OPENAI_INPUT_TOKENS_URL.into(),
+            Self::Usage => codex2api_common::version::CHATGPT_USAGE_URL.into(),
             Self::Models => {
                 format!("{CHATGPT_CODEX_BASE_URL}/models?client_version={CODEX_PACKAGE_VERSION}")
             }
@@ -118,8 +121,8 @@ impl Endpoint {
         } else {
             normalize_protocol_headers(inbound, installation_id)?
         };
-        if !inbound.contains_key("x-codex-routing-hint") {
-            headers.remove("x-codex-routing-hint");
+        if !inbound.contains_key(codex2api_common::version::HEADER_ROUTING_HINT) {
+            headers.remove(codex2api_common::version::HEADER_ROUTING_HINT);
         }
         if matches!(self, Self::ImageGeneration | Self::ImageEdit) {
             // ext/image-generation/src/backend.rs: this identifies the calling turn,
@@ -218,7 +221,7 @@ mod tests {
     fn endpoints_and_version_are_official_and_not_caller_selected() {
         assert_eq!(
             Endpoint::Models.url(),
-            "https://chatgpt.com/backend-api/codex/models?client_version=0.162.1"
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0"
         );
         assert_eq!(
             Endpoint::Usage.url(),

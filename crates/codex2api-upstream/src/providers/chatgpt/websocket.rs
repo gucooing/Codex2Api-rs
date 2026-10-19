@@ -524,7 +524,10 @@ mod tests {
         .unwrap();
         let request = rx.await.unwrap();
         assert_eq!(request["authorization"], "Bearer upstream-token");
-        assert_eq!(request["version"], "0.162.1");
+        assert_eq!(
+            request["version"],
+            codex2api_common::version::CODEX_PACKAGE_VERSION
+        );
         assert_eq!(request["user-agent"], expected_ua);
         assert_eq!(request["thread-id"], "thread");
         assert_eq!(request["x-codex-turn-state"], "state");

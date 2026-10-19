@@ -2,7 +2,7 @@ use super::*;
 
 const FREE: &str = "You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 650951/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok";
 
-async fn pool() -> Fixture {
+pub(super) async fn pool() -> Fixture {
     let f = fixture("grok").await;
     add_supplier(&f.storage, "grok", "supplier-two").await;
     f.storage
@@ -142,9 +142,9 @@ async fn grok_non_quota_errors_keep_supply_and_retry_instructions() {
 }
 
 #[tokio::test]
-async fn grok_measured_failures_never_retry_or_lose_native_chat_usage() {
+async fn grok_measured_failures_never_retry_or_lose_reported_usage() {
     let f = pool().await;
-    let body = json!({"error":{"code":"subscription:free-usage-exhausted","message":FREE},"model":"custom-model","usage":{"prompt_tokens":10000,"completion_tokens":5000,"prompt_tokens_details":{"cached_tokens":2000}}});
+    let body = json!({"error":{"code":"subscription:free-usage-exhausted","message":FREE},"model":"custom-model","usage":{"input_tokens":10000,"output_tokens":5000,"input_tokens_details":{"cached_tokens":2000}}});
     f.mock
         .grok_rejections
         .lock()

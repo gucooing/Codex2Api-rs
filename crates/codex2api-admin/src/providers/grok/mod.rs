@@ -89,8 +89,6 @@ pub async fn fingerprint(
     account.os_type = identity.os_type.clone();
     account.os_version = identity.os_version.clone();
     account.arch = identity.arch.clone();
-    account.originator = identity.originator.clone();
-    account.user_agent = identity.user_agent.clone();
     account.http_fingerprint_json = identity
         .fingerprint_json()
         .map_err(|_| ApiError::bad("指纹无效"))?;
@@ -334,5 +332,16 @@ pub async fn official(
     };
     Ok(Json(
         json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":error,"quota":summary}),
+    ))
+}
+
+pub(crate) fn request_identity(
+    account: &codex2api_storage::SupplierAccount,
+) -> Result<(&'static str, String), ApiError> {
+    let identity =
+        GrokIdentity::from_account(account).map_err(|_| ApiError::bad("账户指纹无效"))?;
+    Ok((
+        codex2api_common::version::grok::ORIGINATOR,
+        codex2api_common::version::grok::user_agent(&identity.os_type, &identity.arch),
     ))
 }

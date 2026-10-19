@@ -1,10 +1,8 @@
 //! Native Codex Responses WebSocket sessions. Each generation uses the same
 //! API admission, supplier scheduler and usage ledger as the HTTP transport.
 use crate::{
-    ApiCredential, ApiError, ApiState, OutputMode, PreparedRequest, Protocol, Result,
-    execution::{self, ResponsesOutput},
-    runtime::ApiPermit,
-    usage::ApiLog,
+    ApiCredential, ApiError, ApiState, InboundRequest, PreparedRequest, Protocol, Result, dispatch,
+    execution, response, runtime::ApiPermit, usage::ApiLog,
 };
 use axum::{
     extract::{
@@ -13,6 +11,7 @@ use axum::{
     },
     response::Response,
 };
+use codex2api_upstream::protocol::responses::Output as ResponsesOutput;
 use codex2api_upstream::scheduler::{ScheduleRequest, SupplierContext, SupplierRoute};
 use codex2api_upstream::{
     Endpoint, ResponseOutcome, SupplierFailure, UpstreamError, UpstreamWebSocket,
@@ -29,6 +28,7 @@ struct Session {
     route: SupplierRoute,
     headers: HeaderMap,
     user_agent: Option<String>,
+    client: Option<std::net::IpAddr>,
 }
 
 struct Connection {
@@ -49,7 +49,7 @@ impl Session {
         mut selected: Option<SupplierContext>,
     ) -> Result<Connection> {
         loop {
-            execution::validate(
+            dispatch::validate(
                 &self.state,
                 &self.credential.principal,
                 &self.credential.token,
@@ -64,7 +64,7 @@ impl Session {
                         request,
                         excluded,
                         || {
-                            execution::validate(
+                            dispatch::validate(
                                 &self.state,
                                 &self.credential.principal,
                                 &self.credential.token,
@@ -83,7 +83,7 @@ impl Session {
                 let client = self.state.upstream.get(&context.account.id).await?;
                 let timezone = client.identity().http_fingerprint.timezone.clone();
                 let headers =
-                    execution::owned_headers(&self.state, &self.route, &context, headers).await?;
+                    dispatch::owned_headers(&self.state, &self.route, &context, headers).await?;
                 let (socket, headers, workspace) = client
                     .connect_websocket(Endpoint::Responses, headers)
                     .await?;
@@ -96,7 +96,7 @@ impl Session {
                         .as_ref()
                         .map(|workspace| workspace.auth_revision())
                         .or(revision);
-                    execution::remember_affinity(
+                    dispatch::remember_affinity(
                         &self.state,
                         &self.route,
                         &context.account.id,
@@ -165,21 +165,27 @@ pub(crate) async fn connect(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    execution::validate(&state, &credential.principal, &credential.token).await?;
+    dispatch::validate(&state, &credential.principal, &credential.token).await?;
     let user_agent = codex2api_upstream::request_user_agent(&headers);
-    let headers = super::request_context(&mut serde_json::json!({}), &headers)?;
+    let headers =
+        codex2api_upstream::protocol::chatgpt_context(&mut serde_json::json!({}), &headers)?;
     let session = Session {
-        route: execution::route(&credential.principal),
+        route: dispatch::route(&credential.principal),
         state,
         credential,
         headers,
         user_agent,
+        client: codex2api_upstream::RequestClock::current().and_then(|clock| clock.client),
     };
-    let request = super::scheduling(&session.headers, &serde_json::json!({}));
+    let request = codex2api_upstream::protocol::scheduling(
+        codex2api_common::CHATGPT,
+        &session.headers,
+        &serde_json::json!({}),
+    )?;
     let mut connection = session
         .open(&session.headers, &request, &mut Vec::new(), None)
         .await?;
-    let mut response_headers = execution::public_headers(&connection.headers, false);
+    let mut response_headers = response::public_headers(&connection.headers, false);
     response_headers.remove("content-type");
     // Idle reusable connections do not consume a generation concurrency slot.
     connection.context.permit.take();
@@ -209,6 +215,7 @@ impl Turn {
     fn supplier(&mut self, connection: &Connection) {
         if let Some(log) = &mut self.log {
             log.record.account_id = connection.context.account.id.clone();
+            log.record.upstream_endpoint = Some(Protocol::Responses.endpoint().into());
             log.record.account_name = connection
                 .context
                 .account
@@ -236,7 +243,7 @@ impl Turn {
             .filter(|id| !id.is_empty() && id.len() <= 256)
         {
             if self.response_id.as_deref() != Some(id) {
-                execution::remember_affinity(
+                dispatch::remember_affinity(
                     &session.state,
                     &session.route,
                     account_id,
@@ -248,7 +255,7 @@ impl Turn {
             self.response_id = Some(id.to_owned());
         }
         if let Some(log) = &mut self.log {
-            log.observe(&value, OutputMode::Responses);
+            log.observe(&value, Protocol::Responses);
             if outcome.is_some() {
                 log.settle().await?;
             }
@@ -293,7 +300,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
             }
             if pending.is_none() && let Some((prepared, bytes, clock)) = queue.pop_front() {
                 queued_bytes -= bytes;
-                execution::validate(&session.state, &session.credential.principal, &session.credential.token).await?;
+                dispatch::validate(&session.state, &session.credential.principal, &session.credential.token).await?;
                 let warmup = prepared.body["generate"] == false;
                 let (log, permit) = if warmup {
                     let model = prepared.body["model"].as_str().unwrap_or("");
@@ -304,7 +311,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     }
                     (None, None)
                 } else {
-                    let (log, permit) = clock.scope(execution::admit(&session.state, &session.credential.principal, &prepared, "websocket", session.user_agent.as_deref())).await?;
+                    let (log, permit) = clock.scope(execution::admit(&session.state, &session.credential.principal, &prepared.body, prepared.inbound.endpoint(), true, "websocket", session.user_agent.as_deref())).await?;
                     (Some(log), Some(permit))
                 };
                 // Store admission before fallible scheduling/connection work so
@@ -314,9 +321,9 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     excluded: Vec::new(), refreshed: HashSet::new(),
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(3600) });
                 let turn = pending.as_mut().unwrap();
-                let schedule = super::scheduling(&session.headers, &turn.prepared.body);
+                let schedule = codex2api_upstream::protocol::scheduling(codex2api_common::CHATGPT, &session.headers, &turn.prepared.body)?;
                 let selected = codex2api_upstream::scheduler::select(&session.state.storage, &session.route, &schedule, &[],
-                    || execution::validate(&session.state, &session.credential.principal, &session.credential.token)).await?;
+                    || dispatch::validate(&session.state, &session.credential.principal, &session.credential.token)).await?;
                 let revision = session.state.storage.supplier_auth_revision(&selected.account.id).await?;
                 if selected.account.id != connection.context.account.id || revision != connection.revision {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
@@ -325,6 +332,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     connection.context = selected;
                 }
                 turn.supplier(&connection);
+                if let Some(log)=&turn.log {session.state.storage.set_usage_upstream_endpoint(&log.record.id,Protocol::Responses.endpoint()).await?;}
                 connection.create(&turn.prepared).await?;
                 last_upstream = tokio::time::Instant::now();
             }
@@ -332,7 +340,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
             let deadline = pending.as_ref().map_or(idle, |turn| idle.min(turn.deadline));
             tokio::select! {
                 incoming = client.next(), if connected => {
-                    let clock = codex2api_upstream::RequestClock::default();
+                    let clock = codex2api_upstream::RequestClock::arrival(session.client);
                     let Some(Ok(message)) = incoming else { connected = false; continue };
                     if let Message::Text(value) = &message { trace.input(value.as_bytes()); }
                     if let Message::Binary(value) = &message { trace.input(value); }
@@ -344,7 +352,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                             Message::Close(_) => { connected = false; return Ok(()); }
                             Message::Ping(_) | Message::Pong(_) => return Ok(()),
                         };
-                        execution::validate(&session.state, &session.credential.principal, &session.credential.token).await?;
+                        dispatch::validate(&session.state, &session.credential.principal, &session.credential.token).await?;
                         let mut value: Value = serde_json::from_str(&text)
                             .map_err(|_| ApiError::bad_request("Invalid Responses WebSocket JSON."))?;
                         match value["type"].as_str() {
@@ -358,7 +366,8 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                                 }
                                 value.as_object_mut().unwrap().remove("type");
                                 value["stream"] = true.into();
-                                let prepared = super::prepare(Protocol::Responses, value, &session.headers)?;
+                                let input = InboundRequest::new(Protocol::Responses, value, session.headers.clone())?;
+                                let prepared = codex2api_upstream::protocol::prepare_for(codex2api_common::CHATGPT, &input)?;
                                 queued_bytes += text.len();
                                 queue.push_back((prepared, text.len(), clock));
                             }
@@ -446,12 +455,13 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                             if !recovered { turn.excluded.push(connection.context.account.id.clone()); }
                             connection.context.permit.take();
                             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
-                            let schedule = super::scheduling(&session.headers, &turn.prepared.body);
+                            let schedule = codex2api_upstream::protocol::scheduling(codex2api_common::CHATGPT, &session.headers, &turn.prepared.body)?;
                             connection = session.open(&turn.prepared.headers, &schedule, &mut turn.excluded, None).await?;
                             turn.prelude.clear();
                             turn.prelude_bytes = 0;
                             turn.response_id = None;
                             turn.supplier(&connection);
+                if let Some(log)=&turn.log {session.state.storage.set_usage_upstream_endpoint(&log.record.id,Protocol::Responses.endpoint()).await?;}
                             connection.create(&turn.prepared).await?;
                             continue;
                         }
@@ -525,7 +535,7 @@ async fn reject(
     error: &ApiError,
     trace: &codex2api_upstream::request_debug::RequestTrace,
 ) {
-    let message = execution::error_event(error).to_string();
+    let message = response::error_event(error).to_string();
     trace.output(message.as_bytes());
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -580,11 +590,11 @@ mod tests {
             }], &[], None).await.unwrap();
             let identity = codex2api_suppliers::AccountIdentity::new(
                 "supplier", uuid::Uuid::new_v4().to_string(), codex2api_suppliers::HostRuntime {
-                    originator: "codex_cli_rs".into(), user_agent: "codex_cli_rs/fixture".into(),
+                    terminal: "fixture".into(),
                     os_type: "Linux".into(), os_version: "6".into(), arch: "x86_64".into(),
                 });
             let mut supplier = NewSupplierAccount::pending_identity(
-                &identity.installation_id, &identity.originator, &identity.user_agent,
+                &identity.installation_id,
                 &identity.os_type, &identity.os_version, &identity.arch, identity.fingerprint_json().unwrap(),
             );
             supplier.id = Some("supplier".into());
@@ -663,13 +673,14 @@ mod tests {
             inbound.insert("openai-project", "untrusted-project".parse().unwrap());
             inbound.insert("openai-organization", "untrusted-organization".parse().unwrap());
             inbound.insert("chatgpt-account-id", "untrusted-account".parse().unwrap());
-            let headers = super::super::request_context(&mut json!({}), &inbound).unwrap();
+            let headers = codex2api_upstream::protocol::chatgpt_context(&mut json!({}), &inbound).unwrap();
             assert_eq!(headers.len(), 1);
             assert_eq!(headers["session-id"], "caller-session");
             let session = Session {
-                route: execution::route(&principal), state: state.clone(),
+                route: dispatch::route(&principal), state: state.clone(),
                 credential: ApiCredential { principal, token: key.secret }, headers,
                 user_agent: codex2api_upstream::request_user_agent(&inbound),
+                client: None,
             };
             let ready = std::sync::Arc::new(tokio::sync::Mutex::new(Some((session, connection))));
             let router = axum::Router::new().route("/responses", axum::routing::get(move |upgrade: WebSocketUpgrade| {

@@ -57,7 +57,7 @@ impl QuotaObserver {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("text/event-stream"))
+            .is_some_and(|v| v.starts_with(codex2api_common::version::HEADER_ACCEPT_SSE))
         {
             return response;
         }

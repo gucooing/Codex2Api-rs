@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::{Result, UpstreamClient, UpstreamError, client::RequestAuth};
 
-const ROUTING_HEADER: &str = "x-openai-account-routing-override";
-const DISCOVERY_URL: &str = "https://chatgpt.com/backend-api/wham/accounts/check";
+use codex2api_common::version::CHATGPT_DISCOVERY_URL as DISCOVERY_URL;
+use codex2api_common::version::HEADER_ROUTING_OVERRIDE as ROUTING_HEADER;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspaceRoute {
@@ -233,8 +233,8 @@ impl UpstreamClient {
             return Ok(snapshot);
         }
         let mut headers = request.headers.clone();
-        headers.remove("version");
-        headers.remove("originator");
+        headers.remove(codex2api_common::version::HEADER_VERSION);
+        headers.remove(codex2api_common::version::HEADER_ORIGINATOR);
         let discovery_url = DISCOVERY_URL;
         #[cfg(test)]
         let discovery_url = self.discovery_url.as_deref().unwrap_or(discovery_url);

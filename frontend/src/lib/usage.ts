@@ -128,14 +128,16 @@ export function useUsageTable() {
       "供应账户",
       "来源",
       "类型",
-      "模型 / 接口",
+      "模型",
+      "接口",
+      "IP",
       "推理强度 / 速度",
       "用量",
       "费用",
       "耗时",
       "时间 / 状态",
     ],
-    ["模型 / 接口", "来源", "类型", "用量", "时间 / 状态"],
+    ["模型", "接口", "来源", "类型", "用量", "时间 / 状态"],
   );
   const mobile = useIsMobile();
   const [selected, setSelected] = useState<UsageRecord>();

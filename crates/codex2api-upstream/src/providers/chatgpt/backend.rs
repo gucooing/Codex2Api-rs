@@ -54,25 +54,25 @@ impl BackendEndpoint {
 
     pub fn path(self) -> &'static str {
         match self {
-            Self::Usage => "usage",
-            Self::Accounts => "accounts/check",
-            Self::Profile => "profiles/me",
-            Self::Config => "config/bundle",
-            Self::Settings => "settings/user",
-            Self::Credits => "rate-limit-reset-credits",
-            Self::ConsumeCredit => "rate-limit-reset-credits/consume",
-            Self::Tasks => "tasks/list",
-            Self::Task => "tasks/{task_id}",
-            Self::SiblingTurns => "tasks/{task_id}/turns/{turn_id}/sibling_turns",
-            Self::CreateTask => "tasks",
-            Self::TaskTurns => "tasks/{task_id}/turns",
-            Self::TaskTurn => "tasks/{task_id}/turns/{turn_id}",
-            Self::TaskLogs => "tasks/{task_id}/turns/{turn_id}/logs",
-            Self::CancelTask => "tasks/{task_id}/cancel",
-            Self::ArchiveTask => "tasks/{task_id}/archive",
-            Self::Messages => "workspace-messages",
-            Self::ThreadUsage => "usage/thread_usage/query",
-            Self::TurnEstimates => "usage/thread-estimates/query",
+            Self::Usage => codex2api_common::version::WHAM_PATH_USAGE,
+            Self::Accounts => codex2api_common::version::WHAM_PATH_ACCOUNTS,
+            Self::Profile => codex2api_common::version::WHAM_PATH_PROFILE,
+            Self::Config => codex2api_common::version::WHAM_PATH_CONFIG,
+            Self::Settings => codex2api_common::version::WHAM_PATH_SETTINGS,
+            Self::Credits => codex2api_common::version::WHAM_PATH_CREDITS,
+            Self::ConsumeCredit => codex2api_common::version::WHAM_PATH_CONSUME_CREDIT,
+            Self::Tasks => codex2api_common::version::WHAM_PATH_TASKS,
+            Self::Task => codex2api_common::version::WHAM_PATH_TASK,
+            Self::SiblingTurns => codex2api_common::version::WHAM_PATH_SIBLING_TURNS,
+            Self::CreateTask => codex2api_common::version::WHAM_PATH_CREATE_TASK,
+            Self::TaskTurns => codex2api_common::version::WHAM_PATH_TASK_TURNS,
+            Self::TaskTurn => codex2api_common::version::WHAM_PATH_TASK_TURN,
+            Self::TaskLogs => codex2api_common::version::WHAM_PATH_TASK_LOGS,
+            Self::CancelTask => codex2api_common::version::WHAM_PATH_CANCEL_TASK,
+            Self::ArchiveTask => codex2api_common::version::WHAM_PATH_ARCHIVE_TASK,
+            Self::Messages => codex2api_common::version::WHAM_PATH_MESSAGES,
+            Self::ThreadUsage => codex2api_common::version::WHAM_PATH_THREAD_USAGE,
+            Self::TurnEstimates => codex2api_common::version::WHAM_PATH_TURN_ESTIMATES,
         }
     }
 
@@ -93,7 +93,8 @@ impl BackendEndpoint {
         parameters: &HashMap<String, String>,
         query: Option<&str>,
     ) -> Result<reqwest::Url> {
-        let mut url = reqwest::Url::parse("https://chatgpt.com/backend-api/wham/").unwrap();
+        let mut url =
+            reqwest::Url::parse(codex2api_common::version::CHATGPT_WHAM_BASE_URL).unwrap();
         {
             let mut segments = url.path_segments_mut().unwrap();
             segments.pop_if_empty();

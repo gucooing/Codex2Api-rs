@@ -231,8 +231,10 @@ export type UsageRecord = {
   subject_kind: string;
   provider_id: string;
   endpoint: string;
+  upstream_endpoint: string | null;
   transport: string;
   user_agent: string | null;
+  client_ip: string | null;
   stream: boolean | null;
   model: string | null;
   actual_model: string | null;

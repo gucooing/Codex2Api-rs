@@ -24,7 +24,7 @@ impl Storage {
             });
         }
         let requirement = match record.endpoint.as_str() {
-            "/v1/responses" | "/v1/chat/completions" | "/v1/responses/compact" => {
+            "/v1/responses" | "/v1/chat/completions" | "/v1/messages" | "/v1/responses/compact" => {
                 PriceRequirement::Tokens(crate::price_tier(record.service_tier.as_deref()))
             }
             "/v1/images/generations" | "/v1/images/edits" => {

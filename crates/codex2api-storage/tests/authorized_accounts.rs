@@ -5,15 +5,8 @@ async fn authorized_account_and_credentials_commit_together() {
     let dir = codex2api_storage::test_support::tempdir().unwrap();
     let path = dir.path().join("authorized-pg");
     let storage = codex2api_storage::test_support::open(&path).await.unwrap();
-    let mut account = NewSupplierAccount::pending_identity(
-        "installation",
-        "codex_cli_rs",
-        "ua",
-        "Linux",
-        "6",
-        "aarch64",
-        "{}",
-    );
+    let mut account =
+        NewSupplierAccount::pending_identity("installation", "Linux", "6", "aarch64", "{}");
     account.id = Some("draft".into());
     account.chatgpt_account_id = Some("chatgpt-account".into());
     account.chatgpt_user_id = Some("chatgpt-user".into());
@@ -79,15 +72,7 @@ async fn concurrent_logins_deduplicate_only_the_same_user_and_workspace() {
         .await
         .unwrap();
     let make = |id: &str, user: &str, workspace: &str| {
-        let mut account = NewSupplierAccount::pending_identity(
-            id,
-            "codex_cli_rs",
-            "ua",
-            "Linux",
-            "6",
-            "aarch64",
-            "{}",
-        );
+        let mut account = NewSupplierAccount::pending_identity(id, "Linux", "6", "aarch64", "{}");
         account.id = Some(id.into());
         account.chatgpt_user_id = Some(user.into());
         account.chatgpt_account_id = Some(workspace.into());

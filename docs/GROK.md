@@ -1,6 +1,6 @@
 # Grok 渠道
 
-Grok 与 ChatGPT 是独立渠道。客户端参考 [gucooing/grok-build](https://github.com/gucooing/grok-build)，参考提交为 `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`，`SOURCE_REV` 为 `559751fdcec02d413e4c57c8832ab275e4f44980`，协议版本为 `1.0.45`。客户端源码仅供参考，不作为 Rust 依赖。
+Grok 与 ChatGPT 是独立渠道。客户端参考 [gucooing/grok-build](https://github.com/gucooing/grok-build)，参考提交为 `2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8`，`SOURCE_REV` 为 `559751fdcec02d413e4c57c8832ab275e4f44980`，协议版本为 `1.0.45`。客户端源码仅供参考，不作为 Rust 依赖。维护客户端的当前路由集成提交为 `b5cf836c76ebc927dee84e74dfe7d2729f55e1f0`；它只修改 fork 接入地址，不替换上述供应协议来源。
 
 ## 目录与账户隔离
 
@@ -44,6 +44,8 @@ Grok 套餐独立选择 Grok 订阅档位、模型范围、售价、供应池及
 | `/v1/user`、`/v1/settings`、`/v1/billing` | 本地虚拟身份、套餐服务策略和本地额度，不读取供应隐私 |
 
 平台由路径明确选择，Grok 客户端使用 `/v1/grok/v1/responses`、`/v1/grok/v1/models`；Grok 凭据不能访问 ChatGPT 专属路由。Grok Build 配置使用 `endpoints.cli_chat_proxy_base_url` 指向服务根后的 `/v1`，OAuth issuer 指向服务根本身。不要用 `models_base_url` 代替，因为客户端会把它解释为 API-key 认证的独立模型服务。
+
+cgrok 的 API-key 请求使用独立 API 网关 `{api_url}/v1`，通过 `endpoints.xai_api_base_url` 或 `CGROK_XAI_API_BASE_URL` 配置，不指向 OAuth 服务根。维护客户端的默认值由 `xai-grok-env` 统一提供。供应 UA 使用本渠道公共版本与账户冻结输入运行时生成，不在供应账户中保存完整 UA。
 
 Grok 原生请求携带完整会话输入；供应端保存的 `previous_response_id` 不能跨虚拟账户读取。
 
