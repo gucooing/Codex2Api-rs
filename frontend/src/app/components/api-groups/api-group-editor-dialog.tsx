@@ -34,6 +34,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import type { ApiGroup } from "@/lib/api-access";
+import { providerOptions } from "@/lib/providers";
 
 export function ApiGroupEditorDialog({
   group,
@@ -113,8 +114,11 @@ export function ApiGroupEditorDialog({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent position="popper">
-                            <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                            <SelectItem value="grok">Grok</SelectItem>
+                            {providerOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </Field>

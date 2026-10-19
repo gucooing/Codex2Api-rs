@@ -13,6 +13,7 @@
 //! belong to codex2api-oauth and codex2api-api respectively.
 //! Protocol construction lives in request/headers; transport lives in client/websocket/stream.
 
+pub use providers::antigravity;
 pub(crate) use providers::chatgpt::backend;
 pub use providers::grok;
 pub mod providers;
@@ -45,14 +46,14 @@ mod pool;
 pub(crate) use providers::chatgpt::proxy;
 pub(crate) use providers::chatgpt::request;
 pub(crate) use providers::chatgpt::routing;
-mod stream;
 mod client_ip;
+mod stream;
 mod timing;
 mod transport;
+pub use client_ip::{ClientIpPolicy, client_ip};
 pub(crate) use providers::chatgpt::timezone;
 pub(crate) use providers::chatgpt::websocket;
 pub use stream::{buffered_sse_lines, sse_data};
-pub use client_ip::{ClientIpPolicy, client_ip};
 pub use timing::{RequestClock, ResponseTiming, TokenProtocol};
 pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
 

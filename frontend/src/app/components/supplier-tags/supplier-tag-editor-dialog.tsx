@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { providerOptions } from "@/lib/providers";
 
 export function SupplierTagEditorDialog({
   editing,
@@ -80,8 +81,11 @@ export function SupplierTagEditorDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent position="popper">
-                  <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                  <SelectItem value="grok">Grok</SelectItem>
+                  {providerOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>

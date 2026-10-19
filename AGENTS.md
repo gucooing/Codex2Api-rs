@@ -137,8 +137,8 @@ Provider-wide fixed values (release/UA version, originator, official URLs, OAuth
 client ID/scopes, header names and protocol paths) have one definition in
 `codex2api-common/src/providers/<provider>/`; all runtime callers reference those
 constants or shared builders. Do not scatter literal copies across handlers,
-transport, identity generation or storage. Keep ChatGPT and Grok constants
-independent. Administrator-configured service origins remain configuration and
+transport, identity generation or storage. Keep ChatGPT, Grok and Antigravity
+constants independent. Administrator-configured service origins remain configuration and
 must not replace official supplier constants.
 
 Routine version upgrades change the shared version definition and rebuild the
@@ -164,9 +164,10 @@ readers or repeat UA data migrations for future releases.
 
 ### Provider boundaries
 
-- Keep channel code in each relevant crate's `src/providers/chatgpt/` or
-  `src/providers/grok/`. Frontend channel forms, labels and protocol views belong
-  in `frontend/src/components/providers/chatgpt/` or `providers/grok/`.
+- Keep channel code in each relevant crate's `src/providers/chatgpt/`,
+  `src/providers/grok/` or `src/providers/antigravity/`. Frontend channel forms,
+  labels and protocol views belong in `frontend/src/components/providers/chatgpt/`,
+  `providers/grok/` or `providers/antigravity/`.
 - A channel may not import another channel or add branches to the other channel's
   authentication, transport or handlers. Root modules may dispatch by provider;
   shared PostgreSQL, supplier pools, billing, sessions and UI layout stay protocol-neutral.
@@ -177,6 +178,13 @@ readers or repeat UA data migrations for future releases.
 - Grok supplier credentials, PKCE/device/RT flows, frozen identity, clients and
   version constants are independent of ChatGPT. Never interpret Grok tokens as
   Codex auth.json or send Codex headers to Grok.
+- Antigravity is a supplier channel of the standard AI API gateway only: Google
+  OAuth code/callback and RT creation, the desktop client's `v1internal` envelope
+  and UA, Gemini wire conversion inside `providers/antigravity/`, per-model quota
+  cooldowns in `supplier_model_cooldowns`, and official model sync through
+  `fetchAvailableModels`. It has no OAuth client service root, plans or
+  subscriptions. sub2api is a reference for its wire protocol only, never a
+  dependency or a source of model mappings, quota fetchers or credit features.
 - The administrator's enabled model catalog determines availability, subject to
   the consumer's plan. Official catalogs and price presets are references, never
   model allowlists. Custom models must remain addable and usable. Missing prices
@@ -201,7 +209,9 @@ readers or repeat UA data migrations for future releases.
 
 - Keep documentation focused on the current architecture, behavior, contracts and maintenance rules.
 - Do not implement backward compatibility: no legacy routes, field aliases, old-format readers, dual reads/writes or runtime configuration-name mappings. Validate the current contract and reject invalid input.
-- Database migrations are required persistence maintenance, not backward compatibility. Keep migration SQL and its automatic execution; perform stored-data changes in SQL, atomically and once per migration. Never delete necessary migration SQL as historical documentation.
+- Database migrations are required persistence maintenance, not backward compatibility. Keep migration SQL and its automatic execution; perform stored-data changes in SQL, atomically and once per migration. Never delete necessary migration SQL as historical documentation. New migrations are
+  `crates/codex2api-storage/migrations/NNNN_name.sql`, embedded automatically by the
+  storage build script in numeric order; do not hand-maintain a migration list.
 - Do not retain transition guides, old/new configuration tables or descriptions of removed implementations. Official protocol variants required by the pinned clients are current external contracts, not project history.
 - Update plans are temporary working documents used for approval and implementation. After the task is complete, remove the completed plan and historical version plans, investigation notes, audit logs and execution diaries; do not archive them as new Markdown files.
 - Merge enduring conclusions and known limitations into the relevant current documentation, then remove links to deleted records. Git history and cloud CI retain the change and validation history.

@@ -348,6 +348,9 @@ function AdminShell({ children }: { children: ReactNode }) {
                 Grok Build {session.grok_build_version || "—"}
               </span>
               <span className="whitespace-nowrap rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono">
+                Antigravity {session.antigravity_version || "—"}
+              </span>
+              <span className="whitespace-nowrap rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono">
                 Codex2API {session.app_version || "—"}
               </span>
             </div>

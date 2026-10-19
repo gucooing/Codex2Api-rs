@@ -1,11 +1,11 @@
 # AI API 网关
 
-AI API 网关在同一 Rust 进程的独立端口提供 ChatGPT 和 Grok 模型调用。默认地址为
+AI API 网关在同一 Rust 进程的独立端口提供 ChatGPT、Grok 和 Antigravity 模型调用。默认地址为
 `http://127.0.0.1:8083/v1`。`CODEX2API_API_BIND` 控制监听地址，
 `CODEX2API_PUBLIC_API_URL` 提供公开 origin 的启动默认值；管理员在
 **设置 / 访问地址 / AI API 网关** 保存的 origin 优先。用户 API Key 页面读取这一
 地址，不从浏览器地址或转发头推测端口。反向代理可使用独立域名指向 8083，也可将标准 `/v1/*` 路由到此入口，
-将 `/v1/chatgpt`、`/v1/grok` 及其子路径路由到 OAuth 入口 8080。
+将 `/v1/chatgpt`、`/v1/grok` 及其子路径路由到 OAuth 入口 8080。Antigravity 没有 OAuth 客户端服务根，只通过本网关调用。
 
 ## 调用与平台
 
@@ -34,13 +34,15 @@ API 组选择“该平台的全部模型”时，范围为管理员模型目录�
 
 API 模块负责 HTTP 入站、API Key 鉴权、准入、调度调用、下游交付和钱包结算。
 协议转换位于 codex2api-upstream/src/protocol/，渠道请求构造位于 upstream 的
-providers/chatgpt/api.rs 与 providers/grok/api.rs。先按 API 组号池与模型权限选中
+providers/chatgpt/api.rs、providers/grok/api.rs 与 providers/antigravity/api.rs。先按 API 组号池与模型权限选中
 供应账户，再按该账户的渠道构造请求；每次尝试都重新构造，所有尝试保持同一个请求标识。
 
-两个渠道都是官方订阅供应，上游协议固定，不按模型描述或模型名推断。ChatGPT 使用
+三个渠道都是官方订阅供应，上游协议固定，不按模型描述或模型名推断。ChatGPT 使用
 固定 Codex Responses。Grok 使用 xAI Responses：固定参考提交的 Grok Build 在内置
 官方模型表 `xai-grok-models/default_models.json` 中为官方模型声明
-`api_backend: responses`，其 Chat Completions 缺省只适用于未声明协议的自定义模型。
+`api_backend: responses`，其 Chat Completions 缺省只适用于未声明协议的自定义模型。Antigravity 使用 Cloud Code Assist 的
+`v1internal:streamGenerateContent` Gemini 线协议，由 upstream 的 `providers/antigravity/` 在传输内部
+完成规范 Responses 与 Gemini 之间的双向转换；公共层只处理 Responses 事件。
 
 ### 单次转换
 
@@ -50,7 +52,7 @@ providers/chatgpt/api.rs 与 providers/grok/api.rs。先按 API 组号池与模�
 到入站事件的转换。Responses 调用方也经过同一转换，因为标准接口的各类客户端请求形态
 不一致；渠道层只施加各自官方客户端的差异。Responses 事件只清理供应信封后转发。
 
-两个渠道与官方客户端一致，始终以 `stream=true` 请求上游。客户端选择同步时，
+各渠道与官方客户端一致，始终以流式方式请求上游（Antigravity 使用 `alt=sse`）。客户端选择同步时，
 网关把转换后的同协议事件聚合为该协议的完整 JSON，因此同步与流式输出一致。
 用量账本始终按上游 Responses 的真实事件计量，不以转换结果计费。转换后的终态事件在
 结算完成后才交付客户端；没有终态事件就结束的上游流按未完成失败处理。
@@ -99,10 +101,22 @@ Grok 按 Grok Build 的 Responses 构造器发送：`store=false`、`stream=true
 加密推理。Grok 保留其原生采样、输出限制和搜索工具字段，不套用 ChatGPT 的参数
 处理规则；没有工具或具名工具未声明时不发送工具选择。
 
+Antigravity 按官方桌面客户端的 v1internal 信封发送：`project`、`agent-` 前缀的 `requestId`、
+`userAgent: antigravity`、`requestType: agent`、`model` 与 Gemini `request`。规范 Responses 请求
+转换为 `contents`（user／model 角色、文本、thought 与 thoughtSignature、inlineData、
+functionCall／functionResponse）、`systemInstruction`（客户端身份提示、边界提示与调用方 system
+文本）、`generationConfig`（`maxOutputTokens` 缺省 64000、temperature、topP、按推理强度映射的
+`thinkingConfig`、结构化输出的 `responseMimeType`／`responseSchema`）、清理后的
+`functionDeclarations`、`toolConfig` 以及由会话种子派生的 `sessionId`。响应事件按 Gemini 候选项
+转换为 Responses 的 reasoning、message 与 function_call 项；`finishReason` 映射为 completed、
+incomplete（`max_output_tokens` 或 `content_filter`）或 failed，用量取 `promptTokenCount`（含缓存）、
+`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`。细节见
+[Antigravity 渠道](ANTIGRAVITY.md)。
+
 后台持久化作业、生成 `n>1`、查询/删除已存储响应不是 Codex 订阅协议提供的能力。
 固定 Images 协议不提供 mask、流式输出或托管图片 URL；对应请求明确返回不支持，
-不会伪造异步任务、下载地址或成功结果。Grok 目前没有该渠道可用的 Codex 搜索、
-压缩、计数和原生 Responses WebSocket 传输，这些路径明确拒绝。
+不会伪造异步任务、下载地址或成功结果。Grok 与 Antigravity 目前没有该渠道可用的 Codex 搜索、
+压缩、计数和原生 Responses WebSocket 传输，Antigravity 也不提供图像生成和 `previous_response_id` 续接，这些路径明确拒绝。
 
 ## 搜索与计数
 
@@ -123,7 +137,7 @@ Grok 按 Grok Build 的 Responses 构造器发送：`store=false`、`stream=true
 
 搜索 JSON 返回实际 `output`，以及可选的 `encrypted_output`、`results`。搜索按次
 价格由管理员在每个 ChatGPT API 组的 `search_price_usd` 中独立配置，单位为 USD / 次。
-该金额直接作为最终单价，不再乘组或模型倍率，也不回退到订阅搜索价格。Grok 不提供
+该金额直接作为最终单价，不再乘组或模型倍率，也不回退到订阅搜索价格。Grok 与 Antigravity 不提供
 该设置。请求开始时冻结单价，后续改价不影响历史。缺价明确拒绝；明确零价允许零余额。
 用户模型广场的搜索卡片展示所选 API 组的搜索单价。输入计数继续检查凭据、模型范围和调用限制，但不要求钱包余额、不触发偿债，
 返回的预估 Token 数不写成已消费 Token。

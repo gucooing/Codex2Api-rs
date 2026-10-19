@@ -45,6 +45,7 @@ async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
             provider_id: "chatgpt".into(),
             model: "gpt-5.5".into(),
             kind: "text".into(),
+            preset_key: None,
         }])
         .await
         .unwrap();
@@ -131,6 +132,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
                 provider_id: provider.into(),
                 model: "shared-model".into(),
                 kind: "text".into(),
+                preset_key: None,
             }])
             .await
             .unwrap();
@@ -1172,4 +1174,103 @@ async fn plan_display_tier_updates_members_without_resetting_subscription_or_bil
         storage.virtual_plan("plus").await.unwrap().unwrap().config,
         plan.config
     );
+}
+
+async fn model_candidates(storage: &Storage, model: &str) -> Vec<String> {
+    storage
+        .pool_candidates("pool", "chatgpt", Some(model))
+        .await
+        .unwrap()
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn model_cooldowns_exclude_one_model_until_reset_recovery_or_a_new_login() {
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("model-cooldown-pg"))
+        .await
+        .unwrap();
+    supplier(&storage, "s").await;
+    for model in ["alpha-model", "beta-model"] {
+        storage.add_supplier_model("s", model).await.unwrap();
+    }
+    storage
+        .save_supplier_tag("pool", "chatgpt", "Pool")
+        .await
+        .unwrap();
+    storage
+        .edit_supplier_tags(&["s".into()], &["pool".into()], false)
+        .await
+        .unwrap();
+    let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    let now = chrono::Utc::now().timestamp();
+    storage
+        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 600, "quota_exhausted")
+        .await
+        .unwrap();
+    assert!(model_candidates(&storage, "alpha-model").await.is_empty());
+    assert_eq!(model_candidates(&storage, "beta-model").await, vec!["s"]);
+    let health = storage.supplier_health("s").await.unwrap();
+    assert!(health.cooldown_kind.is_none());
+    assert!(health.cooldown_until.is_none());
+    let cooldowns = storage.supplier_model_cooldowns("s").await.unwrap();
+    assert_eq!(cooldowns.len(), 1);
+    assert_eq!(cooldowns[0].model, "alpha-model");
+    assert_eq!(cooldowns[0].cooldown_until, now + 600);
+    assert_eq!(
+        cooldowns[0].cooldown_code.as_deref(),
+        Some("quota_exhausted")
+    );
+    // An observation made with stale credentials is not recorded.
+    storage
+        .exhaust_supplier_model_quota("s", rev - 1, "beta-model", now + 600, "quota_exhausted")
+        .await
+        .unwrap();
+    assert_eq!(model_candidates(&storage, "beta-model").await, vec!["s"]);
+    assert_eq!(
+        storage.supplier_model_cooldowns("s").await.unwrap().len(),
+        1
+    );
+    // A fresh official read reporting the model available recovers it before the reset.
+    storage
+        .recover_supplier_model_quota("s", "alpha-model")
+        .await
+        .unwrap();
+    assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
+    // The reset time expires the cooldown by itself.
+    storage
+        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 600, "quota_exhausted")
+        .await
+        .unwrap();
+    assert!(model_candidates(&storage, "alpha-model").await.is_empty());
+    sqlx::query("UPDATE supplier_model_cooldowns SET cooldown_until=$1 WHERE account_id='s'")
+        .bind(now - 1)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    storage.invalidate_cached_snapshots();
+    assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
+    assert!(
+        storage
+            .supplier_model_cooldowns("s")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // A new login discards cooldowns observed with the previous credentials.
+    storage
+        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 600, "quota_exhausted")
+        .await
+        .unwrap();
+    supplier(&storage, "s").await;
+    assert!(
+        storage
+            .supplier_model_cooldowns("s")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
 }

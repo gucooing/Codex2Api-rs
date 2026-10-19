@@ -75,6 +75,10 @@ fn export_sub2api(accounts: &[SupplierTransferAccount]) -> Result<Value, ApiErro
                 crate::providers::chatgpt::transfer::to_sub2api(item)?,
             ),
             codex2api_common::GROK => ("grok", crate::providers::grok::transfer::to_sub2api(item)?),
+            codex2api_common::ANTIGRAVITY => (
+                "antigravity",
+                crate::providers::antigravity::transfer::to_sub2api(item)?,
+            ),
             _ => return Err(ApiError::bad("该平台不支持 Sub2api 导出")),
         };
         credentials["model_mapping"] = json!(
@@ -262,7 +266,7 @@ fn parse_account(
         }
         Format::Sub2api => {
             let platform = row["platform"].as_str().unwrap_or_default();
-            if !["openai", "grok"].contains(&platform) || row["type"] != "oauth" {
+            if !["openai", "grok", "antigravity"].contains(&platform) || row["type"] != "oauth" {
                 return Ok(None);
             }
             let source: Sub2apiAccount = serde_json::from_value(row.clone())
@@ -270,6 +274,7 @@ fn parse_account(
             let mut item = match platform {
                 "openai" => crate::providers::chatgpt::transfer::from_sub2api(&source)?,
                 "grok" => crate::providers::grok::transfer::from_sub2api(&source)?,
+                "antigravity" => crate::providers::antigravity::transfer::from_sub2api(&source)?,
                 _ => unreachable!(),
             };
             if include_proxies && let Some(key) = source.proxy_key.as_deref() {
@@ -296,6 +301,9 @@ fn parse_account(
     match a.provider_id.as_str() {
         codex2api_common::CHATGPT => crate::providers::chatgpt::transfer::normalize(&mut item)?,
         codex2api_common::GROK => crate::providers::grok::transfer::normalize(&mut item)?,
+        codex2api_common::ANTIGRAVITY => {
+            crate::providers::antigravity::transfer::normalize(&mut item)?
+        }
         _ => return Ok(None),
     }
     Ok(Some(item))

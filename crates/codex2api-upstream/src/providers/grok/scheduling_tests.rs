@@ -26,7 +26,8 @@ fn free_usage_exhaustion_is_recognized_across_grok_wire_envelopes() {
                 classify_failure(Some(429), &value, &HeaderMap::new(), 100),
                 Some(SupplierFailure::QuotaExhausted {
                     until: 160,
-                    code: errors::FREE_USAGE_EXHAUSTED.into()
+                    code: errors::FREE_USAGE_EXHAUSTED.into(),
+                    model: None,
                 }),
                 "{value}"
             );
@@ -172,7 +173,8 @@ fn cooldown_uses_actual_retry_advice_without_inventing_a_daily_reset() {
             classify_failure(None, &value, &headers, 100),
             Some(SupplierFailure::QuotaExhausted {
                 until,
-                code: errors::FREE_USAGE_EXHAUSTED.into()
+                code: errors::FREE_USAGE_EXHAUSTED.into(),
+                model: None,
             }),
             "{value}"
         );

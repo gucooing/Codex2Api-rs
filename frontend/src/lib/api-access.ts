@@ -1,3 +1,4 @@
+import { providerLabel } from "@/lib/providers";
 export type ApiModelRule = {
   model: string;
   multiplier: string | null;
@@ -41,8 +42,7 @@ export type ApiKey = {
   unknown_cost_requests: number;
   active_requests: number;
 };
-export const apiPlatform = (provider: string) =>
-  provider === "chatgpt" ? "ChatGPT" : provider === "grok" ? "Grok" : provider;
+export const apiPlatform = providerLabel;
 export const apiLimit = (limit: number) => (limit === 0 ? "无限" : String(limit));
 export const apiTokens = (tokens: number | null) =>
   tokens === null

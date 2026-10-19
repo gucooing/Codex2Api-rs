@@ -65,6 +65,7 @@ export default function UsagePage() {
                       <SelectItem value="all">全部平台</SelectItem>
                       <SelectItem value="chatgpt">ChatGPT</SelectItem>
                       <SelectItem value="grok">Grok</SelectItem>
+                      <SelectItem value="antigravity">Antigravity</SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>

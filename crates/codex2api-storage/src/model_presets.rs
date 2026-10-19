@@ -17,7 +17,7 @@ pub fn preset_model_prices(provider: &str, model: &str) -> Option<Vec<ModelPrice
                 output_rate: price.output_rate,
                 source: format!(
                     "preset:{}",
-                    codex2api_common::model_preset_source(provider).1
+                    codex2api_common::model_preset_source(provider, model).1
                 ),
                 revision: 1,
             })
@@ -39,7 +39,7 @@ impl Storage {
                 return Err(StorageError::InvalidAdminUpdate("内置模型配置无效"));
             }
             let prices = (model.kind == "text")
-                .then(|| preset_model_prices(&model.provider_id, &model.model))
+                .then(|| preset_model_prices(&model.provider_id, model.preset_key()))
                 .flatten();
             let created = sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(provider_id,model) DO NOTHING")
                 .bind(&model.provider_id).bind(&model.model).bind(&model.kind).bind(prices.is_some())

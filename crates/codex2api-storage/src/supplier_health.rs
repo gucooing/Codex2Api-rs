@@ -17,6 +17,14 @@ pub struct SupplierHealth {
     pub cooldown_revision: i64,
 }
 
+/// A model whose quota is exhausted on one account while its other models stay eligible.
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct SupplierModelCooldown {
+    pub model: String,
+    pub cooldown_until: i64,
+    pub cooldown_code: Option<String>,
+}
+
 impl SupplierHealth {
     pub fn display_status(&self, enabled: bool, authorized: bool) -> &'static str {
         if !enabled {
@@ -54,8 +62,12 @@ pub(crate) async fn complete_authorization(
         cooldown_observed_at=NULL,cooldown_revision=cooldown_revision+1 WHERE account_id=$1",
     )
     .bind(id)
-    .execute(conn)
+    .execute(&mut *conn)
     .await?;
+    sqlx::query("DELETE FROM supplier_model_cooldowns WHERE account_id=$1")
+        .bind(id)
+        .execute(conn)
+        .await?;
     Ok(())
 }
 
@@ -152,6 +164,70 @@ impl Storage {
         Ok(())
     }
 
+    /// A model-scoped exhaustion observed with the credential revision of that attempt.
+    /// Other models of the account stay schedulable; a newer login discards the record.
+    pub async fn exhaust_supplier_model_quota(
+        &self,
+        id: &str,
+        auth_revision: i64,
+        model: &str,
+        until: i64,
+        code: &str,
+    ) -> Result<()> {
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_supplier(&mut tx, id).await?;
+        sqlx::query(
+            "INSERT INTO supplier_model_cooldowns(account_id,model,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at)
+             SELECT id,$1,$2,auth_revision,$3,floor(extract(epoch FROM clock_timestamp()))::bigint FROM supplier_accounts WHERE id=$4 AND auth_revision=$5
+             ON CONFLICT(account_id,model) DO UPDATE SET
+             cooldown_until=CASE WHEN supplier_model_cooldowns.cooldown_auth_revision=excluded.cooldown_auth_revision THEN GREATEST(supplier_model_cooldowns.cooldown_until,excluded.cooldown_until) ELSE excluded.cooldown_until END,
+             cooldown_auth_revision=excluded.cooldown_auth_revision,cooldown_code=excluded.cooldown_code,cooldown_observed_at=excluded.cooldown_observed_at",
+        )
+        .bind(model)
+        .bind(until)
+        .bind(code)
+        .bind(id)
+        .bind(auth_revision)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.runtime
+            .snapshots
+            .invalidate(&[crate::snapshots::Domain::Pools]);
+        Ok(())
+    }
+
+    /// An official read reported the model available again before its recorded reset.
+    pub async fn recover_supplier_model_quota(&self, id: &str, model: &str) -> Result<()> {
+        let changed =
+            sqlx::query("DELETE FROM supplier_model_cooldowns WHERE account_id=$1 AND model=$2")
+                .bind(id)
+                .bind(model)
+                .execute(self.pool())
+                .await?
+                .rows_affected();
+        if changed > 0 {
+            self.runtime
+                .snapshots
+                .invalidate(&[crate::snapshots::Domain::Pools]);
+        }
+        Ok(())
+    }
+
+    /// Model cooldowns still in force for the account's current credentials.
+    pub async fn supplier_model_cooldowns(&self, id: &str) -> Result<Vec<SupplierModelCooldown>> {
+        Ok(sqlx::query_as(
+            "SELECT c.model,c.cooldown_until,c.cooldown_code FROM supplier_model_cooldowns c
+             JOIN supplier_accounts a ON a.id=c.account_id
+             WHERE c.account_id=$1 AND c.cooldown_auth_revision=a.auth_revision
+             AND c.cooldown_until>floor(extract(epoch FROM clock_timestamp()))::bigint
+             ORDER BY c.model",
+        )
+        .bind(id)
+        .fetch_all(self.pool())
+        .await?)
+    }
+
     /// Administrator-requested retry, independent of provider reachability.
     /// Billing and quota state are cleared; credential rejection and manual
     /// enablement remain independent. In-flight checks lose their revision.
@@ -169,6 +245,10 @@ impl Storage {
         .bind(id)
         .execute(&mut *tx)
         .await?;
+        sqlx::query("DELETE FROM supplier_model_cooldowns WHERE account_id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         self.runtime
             .snapshots

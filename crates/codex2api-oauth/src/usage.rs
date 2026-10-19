@@ -633,7 +633,7 @@ impl RequestLog {
             (&self.record, self.auth_revision, &self.supplier_failure)
         {
             match failure {
-                codex2api_upstream::SupplierFailure::QuotaExhausted { until, code } => {
+                codex2api_upstream::SupplierFailure::QuotaExhausted { until, code, .. } => {
                     self.storage
                         .exhaust_supplier_quota(&record.account_id, revision, *until, code)
                         .await?;
@@ -717,7 +717,7 @@ impl RequestLog {
         tokio::spawn(async move {
             if let Some((failure, revision)) = cooldown {
                 let result = match failure {
-                    codex2api_upstream::SupplierFailure::QuotaExhausted { until, code } => {
+                    codex2api_upstream::SupplierFailure::QuotaExhausted { until, code, .. } => {
                         storage
                             .exhaust_supplier_quota(&record.account_id, revision, until, &code)
                             .await

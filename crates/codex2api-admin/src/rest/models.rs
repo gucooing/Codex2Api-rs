@@ -91,10 +91,17 @@ pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
     models.extend(
         codex2api_common::providers::grok::PRICED_MODELS
             .iter()
-            .map(|model| codex2api_common::SupportedModel {
-                provider_id: codex2api_common::GROK.into(),
-                model: (*model).into(),
+            .map(|model| (codex2api_common::GROK, *model))
+            .chain(
+                codex2api_common::providers::antigravity::PRICED_FAMILIES
+                    .iter()
+                    .map(|family| (codex2api_common::ANTIGRAVITY, *family)),
+            )
+            .map(|(provider, model)| codex2api_common::SupportedModel {
+                provider_id: provider.into(),
+                model: model.into(),
                 kind: "text".into(),
+                preset_key: None,
             }),
     );
     models.sort_by(|a, b| (&a.provider_id, &a.model).cmp(&(&b.provider_id, &b.model)));
@@ -103,7 +110,8 @@ pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
         .into_iter()
         .map(|model| {
             let prices = codex2api_storage::preset_model_prices(&model.provider_id, &model.model);
-            let (source, version) = codex2api_common::model_preset_source(&model.provider_id);
+            let (source, version) =
+                codex2api_common::model_preset_source(&model.provider_id, &model.model);
             dto::ModelPreset {
                 source_url: prices.as_ref().map(|_| source.to_owned()),
                 verified_at: prices
@@ -161,7 +169,7 @@ pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) 
         return Err(ApiError::bad("提供商尚未接入"));
     }
     let mut tokens = if let Some(version) = f.pricing_preset.as_deref() {
-        if version != codex2api_common::model_preset_source(&f.provider_id).1 {
+        if version != codex2api_common::model_preset_source(&f.provider_id, f.model.trim()).1 {
             return Err(ApiError::conflict());
         }
         if f.kind != "text" || !f.token_prices.is_empty() || !f.image_prices.is_empty() {

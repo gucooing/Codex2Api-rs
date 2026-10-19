@@ -1,7 +1,7 @@
-//! Public generation protocols. Both official subscriptions speak Responses, so a
-//! Responses, Chat or Messages request is converted once into the canonical
-//! Responses request, and each supplier event is converted once back.
-//! Consumers retain authentication, admission, scheduling and settlement.
+//! Public generation protocols. A Responses, Chat or Messages request is converted
+//! once into the canonical Responses request; each provider adapter turns that into
+//! its wire request and delivers Responses events back, converted once more into the
+//! caller's protocol. Consumers retain authentication, admission, scheduling and settlement.
 pub mod chat;
 pub mod images;
 pub mod messages;
@@ -120,7 +120,10 @@ pub struct PreparedRequest {
     pub body: Value,
     pub headers: HeaderMap,
     pub inbound: Protocol,
+    /// The protocol of the events the adapter delivers back.
     pub upstream: Protocol,
+    /// The supplier wire operation recorded in the ledger when it is not the protocol path.
+    pub upstream_endpoint: Option<&'static str>,
     pub stream: bool,
     pub include_usage: bool,
     pub metadata: Option<Value>,
@@ -132,12 +135,17 @@ impl PreparedRequest {
             headers: HeaderMap::new(),
             inbound: input.protocol,
             upstream,
+            upstream_endpoint: None,
             stream: input.stream,
             include_usage: input.include_usage,
             metadata: (input.protocol != Protocol::Messages)
                 .then(|| input.metadata.clone())
                 .flatten(),
         }
+    }
+    pub fn endpoint(&self) -> &'static str {
+        self.upstream_endpoint
+            .unwrap_or_else(|| self.upstream.endpoint())
     }
 }
 
@@ -228,6 +236,9 @@ pub fn scheduling(
     match provider {
         codex2api_common::CHATGPT => Ok(crate::providers::chatgpt::api::scheduling(headers, body)),
         codex2api_common::GROK => Ok(crate::providers::grok::api::scheduling(headers, body)),
+        codex2api_common::ANTIGRAVITY => Ok(crate::providers::antigravity::api::scheduling(
+            headers, body,
+        )),
         _ => Err(Error::bad_request("Unsupported supplier platform")),
     }
 }
@@ -235,11 +246,12 @@ pub fn chatgpt_context(body: &mut Value, headers: &HeaderMap) -> Result<HeaderMa
     crate::providers::chatgpt::api::request_context(body, headers)
 }
 
-/// Build the supplier request; both official subscriptions use Responses.
+/// Build the supplier request for the selected account's provider.
 pub fn prepare_for(provider: &str, input: &InboundRequest) -> Result<PreparedRequest> {
     match provider {
         codex2api_common::CHATGPT => crate::providers::chatgpt::api::prepare(input),
         codex2api_common::GROK => crate::providers::grok::api::prepare(input),
+        codex2api_common::ANTIGRAVITY => crate::providers::antigravity::api::prepare(input),
         _ => Err(Error::bad_request("Unsupported supplier platform")),
     }
 }
@@ -267,6 +279,7 @@ pub async fn send(
                 )
                 .await
         }
+        codex2api_common::ANTIGRAVITY => pool.antigravity().generate(&account.id, body).await,
         _ => Err(crate::UpstreamError::InvalidRequest(
             "Unsupported supplier platform".into(),
         )),

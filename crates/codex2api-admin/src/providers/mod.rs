@@ -1,4 +1,5 @@
 //! Provider dispatch only. Each channel owns its protocol and authentication DTOs.
+pub(crate) mod antigravity;
 pub(crate) mod chatgpt;
 pub(crate) mod grok;
 use crate::{
@@ -18,6 +19,7 @@ pub(crate) fn request_identity(
     match account.provider_id.as_str() {
         codex2api_common::CHATGPT => chatgpt::request_identity(account),
         codex2api_common::GROK => grok::request_identity(account),
+        codex2api_common::ANTIGRAVITY => antigravity::request_identity(account),
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
@@ -28,6 +30,7 @@ fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ApiError> {
 pub fn fingerprint_view(account: &codex2api_storage::SupplierAccount) -> Result<Value, ApiError> {
     match account.provider_id.as_str() {
         codex2api_common::GROK => grok::fingerprint_view(account),
+        codex2api_common::ANTIGRAVITY => antigravity::fingerprint_view(account),
         codex2api_common::CHATGPT => Ok(serde_json::json!(chatgpt::Fingerprint::from_account(
             account
         )?)),
@@ -66,6 +69,7 @@ pub async fn quota(
     {
         codex2api_common::CHATGPT => chatgpt::quota(s, id, refresh).await,
         codex2api_common::GROK => grok::quota(s, id, refresh).await,
+        codex2api_common::ANTIGRAVITY => antigravity::quota(s, id, refresh).await,
         _ => Err("不支持的渠道".into()),
     }
 }
@@ -79,6 +83,9 @@ pub async fn fingerprint(
             chatgpt::fingerprint(State(s), Path(id), Json(decode(value)?)).await
         }
         codex2api_common::GROK => grok::fingerprint(State(s), Path(id), Json(decode(value)?)).await,
+        codex2api_common::ANTIGRAVITY => {
+            antigravity::fingerprint(State(s), Path(id), Json(decode(value)?)).await
+        }
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
@@ -92,6 +99,9 @@ pub async fn relogin(
             chatgpt::relogin(State(s), Path(id), Json(decode(value)?)).await
         }
         codex2api_common::GROK => grok::relogin(State(s), Path(id), Json(decode(value)?)).await,
+        codex2api_common::ANTIGRAVITY => {
+            antigravity::relogin(State(s), Path(id), Json(decode(value)?)).await
+        }
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }
@@ -112,6 +122,9 @@ pub async fn official(
             chatgpt::official(State(s), Path(id), Query(decode(value)?)).await
         }
         codex2api_common::GROK => grok::official(State(s), Path(id), Query(decode(value)?)).await,
+        codex2api_common::ANTIGRAVITY => {
+            antigravity::official(State(s), Path(id), Query(decode(value)?)).await
+        }
         _ => Err(ApiError::bad("不支持的渠道")),
     }
 }

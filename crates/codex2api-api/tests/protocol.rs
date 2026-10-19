@@ -126,6 +126,54 @@ impl codex2api_upstream::HttpTransport for Mock {
                 let id = request.headers()["chatgpt-account-id"].to_str().unwrap();
                 return Ok(http::Response::builder().header("content-type","application/json").body(reqwest::Body::from(json!({"accounts":[{"id":id,"workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}).to_string())).unwrap().into());
             }
+            if request.url().path().starts_with("/v1internal:") {
+                assert!(
+                    request
+                        .url()
+                        .host_str()
+                        .unwrap()
+                        .ends_with("cloudcode-pa.googleapis.com")
+                );
+                assert_eq!(request.url().query(), Some("alt=sse"));
+                let envelope = decoded.unwrap();
+                assert_eq!(envelope["userAgent"], "antigravity");
+                if let Some(status) = status {
+                    let (rpc, message, details) = if status == 429 {
+                        (
+                            "RESOURCE_EXHAUSTED",
+                            "You have exhausted your capacity on this model. private-supplier",
+                            json!([{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1799s"},
+                                {"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","domain":"cloudcode-pa.googleapis.com"}]),
+                        )
+                    } else {
+                        ("UNAVAILABLE", "The model is overloaded.", json!([]))
+                    };
+                    return Ok(http::Response::builder()
+                        .status(status)
+                        .header("content-type", "application/json")
+                        .body(reqwest::Body::from(
+                            json!({"error":{"code":status,"message":message,"status":rpc,"details":details}})
+                                .to_string(),
+                        ))
+                        .unwrap()
+                        .into());
+                }
+                let chunks = [
+                    json!({"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"index":0}],"responseId":"gemini-fixture"}}),
+                    json!({"response":{"candidates":[{"content":{"role":"model","parts":[]},"index":0,"finishReason":"STOP"}],
+                        "usageMetadata":{"promptTokenCount":10000,"cachedContentTokenCount":2000,"candidatesTokenCount":4000,"thoughtsTokenCount":1000,"totalTokenCount":15000}}}),
+                ];
+                let body = chunks
+                    .iter()
+                    .map(|chunk| format!("data: {chunk}\n\n"))
+                    .collect::<String>();
+                return Ok(http::Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .header("set-cookie", "private-supplier")
+                    .body(reqwest::Body::from(body))
+                    .unwrap()
+                    .into());
+            }
             if let Some(status) = status {
                 let code = if status == 402 {
                     "payment_required"
@@ -381,6 +429,26 @@ async fn add_supplier(storage: &Storage, provider: &str, id: &str) {
                 id_token: None,
                 expires_at: Some(chrono::Utc::now().timestamp() + 3600),
                 profile: json!({"userId":id}),
+            }
+            .to_supplier_tokens(id),
+        )
+    } else if provider == "antigravity" {
+        let identity = codex2api_suppliers::antigravity::AntigravityIdentity::generate();
+        (
+            NewSupplierAccount::pending_identity(
+                &identity.installation_id,
+                &identity.os_type,
+                &identity.os_version,
+                &identity.arch,
+                identity.fingerprint_json().unwrap(),
+            ),
+            codex2api_suppliers::antigravity::AntigravityCredentials {
+                access_token: "fixture-supplier".into(),
+                refresh_token: None,
+                expires_at: Some(chrono::Utc::now().timestamp() + 3600),
+                project_id: Some("fixture-project".into()),
+                tier: None,
+                profile: json!({"email":"fixture@example.test"}),
             }
             .to_supplier_tokens(id),
         )
@@ -1518,4 +1586,210 @@ async fn api_rewrite_public_contracts() {
     assert_eq!(count.input_tokens, None);
     assert_eq!(count.cost_nano_usd, Some(0));
     assert_eq!(count.billing_status, "not_charged");
+}
+
+#[tokio::test]
+async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_one_model() {
+    for (path, stream) in [
+        ("/v1/responses", false),
+        ("/v1/responses", true),
+        ("/v1/chat/completions", false),
+        ("/v1/chat/completions", true),
+        ("/v1/messages", false),
+        ("/v1/messages", true),
+    ] {
+        let fixture = fixture("antigravity").await;
+        let mut body = match path {
+            "/v1/responses" => {
+                json!({"model":"custom-model","input":"Hello","max_output_tokens":123,"metadata":{"local":"caller-metadata"}})
+            }
+            "/v1/chat/completions" => {
+                json!({"model":"custom-model","messages":[{"role":"user","content":"Hello"}],"max_completion_tokens":123,"metadata":{"local":"caller-metadata"}})
+            }
+            _ => {
+                json!({"model":"custom-model","messages":[{"role":"user","content":"Hello"}],"max_tokens":123})
+            }
+        };
+        body["stream"] = stream.into();
+        body["temperature"] = json!(0.4);
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request(path, &fixture.token, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path} stream={stream}");
+        assert!(response.headers().get("set-cookie").is_none());
+        let text = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("Hello"), "{path} stream={stream}: {text}");
+        assert!(!text.contains("private-supplier"));
+        assert!(!text.contains("fixture-project"));
+        if !stream {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["model"], "custom-model", "{text}");
+        }
+        assert_eq!(
+            fixture
+                .storage
+                .user("user")
+                .await
+                .unwrap()
+                .unwrap()
+                .wallet_cents,
+            98
+        );
+        let record: (String, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT status,input_tokens,output_tokens,reasoning_tokens,cost_nano_usd FROM usage_records",
+        )
+        .fetch_one(fixture.storage.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            record,
+            (
+                "completed".into(),
+                Some(10000),
+                Some(5000),
+                Some(1000),
+                Some(27_300_000)
+            ),
+            "{path} stream={stream}"
+        );
+        let public = fixture
+            .storage
+            .user_store()
+            .usage("user", &codex2api_storage::UserUsageFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            public["items"][0]["upstream_endpoint"],
+            "/v1internal:streamGenerateContent"
+        );
+        let calls = fixture.mock.requests.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (upstream_path, headers, envelope) = &calls[0];
+        assert_eq!(upstream_path, "/v1internal:streamGenerateContent");
+        assert!(
+            headers["user-agent"]
+                .to_str()
+                .unwrap()
+                .starts_with(&format!(
+                    "antigravity/{} ",
+                    codex2api_common::version::antigravity::VERSION
+                ))
+        );
+        for name in [
+            "originator",
+            "chatgpt-account-id",
+            "x-codex-installation-id",
+            "cookie",
+            "x-api-group",
+            "openai-project",
+            "x-codex-guardian",
+            "x-xai-token-auth",
+        ] {
+            assert!(!headers.contains_key(name), "{name}");
+        }
+        assert_eq!(envelope["userAgent"], "antigravity");
+        assert_eq!(envelope["requestType"], "agent");
+        assert!(
+            envelope["requestId"]
+                .as_str()
+                .unwrap()
+                .starts_with("agent-")
+        );
+        assert_eq!(envelope["project"], "fixture-project");
+        assert_eq!(envelope["model"], "custom-model");
+        assert!(envelope.get("stream").is_none());
+        let gemini = &envelope["request"];
+        assert_eq!(gemini["contents"][0]["role"], "user");
+        assert_eq!(gemini["contents"][0]["parts"][0]["text"], "Hello");
+        assert_eq!(gemini["generationConfig"]["temperature"], 0.4);
+        assert_eq!(gemini["generationConfig"]["maxOutputTokens"], 123);
+        assert!(
+            gemini["systemInstruction"]["parts"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Antigravity")
+        );
+        assert!(gemini["sessionId"].as_str().unwrap().starts_with('-'));
+        assert!(gemini.get("metadata").is_none());
+    }
+
+    // Explicit quota exhaustion cools down the exhausted model alone; a shared
+    // capacity shortage is forwarded without touching supplier state.
+    let fixture = fixture("antigravity").await;
+    let generate = || {
+        request(
+            "/v1/responses",
+            &fixture.token,
+            json!({"model":"custom-model","input":"Hello"}),
+        )
+    };
+    *fixture.mock.status.lock().unwrap() = Some(429);
+    let response = fixture.router.clone().oneshot(generate()).await.unwrap();
+    let status = response.status();
+    let value = json_body(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
+    assert_eq!(value["error"]["code"], "supplier_pool_exhausted");
+    assert!(!value.to_string().contains("private-supplier"));
+    let cooldowns = fixture
+        .storage
+        .supplier_model_cooldowns("supplier")
+        .await
+        .unwrap();
+    assert_eq!(cooldowns.len(), 1);
+    assert_eq!(cooldowns[0].model, "custom-model");
+    assert_eq!(
+        cooldowns[0].cooldown_code.as_deref(),
+        Some("quota_exhausted")
+    );
+    assert!(cooldowns[0].cooldown_until > chrono::Utc::now().timestamp() + 1700);
+    let health = fixture.storage.supplier_health("supplier").await.unwrap();
+    assert!(health.cooldown_until.is_none());
+    assert!(!health.authentication_invalid);
+    assert!(!health.payment_required);
+    assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
+    let response = fixture.router.clone().oneshot(generate()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
+    fixture
+        .storage
+        .recover_supplier_model_quota("supplier", "custom-model")
+        .await
+        .unwrap();
+    *fixture.mock.status.lock().unwrap() = Some(503);
+    let response = fixture.router.clone().oneshot(generate()).await.unwrap();
+    let status = response.status();
+    let value = json_body(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
+    assert_eq!(value["error"]["code"], "unavailable", "{value}");
+    assert!(
+        fixture
+            .storage
+            .supplier_model_cooldowns("supplier")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fixture.mock.requests.lock().unwrap().len(), 2);
+    *fixture.mock.status.lock().unwrap() = None;
+    let response = fixture.router.clone().oneshot(generate()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fixture
+            .storage
+            .user("user")
+            .await
+            .unwrap()
+            .unwrap()
+            .wallet_cents,
+        98
+    );
 }

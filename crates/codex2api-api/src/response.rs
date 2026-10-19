@@ -150,9 +150,7 @@ async fn unary(
     prepared: &PreparedRequest,
 ) -> Result<Value> {
     let mut value = read_json(response).await?;
-    if route.provider_id == codex2api_common::GROK {
-        codex2api_upstream::grok::errors::normalize_response(&mut value);
-    }
+    codex2api_upstream::providers::normalize_event(&route.provider_id, &mut value);
     log.measure(&value, prepared.upstream);
     let failed = matches!(
         ResponseOutcome::from_value(&value, None),
@@ -314,7 +312,7 @@ async fn consume_stream(
 ) -> Result<Value> {
     let events = codex2api_upstream::buffered_sse_lines(response.bytes_stream()).eventsource();
     futures::pin_mut!(events);
-    // Every supplier speaks Responses; Responses callers receive its native events.
+    // Every adapter delivers Responses events; Responses callers receive them as they are.
     let native = prepared.inbound == Protocol::Responses;
     let mut converter = Converter::new(prepared);
     let mut collector = sender.is_none().then(|| Collector::new(prepared.inbound));
@@ -358,9 +356,7 @@ async fn consume_stream(
         if value.get("type").is_none() && !event.event.is_empty() && event.event != "message" {
             value["type"] = event.event.into();
         }
-        if route.provider_id == codex2api_common::GROK {
-            codex2api_upstream::grok::errors::normalize_response(&mut value);
-        }
+        codex2api_upstream::providers::normalize_event(&route.provider_id, &mut value);
         if matches!(
             value["type"].as_str(),
             Some("codex.rate_limits" | "rate_limits.updated")

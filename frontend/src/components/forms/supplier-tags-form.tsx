@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { providerLabel } from "@/lib/providers";
 import {
   supplierTagChecked,
   toggleSupplierSelection,
@@ -41,7 +42,7 @@ export function SupplierTagEditor({
         <FieldLegend>
           所属标签
           {provider
-            ? ` · ${provider === "chatgpt" ? "ChatGPT" : provider === "grok" ? "Grok" : provider}`
+            ? ` · ${providerLabel(provider)}`
             : ""}
         </FieldLegend>
         {!provider && accounts.length > 0 && (

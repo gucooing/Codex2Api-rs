@@ -49,6 +49,7 @@ pub fn supported_models() -> Vec<codex2api_common::SupportedModel> {
             provider_id: codex2api_common::CHATGPT.into(),
             model: model.into(),
             kind: "text".into(),
+            preset_key: None,
         })
         .collect()
 }

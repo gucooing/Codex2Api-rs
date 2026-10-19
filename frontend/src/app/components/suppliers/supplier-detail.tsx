@@ -42,7 +42,8 @@ export function SupplierDetail() {
         </Button>
       </Empty>
     );
-  const ChannelOfficialData = supplierChannel(account?.provider_id).OfficialData;
+  const channel = supplierChannel(account?.provider_id);
+  const ChannelOfficialData = channel.OfficialData;
   return (
     <>
       <div className="flex flex-wrap items-center justify-end gap-2">
@@ -96,9 +97,7 @@ export function SupplierDetail() {
               ["models", "可用模型"],
               ["scheduling", "调度"],
               ["local-usage", "本地用量"],
-              ["usage", supplierChannel(account?.provider_id).settingsLabel],
-              ["details", "官方资料"],
-              ["credits", supplierChannel(account?.provider_id).creditsLabel],
+              ...channel.officialSections,
             ].map(([key, text]) => (
               <TabsTrigger key={key} value={key}>
                 {text}
@@ -134,6 +133,14 @@ export function SupplierDetail() {
                           {account ? supplierStatusLabel(account.status) : "—"}
                         </Badge>
                       ),
+                    },
+                    {
+                      label: "模型冷却",
+                      value: account?.model_cooldowns?.length
+                        ? account.model_cooldowns
+                            .map((item) => `${item.model} · ${date(item.cooldown_until)}`)
+                            .join("；")
+                        : undefined,
                     },
                     {
                       label: "上游订阅",
@@ -192,7 +199,7 @@ export function SupplierDetail() {
           {tab === "local-usage" && <LocalUsage account={account} />}
           {tab === "models" && <SupplierModels key={id} id={id} />}
           {tab === "scheduling" && <SupplierScheduling key={id} id={id} />}
-          {["quota", "usage", "details", "credits"].includes(tab) && (
+          {(tab === "quota" || channel.officialSections.some(([key]) => key === tab)) && (
             <ChannelOfficialData key={tab} id={id} section={tab} onUpdated={resource.reload} />
           )}
         </TabsContent>

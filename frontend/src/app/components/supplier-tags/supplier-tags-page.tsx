@@ -22,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { providerLabel, providerOptions } from "@/lib/providers";
 import {
   ChevronLeft,
   ChevronRight,
@@ -92,8 +93,11 @@ export default function SupplierTagsPage() {
                 </SelectTrigger>
                 <SelectContent position="popper">
                   <SelectItem value="all">全部平台</SelectItem>
-                  <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                  <SelectItem value="grok">Grok</SelectItem>
+                  {providerOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>
@@ -152,11 +156,7 @@ export default function SupplierTagsPage() {
                 <TableRow key={tag.id}>
                   <TableCell className="font-medium">{tag.name}</TableCell>
                   <TableCell>
-                    {tag.provider_id === "chatgpt"
-                      ? "ChatGPT"
-                      : tag.provider_id === "grok"
-                        ? "Grok"
-                        : tag.provider_id}
+                    {providerLabel(tag.provider_id)}
                   </TableCell>
                   <TableCell className="tabular-nums">
                     {tag.supplier_count} / {tag.binding_count}

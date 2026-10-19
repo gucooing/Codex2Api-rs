@@ -79,6 +79,7 @@ pub fn classify_failure(
     Some(SupplierFailure::QuotaExhausted {
         until: retry_at(&error, headers, now),
         code: code.into(),
+        model: None,
     })
 }
 

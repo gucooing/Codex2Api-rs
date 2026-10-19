@@ -78,6 +78,7 @@ async fn fixture_with_issuer(issuer: Option<&str>) -> Fixture {
             provider_id: "grok".into(),
             model: "grok-4.7".into(),
             kind: "text".into(),
+            preset_key: None,
         }])
         .await
         .unwrap();

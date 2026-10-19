@@ -32,6 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiLimit, apiPlatform } from "@/lib/api-access";
+import { providerOptions } from "@/lib/providers";
 import {
   ChevronLeft,
   ChevronRight,
@@ -94,8 +95,11 @@ export default function ApiGroupsPage() {
                 </SelectTrigger>
                 <SelectContent position="popper">
                   <SelectItem value="all">全部平台</SelectItem>
-                  <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                  <SelectItem value="grok">Grok</SelectItem>
+                  {providerOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>

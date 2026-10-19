@@ -22,6 +22,7 @@ export type Supplier = {
   active_requests: number;
   cooldown_until: number | null;
   cooldown_code: string | null;
+  model_cooldowns: { model: string; cooldown_until: number; cooldown_code: string | null }[];
   authorized: boolean;
   authentication_invalid: boolean;
   error_message: string | null;

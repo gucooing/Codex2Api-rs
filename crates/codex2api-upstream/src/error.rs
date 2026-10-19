@@ -48,6 +48,8 @@ pub enum UpstreamError {
     #[error(transparent)]
     GrokAuth(#[from] codex2api_suppliers::grok::GrokAuthError),
     #[error(transparent)]
+    AntigravityAuth(#[from] codex2api_suppliers::antigravity::AntigravityAuthError),
+    #[error(transparent)]
     SupplierAccount(#[from] AccountError),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
@@ -96,6 +98,9 @@ impl UpstreamError {
                 _ => (503, "upstream_auth_unavailable", "上游授权当前不可用"),
             },
             Self::GrokAuth(error) => return crate::grok::errors::auth_failure(error),
+            Self::AntigravityAuth(error) => {
+                return crate::antigravity::errors::auth_failure(error);
+            }
             Self::MissingAccessToken(_) => (503, "upstream_auth_missing", "供应账户没有可用授权"),
             Self::WorkspaceChanged => (
                 409,

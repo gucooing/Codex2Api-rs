@@ -301,7 +301,9 @@ impl GrokUpstream {
                             .storage()?
                             .reject_supplier_auth(id, revision.0)
                             .await?;
-                    } else if let crate::SupplierFailure::QuotaExhausted { until, code } = failure {
+                    } else if let crate::SupplierFailure::QuotaExhausted { until, code, .. } =
+                        failure
+                    {
                         self.auth()
                             .storage()?
                             .exhaust_supplier_quota(id, revision.0, until, &code)

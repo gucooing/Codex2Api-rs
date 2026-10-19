@@ -15,7 +15,7 @@ import { mergeOAuth } from "@/lib/domain";
 import { useQueryId, useResource } from "@/lib/hooks";
 import { useListResource } from "@/lib/pagination";
 import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
-import { supplierChannel } from "@/lib/providers";
+import { providerOptions, supplierChannel } from "@/lib/providers";
 import { parseRefreshTokenLines } from "@/lib/refresh-tokens";
 import type { SupplierSelection } from "@/lib/supplier-selection";
 import { commonSupplierTags, selectedSupplierProvider } from "@/lib/supplier-selection";
@@ -219,13 +219,12 @@ export function useOAuthWizard({
   const pending = flow?.status === "pending" ? flow : undefined;
   const busy = actions.running.size > 0;
   const ready = Boolean(supplierId) || (setup.ready && proxies.ready);
-  const methods = [
-    { value: "callback", label: channel.callbackLabel, description: channel.callbackDescription },
-    { value: "device", label: "设备码", description: "在设备授权页面输入一次性代码" },
-    ...(!supplierId || channel.rtRelogin
-      ? [{ value: "refresh_token", label: "RT 授权", description: "使用 Refresh Token 完成授权" }]
-      : []),
-  ];
+  const methodOptions: Record<string, { label: string; description: string }> = {
+    callback: { label: channel.callbackLabel, description: channel.callbackDescription },
+    device: { label: "设备码", description: "在设备授权页面输入一次性代码" },
+    refresh_token: { label: "RT 授权", description: "使用 Refresh Token 完成授权" },
+  };
+  const methods = channel.methods.map((value) => ({ value, ...methodOptions[value] }));
   const steps = [
     ...(!supplierId ? [{ value: 0, label: "指纹配置" }] : []),
     { value: 1, label: "授权方式" },
@@ -478,7 +477,7 @@ export function useSupplierTagsBatchDialog() {
 export const validSupplierFilters = (value: { status: string; provider_id: string }) =>
   ["", "active", "disabled", "error", "payment_required", "quota_exhausted"].includes(
     value.status,
-  ) && ["", "chatgpt", "grok"].includes(value.provider_id);
+  ) && ["", ...providerOptions.map((option) => option.value)].includes(value.provider_id);
 
 export function useSuppliersPage() {
   const tableColumns0 = useColumnVisibility(

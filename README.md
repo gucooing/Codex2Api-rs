@@ -6,7 +6,7 @@
 
 OAuth 模块专用于已配置本服务地址的 ccodex、cgrok 和 hook Desktop，提供各平台的登录、推理、账户、额度和客户端状态协议，统一服务根为 `/v1/chatgpt`、`/v1/grok`。API 模块专用于标准 AI API 网关，提供 `/v1/responses`、`/v1/chat/completions` 等接口。
 
-供应账户负责上游执行。普通用户可以持有同平台的多个独立订阅，OAuth 客户端身份、设备、额度和历史绑定明确选择的订阅。API Key 则按 API 组调用文本和图像模型，从用户 USD 钱包结算，不消耗订阅额度。ChatGPT 与 Grok 使用各自独立的协议、凭据和上游传输。接入见 [OAuth 客户端](docs/OAUTH.md)及 [AI API 网关](docs/API.md)。
+供应账户负责上游执行。普通用户可以持有同平台的多个独立订阅，OAuth 客户端身份、设备、额度和历史绑定明确选择的订阅。API Key 则按 API 组调用文本和图像模型，从用户 USD 钱包结算，不消耗订阅额度。ChatGPT、Grok 与 Antigravity 使用各自独立的协议、凭据和上游传输。接入见 [OAuth 客户端](docs/OAUTH.md)及 [AI API 网关](docs/API.md)。
 
 客户端单独维护在 [gucooing/codex 的 ccodex 分支](https://github.com/gucooing/codex/tree/ccodex)，本地可与本仓库并列放在 `../codex`。更新顺序为官方稳定版 → ccodex → 本仓库。官方源码只作为协议和行为参考，不引入官方 Rust crates；纯净参考快照位置为 `reference/codex`，精确来源记录在版本常量中。
 
@@ -25,6 +25,8 @@ OAuth 模块专用于已配置本服务地址的 ccodex、cgrok 和 hook Desktop
 数据仅使用 PostgreSQL，通过必填的 `CODEX2API_DATABASE_URL` 连接。管理端只有一个管理员，账户密码登录，首次启动默认 `admin` / `admin`。
 
 Grok 作为独立渠道提供代码／回调、设备码、RT 和逐行批量授权，支持本地套餐、钱包购买、模型计价和用量记录。`cgrok` 服务根使用 OAuth origin 加 `/v1/grok`。模型可用性由管理端配置及套餐决定，自定义模型无需内置名单认证；官方数据仅作预设。接入方式及能力边界见 [Grok 渠道](docs/GROK.md)。
+
+Antigravity 作为只服务标准 AI API 网关的供应渠道接入 Google Cloud Code Assist：供应账户通过 Google 授权代码／回调或 RT 创建，请求伪装为官方 Antigravity 桌面客户端，Responses、Chat Completions 和 Messages 在渠道内部转换为 Gemini 线协议。它没有 `/v1/antigravity` OAuth 客户端服务根，也没有套餐或订阅；额度耗尽按模型冷却，Gemini 与 Claude 模型按官方公开价格提供默认计费预设。详见 [Antigravity 渠道](docs/ANTIGRAVITY.md)。
 
 ## Docker Compose 部署
 

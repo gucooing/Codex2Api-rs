@@ -163,6 +163,7 @@ pub fn classify_supplier_failure(
     Some(SupplierFailure::QuotaExhausted {
         until,
         code: code.into(),
+        model: None,
     })
 }
 
@@ -251,7 +252,8 @@ mod tests {
             ),
             Some(SupplierFailure::QuotaExhausted {
                 until: 1000,
-                code: "usage_limit_reached".into()
+                code: "usage_limit_reached".into(),
+                model: None,
             })
         );
         assert_eq!(

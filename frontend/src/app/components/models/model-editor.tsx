@@ -31,6 +31,7 @@ import {
   priceRangeLabel,
   priceTierLabels,
 } from "@/lib/model-pricing";
+import { providerOptions } from "@/lib/providers";
 import { Plus, Trash2, X } from "lucide-react";
 
 export function ModelEditor({
@@ -144,18 +145,12 @@ export function ModelEditor({
                         >
                           <SelectValue
                             placeholder={
-                              [
-                                { value: "chatgpt", label: "ChatGPT" },
-                                { value: "grok", label: "Grok" },
-                              ].find((option) => option.value === "")?.label ?? "请选择"
+                              providerOptions.find((option) => option.value === "")?.label ?? "请选择"
                             }
                           />
                         </SelectTrigger>
                         <SelectContent position="popper">
-                          {[
-                            { value: "chatgpt", label: "ChatGPT" },
-                            { value: "grok", label: "Grok" },
-                          ].map((option) => (
+                          {providerOptions.map((option) => (
                             <SelectItem
                               key={option.value}
                               value={

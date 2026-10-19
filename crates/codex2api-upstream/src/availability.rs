@@ -7,8 +7,15 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupplierFailure {
     Authentication,
-    PaymentRequired { code: Option<String> },
-    QuotaExhausted { until: i64, code: String },
+    PaymentRequired {
+        code: Option<String>,
+    },
+    /// `model` scopes the cooldown to one model of the account; `None` cools the account.
+    QuotaExhausted {
+        until: i64,
+        code: String,
+        model: Option<String>,
+    },
 }
 pub fn classify_provider_failure(
     provider: &str,
@@ -20,6 +27,9 @@ pub fn classify_provider_failure(
     match provider {
         codex2api_common::CHATGPT => classify_supplier_failure(status, value, headers, now),
         codex2api_common::GROK => crate::grok::classify_failure(status, value, headers, now),
+        codex2api_common::ANTIGRAVITY => {
+            crate::antigravity::classify_failure(status, value, headers, now)
+        }
         _ => None,
     }
 }
@@ -36,6 +46,9 @@ impl crate::UpstreamError {
                 Some(SupplierFailure::Authentication)
             }
             Self::GrokAuth(e) if e.permanent_refresh_failure() => {
+                Some(SupplierFailure::Authentication)
+            }
+            Self::AntigravityAuth(e) if e.permanent_refresh_failure() => {
                 Some(SupplierFailure::Authentication)
             }
             Self::Status {

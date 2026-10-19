@@ -1,5 +1,5 @@
 //! Supplier accounts, persistent identities, isolated clients and authentication.
-//! ChatGPT/Codex and Grok own independent provider implementations.
+//! ChatGPT/Codex, Grok and Antigravity own independent provider implementations.
 //!
 //! ChatGPT behavior matches official Codex CLI at the pinned commit
 //! `83086188ae0614bd882818ff1aa23f3194962012`.
@@ -14,6 +14,7 @@
 //! `transport` owns isolated account HTTP clients and cookie/TLS policy.
 //! Admin HTTP routes are registered in codex2api-admin, not here.
 
+pub use providers::antigravity;
 use providers::chatgpt::draft;
 pub use providers::grok;
 pub mod account_cache;

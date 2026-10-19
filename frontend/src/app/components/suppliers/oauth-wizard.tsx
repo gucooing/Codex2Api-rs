@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { providerOptions } from "@/lib/providers";
 import { Copy, X } from "lucide-react";
 import Link from "next/link";
 
@@ -155,8 +156,11 @@ export function OAuthWizard({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent position="popper">
-                      <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                      <SelectItem value="grok">Grok</SelectItem>
+                      {providerOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </Field>

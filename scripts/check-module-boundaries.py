@@ -32,18 +32,19 @@ for manifest in (root / "crates").glob("*/Cargo.toml"):
                 dependency = options.get("package", alias) if isinstance(options, dict) else alias
                 if dependency.startswith("codex2api-") and dependency.removeprefix("codex2api-") not in allowed[business]:
                     violations.append(f"{manifest.relative_to(root)}: {name} cannot depend on {dependency}")
+providers = ("chatgpt", "grok", "antigravity")
 for source in [root / "crates", root / "frontend/src", root / "frontend-user/src"]:
-    for provider in ("chatgpt", "grok"):
-        other = "grok" if provider == "chatgpt" else "chatgpt"
+    for provider in providers:
+        others = "|".join(other for other in providers if other != provider)
+        pattern = rf"(?:providers\s*::\s*(?:{others})\b|providers/(?:{others})/|from\s+[\"'][^\"']*/(?:{others})/)"
         for directory in source.glob(f"**/providers/{provider}"):
             for file in directory.rglob("*"):
                 if file.suffix not in (".rs", ".ts", ".tsx"):
                     continue
-                pattern = rf"(?:providers\s*::\s*{other}\b|providers/{other}/|from\s+[\"'][^\"']*/{other}/)"
                 for number, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
                     if re.search(pattern, line):
                         violations.append(f"{file.relative_to(root)}:{number}: cross-provider import")
 if violations:
     print("\n".join(violations))
     sys.exit(1)
-print("Business crate dependencies and ChatGPT/Grok provider import boundaries verified.")
+print("Business crate dependencies and provider import boundaries verified.")

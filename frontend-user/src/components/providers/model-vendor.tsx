@@ -8,6 +8,8 @@ export function modelVendor(provider: string) {
       return { name: "OpenAI", Icon: OpenAIIcon };
     case "grok":
       return { name: "xAI", Icon: XAIIcon };
+    case "antigravity":
+      return { name: "Antigravity", Icon: Box };
     default:
       return { name: provider, Icon: Box };
   }

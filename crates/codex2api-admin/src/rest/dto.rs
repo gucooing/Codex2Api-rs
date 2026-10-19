@@ -25,6 +25,7 @@ pub struct Session {
     pub app_version: &'static str,
     pub codex_cli_version: &'static str,
     pub grok_build_version: &'static str,
+    pub antigravity_version: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

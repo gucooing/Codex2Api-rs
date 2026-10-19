@@ -7,6 +7,7 @@ fn supported(model: &str) -> SupportedModel {
         provider_id: "chatgpt".into(),
         model: model.into(),
         kind: "text".into(),
+        preset_key: None,
     }
 }
 

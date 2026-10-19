@@ -18,6 +18,11 @@ pub const DEFAULT_ADMIN_SESSION_TTL: Duration =
     Duration::from_secs(crate::WEB_REFRESH_TTL_SECONDS as u64);
 pub const DEFAULT_OAUTH_PENDING_TTL: Duration = Duration::from_secs(10 * 60);
 
+/// Embedded `migrations/NNNN_name.sql`, generated in version order by the build script.
+mod migrations {
+    include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
+}
+
 const ACCOUNT_COLUMNS: &str = "provider_id, id, status, display_name, chatgpt_account_id, chatgpt_user_id, email, \
      plan_type, installation_id, os_type, os_version, arch, \
      http_fingerprint_json, proxy_id, created_at, updated_at, last_used_at";
@@ -155,24 +160,7 @@ impl Storage {
     }
 
     async fn initialize(&self) -> Result<()> {
-        let migrations = [
-            (
-                1_i64,
-                include_str!("../migrations/0001_current_contracts.sql"),
-            ),
-            (
-                2_i64,
-                include_str!("../migrations/0002_supplier_identity_inputs.sql"),
-            ),
-            (
-                3_i64,
-                include_str!("../migrations/0003_usage_upstream_endpoint.sql"),
-            ),
-            (
-                4_i64,
-                include_str!("../migrations/0004_usage_client_ip.sql"),
-            ),
-        ];
+        let migrations = migrations::MIGRATIONS;
         let mut tx = self.pool.begin().await?;
         // Schema initialization and migrations share one transaction and schema lock.
         sqlx::query(
@@ -210,7 +198,7 @@ impl Storage {
                 "数据库版本不受当前服务支持".into(),
             ));
         }
-        for (version, sql) in migrations {
+        for &(version, sql) in migrations {
             if version <= applied {
                 continue;
             }

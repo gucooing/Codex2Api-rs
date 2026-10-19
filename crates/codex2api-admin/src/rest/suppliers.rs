@@ -25,6 +25,14 @@ pub(super) fn router() -> Router<AdminState> {
             "/suppliers/grok/oauth",
             crate::providers::grok::oauth_routes(),
         )
+        .route(
+            "/suppliers/antigravity/{id}/profile",
+            post(crate::providers::antigravity::refresh_profile),
+        )
+        .nest(
+            "/suppliers/antigravity/oauth",
+            crate::providers::antigravity::oauth_routes(),
+        )
         .route("/suppliers", get(list))
         .route("/suppliers/options", get(options))
         .route("/suppliers/selection", get(selection))
@@ -124,6 +132,7 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     value["authentication_invalid"] = json!(health.authentication_invalid);
     value["cooldown_until"] = json!(health.cooldown_until);
     value["cooldown_code"] = json!(health.cooldown_code);
+    value["model_cooldowns"] = json!(s.storage.supplier_model_cooldowns(&a.id).await?);
     let tags = s.storage.supplier_tag_labels(&a.id).await?;
     value["tag_ids"] = json!(tags.iter().map(|(id, _)| id).collect::<Vec<_>>());
     value["tags"] = json!(

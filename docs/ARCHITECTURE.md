@@ -140,6 +140,11 @@ the Responses request in Grok Build's shape: official models declare
 `api_backend: responses` in the pinned client's `xai-grok-models/default_models.json`,
 system-level input uses the system role, `store=false` and encrypted reasoning is
 included. Conversion runs after selection and is rebuilt on failover.
+Antigravity converts the canonical Responses request to the Cloud Code Assist
+Gemini wire inside `providers/antigravity/` (request, events, schema and error
+modules) and sends the desktop client's v1internal envelope; its stream is
+converted back into Responses events before any shared code sees it, so the
+API layer handles only the canonical contract.
 Image JSON and multipart inputs go through the corresponding provider builder.
 Protocol conversion preserves the native tool, multimodal and replay payloads;
 provider validation remains authoritative for unsupported extensions. Search,
@@ -215,8 +220,10 @@ quota snapshots and historical attribution survive upgrades.
 User login identities live in `accounts` and `users`. `platform_accounts` stores independently owned subscription identities, with a nonunique `(user_id, provider_id)` index. A user starts with no subscriptions and can hold several on one platform. Each subscription isolates client state, OAuth devices, usage, spending windows and request limits.
 
 A consumer's provider is fixed at creation; execution routes select
-only pools of that provider. ChatGPT and Grok have independent protocol adapters.
-See [Grok](GROK.md) for its authentication, model and client contracts.
+only pools of that provider. ChatGPT, Grok and Antigravity have independent protocol
+adapters. See [Grok](GROK.md) and [Antigravity](ANTIGRAVITY.md) for their authentication,
+model and client contracts; Antigravity has no OAuth client surface and is served only
+by the API gateway.
 
 ## Supplier pools and runtime state
 
@@ -237,7 +244,7 @@ bindings are included only when selected. Exports offer native and Sub2api forma
 Sub2api exports map credentials and model names to its OAuth account fields and
 deduplicate proxies using its `proxy_key` references. Native imports restore the exported
 fields; Sub2api imports read `accounts` and `proxies` from its data export and accept
-OpenAI OAuth and Grok OAuth accounts. Unsupported platforms and credential types
+OpenAI OAuth, Grok OAuth and Antigravity OAuth accounts. Unsupported platforms and credential types
 are skipped. Sub2api accounts receive independent local fingerprints; their explicit
 model-mapping targets become supplier models, without inventing a catalog when no
 mapping was exported. Each imported account and its proxy binding are saved in one
@@ -396,10 +403,14 @@ User-Agent, the provider `version` header and catalog `client_version` share the
 pinned release version from `codex2api-common/src/providers/chatgpt/version.rs`.
 Each provider owns its official endpoint and header constants in common; consumers
 reference those definitions. ChatGPT UA combines the current version with stored
-OS, architecture and terminal inputs. Grok uses its independent version and formula.
+OS, architecture and terminal inputs. Grok and Antigravity use their independent
+versions and formulas; Antigravity sends `antigravity/{version} {os}/{arch}` from the
+account's frozen Go-style OS and architecture tokens.
 Version upgrades rebuild account-bound clients on process restart without rewriting
 supplier identity. Schema initialization uses the current schema; existing databases
-apply numbered SQL migrations atomically. Removing derived identity fields preserves
+apply the numbered SQL migrations in `crates/codex2api-storage/migrations/` atomically;
+the crate build script embeds every `NNNN_name.sql` in order, so adding a migration is
+adding a file. Removing derived identity fields preserves
 installation IDs, frozen inputs, cookies, credentials and manual enablement. Historical
 request/device User-Agents remain observed records and are never rewritten.
 
@@ -461,7 +472,13 @@ Quota cooldowns persist in PostgreSQL and expire automatically at the official r
 Retry-After time. When timing is absent, a sixty-second retry cooldown is used;
 it is not presented as an official quota reset. Fresh main quota responses can
 also record exhaustion; model-specific additional windows do not disable the whole
-account. A fresh ChatGPT response explicitly allowing execution or reporting usable
+account. Antigravity quota is per model: an explicit `RESOURCE_EXHAUSTED` with a reset
+wait of seven seconds or more, or the official per-model quota read reporting no
+remaining fraction, records a cooldown in `supplier_model_cooldowns` for that model and
+credential revision. Other models of the account stay schedulable, the pool index applies
+the later of the account and model cooldowns, and a fresh read reporting remaining quota,
+a new login or the administrator reset clears it. Short waits are forwarded as ordinary
+throttling with `Retry-After`. A fresh ChatGPT response explicitly allowing execution or reporting usable
 credits clears quota exhaustion immediately, even before the old reset time, and
 invalidates pool eligibility caches. Unknown, failed or cached reads never prove recovery.
 Credential and quota observation revisions protect against late checks, including

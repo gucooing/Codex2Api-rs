@@ -246,7 +246,7 @@ pub(super) async fn observe_request_failure(
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        Some(codex2api_upstream::SupplierFailure::QuotaExhausted { until, code }) => {
+        Some(codex2api_upstream::SupplierFailure::QuotaExhausted { until, code, .. }) => {
             state
                 .storage
                 .exhaust_supplier_quota_if_unchanged(id, revision, until, &code, cooldown_revision)

@@ -151,14 +151,16 @@ impl Storage {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT a.id,COALESCE(s.concurrency,5) AS concurrency,
              COALESCE(s.priority,0) AS priority,s.load_factor,sm.model,
-             CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
-                  THEN h.cooldown_until END AS ready_at
+             GREATEST(CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
+                  THEN h.cooldown_until END,
+                  CASE WHEN c.cooldown_auth_revision=a.auth_revision THEN c.cooldown_until END) AS ready_at
              FROM supplier_tag_members m
              JOIN supplier_accounts a ON a.id=m.account_id
              JOIN supplier_tokens k ON k.account_id=a.id
              LEFT JOIN supplier_health h ON h.account_id=a.id
              LEFT JOIN supplier_scheduling s ON s.account_id=a.id
              LEFT JOIN supplier_models sm ON sm.account_id=a.id
+             LEFT JOIN supplier_model_cooldowns c ON c.account_id=a.id AND c.model=sm.model
              WHERE m.tag_id=$1 AND a.provider_id=$2 AND a.status='active'
              AND COALESCE(k.access_token,'')!=''
              AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)

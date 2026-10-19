@@ -135,7 +135,7 @@ pub(crate) async fn forward(
             log.record.http_status = None;
             let result = async {
                 let inbound = owned_headers(state, &route, &context, &prepared.headers).await?;
-                let endpoint = prepared.upstream.endpoint();
+                let endpoint = prepared.endpoint();
                 state
                     .storage
                     .set_usage_upstream_endpoint(&log.record.id, endpoint)
@@ -154,14 +154,9 @@ pub(crate) async fn forward(
                     .get::<codex2api_upstream::SupplierAuthRevision>()
                     .map(|r| r.0)
                     .or(revision);
-                let prelude = if route.provider_id == codex2api_common::GROK {
-                    codex2api_upstream::grok::prelude
-                } else {
-                    codex2api_upstream::scheduler::prelude_event
-                };
                 codex2api_upstream::scheduler::inspect_response(
                     &route.provider_id,
-                    prelude,
+                    codex2api_upstream::providers::prelude(&route.provider_id),
                     response,
                 )
                 .await

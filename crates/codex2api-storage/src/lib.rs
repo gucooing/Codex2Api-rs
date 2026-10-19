@@ -87,7 +87,7 @@ pub use supplier_pools::PoolCandidate;
 pub use supplier_pools::SupplierTag;
 mod supplier_routing;
 pub use spending_windows::{SpendingWindow, plan_spending_windows, spending_windows};
-pub use supplier_health::SupplierHealth;
+pub use supplier_health::{SupplierHealth, SupplierModelCooldown};
 pub use supplier_routing::SupplierAuthSnapshot;
 mod types;
 mod usage;

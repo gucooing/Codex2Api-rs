@@ -13,8 +13,13 @@ pub use model_presets::{
 
 pub const CHATGPT: &str = "chatgpt";
 pub const GROK: &str = "grok";
+pub const ANTIGRAVITY: &str = "antigravity";
 
-pub const PROVIDERS: &[(&str, &str)] = &[(CHATGPT, "ChatGPT"), (GROK, "Grok")];
+pub const PROVIDERS: &[(&str, &str)] = &[
+    (CHATGPT, "ChatGPT"),
+    (GROK, "Grok"),
+    (ANTIGRAVITY, "Antigravity"),
+];
 
 pub fn default_provider() -> String {
     CHATGPT.into()

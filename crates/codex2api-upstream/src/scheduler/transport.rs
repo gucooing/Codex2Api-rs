@@ -18,7 +18,20 @@ pub async fn observe_failure(
                     .mark_supplier_payment_required(id, revision, code.as_deref(), None)
                     .await?
             }
-            SupplierFailure::QuotaExhausted { until, code } => {
+            SupplierFailure::QuotaExhausted {
+                until,
+                code,
+                model: Some(model),
+            } => {
+                storage
+                    .exhaust_supplier_model_quota(id, revision, model, *until, code)
+                    .await?
+            }
+            SupplierFailure::QuotaExhausted {
+                until,
+                code,
+                model: None,
+            } => {
                 storage
                     .exhaust_supplier_quota(id, revision, *until, code)
                     .await?

@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/table";
 import { type Supplier } from "@/lib/api";
 import { date } from "@/lib/format";
+import { providerOptions } from "@/lib/providers";
 import { supplierSubscriptionLabel as subscriptionLabel } from "@/lib/subscriptions";
 import {
   cycleUsageLabel,
@@ -188,8 +189,11 @@ export default function SuppliersPage() {
                   </SelectTrigger>
                   <SelectContent position="popper">
                     <SelectItem value="all">全部平台</SelectItem>
-                    <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                    <SelectItem value="grok">Grok</SelectItem>
+                    {providerOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </Field>

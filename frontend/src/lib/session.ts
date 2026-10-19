@@ -15,6 +15,7 @@ export type Session = {
   app_version: string;
   codex_cli_version: string;
   grok_build_version: string;
+  antigravity_version: string;
 };
 
 export const signedOut: Session = {
@@ -24,6 +25,7 @@ export const signedOut: Session = {
   app_version: "",
   codex_cli_version: "",
   grok_build_version: "",
+  antigravity_version: "",
 };
 
 export async function readSession(signal?: AbortSignal): Promise<Session> {

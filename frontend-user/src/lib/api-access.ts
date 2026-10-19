@@ -75,8 +75,12 @@ export type ApiKey = {
   active_requests: number;
 };
 export type CreatedApiKey = { key: ApiKey; secret: string };
-export const apiPlatform = (provider: string) =>
-  provider === "chatgpt" ? "ChatGPT" : provider === "grok" ? "Grok" : provider;
+const platformNames: Record<string, string> = {
+  chatgpt: "ChatGPT",
+  grok: "Grok",
+  antigravity: "Antigravity",
+};
+export const apiPlatform = (provider: string) => platformNames[provider] ?? provider;
 export const apiLimit = (limit: number) => (limit === 0 ? "无限" : String(limit));
 export const apiPrice = (usd: string | null | undefined) =>
   usd == null || usd === "" ? "待定价" : `$${usd}`;

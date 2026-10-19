@@ -2,7 +2,8 @@
 
 INSERT INTO providers (id,name) VALUES
 ('chatgpt','ChatGPT'),
-('grok','Grok');
+('grok','Grok'),
+('antigravity','Antigravity');
 
 INSERT INTO model_catalog (provider_id,model,kind,enabled,deleted,revision) VALUES
 ('chatgpt','gpt-5.6','text',TRUE,FALSE,1),
