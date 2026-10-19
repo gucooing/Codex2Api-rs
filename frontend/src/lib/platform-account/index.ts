@@ -373,7 +373,9 @@ export type RoutingResponse = {
   items: {
     virtual_account_id: string;
     provider_id: string;
-    tag_id: string | null;
+    /** Explicit override; null while the subscription inherits its plan's pool. */
+    tag_ids: string[] | null;
+    effective_tag_ids: string[];
     revision: number;
   }[];
 };
@@ -436,24 +438,33 @@ export function useRoutingForm({
   const id = useId();
   const actions = useActions();
   const route = data.items.find((r) => r.provider_id === account?.provider_id);
-  const [draft, setDraft] = useState<{ tag: string }>();
-  const current = draft ?? { tag: route?.tag_id ?? "" };
-  const tags = useResource<List<SupplierTag>>(
-    account ? `/supplier-tags/options${query({ provider_id: account.provider_id })}` : null,
-  );
+  const [draft, setDraft] = useState<{ inherit: boolean; tags: string[] }>();
+  const current = draft ?? { inherit: route?.tag_ids === null, tags: route?.tag_ids ?? [] };
+  const tags = useResource<List<SupplierTag>>(account ? "/supplier-tags/options" : null);
   useErrorToast(tags.error);
-  const selectTag = (tag: string) => {
+  const setInherit = (inherit: boolean) => {
     if (disabled || !tags.ready || actions.isBusy("pool-route")) return;
-    if (tag !== "none" && !tags.data?.items.some((item) => item.id === tag)) return;
-    setDraft({ tag: tag === "none" ? "" : tag });
+    setDraft({ inherit, tags: inherit ? [] : (route?.effective_tag_ids ?? []) });
+  };
+  const toggleTag = (tag: string, checked: boolean) => {
+    if (disabled || !tags.ready || actions.isBusy("pool-route")) return;
+    if (!tags.data?.items.some((item) => item.id === tag)) return;
+    setDraft({
+      inherit: false,
+      tags: checked
+        ? [...new Set([...current.tags, tag])]
+        : current.tags.filter((item) => item !== tag),
+    });
   };
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(event, "pool-route", async () => {
       if (disabled || !account || !tags.ready) throw new Error("请先加载号池配置");
+      if (!current.inherit && !current.tags.length)
+        throw new Error("请选择至少一个标签或继承套餐号池");
       await request(`${platformPrefix}/${account.id}/routing`, {
         method: "PUT",
         body: {
-          tag_id: current.tag || null,
+          tag_ids: current.inherit ? null : current.tags,
           revision: route?.revision ?? null,
         },
       });
@@ -463,8 +474,11 @@ export function useRoutingForm({
   return {
     id,
     actions,
-    selectTag,
-    current,
+    inherit: current.inherit,
+    setInherit,
+    selected: current.tags,
+    toggleTag,
+    effective: current.inherit ? (route?.effective_tag_ids ?? []) : current.tags,
     tags,
     handleSubmit,
   } as const;

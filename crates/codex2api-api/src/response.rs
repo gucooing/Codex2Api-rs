@@ -81,7 +81,7 @@ pub(crate) async fn response_body(
     let is_sse = codex2api_upstream::ResponseFormat::from_headers(response.headers())
         == codex2api_upstream::ResponseFormat::EventStream;
     if !is_sse {
-        let result = unary(&state, &route, &mut log, response, &prepared).await;
+        let result = unary(&state, &mut log, response, &prepared).await;
         return match result {
             Ok(value) => {
                 let mut result = Json(value).into_response();
@@ -144,13 +144,12 @@ pub(crate) async fn response_body(
 /// JSON replies: unary operations and failures. Generations are always requested as streams.
 async fn unary(
     state: &ApiState,
-    route: &SupplierRoute,
     log: &mut ApiLog,
     response: reqwest::Response,
     prepared: &PreparedRequest,
 ) -> Result<Value> {
     let mut value = read_json(response).await?;
-    codex2api_upstream::providers::normalize_event(&route.provider_id, &mut value);
+    codex2api_upstream::providers::normalize_event(&log.record.provider_id, &mut value);
     log.measure(&value, prepared.upstream);
     let failed = matches!(
         ResponseOutcome::from_value(&value, None),
@@ -356,7 +355,7 @@ async fn consume_stream(
         if value.get("type").is_none() && !event.event.is_empty() && event.event != "message" {
             value["type"] = event.event.into();
         }
-        codex2api_upstream::providers::normalize_event(&route.provider_id, &mut value);
+        codex2api_upstream::providers::normalize_event(&log.record.provider_id, &mut value);
         if matches!(
             value["type"].as_str(),
             Some("codex.rate_limits" | "rate_limits.updated")

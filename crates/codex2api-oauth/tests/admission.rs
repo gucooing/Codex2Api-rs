@@ -62,7 +62,7 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
         .await
         .unwrap();
     let model = codex2api_storage::ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "fixture-image".into(),
         kind: "image".into(),
         enabled: true,
@@ -70,7 +70,6 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
         revision: 0,
     };
     let mut price = codex2api_storage::ImagePrice {
-        provider_id: "chatgpt".into(),
         model: model.model.clone(),
         resolution: "4K".into(),
         price_nano_usd: 1,
@@ -91,11 +90,7 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
             .await,
         Err(ServiceError::PricingUnavailable)
     ));
-    let model = storage
-        .model_config("chatgpt", &model.model)
-        .await
-        .unwrap()
-        .unwrap();
+    let model = storage.model_config(&model.model).await.unwrap().unwrap();
     price.resolution = "1K".into();
     storage
         .save_model_config(
@@ -120,11 +115,7 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
             Err(ServiceError::PricingUnavailable)
         ));
     }
-    let model = storage
-        .model_config("chatgpt", &model.model)
-        .await
-        .unwrap()
-        .unwrap();
+    let model = storage.model_config(&model.model).await.unwrap().unwrap();
     price.resolution = "4K".into();
     storage
         .save_model_config(
@@ -264,13 +255,9 @@ async fn model_permissions_are_exact_current_and_provider_scoped() {
             .await,
         Err(ServiceError::Policy(PolicyError::InvalidModel))
     ));
-    let model = storage
-        .model_config("chatgpt", "gpt-5.6-luna")
-        .await
-        .unwrap()
-        .unwrap();
+    let model = storage.model_config("gpt-5.6-luna").await.unwrap().unwrap();
     storage
-        .set_model_enabled("chatgpt", &model.model, false, model.revision)
+        .set_model_enabled(&model.model, false, model.revision)
         .await
         .unwrap();
     assert!(matches!(
@@ -281,7 +268,7 @@ async fn model_permissions_are_exact_current_and_provider_scoped() {
     ));
     assert!(
         storage
-            .available_virtual_models(&account.id, "chatgpt")
+            .available_virtual_models(&account.id)
             .await
             .unwrap()
             .is_empty()
@@ -321,7 +308,7 @@ async fn expired_subscriptions_never_fall_back_to_another_plan() {
     ));
     assert!(
         storage
-            .available_virtual_models(&account.id, "chatgpt")
+            .available_virtual_models(&account.id)
             .await
             .unwrap()
             .is_empty()

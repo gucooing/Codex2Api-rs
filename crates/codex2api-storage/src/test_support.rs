@@ -51,7 +51,13 @@ pub async fn open(identity: impl AsRef<Path>) -> Result<Storage> {
             schemas.push(schema.clone());
         }
     }
-    Storage::connect_with(options().options([("search_path", schema.as_str())])).await
+    let storage =
+        Storage::connect_with(options().options([("search_path", schema.as_str())])).await?;
+    // The process registers built-in models at startup; fixtures mirror that step.
+    storage
+        .sync_supported_models(&codex2api_common::builtin_models())
+        .await?;
+    Ok(storage)
 }
 
 impl Drop for TestDirectory {

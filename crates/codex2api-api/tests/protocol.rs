@@ -333,7 +333,7 @@ async fn fixture(provider: &str) -> Fixture {
         .await
         .unwrap();
     let model = ModelConfig {
-        provider_id: provider.into(),
+        platform: provider.into(),
         model: "custom-model".into(),
         kind: "text".into(),
         enabled: true,
@@ -344,7 +344,6 @@ async fn fixture(provider: &str) -> Fixture {
         .save_model_config(
             &model,
             &[ModelPrice {
-                provider_id: provider.into(),
                 model: model.model.clone(),
                 tier: "standard".into(),
                 min_input_tokens: 0,
@@ -376,15 +375,13 @@ async fn fixture(provider: &str) -> Fixture {
                 id: "group".into(),
                 name: "Group".into(),
                 description: "Description".into(),
-                provider_id: provider.into(),
                 enabled: true,
                 tag_ids: vec!["tag".into()],
-                allowed_models: vec![],
+                models: vec![codex2api_common::ModelRule::granted("custom-model")],
                 multiplier: "1.5".into(),
                 search_price_usd: (provider == "chatgpt").then(|| "0.02".into()),
                 concurrency_limit: 1,
                 rpm_limit: 0,
-                model_rules: vec![],
                 revision: 0,
             },
             None,
@@ -898,7 +895,7 @@ async fn supplier_throttle_is_forwarded_without_failover_or_persistent_ban() {
 async fn api_model_catalog_uses_platform_policy_and_execution_stays_in_the_group_pool() {
     let fixture = fixture("chatgpt").await;
     let config = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "catalog-only".into(),
         kind: "text".into(),
         enabled: true,
@@ -907,7 +904,7 @@ async fn api_model_catalog_uses_platform_policy_and_execution_stays_in_the_group
     };
     let mut price = fixture
         .storage
-        .model_prices("chatgpt")
+        .model_prices()
         .await
         .unwrap()
         .into_iter()
@@ -1197,7 +1194,7 @@ async fn images_use_each_platform_transport_and_bill_actual_count() {
                 .storage
                 .save_model_config(
                     &ModelConfig {
-                        provider_id: provider.into(),
+                        platform: provider.into(),
                         model: "custom-image".into(),
                         kind: "image".into(),
                         enabled: true,
@@ -1206,7 +1203,6 @@ async fn images_use_each_platform_transport_and_bill_actual_count() {
                     },
                     &[],
                     &[codex2api_storage::ImagePrice {
-                        provider_id: provider.into(),
                         model: "custom-image".into(),
                         resolution: "1K".into(),
                         price_nano_usd: 20_000_000,

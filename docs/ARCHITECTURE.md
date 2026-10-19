@@ -188,7 +188,8 @@ continues to account for usage when the downstream disconnects.
 ## Storage and supplier isolation
 
 PostgreSQL is the only durable store. `CODEX2API_DATABASE_URL` is mandatory;
-`schema.sql` and `seed.sql` initialize a fresh schema. Embedded SQL migrations run
+`migrations/0000_baseline.sql` initializes a fresh schema and records the migration
+version it represents. Embedded SQL migrations run
 in version order during startup under the same schema-scoped transaction advisory
 lock. The migration version commits with its SQL; failure rolls back startup, and
 subsequent starts skip completed versions. Application handlers read the current
@@ -227,13 +228,13 @@ by the API gateway.
 
 ## Supplier pools and runtime state
 
-`execution_routes` stores only a pool tag and revision, never a fixed supplier.
+`execution_routes` stores only an optional pool tag set and revision, never a fixed supplier.
 Each generation filters enabled, authorized suppliers by the requested model and
 observed availability before scheduling. Supplier model lists live in
 `supplier_models`, separately from the administrator billing catalog. A supplier
 with no configured models cannot serve generation requests. Discovery replaces
 only that supplier's upstream entries and preserves its custom entries. Custom
-models can be selected from the same provider's billing catalog or entered by name.
+models can be selected from the shared billing catalog or entered by name.
 Batch replacement validates a single provider and atomically replaces both upstream
 and custom entries with the chosen custom list. These operations never change
 catalog enablement or prices, and batch replacement never requests upstream discovery.
@@ -328,7 +329,7 @@ credentials and HTTP clients remain process-local and account-isolated.
 
 Consumer authentication checks live PostgreSQL ownership, revocation and enabled flags.
 API group policy is loaded from the shared snapshot service and checked against the
-live group revision. API admission loads the platform price/catalog snapshot before
+live group revision. API admission loads the shared price/catalog snapshot before
 its write transaction, then checks a PostgreSQL revision maintained atomically by catalog
 and price triggers. A concurrent edit reloads prices from that transaction. Ordinary
 admissions reuse the serialized price snapshot; group-specific operation prices
@@ -427,9 +428,14 @@ Responses serialization places `model`, `stream` and an explicitly supplied
 `type` first. This ordering does not add missing fields or alter nested payloads,
 Cyber access-program selections, warmups or interrupts.
 
-Execution supply is a provider-scoped tag pool. Suppliers may have multiple tags.
-Subscriptions inherit their plan's pool unless an administrator explicitly selects
-a subscription-specific pool. Selection is per generation with runtime affinity and
+Execution supply is a set of supplier tags. A tag groups suppliers of one platform
+and a supplier may have multiple tags; plans, API groups and subscription overrides
+bind any number of tags of any platform. A subscription inherits its plan's tag set
+unless an administrator stores an explicit set, and it executes only on suppliers of
+its own client platform. An API group executes on any tagged supplier that serves
+the requested model; the selected supplier's platform chooses the upstream adapter,
+and ChatGPT protocol operations (search, input counting, the Responses WebSocket)
+run only on ChatGPT suppliers. Selection is per generation with runtime affinity and
 concurrency, as described above; it never counts or persists fixed assignments.
 Referenced tags cannot be deleted.
 
@@ -553,8 +559,10 @@ Subscriptions are issued by administrators or purchased with the owner's wallet.
 Every grant or new purchase creates an independent platform identity. Renewals and
 plan changes explicitly identify an owned subscription. Expiration ends its
 execution benefits while retaining the assigned plan and historical records.
-There is no implicit Free identity, Free plan or expiration fallback. Model access
-still distinguishes all enabled models, a selected list and no models.
+There is no implicit Free identity, Free plan or expiration fallback. A plan belongs
+to one client platform (ChatGPT or Grok) and grants an explicit model list drawn from
+the whole catalog; each entry may carry a spending-window multiplier and per-model
+RPM/concurrency limits, exactly like an API group.
 
 Management uses named fields and choices. Actual activity, requests, device
 authorizations and resource operations are viewable as records; they cannot be
@@ -590,11 +598,11 @@ fields; common signing primitives do not create a shared HTTP login/data endpoin
 
 User creation does not create platform identities. A grant or new purchase creates one subscription. Expired subscriptions remain inspectable without acquiring fallback benefits.
 
-Subscriptions inherit the assigned plan's supplier pool unless administration
-sets an explicit pool override. `regular_subscription_pools` and
-`effective_execution_routes` resolve that choice in PostgreSQL. Clearing the override
-restores plan inheritance. The administration route is
-`/subscriptions/{id}/routing`; user APIs never expose supplier routing.
+Subscriptions inherit the assigned plan's tag set unless administration stores an
+explicit tag set. `regular_subscription_pools` and `effective_execution_routes`
+resolve that choice in PostgreSQL. Clearing the override restores plan inheritance.
+The administration route is `/subscriptions/{id}/routing`; user APIs never expose
+supplier routing.
 Pool edits preserve identity, expiration, spending anchors and price snapshots.
 
 Wallet balance is `users.wallet_cents`, with a nonnegative integer constraint. It starts at zero. Identity forms and user APIs cannot set it. Administrators use `/admin/api/users/{id}/wallet-adjustments` with a signed-in administrator session, CSRF, expected user identity revision, idempotency key, signed integer-cent delta and optional reason. Missing, null and blank reasons normalize to null; nonempty reasons retain their length limit. A single immediate transaction applies the delta and appends a `system_adjustment` ledger entry containing the operator snapshot and before/after balances. The identity revision changes only when user identity/profile data changes; usage charges, debt settlement, order payments and administrative wallet adjustments leave it unchanged. Relative adjustments apply to the transaction's current balance, so intervening wallet movements do not cause a revision conflict. Overdraw, spending already reserved for measured API debt, unsafe amounts and stale identity revisions are rejected. The frontend shows only an estimated balance and leaves balance validation to the transaction. Replays return the same entry without another balance change. Ledger updates/deletions are prohibited; historical purchase entries remain intact. The administrator-only `GET /admin/api/wallet-entries` reads all users' ledger entries with exact user ID, source, optional Unix-millisecond start/end bounds and pagination. The count and rows share a read transaction, timestamps are compared as instants, and ordering breaks time ties by insertion order. List DTOs add only the owner username/name to ledger fields, including the original order reference. This capability is not exposed through UserStore or the user listener. User wallet DTOs show the change as a system operation without administrator identity or private reason. There is no external payment integration; checkout offers the USD wallet. Plan sale price uses at most two decimal USD places, separately from model-priced inference budgets. Plans have a purchase duration and an administrator-only supplier pool. User catalog publication and purchase require both `virtual_plans.allow_purchase` and an explicitly configured sale price. Unpriced or closed plans are absent from catalog rows and totals; unknown prices are never zero. An explicit zero price is configured pricing. Supplier execution configuration does not gate wallet checkout or payment. Closing purchases blocks user purchases/renewals, not administrator assignments or existing benefits. No Free plan is provisioned.
@@ -717,16 +725,23 @@ Device authorization stores short-lived pending codes and PKCE state in
 `virtual_device_authorizations`. Browser approval uses the same identity-then-confirmation/CSRF boundary and completes a normal virtual-device session. The administrator's
 device list and revoke operation manage both browser and device-code logins.
 
-### Supported models and price presets
+### Built-in models and price presets
 
-The administrator's enabled model catalog is the model availability policy.
-Both provider adapters expose configured models within each consumer's entitlement,
+The administrator's enabled model catalog is the model availability policy. Model
+names are the catalog key; the `platform` column is an identification label of the
+model's vendor (ChatGPT, Grok, Gemini, Claude) used for display and filtering, never a
+routing or grant restriction. Supplier channels such as Antigravity are not labels.
+Provider adapters expose configured models within each consumer's entitlement,
 including model names absent from bundled or discovered metadata. Official
 descriptors and verified prices are defaults, never an admission allowlist.
-Startup calls `sync_supported_models` before listening. It atomically registers
-missing models and their verified presets; complete presets enable new models by
-default. All-enabled plans then use their existing entitlement rule, while selected
-plans retain their explicit lists.
+
+`codex2api-common/src/model_presets.rs` holds one table of every built-in model of
+every platform with its official price source, verification date, standard context
+bands and extra service tiers. Startup calls `sync_supported_models` with that table
+(plus the pinned ChatGPT descriptors) before listening. It atomically registers
+missing models enabled with their verified prices, so a model added to the table
+appears in the billing configuration enabled after the next start. Plans and API
+groups grant models only through their explicit lists.
 
 Models with unknown prices remain visible but disabled and marked pending pricing.
 When a later code version supplies a complete preset, only untouched automatically

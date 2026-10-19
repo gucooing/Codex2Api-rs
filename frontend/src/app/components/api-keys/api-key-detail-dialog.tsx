@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { date } from "@/lib/format";
-import { apiCost, apiKeyStatus, apiPlatform, apiTokens, type ApiKey } from "@/lib/api-access";
+import { apiCost, apiKeyStatus, apiTokens, type ApiKey } from "@/lib/api-access";
 
 export function ApiKeyDetailDialog({
   selected,
@@ -37,8 +37,6 @@ export function ApiKeyDetailDialog({
           <dd>{selected?.key_prefix ?? "—"}…</dd>
           <dt className="text-muted-foreground">API 组</dt>
           <dd>{selected?.group_name ?? "—"}</dd>
-          <dt className="text-muted-foreground">平台</dt>
-          <dd>{selected ? apiPlatform(selected.provider_id) : "—"}</dd>
           <dt className="text-muted-foreground">状态</dt>
           <dd>{selected ? apiKeyStatus(selected) : "—"}</dd>
           <dt className="text-muted-foreground">创建时间</dt>

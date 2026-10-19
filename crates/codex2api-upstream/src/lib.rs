@@ -20,8 +20,16 @@ pub mod providers;
 pub use catalog::{codex_model_descriptor, configured_model_descriptor};
 pub(crate) use providers::chatgpt::catalog;
 pub(crate) use providers::chatgpt::client;
+/// Every built-in model of every platform in one list: shared presets plus the
+/// public descriptors of the pinned ChatGPT snapshot. Registered together at startup.
 pub fn supported_models() -> Vec<codex2api_common::SupportedModel> {
-    catalog::supported_models()
+    let mut models = codex2api_common::builtin_models();
+    for model in catalog::supported_models() {
+        if !models.iter().any(|known| known.model == model.model) {
+            models.push(model);
+        }
+    }
+    models
 }
 
 mod availability;

@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiCost, apiDate, apiKeyStatus, apiPlatform } from "@/lib/api-access";
+import { apiCost, apiDate, apiKeyStatus } from "@/lib/api-access";
 import { tokens } from "@/lib/usage";
 import {
   ChevronLeft,
@@ -187,9 +187,7 @@ export default function ApiKeysPage() {
                   <TableCell>
                     <p className="max-w-44 truncate font-medium">{key.name}</p>
                     <p className="text-xs text-muted-foreground">{key.key_prefix}…</p>
-                    <p className="text-xs text-muted-foreground">
-                      {key.group_name} · {apiPlatform(key.provider_id)}
-                    </p>
+                    <p className="text-xs text-muted-foreground">{key.group_name}</p>
                   </TableCell>
                   <TableCell>
                     <Badge variant={key.enabled && !key.revoked_at ? "secondary" : "outline"}>

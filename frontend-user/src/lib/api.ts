@@ -44,8 +44,7 @@ export type Plan = {
   sale_price_usd: string;
   duration_days: number;
   revision: number;
-  model_access: string;
-  models: { provider_id: string; model: string; kind: string }[];
+  models: { platform: string; model: string; kind: string }[];
   spending_windows: { duration_seconds: number; cost_limit_usd: string | null }[];
 };
 export type Entry = {

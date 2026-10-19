@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { apiLimit, apiPlatform } from "@/lib/api-access";
+import { apiLimit } from "@/lib/api-access";
 
 export function ApiKeyEditorDialog({ state }: { state: ReturnType<typeof useApiKeysPage> }) {
   const {
@@ -84,7 +84,7 @@ export function ApiKeyEditorDialog({ state }: { state: ReturnType<typeof useApiK
                     )}
                   {groups.data?.items.map((group) => (
                     <SelectItem key={group.id} value={group.id}>
-                      {group.name} · {apiPlatform(group.provider_id)}
+                      {group.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

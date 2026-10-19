@@ -112,7 +112,7 @@ impl UserStore {
         let mut items = vec![];
         let page = self
             .storage
-            .read_list::<crate::VirtualPlan>(query, "p.*", "virtual_plans p", "p.sort_id", |q| {
+            .read_list::<crate::VirtualPlan>(query, crate::virtual_plans::PLAN_COLUMNS, "virtual_plans p", "p.sort_id", |q| {
                 q.push(" AND p.allow_purchase=TRUE AND jsonb_typeof(p.config::jsonb #> '{sale_price_usd}')='string' AND trim((p.config::jsonb #>> '{sale_price_usd}'))!=''");
                 crate::list_query::exact(q, "p.provider_id", &query.provider_id);
                 crate::list_query::search(
@@ -128,12 +128,13 @@ impl UserStore {
                     .ok_or(crate::StorageError::InvalidAdminUpdate("套餐未配置售价"))?,
                 2,
             );
-            let models: Vec<(String,String,String)> = sqlx::query_as("SELECT m.provider_id,m.model,m.kind FROM model_catalog m JOIN virtual_plans p ON p.provider_id=m.provider_id WHERE p.id=$1 AND m.enabled=TRUE AND m.deleted=FALSE AND ((p.config::jsonb #>> '{model_access}')='all' OR ((p.config::jsonb #>> '{model_access}')='selected' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p.config::jsonb #> '{models}') selected WHERE (selected.value::jsonb #>> '{provider_id}')=m.provider_id AND (selected.value::jsonb #>> '{model}')=m.model))) ORDER BY m.provider_id,m.model")
-                .bind(&plan.id).fetch_all(self.storage.pool()).await?;
-            let models: Vec<Value> = models.into_iter().map(|(provider,model,kind)|json!({"provider_id":provider,"model":model,"kind":kind})).collect();
+            let granted: Vec<String> = plan.models()?.into_iter().map(|rule| rule.model).collect();
+            let models: Vec<(String,String,String)> = sqlx::query_as("SELECT m.platform,m.model,m.kind FROM model_catalog m WHERE m.enabled=TRUE AND m.deleted=FALSE AND m.model=ANY($1) ORDER BY m.platform,m.model")
+                .bind(&granted).fetch_all(self.storage.pool()).await?;
+            let models: Vec<Value> = models.into_iter().map(|(platform,model,kind)|json!({"platform":platform,"model":model,"kind":kind})).collect();
             items.push(json!({"id":plan.id,"name":plan.name,"provider_id":plan.provider_id,"plan_type":plan.plan_type,
                 "rpm_limit":plan.rpm_limit(),"concurrency_limit":plan.concurrency_limit(),"description":plan.description(),"sale_price_usd":price,"duration_days":plan.duration_days()?,"revision":plan.revision,
-                "model_access":plan.config["model_access"],"models":models,"spending_windows":crate::plan_spending_windows(&plan.config)?}));
+                "models":models,"spending_windows":crate::plan_spending_windows(&plan.config)?}));
         }
         Ok(crate::ListPage {
             items,

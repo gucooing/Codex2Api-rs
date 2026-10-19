@@ -130,7 +130,7 @@ export function PlanDetailDialog({
                 </TableHeader>
                 <TableBody>
                   {viewed?.models.map((model) => (
-                    <TableRow key={`${model.provider_id}/${model.model}`}>
+                    <TableRow key={model.model}>
                       <TableCell className="break-all whitespace-normal">{model.model}</TableCell>
                       <TableCell>
                         {model.kind === "text"

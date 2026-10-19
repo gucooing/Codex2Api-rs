@@ -27,13 +27,16 @@ pub(crate) async fn validate(
     Ok(())
 }
 
-pub(crate) fn route(principal: &ApiPrincipal) -> SupplierRoute {
+/// `provider` pins the supplier platform for protocol-specific operations; a
+/// generation may run on any platform whose tagged supplier serves the model.
+pub(crate) fn route(principal: &ApiPrincipal, provider: Option<&str>) -> SupplierRoute {
     SupplierRoute {
         owner_id: format!(
             "api:{}:{}:{}",
             principal.user_id, principal.key_id, principal.group.id
         ),
-        provider_id: principal.group.provider_id.clone(),
+        scope: "api".into(),
+        provider_id: provider.map(str::to_owned),
         tag_ids: principal.group.tag_ids.clone(),
     }
 }
@@ -50,7 +53,7 @@ pub(crate) async fn owned_headers(
     if let Some(turn) = headers.get("x-codex-turn-state") {
         let key = codex2api_storage::RoutingKey::turn(
             &route.owner_id,
-            &route.provider_id,
+            &route.scope,
             turn.to_str().unwrap_or(""),
         );
         if state.storage.routing_affinity(&key).await?.as_deref()
@@ -72,12 +75,12 @@ pub(crate) async fn remember_affinity(
     let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
     let response = response_id
         .filter(|id| !id.is_empty() && id.len() <= 256)
-        .map(|id| codex2api_storage::RoutingKey::response(&route.owner_id, &route.provider_id, id));
+        .map(|id| codex2api_storage::RoutingKey::response(&route.owner_id, &route.scope, id));
     let turn = headers
         .and_then(|h| h.get("x-codex-turn-state"))
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty() && v.len() <= 16384)
-        .map(|v| codex2api_storage::RoutingKey::turn(&route.owner_id, &route.provider_id, v));
+        .map(|v| codex2api_storage::RoutingKey::turn(&route.owner_id, &route.scope, v));
     let bindings: Vec<_> = response
         .iter()
         .chain(turn.iter())
@@ -102,9 +105,16 @@ pub(crate) async fn forward(
     SupplierRoute,
     PreparedRequest,
 )> {
-    let route = route(principal);
-    let schedule =
-        codex2api_upstream::protocol::scheduling(&route.provider_id, &input.headers, &input.body)?;
+    let route = route(
+        principal,
+        codex2api_storage::chatgpt_only_endpoint(input.protocol.endpoint())
+            .then_some(codex2api_common::CHATGPT),
+    );
+    let schedule = codex2api_upstream::protocol::scheduling(
+        route.provider_id.as_deref(),
+        &input.headers,
+        &input.body,
+    )?;
     let mut excluded = vec![];
     let mut refreshed = std::collections::HashSet::new();
     loop {
@@ -117,6 +127,19 @@ pub(crate) async fn forward(
             || validate(state, principal, token),
         )
         .await?;
+        // ChatGPT keeps stored-response continuation only on its native WebSocket transport.
+        if context.account.provider_id == codex2api_common::CHATGPT
+            && input.protocol == codex2api_upstream::protocol::Protocol::Responses
+            && input
+                .body
+                .get("previous_response_id")
+                .is_some_and(|v| !v.is_null())
+        {
+            return Err(crate::ApiError::bad_request(
+                "previous_response_id requires the Responses WebSocket transport for ChatGPT",
+            ));
+        }
+        let provider = context.account.provider_id.clone();
         log.record.account_id = context.account.id.clone();
         log.record.account_name = context
             .account
@@ -155,8 +178,8 @@ pub(crate) async fn forward(
                     .map(|r| r.0)
                     .or(revision);
                 codex2api_upstream::scheduler::inspect_response(
-                    &route.provider_id,
-                    codex2api_upstream::providers::prelude(&route.provider_id),
+                    &provider,
+                    codex2api_upstream::providers::prelude(&provider),
                     response,
                 )
                 .await
@@ -184,10 +207,9 @@ pub(crate) async fn forward(
                                     headers,
                                 );
                                 log.measure(&value, prepared.upstream);
-                                if let Some(failure) = error.supplier_failure_for(
-                                    &route.provider_id,
-                                    chrono::Utc::now().timestamp(),
-                                ) {
+                                if let Some(failure) = error
+                                    .supplier_failure_for(&provider, chrono::Utc::now().timestamp())
+                                {
                                     codex2api_upstream::scheduler::observe_failure(
                                         &state.storage,
                                         &context.account.id,
@@ -204,8 +226,8 @@ pub(crate) async fn forward(
                         }
                     }
                     revision = error.auth_revision().or(revision);
-                    let Some(mut failure) = error
-                        .supplier_failure_for(&route.provider_id, chrono::Utc::now().timestamp())
+                    let Some(mut failure) =
+                        error.supplier_failure_for(&provider, chrono::Utc::now().timestamp())
                     else {
                         log.fail_upstream(&error);
                         return Err(error.into());

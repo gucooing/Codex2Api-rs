@@ -37,7 +37,10 @@ export function useAntigravityOfficialData({
     ["项目", text(value?.cloudaicompanionProject)],
     ["当前档位", tierLabel(value?.currentTier)],
     ["付费档位", tierLabel(value?.paidTier)],
-    ["可用档位", Array.isArray(allowed) ? allowed.map(tierLabel).filter(Boolean).join("、") : undefined],
+    [
+      "可用档位",
+      Array.isArray(allowed) ? allowed.map(tierLabel).filter(Boolean).join("、") : undefined,
+    ],
   ];
   const models = Object.entries(record(value?.models) ?? {})
     .map(([model, info]) => {
@@ -50,8 +53,7 @@ export function useAntigravityOfficialData({
       return {
         model,
         name: text(entry?.displayName) ?? model,
-        usedPercent:
-          remaining == null ? null : Math.min(100, Math.max(0, (1 - remaining) * 100)),
+        usedPercent: remaining == null ? null : Math.min(100, Math.max(0, (1 - remaining) * 100)),
         resetAt: Number.isFinite(resetAt) ? resetAt : null,
       };
     })

@@ -244,7 +244,7 @@ async fn thousand_suppliers_three_thousand_requests() {
     }
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            provider_id: provider.into(),
+            platform: provider.into(),
             model: model.into(),
             kind: "text".into(),
             preset_key: None,
@@ -318,12 +318,12 @@ async fn thousand_suppliers_three_thousand_requests() {
             .unwrap();
     }
     storage
-        .save_pool_route(&owner.id, provider, Some("load-pool"), Some(1))
+        .save_pool_route(&owner.id, provider, Some(&["load-pool".into()]), Some(1))
         .await
         .unwrap();
     assert_eq!(
         storage
-            .pool_candidates("load-pool", provider, Some(model))
+            .pool_candidates("load-pool", Some(provider), Some(model))
             .await
             .unwrap()
             .len(),

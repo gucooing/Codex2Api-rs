@@ -26,7 +26,9 @@ impl Admission {
                 request(provider, endpoint, &metadata, false),
             )
             .await?;
-        service.admit_request(owner, false).await?;
+        service
+            .admit_request(owner, metadata.model.as_deref(), false)
+            .await?;
         Ok(Self { metadata, version })
     }
 }
@@ -196,11 +198,25 @@ impl ExecutionContext {
             ));
         }
         let metadata = admission.metadata;
-        let consumer_permit = self
+        let consumer_permits = self
             .storage
-            .acquire_consumer(&self.owner_id)
+            .acquire_consumer(&self.owner_id, metadata.model.as_deref())
             .await?
             .ok_or(crate::admission::ServiceError::ConcurrencyExceeded)?;
+        // The plan's model rule scales this subscription's spending-window cost.
+        let multiplier_micros = match metadata.model.as_deref() {
+            Some(model) => {
+                let entitlements = self.storage.effective_entitlements(&self.owner_id).await?;
+                match entitlements
+                    .model_rule(model)
+                    .and_then(|rule| rule.multiplier.clone())
+                {
+                    Some(value) => codex2api_storage::multiplier_micros(&value)?,
+                    None => 1_000_000,
+                }
+            }
+            None => 1_000_000,
+        };
         let supplier_permit = match self.take_supplier_permit() {
             Some(permit) => permit,
             None => {
@@ -219,10 +235,11 @@ impl ExecutionContext {
             }
         };
         crate::admission::ExecutionService::new(self.storage.clone())
-            .admit_request(&self.owner_id, true)
+            .admit_request(&self.owner_id, metadata.model.as_deref(), true)
             .await?;
         let record = UsageRecord {
             provider_id: self.provider_id.clone(),
+            multiplier_micros,
             id: uuid::Uuid::new_v4().to_string(),
             account_id: self.account_id.clone(),
             account_name: self.account_name.clone(),
@@ -255,7 +272,7 @@ impl ExecutionContext {
         };
         let mut log = RequestLog::begin(self.storage.clone(), record, start).await?;
         log.set_supplier_permit(supplier_permit);
-        log.set_consumer_permit(consumer_permit);
+        log.set_consumer_permits(consumer_permits);
         Ok(log)
     }
 }

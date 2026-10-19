@@ -160,7 +160,12 @@ impl Storage {
     }
 
     async fn initialize(&self) -> Result<()> {
-        let migrations = migrations::MIGRATIONS;
+        // The 0000 baseline creates a fresh schema and records the migration version it
+        // represents; every database then applies only the numbered migrations above
+        // its recorded version.
+        let (&(_, baseline), migrations) = migrations::MIGRATIONS
+            .split_first()
+            .expect("baseline migration");
         let mut tx = self.pool.begin().await?;
         // Schema initialization and migrations share one transaction and schema lock.
         sqlx::query(
@@ -173,16 +178,7 @@ impl Storage {
                 .fetch_one(&mut *tx)
                 .await?;
         if !initialized {
-            sqlx::raw_sql(include_str!("../schema.sql"))
-                .execute(&mut *tx)
-                .await?;
-            sqlx::raw_sql(include_str!("../seed.sql"))
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("INSERT INTO meta(key,value) VALUES('schema_migration_version',$1)")
-                .bind(migrations.last().expect("migration list").0.to_string())
-                .execute(&mut *tx)
-                .await?;
+            sqlx::raw_sql(baseline).execute(&mut *tx).await?;
         }
         let applied: Option<String> =
             sqlx::query_scalar("SELECT value FROM meta WHERE key='schema_migration_version'")
@@ -193,7 +189,8 @@ impl Storage {
             .unwrap_or("0")
             .parse::<i64>()
             .map_err(|_| StorageError::Constraint("数据库迁移版本无效".into()))?;
-        if applied < 0 || applied > migrations.last().expect("migration list").0 {
+        let latest = migrations.last().map_or(0, |(version, _)| *version);
+        if applied < 0 || applied > latest {
             return Err(StorageError::Constraint(
                 "数据库版本不受当前服务支持".into(),
             ));

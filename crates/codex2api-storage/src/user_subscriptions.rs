@@ -138,17 +138,20 @@ impl Storage {
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(input.user_id.into()))?;
-        let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1 FOR SHARE")
-            .bind(input.plan_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(StorageError::InvalidAdminUpdate("请选择可用套餐"))?;
+        let plan: VirtualPlan = sqlx::query_as(&format!(
+            "SELECT {} FROM virtual_plans p WHERE p.id=$1 FOR SHARE OF p",
+            crate::virtual_plans::PLAN_COLUMNS
+        ))
+        .bind(input.plan_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StorageError::InvalidAdminUpdate("请选择可用套餐"))?;
+        let platform = plan.provider_id.as_str();
         if let Some(id) = input.subscription_id {
             crate::storage::lock_subscription(&mut tx, id).await?;
         }
         let current =
-            subscription_account(&mut tx, &user.id, &plan.provider_id, input.subscription_id)
-                .await?;
+            subscription_account(&mut tx, &user.id, platform, input.subscription_id).await?;
         if current.as_ref().map(|(_, r)| *r) != input.revision {
             return Err(StorageError::ProxyChanged);
         }
@@ -228,6 +231,7 @@ pub(crate) async fn write_subscription(
             .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
     });
+    let platform = plan.provider_id.as_str();
     let now = Utc::now();
     let plan_changed = previous.is_some_and(|a| a.plan_id != plan.id);
     let restart = origin == "admin_reissue"
@@ -242,7 +246,7 @@ pub(crate) async fn write_subscription(
             }));
     if previous.is_none() {
         sqlx::query("INSERT INTO platform_accounts(id,user_id,provider_id,plan_id,plan_type,subscription_expires_at,subscription_started_at,enabled,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-            .bind(&id).bind(&user.id).bind(&plan.provider_id).bind(&plan.id).bind(&plan.plan_type)
+            .bind(&id).bind(&user.id).bind(platform).bind(&plan.id).bind(&plan.plan_type)
             .bind(expires).bind(now.to_rfc3339())
             .bind(enabled).bind(now.to_rfc3339()).execute(&mut *connection).await?;
     } else {
@@ -265,7 +269,7 @@ pub(crate) async fn write_subscription(
     }
     if previous.is_none() || restart || plan_changed {
         sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id) VALUES($1,$2) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET revision=execution_routes.revision+1")
-            .bind(&id).bind(&plan.provider_id).execute(&mut *connection).await?;
+            .bind(&id).bind(platform).execute(&mut *connection).await?;
     }
     let operation = if origin == "admin_reissue" {
         "reissue"

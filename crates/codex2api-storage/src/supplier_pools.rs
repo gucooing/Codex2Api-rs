@@ -17,6 +17,8 @@ pub struct SupplierTag {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, FromRow)]
 pub struct PoolCandidate {
     pub id: String,
+    /// The supplier's protocol platform; its selection decides the upstream adapter.
+    pub provider_id: String,
     #[sqlx(try_from = "i64")]
     pub concurrency: u32,
     pub priority: i32,
@@ -64,11 +66,12 @@ impl PoolUnion {
 
 impl Storage {
     /// API group tags expand into the same scheduler candidates as subscription pools.
-    /// One stable cache slot per provider, tag set and model; source changes replace it.
+    /// One stable cache slot per protocol filter, tag set and model; source changes replace it.
+    /// `provider` restricts members to one protocol platform; `None` admits every platform.
     pub async fn pool_candidates_for_tags(
         &self,
         tags: &[String],
-        provider: &str,
+        provider: Option<&str>,
         model: Option<&str>,
     ) -> Result<Arc<SupplierPool>> {
         let model = model.filter(|model| !model.is_empty());
@@ -125,7 +128,7 @@ impl Storage {
     pub async fn pool_candidate_for_tags(
         &self,
         tags: &[String],
-        provider: &str,
+        provider: Option<&str>,
         model: Option<&str>,
         id: &str,
     ) -> Result<Option<Arc<PoolCandidate>>> {
@@ -137,7 +140,8 @@ impl Storage {
         Ok(None)
     }
 
-    async fn pool_index(&self, tag: &str, provider: &str) -> Result<Arc<PoolIndex>> {
+    async fn pool_index(&self, tag: &str, provider: Option<&str>) -> Result<Arc<PoolIndex>> {
+        let provider = provider.unwrap_or("");
         let key = format!("pool-index:{}", serde_json::to_string(&(provider, tag))?);
         if let Some(value) = self.runtime.snapshots.get(&key) {
             return Ok(value);
@@ -149,7 +153,7 @@ impl Storage {
         let epoch = self.runtime.snapshots.version(&key);
         let rows = self.runtime.snapshots.read(format!("pool-rows:{provider}:{tag}"), async {
         let rows = sqlx::query_as::<_, CandidateRow>(
-            "SELECT a.id,COALESCE(s.concurrency,5) AS concurrency,
+            "SELECT a.id,a.provider_id,COALESCE(s.concurrency,5) AS concurrency,
              COALESCE(s.priority,0) AS priority,s.load_factor,sm.model,
              GREATEST(CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
                   THEN h.cooldown_until END,
@@ -161,7 +165,7 @@ impl Storage {
              LEFT JOIN supplier_scheduling s ON s.account_id=a.id
              LEFT JOIN supplier_models sm ON sm.account_id=a.id
              LEFT JOIN supplier_model_cooldowns c ON c.account_id=a.id AND c.model=sm.model
-             WHERE m.tag_id=$1 AND a.provider_id=$2 AND a.status='active'
+             WHERE m.tag_id=$1 AND ($2='' OR a.provider_id=$2) AND a.status='active'
              AND COALESCE(k.access_token,'')!=''
              AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
              AND h.payment_required_at IS NULL
@@ -215,7 +219,7 @@ impl Storage {
     pub async fn pool_candidates(
         &self,
         tag: &str,
-        provider: &str,
+        provider: Option<&str>,
         model: Option<&str>,
     ) -> Result<Arc<SupplierPool>> {
         let index = self.pool_index(tag, provider).await?;
@@ -228,7 +232,7 @@ impl Storage {
     pub async fn pool_candidate(
         &self,
         tag: &str,
-        provider: &str,
+        provider: Option<&str>,
         model: Option<&str>,
         id: &str,
     ) -> Result<Option<Arc<PoolCandidate>>> {
@@ -253,15 +257,11 @@ impl Storage {
         let Some(id) = supplier else {
             return Ok(false);
         };
-        let Some(tag) = self
-            .execution_route(owner, provider)
-            .await?
-            .and_then(|r| r.tag_id)
-        else {
+        let Some(route) = self.execution_route(owner, provider).await? else {
             return Ok(false);
         };
         Ok(self
-            .pool_candidate(&tag, provider, None, id)
+            .pool_candidate_for_tags(&route.tag_ids, Some(provider), None, id)
             .await?
             .is_some())
     }
@@ -269,7 +269,7 @@ impl Storage {
         Ok(sqlx::query_as(
             "SELECT t.*,
             (SELECT COUNT(*) FROM supplier_tag_members m WHERE m.tag_id=t.id) AS supplier_count,
-            ((SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_id=t.id)+(SELECT COUNT(*) FROM api_group_tags g WHERE g.tag_id=t.id)) AS binding_count
+            ((SELECT COUNT(*) FROM effective_execution_routes r WHERE r.tag_ids ? t.id)+(SELECT COUNT(*) FROM virtual_plan_tags p WHERE p.tag_id=t.id)+(SELECT COUNT(*) FROM api_group_tags g WHERE g.tag_id=t.id)) AS binding_count
             FROM supplier_tags t ORDER BY t.provider_id,t.name,t.id",
         )
         .fetch_all(self.pool())
@@ -300,7 +300,7 @@ impl Storage {
     pub async fn delete_supplier_tag(&self, id: &str) -> Result<()> {
         let mut tx = self.pool().begin().await?;
         let bound: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_routes WHERE tag_id=$1) OR EXISTS(SELECT 1 FROM virtual_plans WHERE (config::jsonb #>> '{supplier_tag_id}')=$2) OR EXISTS(SELECT 1 FROM api_group_tags WHERE tag_id=$3)")
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_routes WHERE tag_ids ? $1) OR EXISTS(SELECT 1 FROM virtual_plan_tags WHERE tag_id=$2) OR EXISTS(SELECT 1 FROM api_group_tags WHERE tag_id=$3)")
                 .bind(id)
                 .bind(id)
                 .bind(id)
@@ -442,15 +442,34 @@ impl Storage {
         Ok(())
     }
 
+    /// An explicit tag set overrides the plan's pool; `None` restores plan inheritance.
     pub async fn save_pool_route(
         &self,
         owner: &str,
         provider: &str,
-        tag: Option<&str>,
+        tags: Option<&[String]>,
         expected: Option<i64>,
     ) -> Result<bool> {
+        let tags: Option<Vec<String>> = tags.map(|tags| {
+            tags.iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        });
+        if tags
+            .as_ref()
+            .is_some_and(|tags| tags.is_empty() || tags.len() > 100)
+        {
+            return Err(StorageError::Constraint(
+                "请选择 1 到 100 个标签，或恢复套餐号池".into(),
+            ));
+        }
         let mut tx = self.pool().begin().await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::UserPlatform).await?;
+        if let Some(tags) = &tags {
+            crate::api_groups::require_supplier_tags(&mut tx, tags).await?;
+        }
         let current: Option<i64> = sqlx::query_scalar(
             "SELECT revision FROM execution_routes WHERE virtual_account_id=$1 AND provider_id=$2",
         )
@@ -461,8 +480,8 @@ impl Storage {
         if current != expected {
             return Ok(false);
         }
-        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_id,revision) VALUES($1,$2,$3,$4) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_id=excluded.tag_id,revision=excluded.revision")
-            .bind(owner).bind(provider).bind(tag).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO execution_routes(virtual_account_id,provider_id,tag_ids,revision) VALUES($1,$2,$3::jsonb,$4) ON CONFLICT(virtual_account_id,provider_id) DO UPDATE SET tag_ids=excluded.tag_ids,revision=excluded.revision")
+            .bind(owner).bind(provider).bind(tags.as_ref().map(serde_json::to_string).transpose()?).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
         tx.commit().await?;
         self.runtime.snapshots.invalidate(&[
             crate::snapshots::Domain::Suppliers,
@@ -481,10 +500,12 @@ impl Storage {
         let Some(route) = self.execution_route(owner, provider).await? else {
             return Ok(None);
         };
-        let Some(tag) = route.tag_id else {
+        if route.tag_ids.is_empty() {
             return Ok(None);
-        };
-        let candidates = self.pool_candidates(&tag, provider, None).await?;
+        }
+        let candidates = self
+            .pool_candidates_for_tags(&route.tag_ids, Some(provider), None)
+            .await?;
         let selected = candidates
             .iter()
             .filter(|a| !excluded.contains(&a.id))

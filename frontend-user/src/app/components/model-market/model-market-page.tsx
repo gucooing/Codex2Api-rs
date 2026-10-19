@@ -74,9 +74,9 @@ export default function ModelMarketPage() {
             <Field className="w-32 sm:w-36">
               <FieldLabel htmlFor={id + "-provider"}>平台</FieldLabel>
               <Select
-                value={filters.provider_id || "all"}
-                onValueChange={(provider) =>
-                  setFilters({ ...filters, provider_id: provider === "all" ? "" : provider })
+                value={filters.platform || "all"}
+                onValueChange={(platform) =>
+                  setFilters({ ...filters, platform: platform === "all" ? "" : platform })
                 }
               >
                 <SelectTrigger id={id + "-provider"} className="w-full">
@@ -86,7 +86,8 @@ export default function ModelMarketPage() {
                   <SelectItem value="all">全部平台</SelectItem>
                   <SelectItem value="chatgpt">ChatGPT</SelectItem>
                   <SelectItem value="grok">Grok</SelectItem>
-                  <SelectItem value="antigravity">Antigravity</SelectItem>
+                  <SelectItem value="gemini">Gemini</SelectItem>
+                  <SelectItem value="claude">Claude</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -118,7 +119,7 @@ export default function ModelMarketPage() {
           <section aria-label="模型列表" aria-busy={!resource.ready && !resource.error}>
             <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {items.map((item) => (
-                <li key={`${item.model.provider_id}/${item.model.model}`} className="min-w-0">
+                <li key={item.model.model} className="min-w-0">
                   <ModelMarketCard
                     item={item}
                     grouped={!!groupId}

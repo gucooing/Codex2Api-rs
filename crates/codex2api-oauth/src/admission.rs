@@ -39,8 +39,17 @@ impl ExecutionService {
         Self { storage }
     }
 
-    pub async fn admit_request(&self, owner: &str, consume: bool) -> Result<()> {
-        if let Some(retry_after) = self.storage.admit_virtual_request(owner, consume).await? {
+    pub async fn admit_request(
+        &self,
+        owner: &str,
+        model: Option<&str>,
+        consume: bool,
+    ) -> Result<()> {
+        if let Some(retry_after) = self
+            .storage
+            .admit_virtual_request(owner, model, consume)
+            .await?
+        {
             return Err(ServiceError::RpmExceeded { retry_after });
         }
         Ok(())
@@ -77,10 +86,10 @@ impl ExecutionService {
             .model
             .filter(|model| codex2api_common::valid_model(model))
             .ok_or(PolicyError::InvalidModel)?;
-        if !entitlement.models.permits(provider, model) {
+        if !entitlement.permits(model) {
             return Err(PolicyError::ModelNotEntitled.into());
         }
-        let configured = self.storage.model_config(provider, model).await?;
+        let configured = self.storage.model_config(model).await?;
         if !configured.is_some_and(|model| model.enabled && !model.deleted) {
             return Err(PolicyError::ModelUnavailable.into());
         }

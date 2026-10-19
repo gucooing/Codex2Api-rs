@@ -22,7 +22,7 @@ export function ModelPriceDialog({
   group: ApiGroup | null | undefined;
   onClose: () => void;
 }) {
-  const { Icon, name } = modelVendor(item?.model.provider_id ?? "");
+  const { Icon, name } = modelVendor(item?.model.platform ?? "");
   return (
     <Dialog
       open={!!item}

@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::BTreeSet;
 
+/// One model of the shared catalog. `platform` labels where the model comes from
+/// (ChatGPT, Grok, Antigravity); supplier tags and model lists decide execution.
 #[derive(Clone, Debug, FromRow, Serialize, Deserialize)]
 pub struct ModelConfig {
-    pub provider_id: String,
     pub model: String,
+    pub platform: String,
     pub kind: String,
     pub enabled: bool,
     pub deleted: bool,
@@ -15,7 +17,6 @@ pub struct ModelConfig {
 
 #[derive(Clone, Debug, FromRow, Serialize, Deserialize)]
 pub struct ImagePrice {
-    pub provider_id: String,
     pub model: String,
     pub resolution: String,
     pub price_nano_usd: i64,
@@ -65,63 +66,44 @@ pub fn image_resolution_tier(value: &str) -> Option<String> {
 }
 
 impl Storage {
-    pub async fn model_configs(&self, provider: &str) -> Result<Vec<ModelConfig>> {
-        Ok(self
-            .model_catalog_snapshot(provider)
-            .await?
-            .as_ref()
-            .clone())
+    /// Every non-deleted catalog model across all platforms.
+    pub async fn model_configs(&self) -> Result<Vec<ModelConfig>> {
+        Ok(self.model_catalog_snapshot().await?.as_ref().clone())
     }
-    pub async fn model_catalog_snapshot(
-        &self,
-        provider: &str,
-    ) -> Result<std::sync::Arc<Vec<ModelConfig>>> {
-        let key = format!("model-catalog:{provider}");
+    pub async fn model_catalog_snapshot(&self) -> Result<std::sync::Arc<Vec<ModelConfig>>> {
         self.runtime
             .snapshots
-            .read(key.clone(), async {
+            .read("model-catalog:all".to_owned(), async {
                 let value = std::sync::Arc::new(
-            sqlx::query_as(
-                "SELECT * FROM model_catalog WHERE provider_id=$1 AND deleted=FALSE ORDER BY model",
-            )
-            .bind(provider)
-            .fetch_all(self.pool())
-            .await?,
-        );
+                    sqlx::query_as(
+                        "SELECT * FROM model_catalog WHERE deleted=FALSE ORDER BY platform,model",
+                    )
+                    .fetch_all(self.pool())
+                    .await?,
+                );
                 Ok((value, std::time::Duration::from_secs(30)))
             })
             .await
     }
-    pub async fn model_config(&self, provider: &str, model: &str) -> Result<Option<ModelConfig>> {
-        let key = format!("model-config:{provider}:{model}");
+    pub async fn model_config(&self, model: &str) -> Result<Option<ModelConfig>> {
+        let key = format!("model-config:{model}");
         self.runtime
             .snapshots
             .read(key.clone(), async {
-                let value =
-                    sqlx::query_as("SELECT * FROM model_catalog WHERE provider_id=$1 AND model=$2")
-                        .bind(provider)
-                        .bind(model)
-                        .fetch_optional(self.pool())
-                        .await?;
+                let value = sqlx::query_as("SELECT * FROM model_catalog WHERE model=$1")
+                    .bind(model)
+                    .fetch_optional(self.pool())
+                    .await?;
                 Ok((value, std::time::Duration::from_secs(30)))
             })
             .await
     }
-    pub async fn unavailable_models(&self, provider: &str) -> Result<Vec<String>> {
-        Ok(sqlx::query_scalar(
-            "SELECT model FROM model_catalog WHERE provider_id=$1 AND (enabled=FALSE OR deleted=TRUE)",
+    pub async fn image_prices(&self) -> Result<Vec<ImagePrice>> {
+        Ok(
+            sqlx::query_as("SELECT * FROM model_image_prices ORDER BY model,resolution")
+                .fetch_all(self.pool())
+                .await?,
         )
-        .bind(provider)
-        .fetch_all(self.pool())
-        .await?)
-    }
-    pub async fn image_prices(&self, provider: &str) -> Result<Vec<ImagePrice>> {
-        Ok(sqlx::query_as(
-            "SELECT * FROM model_image_prices WHERE provider_id=$1 ORDER BY model,resolution",
-        )
-        .bind(provider)
-        .fetch_all(self.pool())
-        .await?)
     }
     /// Save the complete model form and its prices with one revision check and transaction.
     pub async fn save_model_config(
@@ -131,15 +113,13 @@ impl Storage {
         images: &[ImagePrice],
         expected: Option<i64>,
     ) -> Result<bool> {
-        if model.model.is_empty()
-            || model.model.len() > 256
-            || !model
-                .model
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-._:/".contains(&b))
+        if !codex2api_common::valid_model(&model.model)
             || !matches!(model.kind.as_str(), "text" | "image")
         {
             return Err(StorageError::InvalidAdminUpdate("模型名称或计费方式无效"));
+        }
+        if !codex2api_common::valid_model_platform(&model.platform) {
+            return Err(StorageError::InvalidAdminUpdate("模型平台无效"));
         }
         if tokens.len() + images.len() > 128 {
             return Err(StorageError::InvalidAdminUpdate(
@@ -155,8 +135,7 @@ impl Storage {
             }
             for price in tokens {
                 crate::billing::validate_model_price(price)?;
-                if price.provider_id != model.provider_id
-                    || price.model != model.model
+                if price.model != model.model
                     || !keys.insert((price.tier.as_str(), price.min_input_tokens))
                 {
                     return Err(StorageError::InvalidAdminUpdate(
@@ -186,8 +165,7 @@ impl Storage {
                 ));
             }
             for price in images {
-                if price.provider_id != model.provider_id
-                    || price.model != model.model
+                if price.model != model.model
                     || (price.resolution != IMAGE_UNIFORM_RESOLUTION
                         && image_resolution_tier(&price.resolution).as_deref()
                             != Some(&price.resolution))
@@ -202,34 +180,32 @@ impl Storage {
         }
         let mut tx = self.pool().begin().await?;
         let changed = if let Some(revision) = expected {
-            sqlx::query("UPDATE model_catalog SET kind=$1,enabled=$2,revision=revision+1 WHERE provider_id=$3 AND model=$4 AND revision=$5 AND deleted=FALSE")
-                .bind(&model.kind).bind(model.enabled).bind(&model.provider_id).bind(&model.model).bind(revision).execute(&mut *tx).await?.rows_affected()
+            sqlx::query("UPDATE model_catalog SET platform=$1,kind=$2,enabled=$3,revision=revision+1 WHERE model=$4 AND revision=$5 AND deleted=FALSE")
+                .bind(&model.platform).bind(&model.kind).bind(model.enabled).bind(&model.model).bind(revision).execute(&mut *tx).await?.rows_affected()
         } else {
-            sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(provider_id,model) DO UPDATE SET kind=excluded.kind,enabled=excluded.enabled,deleted=FALSE,revision=model_catalog.revision+1 WHERE model_catalog.deleted=TRUE")
-                .bind(&model.provider_id).bind(&model.model).bind(&model.kind).bind(model.enabled).execute(&mut *tx).await?.rows_affected()
+            sqlx::query("INSERT INTO model_catalog(model,platform,kind,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(model) DO UPDATE SET platform=excluded.platform,kind=excluded.kind,enabled=excluded.enabled,deleted=FALSE,revision=model_catalog.revision+1 WHERE model_catalog.deleted=TRUE")
+                .bind(&model.model).bind(&model.platform).bind(&model.kind).bind(model.enabled).execute(&mut *tx).await?.rows_affected()
         };
         if changed == 0 {
             return Ok(false);
         }
-        sqlx::query("DELETE FROM model_prices WHERE provider_id=$1 AND model=$2")
-            .bind(&model.provider_id)
+        sqlx::query("DELETE FROM model_prices WHERE model=$1")
             .bind(&model.model)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM model_image_prices WHERE provider_id=$1 AND model=$2")
-            .bind(&model.provider_id)
+        sqlx::query("DELETE FROM model_image_prices WHERE model=$1")
             .bind(&model.model)
             .execute(&mut *tx)
             .await?;
         for price in tokens {
-            sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,max_input_tokens,revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
-                .bind(&model.provider_id).bind(&model.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.source).bind(price.max_input_tokens).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO model_prices(model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,source,max_input_tokens,revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+                .bind(&model.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(&price.source).bind(price.max_input_tokens).bind(expected.unwrap_or(0)+1).execute(&mut *tx).await?;
         }
         for price in images {
             sqlx::query(
-                "INSERT INTO model_image_prices(provider_id,model,resolution,price_nano_usd) VALUES($1,$2,$3,$4)",
+                "INSERT INTO model_image_prices(model,resolution,price_nano_usd) VALUES($1,$2,$3)",
             )
-            .bind(&model.provider_id).bind(&model.model)
+            .bind(&model.model)
             .bind(&price.resolution)
             .bind(price.price_nano_usd)
             .execute(&mut *tx)
@@ -244,37 +220,29 @@ impl Storage {
     }
     pub async fn set_model_enabled(
         &self,
-        provider: &str,
         model: &str,
         enabled: bool,
         revision: i64,
     ) -> Result<bool> {
-        let changed=sqlx::query("UPDATE model_catalog SET enabled=$1,revision=revision+1 WHERE provider_id=$2 AND model=$3 AND revision=$4 AND deleted=FALSE").bind(enabled).bind(provider).bind(model).bind(revision).execute(self.pool()).await?.rows_affected()==1;
+        let changed=sqlx::query("UPDATE model_catalog SET enabled=$1,revision=revision+1 WHERE model=$2 AND revision=$3 AND deleted=FALSE").bind(enabled).bind(model).bind(revision).execute(self.pool()).await?.rows_affected()==1;
         self.runtime.snapshots.invalidate(&[
             crate::snapshots::Domain::Catalog,
             crate::snapshots::Domain::Billing,
         ]);
         Ok(changed)
     }
-    pub async fn delete_model_config(
-        &self,
-        provider: &str,
-        model: &str,
-        revision: i64,
-    ) -> Result<bool> {
+    pub async fn delete_model_config(&self, model: &str, revision: i64) -> Result<bool> {
         let mut tx = self.pool().begin().await?;
         // Keep a tombstone so stale clients cannot continue using a deleted model.
-        let changed=sqlx::query("UPDATE model_catalog SET deleted=TRUE,enabled=FALSE,revision=revision+1 WHERE provider_id=$1 AND model=$2 AND revision=$3 AND deleted=FALSE").bind(provider).bind(model).bind(revision).execute(&mut *tx).await?.rows_affected();
+        let changed=sqlx::query("UPDATE model_catalog SET deleted=TRUE,enabled=FALSE,revision=revision+1 WHERE model=$1 AND revision=$2 AND deleted=FALSE").bind(model).bind(revision).execute(&mut *tx).await?.rows_affected();
         if changed == 0 {
             return Ok(false);
         }
-        sqlx::query("DELETE FROM model_prices WHERE provider_id=$1 AND model=$2")
-            .bind(provider)
+        sqlx::query("DELETE FROM model_prices WHERE model=$1")
             .bind(model)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM model_image_prices WHERE provider_id=$1 AND model=$2")
-            .bind(provider)
+        sqlx::query("DELETE FROM model_image_prices WHERE model=$1")
             .bind(model)
             .execute(&mut *tx)
             .await?;

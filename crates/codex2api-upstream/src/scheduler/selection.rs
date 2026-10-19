@@ -123,13 +123,14 @@ where
         hash(&serde_json::to_string(&tags).expect("tags"))
     };
     let settings = storage.gateway_settings().await?;
+    let provider = route.provider_id.as_deref();
     let sticky_key = request.session_hash.as_ref().map(|hash| {
-        codex2api_storage::RoutingKey::session(&route.owner_id, &route.provider_id, &tag, hash)
+        codex2api_storage::RoutingKey::session(&route.owner_id, &route.scope, &tag, hash)
     });
     let previous_key = request
         .previous_response
         .as_ref()
-        .map(|id| previous_key(&route.owner_id, &route.provider_id, id));
+        .map(|id| previous_key(&route.owner_id, &route.scope, id));
     let [sticky, previous] = storage
         .routing_affinities([sticky_key.as_ref(), previous_key.as_ref()])
         .await?;
@@ -139,7 +140,7 @@ where
     {
         Some(id) => {
             storage
-                .pool_candidate_for_tags(&tags, &route.provider_id, request.model.as_deref(), id)
+                .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
                 .await?
         }
         None => None,
@@ -153,12 +154,7 @@ where
         {
             Some(id) => {
                 storage
-                    .pool_candidate_for_tags(
-                        &tags,
-                        &route.provider_id,
-                        request.model.as_deref(),
-                        id,
-                    )
+                    .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
                     .await?
             }
             None => None,
@@ -223,7 +219,7 @@ where
                 .ok_or_else(busy)?;
             validate().await?;
             let current = storage
-                .pool_candidate_for_tags(&tags, &route.provider_id, request.model.as_deref(), id)
+                .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
                 .await?;
             let Some(current) = current else {
                 drop(permit);
@@ -262,12 +258,12 @@ where
         // Keeping the owner eligible also lets a single-supplier pool recover.
     }
     let pool = storage
-        .pool_candidates_for_tags(&tags, &route.provider_id, request.model.as_deref())
+        .pool_candidates_for_tags(&tags, provider, request.model.as_deref())
         .await?;
     if pool.is_empty() {
         let model_unavailable = request.model.is_some()
             && !storage
-                .pool_candidates_for_tags(&tags, &route.provider_id, None)
+                .pool_candidates_for_tags(&tags, provider, None)
                 .await?
                 .is_empty();
         return Err(if model_unavailable {
@@ -319,7 +315,7 @@ where
             continue;
         }
         let Some(current) = storage
-            .pool_candidate_for_tags(&tags, &route.provider_id, request.model.as_deref(), id)
+            .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
             .await?
         else {
             continue;

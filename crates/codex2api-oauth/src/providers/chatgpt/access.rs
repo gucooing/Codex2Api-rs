@@ -33,11 +33,11 @@ impl AccessCheck {
         let route = storage
             .execution_route(&access.virtual_account_id, &access.provider_id)
             .await?;
-        let Some(tag) = route.and_then(|r| r.tag_id) else {
+        let Some(route) = route.filter(|r| !r.tag_ids.is_empty()) else {
             return Err(crate::pool_execution::exhausted());
         };
         if !storage
-            .pool_candidates(&tag, &access.provider_id, None)
+            .pool_candidates_for_tags(&route.tag_ids, Some(&access.provider_id), None)
             .await?
             .iter()
             .any(|a| a.id == self.account_id)

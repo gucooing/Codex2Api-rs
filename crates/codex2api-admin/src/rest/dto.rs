@@ -48,19 +48,12 @@ pub struct SubscriptionAccount {
     pub plan_name: String,
     pub subscription_status: &'static str,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelRef {
-    pub provider_id: String,
-    pub model: String,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Serialize)]
 pub struct Plan {
     pub rpm_limit: u32,
     pub concurrency_limit: u32,
     pub description: String,
-    pub supplier_tag_id: Option<String>,
+    pub tag_ids: Vec<String>,
     pub sale_price_usd: Option<String>,
     pub duration_days: i64,
     pub plan_type: String,
@@ -70,8 +63,7 @@ pub struct Plan {
     pub allow_purchase: bool,
     pub revision: i64,
     pub updated_at_ms: i64,
-    pub model_access: String,
-    pub models: Vec<ModelRef>,
+    pub models: Vec<codex2api_common::ModelRule>,
     pub spending_windows: Vec<SpendingWindow>,
 }
 #[derive(Serialize, Deserialize, Clone)]
@@ -97,7 +89,7 @@ pub struct ImagePrice {
 }
 #[derive(Serialize)]
 pub struct ModelPreset {
-    pub provider_id: String,
+    pub platform: String,
     pub model: String,
     pub kind: String,
     pub version: &'static str,
@@ -107,7 +99,7 @@ pub struct ModelPreset {
 }
 #[derive(Serialize)]
 pub struct Model {
-    pub provider_id: String,
+    pub platform: String,
     pub model: String,
     pub kind: String,
     pub enabled: bool,
@@ -128,7 +120,10 @@ pub struct Usage {
 }
 #[derive(Serialize)]
 pub struct Route {
-    pub tag_id: Option<String>,
+    /// Explicit override; absent while the subscription inherits its plan's pool.
+    pub tag_ids: Option<Vec<String>>,
+    /// The pool actually used: the override or the plan's tags.
+    pub effective_tag_ids: Vec<String>,
     pub virtual_account_id: String,
     pub provider_id: String,
     pub revision: i64,
@@ -145,6 +140,7 @@ pub fn value<T: Serialize>(v: T) -> serde_json::Value {
 #[serde(default, deny_unknown_fields)]
 pub struct OptionsQuery {
     pub provider_id: String,
+    pub platform: String,
     pub search: String,
     pub plan_id: String,
 }

@@ -21,7 +21,6 @@ pub enum PriceRequirement<'a> {
 /// Integer micro-USD per million tokens; snapshot with each request.
 #[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ModelPrice {
-    pub provider_id: String,
     pub model: String,
     pub tier: String,
     pub min_input_tokens: i64,
@@ -42,8 +41,7 @@ impl ModelPrice {
         let next = prices
             .iter()
             .filter(|p| {
-                p.provider_id == self.provider_id
-                    && p.model == self.model
+                p.model == self.model
                     && p.tier == self.tier
                     && p.min_input_tokens > self.min_input_tokens
             })
@@ -216,9 +214,7 @@ impl BillingSnapshot {
                 return (None, "overflow", model, None);
             };
             count = next;
-            let same_model = |p: &&crate::ImagePrice| {
-                p.provider_id == record.provider_id && Some(&p.model) == model.as_ref()
-            };
+            let same_model = |p: &&crate::ImagePrice| Some(&p.model) == model.as_ref();
             let uniform = images
                 .iter()
                 .find(|p| same_model(p) && p.resolution == crate::IMAGE_UNIFORM_RESOLUTION);
@@ -419,8 +415,7 @@ fn charge_scaled(
     let price = prices
         .iter()
         .filter(|p| {
-            p.provider_id == record.provider_id
-                && Some(&p.model) == model.as_ref()
+            Some(&p.model) == model.as_ref()
                 && Some(p.tier.as_str()) == tier
                 && p.min_input_tokens <= input
         })
@@ -466,6 +461,7 @@ fn image_tier_rank(tier: &str) -> Option<usize> {
 }
 
 impl Storage {
+    /// `provider` scopes platform-specific operations; model prices are global.
     pub async fn price_available(
         &self,
         provider: &str,
@@ -473,60 +469,48 @@ impl Storage {
         requirement: PriceRequirement<'_>,
     ) -> Result<bool> {
         Ok(self
-            .billing_catalog(provider)
+            .billing_catalog()
             .await?
-            .available(model, requirement))
+            .available(provider, model, requirement))
     }
 
-    pub(crate) async fn billing_snapshot(&self, provider: &str) -> Result<std::sync::Arc<String>> {
-        Ok(self.billing_catalog(provider).await?.journal.clone())
+    pub(crate) async fn billing_snapshot(&self) -> Result<std::sync::Arc<String>> {
+        Ok(self.billing_catalog().await?.journal.clone())
     }
-    pub async fn model_prices(&self, provider: &str) -> Result<Vec<ModelPrice>> {
-        Ok(sqlx::query_as(
-            "SELECT * FROM model_prices WHERE provider_id=$1 ORDER BY model,tier,min_input_tokens",
+    pub async fn model_prices(&self) -> Result<Vec<ModelPrice>> {
+        Ok(
+            sqlx::query_as("SELECT * FROM model_prices ORDER BY model,tier,min_input_tokens")
+                .fetch_all(self.pool())
+                .await?,
         )
-        .bind(provider)
-        .fetch_all(self.pool())
-        .await?)
     }
     pub async fn save_model_price(&self, price: &ModelPrice) -> Result<bool> {
         validate_model_price(price)?;
         let mut tx = self.pool().begin().await?;
-        sqlx::query(
-            "INSERT INTO model_catalog(provider_id,model,kind) VALUES($1,$2,'text') ON CONFLICT DO NOTHING",
+        let usable: Option<bool> = sqlx::query_scalar(
+            "SELECT kind='text' AND deleted=FALSE FROM model_catalog WHERE model=$1",
         )
-        .bind(&price.provider_id)
         .bind(&price.model)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        let usable: bool = sqlx::query_scalar(
-            "SELECT kind='text' AND deleted=FALSE FROM model_catalog WHERE provider_id=$1 AND model=$2",
-        )
-        .bind(&price.provider_id)
-        .bind(&price.model)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !usable {
+        if usable != Some(true) {
             return Err(StorageError::InvalidAdminUpdate(
-                "请在计费配置中恢复模型或选择正确的计费方式",
+                "请在计费配置中添加或恢复该文本模型",
             ));
         }
-        let mut affected=sqlx::query("INSERT INTO model_prices(provider_id,model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,max_input_tokens,source,revision) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,'custom',1 WHERE $10=0 ON CONFLICT(provider_id,model,tier,min_input_tokens) DO NOTHING")
-            .bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
+        let mut affected=sqlx::query("INSERT INTO model_prices(model,tier,min_input_tokens,input_rate,cached_rate,cache_write_rate,output_rate,max_input_tokens,source,revision) SELECT $1,$2,$3,$4,$5,$6,$7,$8,'custom',1 WHERE $9=0 ON CONFLICT(model,tier,min_input_tokens) DO NOTHING")
+            .bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
         if affected == 0 {
-            affected=sqlx::query("UPDATE model_prices SET input_rate=$1,cached_rate=$2,cache_write_rate=$3,output_rate=$4,max_input_tokens=$5,source='custom',revision=revision+1 WHERE provider_id=$6 AND model=$7 AND tier=$8 AND min_input_tokens=$9 AND revision=$10")
-                .bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(&price.provider_id).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
+            affected=sqlx::query("UPDATE model_prices SET input_rate=$1,cached_rate=$2,cache_write_rate=$3,output_rate=$4,max_input_tokens=$5,source='custom',revision=revision+1 WHERE model=$6 AND tier=$7 AND min_input_tokens=$8 AND revision=$9")
+                .bind(price.input_rate).bind(price.cached_rate).bind(price.cache_write_rate).bind(price.output_rate).bind(price.max_input_tokens).bind(&price.model).bind(&price.tier).bind(price.min_input_tokens).bind(price.revision).execute(&mut *tx).await?.rows_affected();
         }
         if affected == 0 {
             return Ok(false);
         }
-        sqlx::query(
-            "UPDATE model_catalog SET revision=revision+1 WHERE provider_id=$1 AND model=$2",
-        )
-        .bind(&price.provider_id)
-        .bind(&price.model)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE model_catalog SET revision=revision+1 WHERE model=$1")
+            .bind(&price.model)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         self.runtime
             .snapshots
@@ -544,8 +528,8 @@ impl Storage {
             serde_json::json!({"currency":"USD","used_nano_usd":used,"used_usd":format_units(used,9),"pending_requests":pending,"unpriced_requests":unknown,"started_at":since}),
         )
     }
-    pub async fn unpriced_models(&self, provider: &str) -> Result<Vec<String>> {
-        Ok(sqlx::query_scalar("SELECT DISTINCT COALESCE(actual_model,model) FROM usage_records WHERE provider_id=$1 AND COALESCE(actual_model,model) IS NOT NULL AND NOT EXISTS(SELECT 1 FROM model_prices p WHERE p.provider_id=usage_records.provider_id AND p.model=COALESCE(usage_records.actual_model,usage_records.model)) ORDER BY 1").bind(provider).fetch_all(self.pool()).await?)
+    pub async fn unpriced_models(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar("SELECT DISTINCT COALESCE(actual_model,model) FROM usage_records WHERE COALESCE(actual_model,model) IS NOT NULL AND NOT EXISTS(SELECT 1 FROM model_prices p WHERE p.model=COALESCE(usage_records.actual_model,usage_records.model)) ORDER BY 1").fetch_all(self.pool()).await?)
     }
 }
 
@@ -569,7 +553,6 @@ mod tests {
             tokens: vec![],
             operations: vec![],
             images: vec![crate::ImagePrice {
-                provider_id: "chatgpt".into(),
                 model: "image-test".into(),
                 resolution: "1K".into(),
                 price_nano_usd: 42,
@@ -714,7 +697,7 @@ mod tests {
         let dir = codex2api_storage::test_support::tempdir().unwrap();
         let db = dir.path().join("billing-pg");
         let storage = codex2api_storage::test_support::open(&db).await.unwrap();
-        let prices = storage.model_prices("chatgpt").await.unwrap();
+        let prices = storage.model_prices().await.unwrap();
         let mut record = UsageRecord {
             id: "one".into(),
             subject_id: "virtual-a".into(),
@@ -784,7 +767,7 @@ mod tests {
         );
         assert_eq!(
             reopened
-                .model_prices("chatgpt")
+                .model_prices()
                 .await
                 .unwrap()
                 .iter()

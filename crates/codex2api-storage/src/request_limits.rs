@@ -1,4 +1,5 @@
 use crate::{Result, Storage, StorageError};
+use sha2::{Digest, Sha256};
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VirtualRpmLimit {
     pub rpm: Option<u32>,
@@ -84,13 +85,69 @@ impl Storage {
         )
         .await
     }
-    pub async fn admit_virtual_request(&self, owner: &str, consume: bool) -> Result<Option<u32>> {
-        self.runtime
-            .rpm(
-                owner,
-                self.virtual_rpm_limit(owner).await?.effective_rpm,
-                consume,
-            )
-            .await
+    fn model_scope(owner: &str, model: &str) -> String {
+        format!("{owner}:model:{:x}", Sha256::digest(model.as_bytes()))
+    }
+    /// The subscription window and, when the plan limits the model, its model window
+    /// are checked together before either consumes a slot.
+    pub async fn admit_virtual_request(
+        &self,
+        owner: &str,
+        model: Option<&str>,
+        consume: bool,
+    ) -> Result<Option<u32>> {
+        let mut scopes = vec![(
+            format!("rpm:{owner}"),
+            self.virtual_rpm_limit(owner).await?.effective_rpm,
+        )];
+        if let Some(model) = model {
+            let limit = self
+                .effective_entitlements(owner)
+                .await?
+                .model_rule(model)
+                .map_or(0, |rule| rule.rpm_limit);
+            if limit > 0 {
+                scopes.push((format!("rpm:{}", Self::model_scope(owner, model)), limit));
+            }
+        }
+        self.runtime.rpm_scopes(&scopes, consume).await
+    }
+    /// One generation slot of the subscription and, when the plan limits the model,
+    /// of that model. Dropping the permits releases both.
+    pub async fn acquire_consumer(
+        &self,
+        id: &str,
+        model: Option<&str>,
+    ) -> Result<Option<Vec<crate::RuntimePermit>>> {
+        let limits = self.virtual_rpm_limit(id).await?;
+        let Some(permit) = self
+            .runtime
+            .acquire(&format!("consumer:{id}"), limits.effective_concurrency)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let mut permits = vec![permit];
+        if let Some(model) = model {
+            let limit = self
+                .effective_entitlements(id)
+                .await?
+                .model_rule(model)
+                .map_or(0, |rule| rule.concurrency_limit);
+            if limit > 0 {
+                let Some(permit) = self
+                    .runtime
+                    .acquire(&format!("consumer:{}", Self::model_scope(id, model)), limit)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                permits.push(permit);
+            }
+        }
+        Ok(Some(permits))
+    }
+    pub fn consumer_active(&self, id: &str) -> u32 {
+        self.runtime.metrics(&format!("consumer:{id}")).active
     }
 }

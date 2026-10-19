@@ -1,32 +1,26 @@
+import type { ModelRule } from "@/lib/api";
 import { providerLabel } from "@/lib/providers";
-export type ApiModelRule = {
-  model: string;
-  multiplier: string | null;
-  concurrency_limit: number;
-  rpm_limit: number;
-};
+export type ApiModelRule = ModelRule;
+/** An API group grants models manually and executes on tagged suppliers of any platform. */
 export type ApiGroup = {
   id: string;
   name: string;
   description: string;
-  provider_id: string;
   enabled: boolean;
   tag_ids: string[];
-  allowed_models: string[];
+  models: ApiModelRule[];
   multiplier: string;
   search_price_usd: string | null;
   concurrency_limit: number;
   rpm_limit: number;
-  model_rules: ApiModelRule[];
   revision: number | null;
 };
-export type ApiGroupOption = Pick<ApiGroup, "id" | "name" | "provider_id" | "enabled">;
+export type ApiGroupOption = Pick<ApiGroup, "id" | "name" | "enabled">;
 export type ApiKey = {
   id: string;
   name: string;
   group_id: string;
   group_name: string;
-  provider_id: string;
   user_id: string;
   username: string;
   key_prefix: string;

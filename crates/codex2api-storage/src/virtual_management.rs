@@ -744,13 +744,7 @@ impl Storage {
             ));
         }
         if key == "conversation_metadata" && !value["default_model_slug"].is_null() {
-            let account = self
-                .platform_account(owner)
-                .await?
-                .ok_or_else(|| StorageError::AccountNotFound(owner.into()))?;
-            let models = self
-                .available_virtual_models(owner, &account.provider_id)
-                .await?;
+            let models = self.available_virtual_models(owner).await?;
             if !models
                 .iter()
                 .any(|model| model.kind == "text" && value["default_model_slug"] == model.model)

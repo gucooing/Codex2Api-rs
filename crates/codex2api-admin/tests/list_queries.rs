@@ -479,7 +479,7 @@ async fn supplier_models_read_only_their_own_snapshot() {
     check_page(&filtered, 1, 1, 20, 1);
     assert!(
         f.storage
-            .model_config("grok", "list-grok-00")
+            .model_config("list-grok-00")
             .await
             .unwrap()
             .is_none()

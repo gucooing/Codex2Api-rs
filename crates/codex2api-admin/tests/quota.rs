@@ -335,7 +335,6 @@ async fn supplier_cycles_sum_settled_prices_with_exact_boundaries_and_account_is
     let inner_from = until - 18_000_000;
     let outer_from = until - 2_592_000_000;
     let mut price = ModelPrice {
-        provider_id: "chatgpt".into(),
         model: "cycle-test".into(),
         tier: "standard".into(),
         min_input_tokens: 0,

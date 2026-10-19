@@ -1,4 +1,4 @@
-import type { BusinessField, Json, Model, ModelRef, OAuth, Plan } from "./api";
+import type { BusinessField, Json, Model, OAuth, Plan } from "./api";
 
 export const clientOwnedKeys = new Set([
   "cloud_preferences",
@@ -29,9 +29,6 @@ export function canEditConfig(key: string, readonly: boolean) {
 export function allowedFields(key: string, fields: BusinessField[]) {
   return key === "user_settings" ? fields.filter((field) => field.path[0] === "flags") : fields;
 }
-export function modelKey(model: ModelRef) {
-  return `${model.provider_id}/${model.model}`;
-}
 export function planWrite(value: Plan) {
   return {
     rpm_limit: value.rpm_limit,
@@ -39,12 +36,11 @@ export function planWrite(value: Plan) {
     description: value.description,
     sale_price_usd: value.sale_price_usd,
     duration_days: value.duration_days,
-    supplier_tag_id: value.supplier_tag_id,
+    tag_ids: value.tag_ids,
     plan_type: value.plan_type,
     name: value.name,
     provider_id: value.provider_id,
-    model_access: value.model_access,
-    models: value.models.map(({ provider_id, model }) => ({ provider_id, model })),
+    models: value.models,
     spending_windows: value.spending_windows,
     allow_purchase: value.allow_purchase,
     revision: value.id ? value.revision : null,
@@ -52,7 +48,7 @@ export function planWrite(value: Plan) {
 }
 export function modelWrite(value: Model, presetVersion?: string) {
   return {
-    provider_id: value.provider_id,
+    platform: value.platform,
     model: value.model,
     kind: value.kind,
     enabled: value.enabled,

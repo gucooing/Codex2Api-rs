@@ -23,7 +23,7 @@ export function ModelMarketCard({
   onSelect: () => void;
 }) {
   const { model, pricing } = item;
-  const { Icon, name } = modelVendor(model.provider_id);
+  const { Icon, name } = modelVendor(model.platform);
   const price = pricing.startingToken;
   return (
     <Card size="sm" className="relative h-full min-w-0">

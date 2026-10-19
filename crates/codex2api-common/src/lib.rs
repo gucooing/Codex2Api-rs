@@ -2,13 +2,12 @@
 //! Optional frontend utilities build and serve each business's embedded website.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 
 mod model_presets;
 pub mod providers;
 pub use model_presets::{
-    MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset, model_preset_source,
-    model_preset_verified_at, model_price_preset,
+    BUILTIN_MODELS, BuiltinModel, MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset,
+    builtin_models, model_preset_source, model_price_preset,
 };
 
 pub const CHATGPT: &str = "chatgpt";
@@ -20,6 +19,22 @@ pub const PROVIDERS: &[(&str, &str)] = &[
     (GROK, "Grok"),
     (ANTIGRAVITY, "Antigravity"),
 ];
+
+pub const GEMINI: &str = "gemini";
+pub const CLAUDE: &str = "claude";
+
+/// Identification labels of catalog models: the model's vendor. Supplier channels
+/// such as Antigravity are not vendors. Never a routing restriction.
+pub const MODEL_PLATFORMS: &[(&str, &str)] = &[
+    (CHATGPT, "ChatGPT"),
+    (GROK, "Grok"),
+    (GEMINI, "Gemini"),
+    (CLAUDE, "Claude"),
+];
+
+pub fn valid_model_platform(label: &str) -> bool {
+    MODEL_PLATFORMS.iter().any(|(id, _)| *id == label)
+}
 
 pub fn default_provider() -> String {
     CHATGPT.into()
@@ -36,48 +51,27 @@ pub struct AccountScope {
     pub virtual_account_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ModelRef {
-    pub provider_id: String,
-    pub model: String,
-}
-
+/// One manually granted model with its optional billing multiplier and per-model
+/// limits. Plans and API groups share this shape; presence in a list grants access.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModelAccess {
-    None,
-    AllEnabled,
-    Selected(BTreeSet<ModelRef>),
+#[serde(deny_unknown_fields)]
+pub struct ModelRule {
+    pub model: String,
+    #[serde(default)]
+    pub multiplier: Option<String>,
+    #[serde(default)]
+    pub concurrency_limit: u32,
+    #[serde(default)]
+    pub rpm_limit: u32,
 }
 
-impl ModelAccess {
-    pub fn permits(&self, provider: &str, model: &str) -> bool {
-        match self {
-            Self::None => false,
-            Self::AllEnabled => true,
-            Self::Selected(models) => models.contains(&ModelRef {
-                provider_id: provider.into(),
-                model: model.into(),
-            }),
-        }
-    }
-
-    pub fn from_config(
-        mode: &str,
-        models: impl IntoIterator<Item = ModelRef>,
-    ) -> Result<Self, PolicyError> {
-        let models: BTreeSet<_> = models.into_iter().collect();
-        match mode {
-            "none" if models.is_empty() => Ok(Self::None),
-            "all" if models.is_empty() => Ok(Self::AllEnabled),
-            "selected"
-                if !models.is_empty()
-                    && models
-                        .iter()
-                        .all(|s| valid_model(&s.model) && !s.provider_id.is_empty()) =>
-            {
-                Ok(Self::Selected(models))
-            }
-            _ => Err(PolicyError::InvalidModelScope),
+impl ModelRule {
+    pub fn granted(model: &str) -> Self {
+        Self {
+            model: model.into(),
+            multiplier: None,
+            concurrency_limit: 0,
+            rpm_limit: 0,
         }
     }
 }
@@ -125,24 +119,16 @@ pub enum PolicyError {
     InvalidModel,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn empty_selection_never_becomes_all_models() {
-        assert!(ModelAccess::from_config("selected", []).is_err());
-        assert!(!ModelAccess::None.permits(CHATGPT, "gpt-test"));
-        assert!(ModelAccess::AllEnabled.permits(CHATGPT, "gpt-test"));
+pub fn subscription_tiers(provider: &str) -> &'static [&'static str] {
+    match provider {
+        CHATGPT => providers::chatgpt::SUBSCRIPTION_TIERS,
+        GROK => providers::grok::SUBSCRIPTION_TIERS,
+        _ => &[],
     }
 }
 
 pub fn valid_subscription_tier(provider: &str, tier: &str) -> bool {
-    match provider {
-        CHATGPT => providers::chatgpt::SUBSCRIPTION_TIERS.contains(&tier),
-        GROK => providers::grok::SUBSCRIPTION_TIERS.contains(&tier),
-        _ => false,
-    }
+    subscription_tiers(provider).contains(&tier)
 }
 
 #[cfg(feature = "frontend")]

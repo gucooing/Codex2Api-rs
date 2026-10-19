@@ -106,13 +106,11 @@ impl Storage {
         let rows: Vec<(String, bool)> = sqlx::query_as(
             "SELECT model,bool_or(enabled) FROM (
              SELECT m.model,m.enabled FROM model_catalog m
-             JOIN supplier_accounts a ON a.provider_id=m.provider_id
-             WHERE a.id=$1 AND m.deleted=FALSE AND strpos(lower(m.model),lower($2))>0
+             WHERE m.deleted=FALSE AND strpos(lower(m.model),lower($1))>0
              UNION ALL SELECT model,FALSE FROM supplier_models
-             WHERE account_id=$3 AND strpos(lower(model),lower($4))>0)
+             WHERE account_id=$2 AND strpos(lower(model),lower($3))>0)
              GROUP BY model ORDER BY model LIMIT 100",
         )
-        .bind(id)
         .bind(search.trim())
         .bind(id)
         .bind(search.trim())

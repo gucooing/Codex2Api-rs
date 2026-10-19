@@ -353,7 +353,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(route.tag_id, original.tag_id);
+            assert_eq!(route.tag_ids, original.tag_ids);
             assert_eq!(route.revision, original.revision);
         }
         let frame = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"Please try again in 7s.\"}}}\n\n";
@@ -519,7 +519,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         storage
-            .save_pool_route(&owner.id, "chatgpt", Some("pool"), Some(1))
+            .save_pool_route(&owner.id, "chatgpt", Some(&["pool".into()]), Some(1))
             .await
             .unwrap();
         let device = storage

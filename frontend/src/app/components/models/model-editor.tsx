@@ -31,7 +31,7 @@ import {
   priceRangeLabel,
   priceTierLabels,
 } from "@/lib/model-pricing";
-import { providerOptions } from "@/lib/providers";
+import { platformOptions } from "@/lib/providers";
 import { Plus, Trash2, X } from "lucide-react";
 
 export function ModelEditor({
@@ -117,40 +117,40 @@ export function ModelEditor({
                   <div className="grid sm:grid-cols-3 gap-3">
                     <Field>
                       <FieldLabel
-                        htmlFor={fieldId + "-field-7" + "-" + encodeURIComponent(String("提供商"))}
+                        htmlFor={fieldId + "-field-7" + "-" + encodeURIComponent(String("平台"))}
                       >
-                        {"提供商"}
+                        {"平台"}
                       </FieldLabel>
                       <Select
-                        value={value.provider_id}
+                        value={value.platform}
                         onValueChange={(next) =>
-                          ((provider) => update("provider_id", provider))(
+                          ((platform) => update("platform", platform))(
                             next ===
                               fieldId +
                                 "-field-7" +
                                 "-" +
-                                encodeURIComponent(String("提供商")) +
+                                encodeURIComponent(String("平台")) +
                                 "-empty"
                               ? ""
                               : next,
                           )
                         }
-                        disabled={model.revision !== null}
                       >
                         <SelectTrigger
-                          id={fieldId + "-field-7" + "-" + encodeURIComponent(String("提供商"))}
-                          aria-label={"提供商"}
-                          data-empty={String(value.provider_id) === "" ? "true" : undefined}
+                          id={fieldId + "-field-7" + "-" + encodeURIComponent(String("平台"))}
+                          aria-label={"平台"}
+                          data-empty={String(value.platform) === "" ? "true" : undefined}
                           className="w-full"
                         >
                           <SelectValue
                             placeholder={
-                              providerOptions.find((option) => option.value === "")?.label ?? "请选择"
+                              platformOptions.find((option) => option.value === "")?.label ??
+                              "请选择"
                             }
                           />
                         </SelectTrigger>
                         <SelectContent position="popper">
-                          {providerOptions.map((option) => (
+                          {platformOptions.map((option) => (
                             <SelectItem
                               key={option.value}
                               value={
@@ -158,7 +158,7 @@ export function ModelEditor({
                                 fieldId +
                                   "-field-7" +
                                   "-" +
-                                  encodeURIComponent(String("提供商")) +
+                                  encodeURIComponent(String("平台")) +
                                   "-empty"
                               }
                               disabled={"disabled" in option && Boolean(option.disabled)}

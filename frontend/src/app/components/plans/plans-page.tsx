@@ -32,6 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { money } from "@/lib/format";
+import { providerLabel } from "@/lib/providers";
 import { subscriptionLabel } from "@/lib/subscriptions";
 import {
   ChevronLeft,
@@ -145,7 +146,7 @@ export default function PlansPage() {
               <TableRow>
                 <TableHead hidden={!columns.isVisible("套餐")}>套餐</TableHead>
                 <TableHead hidden={!columns.isVisible("售价 / 有效期")}>售价 / 有效期</TableHead>
-                <TableHead hidden={!columns.isVisible("模型权限")}>模型权限</TableHead>
+                <TableHead hidden={!columns.isVisible("模型与标签")}>模型与标签</TableHead>
                 <TableHead hidden={!columns.isVisible("费用上限")}>费用上限</TableHead>
                 <TableHead hidden={!columns.isVisible("允许购买")}>允许购买</TableHead>
                 <TableHead hidden={!columns.isVisible("操作")}>操作</TableHead>
@@ -157,19 +158,17 @@ export default function PlansPage() {
                   <TableCell hidden={!columns.isVisible("套餐")}>
                     <span className="font-medium">{plan.name}</span>
                     <p className="text-xs text-muted-foreground">
-                      {plan.provider_id} · {subscriptionLabel(plan.plan_type, plan.provider_id)}
+                      {providerLabel(plan.provider_id)} ·{" "}
+                      {subscriptionLabel(plan.plan_type, plan.provider_id)}
                     </p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("售价 / 有效期")} className="tabular-nums">
                     {plan.sale_price_usd === null ? "未开放购买" : money(plan.sale_price_usd)}
                     <p className="text-xs text-muted-foreground">{plan.duration_days} 天</p>
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("模型权限")}>
-                    {plan.model_access === "all"
-                      ? "全部已启用模型"
-                      : plan.model_access === "none"
-                        ? "无模型"
-                        : `指定 ${plan.models.length} 个模型`}
+                  <TableCell hidden={!columns.isVisible("模型与标签")}>
+                    {plan.models.length} 个模型
+                    <p className="text-xs text-muted-foreground">{plan.tag_ids.length} 个标签</p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("费用上限")} className="tabular-nums">
                     {plan.spending_windows.map((w) => (

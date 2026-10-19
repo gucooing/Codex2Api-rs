@@ -34,7 +34,7 @@ pub async fn model_options(
     Query(q): Query<OptionsQuery>,
 ) -> ApiResult {
     Ok(Json(
-        json!({"items":s.storage.model_options(&q.provider_id,&q.search,&q.plan_id).await?}),
+        json!({"items":s.storage.model_options(&q.platform,&q.search,&q.plan_id).await?}),
     ))
 }
 
@@ -57,16 +57,10 @@ pub async fn models(
     let page = s.storage.model_page(&q).await?;
     let mut items = Vec::with_capacity(page.items.len());
     for m in page.items {
-        let tokens = s
-            .storage
-            .model_token_prices(&m.provider_id, &m.model)
-            .await?;
-        let images = s
-            .storage
-            .model_image_prices(&m.provider_id, &m.model)
-            .await?;
+        let tokens = s.storage.model_token_prices(&m.model).await?;
+        let images = s.storage.model_image_prices(&m.model).await?;
         items.push(dto::Model {
-            provider_id: m.provider_id,
+            platform: m.platform,
             model: m.model,
             kind: m.kind,
             enabled: m.enabled,
@@ -86,42 +80,24 @@ pub async fn models(
     ))
 }
 
+/// The built-in models of every platform with their verified prices, in one list.
 pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
-    let mut models = codex2api_upstream::supported_models();
-    models.extend(
-        codex2api_common::providers::grok::PRICED_MODELS
-            .iter()
-            .map(|model| (codex2api_common::GROK, *model))
-            .chain(
-                codex2api_common::providers::antigravity::PRICED_FAMILIES
-                    .iter()
-                    .map(|family| (codex2api_common::ANTIGRAVITY, *family)),
-            )
-            .map(|(provider, model)| codex2api_common::SupportedModel {
-                provider_id: provider.into(),
-                model: model.into(),
-                kind: "text".into(),
-                preset_key: None,
-            }),
-    );
-    models.sort_by(|a, b| (&a.provider_id, &a.model).cmp(&(&b.provider_id, &b.model)));
-    models.dedup_by(|a, b| a.provider_id == b.provider_id && a.model == b.model);
-    let items = models
+    let items = codex2api_upstream::supported_models()
         .into_iter()
         .map(|model| {
-            let prices = codex2api_storage::preset_model_prices(&model.provider_id, &model.model);
-            let (source, version) =
-                codex2api_common::model_preset_source(&model.provider_id, &model.model);
+            let prices = codex2api_storage::preset_model_prices(model.preset_key());
+            let source = codex2api_common::model_preset_source(model.preset_key());
             dto::ModelPreset {
-                source_url: prices.as_ref().map(|_| source.to_owned()),
-                verified_at: prices
-                    .as_ref()
-                    .map(|_| codex2api_common::model_preset_verified_at(&model.provider_id)),
+                source_url: source.map(|(url, _, _)| url.to_owned()),
+                verified_at: source.map(|(_, _, verified)| verified),
+                version: source
+                    .map_or(codex2api_common::MODEL_PRESET_VERSION, |(_, version, _)| {
+                        version
+                    }),
                 token_prices: prices.unwrap_or_default().iter().map(token_dto).collect(),
-                provider_id: model.provider_id,
+                platform: model.platform,
                 model: model.model,
                 kind: model.kind,
-                version,
             }
         })
         .collect::<Vec<_>>();
@@ -131,7 +107,7 @@ pub async fn model_presets(State(_s): State<AdminState>) -> ApiResult {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelInput {
-    provider_id: String,
+    platform: String,
     model: String,
     kind: String,
     enabled: bool,
@@ -165,17 +141,20 @@ pub struct ImageInput {
 }
 
 pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) -> ApiResult {
-    if !codex2api_common::supported_provider(&f.provider_id) {
-        return Err(ApiError::bad("提供商尚未接入"));
+    if !codex2api_common::valid_model_platform(&f.platform) {
+        return Err(ApiError::bad("平台无效"));
     }
+    let model = f.model.trim().to_owned();
     let mut tokens = if let Some(version) = f.pricing_preset.as_deref() {
-        if version != codex2api_common::model_preset_source(&f.provider_id, f.model.trim()).1 {
+        let source = codex2api_common::model_preset_source(&model)
+            .ok_or_else(|| ApiError::bad("该模型没有完整预设价格，请填写自定义价格"))?;
+        if version != source.1 {
             return Err(ApiError::conflict());
         }
         if f.kind != "text" || !f.token_prices.is_empty() || !f.image_prices.is_empty() {
             return Err(ApiError::bad("预设定价与自定义价格不能同时提交"));
         }
-        codex2api_storage::preset_model_prices(&f.provider_id, f.model.trim())
+        codex2api_storage::preset_model_prices(&model)
             .ok_or_else(|| ApiError::bad("该模型没有完整预设价格，请填写自定义价格"))?
     } else {
         vec![]
@@ -187,8 +166,7 @@ pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) 
                 .ok_or_else(|| ApiError::bad("Token 单价须为非负美元金额，最多六位小数"))
         };
         tokens.push(ModelPrice {
-            provider_id: f.provider_id.clone(),
-            model: f.model.trim().into(),
+            model: model.clone(),
             tier: p.tier,
             min_input_tokens: p.min_input_tokens,
             max_input_tokens: p.max_input_tokens,
@@ -202,16 +180,15 @@ pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) 
     }
     for p in f.image_prices {
         images.push(ImagePrice {
-            provider_id: f.provider_id.clone(),
-            model: f.model.trim().into(),
+            model: model.clone(),
             resolution: p.resolution.trim().to_uppercase(),
             price_nano_usd: decimal_units(&p.price, 9)
                 .ok_or_else(|| ApiError::bad("图像价格须为非负美元金额，最多九位小数"))?,
         });
     }
     let config = ModelConfig {
-        provider_id: f.provider_id,
-        model: f.model.trim().into(),
+        model,
+        platform: f.platform,
         kind: f.kind,
         enabled: f.enabled,
         deleted: false,
@@ -230,7 +207,6 @@ pub async fn save_model(State(s): State<AdminState>, Json(f): Json<ModelInput>) 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelAction {
-    provider_id: String,
     model: String,
     revision: i64,
     enabled: Option<bool>,
@@ -240,7 +216,6 @@ pub async fn model_status(State(s): State<AdminState>, Json(f): Json<ModelAction
     if !s
         .storage
         .set_model_enabled(
-            &f.provider_id,
             &f.model,
             f.enabled.ok_or_else(|| ApiError::bad("缺少启停状态"))?,
             f.revision,
@@ -253,11 +228,7 @@ pub async fn model_status(State(s): State<AdminState>, Json(f): Json<ModelAction
 }
 
 pub async fn delete_model(State(s): State<AdminState>, Json(f): Json<ModelAction>) -> ApiResult {
-    if !s
-        .storage
-        .delete_model_config(&f.provider_id, &f.model, f.revision)
-        .await?
-    {
+    if !s.storage.delete_model_config(&f.model, f.revision).await? {
         return Err(ApiError::conflict());
     }
     Ok(ok())

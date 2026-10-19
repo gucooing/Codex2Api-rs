@@ -170,7 +170,7 @@ pub(crate) async fn connect(
     let headers =
         codex2api_upstream::protocol::chatgpt_context(&mut serde_json::json!({}), &headers)?;
     let session = Session {
-        route: dispatch::route(&credential.principal),
+        route: dispatch::route(&credential.principal, Some(codex2api_common::CHATGPT)),
         state,
         credential,
         headers,
@@ -178,7 +178,7 @@ pub(crate) async fn connect(
         client: codex2api_upstream::RequestClock::current().and_then(|clock| clock.client),
     };
     let request = codex2api_upstream::protocol::scheduling(
-        codex2api_common::CHATGPT,
+        Some(codex2api_common::CHATGPT),
         &session.headers,
         &serde_json::json!({}),
     )?;
@@ -321,7 +321,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     excluded: Vec::new(), refreshed: HashSet::new(),
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(3600) });
                 let turn = pending.as_mut().unwrap();
-                let schedule = codex2api_upstream::protocol::scheduling(codex2api_common::CHATGPT, &session.headers, &turn.prepared.body)?;
+                let schedule = codex2api_upstream::protocol::scheduling(Some(codex2api_common::CHATGPT), &session.headers, &turn.prepared.body)?;
                 let selected = codex2api_upstream::scheduler::select(&session.state.storage, &session.route, &schedule, &[],
                     || dispatch::validate(&session.state, &session.credential.principal, &session.credential.token)).await?;
                 let revision = session.state.storage.supplier_auth_revision(&selected.account.id).await?;
@@ -455,7 +455,7 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                             if !recovered { turn.excluded.push(connection.context.account.id.clone()); }
                             connection.context.permit.take();
                             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
-                            let schedule = codex2api_upstream::protocol::scheduling(codex2api_common::CHATGPT, &session.headers, &turn.prepared.body)?;
+                            let schedule = codex2api_upstream::protocol::scheduling(Some(codex2api_common::CHATGPT), &session.headers, &turn.prepared.body)?;
                             connection = session.open(&turn.prepared.headers, &schedule, &mut turn.excluded, None).await?;
                             turn.prelude.clear();
                             turn.prelude_bytes = 0;
@@ -580,10 +580,10 @@ mod tests {
                 WalletAdjustment { request_id: "fund".into(), amount_cents: 100, expected_revision: 1, reason: None }
             ).await.unwrap();
             storage.save_model_config(&ModelConfig {
-                provider_id: "chatgpt".into(), model: "custom-model".into(), kind: "text".into(),
+                model: "custom-model".into(), platform: "chatgpt".into(), kind: "text".into(),
                 enabled: true, deleted: false, revision: 0,
             }, &[ModelPrice {
-                provider_id: "chatgpt".into(), model: "custom-model".into(), tier: "standard".into(),
+                model: "custom-model".into(), tier: "standard".into(),
                 min_input_tokens: 0, max_input_tokens: None, input_rate: 1_000_000,
                 cached_rate: 100_000, cache_write_rate: 1_000_000, output_rate: 2_000_000,
                 source: "custom".into(), revision: 0,
@@ -609,9 +609,10 @@ mod tests {
             storage.edit_supplier_tags(&["supplier".into()], &["pool".into()], false).await.unwrap();
             storage.save_api_group(&ApiGroup {
                 id: "group".into(), name: "Group".into(), description: String::new(),
-                provider_id: "chatgpt".into(), enabled: true, tag_ids: vec!["pool".into()],
-                allowed_models: vec![], multiplier: "1".into(), concurrency_limit: 1,
-                rpm_limit: 0, model_rules: vec![], revision: 0, search_price_usd: None,
+                enabled: true, tag_ids: vec!["pool".into()],
+                models: vec![codex2api_common::ModelRule::granted("custom-model")],
+                multiplier: "1".into(), concurrency_limit: 1,
+                rpm_limit: 0, revision: 0, search_price_usd: None,
             }, None).await.unwrap();
             let key = storage.user_store().create_api_key("consumer", "Key", "group").await.unwrap();
             let principal = storage.authenticate_api_key(&key.secret).await.unwrap().unwrap();
@@ -677,7 +678,7 @@ mod tests {
             assert_eq!(headers.len(), 1);
             assert_eq!(headers["session-id"], "caller-session");
             let session = Session {
-                route: dispatch::route(&principal), state: state.clone(),
+                route: dispatch::route(&principal, Some(codex2api_common::CHATGPT)), state: state.clone(),
                 credential: ApiCredential { principal, token: key.secret }, headers,
                 user_agent: codex2api_upstream::request_user_agent(&inbound),
                 client: None,

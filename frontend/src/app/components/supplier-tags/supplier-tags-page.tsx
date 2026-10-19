@@ -155,9 +155,7 @@ export default function SupplierTagsPage() {
               {pagination.rows.map((tag) => (
                 <TableRow key={tag.id}>
                   <TableCell className="font-medium">{tag.name}</TableCell>
-                  <TableCell>
-                    {providerLabel(tag.provider_id)}
-                  </TableCell>
+                  <TableCell>{providerLabel(tag.provider_id)}</TableCell>
                   <TableCell className="tabular-nums">
                     {tag.supplier_count} / {tag.binding_count}
                   </TableCell>

@@ -42,7 +42,7 @@ async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
     );
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            provider_id: "chatgpt".into(),
+            platform: "chatgpt".into(),
             model: "gpt-5.5".into(),
             kind: "text".into(),
             preset_key: None,
@@ -129,7 +129,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .unwrap();
         storage
             .sync_supported_models(&[codex2api_common::SupportedModel {
-                provider_id: provider.into(),
+                platform: provider.into(),
                 model: "shared-model".into(),
                 kind: "text".into(),
                 preset_key: None,
@@ -137,7 +137,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .await
             .unwrap();
         let empty = storage
-            .pool_candidates(provider, provider, Some("shared-model"))
+            .pool_candidates(provider, Some(provider), Some("shared-model"))
             .await
             .unwrap();
         assert!(empty.is_empty());
@@ -150,7 +150,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             let storage = storage.clone();
             tasks.spawn(async move {
                 storage
-                    .pool_candidates(provider, provider, Some("shared-model"))
+                    .pool_candidates(provider, Some(provider), Some("shared-model"))
                     .await
                     .unwrap()
             });
@@ -163,8 +163,8 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
         assert!(empty.is_empty());
         let models = storage.supplier_model_snapshot(provider).await.unwrap();
         assert!(models.contains("shared-model"));
-        let catalog = storage.model_catalog_snapshot(provider).await.unwrap();
-        assert!(catalog.iter().all(|m| m.provider_id == provider));
+        let catalog = storage.model_catalog_snapshot().await.unwrap();
+        assert!(catalog.iter().any(|m| m.model == "shared-model"));
         storage
             .remove_supplier_model(provider, "shared-model")
             .await
@@ -178,7 +178,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
         assert!(models.contains("shared-model"));
         assert!(
             storage
-                .pool_candidates(provider, provider, Some("shared-model"))
+                .pool_candidates(provider, Some(provider), Some("shared-model"))
                 .await
                 .unwrap()
                 .is_empty()
@@ -249,7 +249,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .unwrap();
         assert!(
             storage
-                .pool_candidates(provider, provider, None)
+                .pool_candidates(provider, Some(provider), None)
                 .await
                 .unwrap()
                 .is_empty()
@@ -258,7 +258,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
         tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
         assert_eq!(
             storage
-                .pool_candidates(provider, provider, None)
+                .pool_candidates(provider, Some(provider), None)
                 .await
                 .unwrap()
                 .len(),
@@ -270,7 +270,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .unwrap();
         assert!(
             storage
-                .pool_candidates(provider, provider, None)
+                .pool_candidates(provider, Some(provider), None)
                 .await
                 .unwrap()
                 .is_empty()
@@ -413,7 +413,7 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
+        .save_pool_route("v", "chatgpt", Some(&["pool".into()]), Some(1))
         .await
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -583,7 +583,7 @@ async fn replacing_tags_is_atomic_scoped_and_preserves_other_account_fields() {
         .unwrap();
     consumer(&storage, "v").await;
     storage
-        .save_pool_route("v", "chatgpt", Some("a"), Some(1))
+        .save_pool_route("v", "chatgpt", Some(&["a".into()]), Some(1))
         .await
         .unwrap();
     let original = storage.require_account("s1").await.unwrap();
@@ -665,7 +665,7 @@ async fn concurrent_pool_configuration_is_provider_isolated() {
         consumer(&storage, &owner).await;
         let s = storage.clone();
         handles.push(tokio::spawn(async move {
-            s.save_pool_route(&owner, "chatgpt", Some("pool"), Some(1))
+            s.save_pool_route(&owner, "chatgpt", Some(&["pool".into()]), Some(1))
                 .await
                 .unwrap()
         }));
@@ -688,7 +688,7 @@ async fn concurrent_pool_configuration_is_provider_isolated() {
             .await
             .unwrap()
     );
-    assert_eq!(route.tag_id.as_deref(), Some("pool"));
+    assert_eq!(route.tag_ids, ["pool"]);
     assert!(storage.delete_supplier_tag("pool").await.is_err());
     assert!(
         !storage
@@ -753,7 +753,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
+        .save_pool_route("v", "chatgpt", Some(&["pool".into()]), Some(1))
         .await
         .unwrap();
     let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -821,7 +821,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(route.tag_id.as_deref(), Some("pool"));
+    assert_eq!(route.tag_ids, ["pool"]);
     assert!(
         storage
             .select_pool_supplier("v", "chatgpt", &[])
@@ -849,7 +849,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .await
         .unwrap();
     storage
-        .save_pool_route("v", "chatgpt", Some("pool"), Some(1))
+        .save_pool_route("v", "chatgpt", Some(&["pool".into()]), Some(1))
         .await
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
@@ -1081,7 +1081,7 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     for _ in 0..8 {
         let s = storage.clone();
         attempts.push(tokio::spawn(async move {
-            s.admit_virtual_request("v", true).await.unwrap()
+            s.admit_virtual_request("v", None, true).await.unwrap()
         }));
     }
     let mut allowed = 0;
@@ -1092,13 +1092,19 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     }
     assert_eq!(allowed, 2);
     assert_eq!(
-        storage.admit_virtual_request("v", false).await.unwrap(),
+        storage
+            .admit_virtual_request("v", None, false)
+            .await
+            .unwrap(),
         Some(60)
     );
     storage.close().await;
     let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(
-        storage.admit_virtual_request("v", true).await.unwrap(),
+        storage
+            .admit_virtual_request("v", None, true)
+            .await
+            .unwrap(),
         Some(60)
     );
     // Age existing members using the Redis clock instead of injecting an application clock.
@@ -1108,7 +1114,7 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
         .key(codex2api_storage::test_support::redis_key(&storage,"rpm:v")).invoke_async::<i64>(&mut conn).await.unwrap();
     assert!(
         storage
-            .admit_virtual_request("v", true)
+            .admit_virtual_request("v", None, true)
             .await
             .unwrap()
             .is_none()
@@ -1116,7 +1122,7 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
     storage.save_virtual_rpm_limit("v", Some(0)).await.unwrap();
     assert!(
         storage
-            .admit_virtual_request("v", true)
+            .admit_virtual_request("v", None, true)
             .await
             .unwrap()
             .is_none()
@@ -1142,7 +1148,10 @@ async fn rpm_is_atomic_sliding_and_survives_restart_and_honors_policy() {
         1
     );
     assert_eq!(
-        storage.admit_virtual_request("v", true).await.unwrap(),
+        storage
+            .admit_virtual_request("v", None, true)
+            .await
+            .unwrap(),
         Some(60)
     );
 }
@@ -1178,7 +1187,7 @@ async fn plan_display_tier_updates_members_without_resetting_subscription_or_bil
 
 async fn model_candidates(storage: &Storage, model: &str) -> Vec<String> {
     storage
-        .pool_candidates("pool", "chatgpt", Some(model))
+        .pool_candidates("pool", Some("chatgpt"), Some(model))
         .await
         .unwrap()
         .iter()

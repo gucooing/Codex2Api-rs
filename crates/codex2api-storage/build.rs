@@ -1,5 +1,6 @@
-//! Embed `migrations/NNNN_name.sql` in version order. Adding a migration is adding a file;
-//! the versions must be consecutive from 1 so a skipped or duplicated number fails the build.
+//! Embed `migrations/NNNN_name.sql` in version order. `0000` is the frozen baseline a
+//! fresh database starts from; every later schema change is a new consecutive file, so
+//! a skipped or duplicated number fails the build.
 use std::{env, fs, path::PathBuf};
 
 fn main() {
@@ -33,8 +34,8 @@ fn main() {
     for (index, (version, path)) in files.iter().enumerate() {
         assert_eq!(
             *version,
-            index as i64 + 1,
-            "migration versions must be consecutive from 0001: {}",
+            index as i64,
+            "migration versions must be consecutive from the 0000 baseline: {}",
             path.display()
         );
     }

@@ -199,8 +199,9 @@ impl AntigravityUpstream {
         Ok((authorized, raw))
     }
 
-    /// Replace the account's upstream models and register newly seen models in the
-    /// billing catalog; a family with a known official price starts enabled.
+    /// Replace the account's upstream models and register newly seen models of a
+    /// recognizable vendor in the billing catalog; a family with a known official
+    /// price starts enabled.
     pub async fn discover_supplier_models(&self, id: &str) -> Result<Value> {
         let (authorized, raw) = self.fetch_models(id).await?;
         let mut descriptors = Vec::new();
@@ -224,8 +225,14 @@ impl AntigravityUpstream {
                 }
             }
             descriptors.push(descriptor);
+            // Only a model with a recognizable vendor joins the billing catalog automatically.
+            let Some(platform) = codex2api_common::providers::antigravity::platform_label(
+                info["displayName"].as_str().unwrap_or(name.as_str()),
+            ) else {
+                continue;
+            };
             supported.push(codex2api_common::SupportedModel {
-                provider_id: codex2api_common::ANTIGRAVITY.into(),
+                platform: platform.into(),
                 model: name.clone(),
                 kind: "text".into(),
                 preset_key: info["displayName"]

@@ -83,12 +83,14 @@ async fn plans_are_shared_revision_checked_and_subscription_operations_are_actua
     let path = format!("/admin/api/plans/{id}");
     let mut changed = input;
     changed["revision"] = plan["revision"].clone();
-    changed["model_access"] = "selected".into();
+    changed["models"] = serde_json::json!([
+        {"model":"bad model","multiplier":null,"concurrency_limit":0,"rpm_limit":0}
+    ]);
     assert_eq!(
         f.request("PUT", &path, changed.clone()).await.status(),
         StatusCode::BAD_REQUEST
     );
-    changed["model_access"] = "all".into();
+    changed["models"] = plan["models"].clone();
     changed["name"] = "Renamed".into();
     assert_eq!(
         f.request("PUT", &path, changed.clone()).await.status(),

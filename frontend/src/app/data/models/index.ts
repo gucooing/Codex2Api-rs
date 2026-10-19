@@ -29,7 +29,7 @@ export const tokenRule = (): TokenPrice => ({
 });
 
 export const emptyModel = (): Model => ({
-  provider_id: "chatgpt",
+  platform: "chatgpt",
   model: "",
   kind: "text",
   enabled: true,
@@ -56,7 +56,7 @@ export function useModelEditor({
   const [pricingChanged, setPricingChanged] = useState(false);
   const [customPricing, setCustomPricing] = useState(model.revision !== null);
   const [presetVersion, setPresetVersion] = useState<string>();
-  const matchedPreset = findModelPreset(presets, value.provider_id, value.model);
+  const matchedPreset = findModelPreset(presets, value.model);
   const applyPreset = (current: Model, preset: ModelPreset) => {
     const next = withModelPreset(current, preset);
     setValue(next);
@@ -68,8 +68,8 @@ export function useModelEditor({
   };
   const update = <K extends keyof Model>(key: K, next: Model[K]) => {
     const current = { ...value, [key]: next };
-    if ((key === "model" || key === "provider_id") && model.revision === null && !customPricing) {
-      const preset = findModelPreset(presets, current.provider_id, current.model);
+    if (key === "model" && model.revision === null && !customPricing) {
+      const preset = findModelPreset(presets, current.model);
       if (preset?.token_prices.length) {
         applyPreset(current, preset);
         return;
@@ -151,7 +151,7 @@ export function useModelPricing() {
   const actions = useActions();
   const presets = useResource<List<ModelPreset>>("/models/presets");
   const [editing, setEditing] = useState<Model>();
-  const empty = { search: "", kind: "", status: "" };
+  const empty = { search: "", platform: "", kind: "", status: "" };
   const { filters, setFilters, applied, setApplied } = useSavedFilters("models.filters", empty);
   const resource = useListResource<Model>("/models", applied);
   const pagination = resource.pagination;
@@ -164,7 +164,6 @@ export function useModelPricing() {
         await request("/models/status", {
           method: "POST",
           body: {
-            provider_id: model.provider_id,
             model: model.model,
             revision: model.revision,
             enabled: !model.enabled,
@@ -185,7 +184,6 @@ export function useModelPricing() {
         await request("/models/delete", {
           method: "POST",
           body: {
-            provider_id: model.provider_id,
             model: model.model,
             revision: model.revision,
           },

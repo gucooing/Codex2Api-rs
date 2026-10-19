@@ -1,7 +1,12 @@
 use crate::{Result, Storage, StorageError, VirtualClientState};
+use codex2api_common::ModelRule;
 use serde_json::{Value, json};
 use sqlx::{FromRow, Row, postgres::PgRow};
 
+/// Plan rows with their supplier tag set; every plan read selects these columns.
+pub(crate) const PLAN_COLUMNS: &str = "p.*,COALESCE((SELECT jsonb_agg(t.tag_id ORDER BY t.tag_id) FROM virtual_plan_tags t WHERE t.plan_id=p.id),'[]'::jsonb) AS tag_ids";
+
+/// A plan belongs to one client platform; its model list and tag set may span platforms.
 #[derive(Clone)]
 pub struct VirtualPlan {
     pub provider_id: String,
@@ -12,11 +17,13 @@ pub struct VirtualPlan {
     pub allow_purchase: bool,
     pub revision: i64,
     pub updated_at_ms: i64,
+    pub tag_ids: Vec<String>,
 }
 
 impl<'r> FromRow<'r, PgRow> for VirtualPlan {
     fn from_row(row: &'r PgRow) -> std::result::Result<Self, sqlx::Error> {
         let config: sqlx::types::Json<Value> = row.try_get("config")?;
+        let tag_ids: sqlx::types::Json<Vec<String>> = row.try_get("tag_ids")?;
         Ok(Self {
             provider_id: row.try_get("provider_id")?,
             id: row.try_get("id")?,
@@ -26,6 +33,7 @@ impl<'r> FromRow<'r, PgRow> for VirtualPlan {
             allow_purchase: row.try_get("allow_purchase")?,
             revision: row.try_get("revision")?,
             updated_at_ms: row.try_get("updated_at_ms")?,
+            tag_ids: tag_ids.0,
         })
     }
 }
@@ -46,20 +54,15 @@ impl VirtualPlan {
         self.config["description"].as_str().unwrap_or("")
     }
 
-    pub fn model_access(&self) -> Result<codex2api_common::ModelAccess> {
-        let (mode, items) = ("model_access", "models");
-        let models = self.config[items]
-            .as_array()
-            .ok_or_else(|| StorageError::Constraint("模型权限配置无效".into()))?;
-        let models: Option<Vec<codex2api_common::ModelRef>> = models
-            .iter()
-            .map(|v| serde_json::from_value(v.clone()).ok())
-            .collect();
-        codex2api_common::ModelAccess::from_config(
-            self.config[mode].as_str().unwrap_or(""),
-            models.ok_or_else(|| StorageError::Constraint("模型权限配置无效".into()))?,
-        )
-        .map_err(|_| StorageError::Constraint("请选择明确的模型权限范围".into()))
+    pub fn models(&self) -> Result<Vec<ModelRule>> {
+        serde_json::from_value(self.config["models"].clone())
+            .map_err(|_| StorageError::Constraint("套餐模型列表无效".into()))
+    }
+    pub fn model_rule(&self, model: &str) -> Option<ModelRule> {
+        self.models()
+            .ok()?
+            .into_iter()
+            .find(|rule| rule.model == model)
     }
     pub fn validate(&self) -> Result<()> {
         self.sale_price_cents()?;
@@ -85,37 +88,12 @@ impl VirtualPlan {
                 "Invalid client subscription tier",
             ));
         }
-        let value = &self.config;
-        let fields = ["models", "model_access"];
-        if !value
-            .as_object()
-            .is_some_and(|v| fields.iter().all(|k| v.contains_key(*k)))
-            || !value["models"].as_array().is_some_and(|a| {
-                a.len() <= 256
-                    && a.iter().all(|v| {
-                        serde_json::from_value::<codex2api_common::ModelRef>(v.clone()).is_ok_and(
-                            |m| {
-                                codex2api_common::valid_model(&m.model) && !m.provider_id.is_empty()
-                            },
-                        )
-                    })
-            })
-        {
-            return Err(StorageError::Constraint(
-                "套餐模型范围或费用额度无效；金额须为非负美元数，最多九位小数".into(),
-            ));
+        if !self.config.is_object() || !self.config["models"].is_array() {
+            return Err(StorageError::Constraint("套餐模型列表无效".into()));
         }
-        for key in ["models"] {
-            if self.config[key]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|m| m["provider_id"] != self.provider_id)
-            {
-                return Err(StorageError::Constraint(
-                    "套餐只能授权同一提供商的模型".into(),
-                ));
-            }
+        crate::api_groups::validate_model_rules(&self.models()?, 256)?;
+        if self.tag_ids.len() > 100 {
+            return Err(StorageError::Constraint("套餐标签不能超过 100 个".into()));
         }
         for key in ["rpm_limit", "concurrency_limit"] {
             if self
@@ -128,17 +106,16 @@ impl VirtualPlan {
                 ));
             }
         }
-        self.model_access()?;
-        crate::plan_spending_windows(value)?;
+        crate::plan_spending_windows(&self.config)?;
         Ok(())
     }
 }
 
 impl Storage {
-    /// Models already configured for billing or observed by this service.
-    pub async fn virtual_plan_model_choices(&self, provider: &str) -> Result<Vec<String>> {
+    /// Enabled catalog models of every platform, selectable for a plan.
+    pub async fn virtual_plan_model_choices(&self) -> Result<Vec<String>> {
         Ok(self
-            .model_configs(provider)
+            .model_configs()
             .await?
             .into_iter()
             .filter(|model| model.enabled)
@@ -147,18 +124,20 @@ impl Storage {
     }
 
     pub async fn virtual_plans(&self) -> Result<Vec<VirtualPlan>> {
-        Ok(
-            sqlx::query_as("SELECT * FROM virtual_plans ORDER BY sort_id")
-                .fetch_all(self.pool())
-                .await?,
-        )
+        Ok(sqlx::query_as(&format!(
+            "SELECT {PLAN_COLUMNS} FROM virtual_plans p ORDER BY p.sort_id"
+        ))
+        .fetch_all(self.pool())
+        .await?)
     }
 
     pub async fn virtual_plan(&self, id: &str) -> Result<Option<VirtualPlan>> {
-        Ok(sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1")
-            .bind(id)
-            .fetch_optional(self.pool())
-            .await?)
+        Ok(sqlx::query_as(&format!(
+            "SELECT {PLAN_COLUMNS} FROM virtual_plans p WHERE p.id=$1"
+        ))
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await?)
     }
 
     pub async fn save_virtual_plan(
@@ -168,18 +147,9 @@ impl Storage {
     ) -> Result<bool> {
         plan.validate()?;
         let mut tx = self.pool().begin().await?;
-        if let Some(tag) = plan.config["supplier_tag_id"].as_str() {
-            let valid: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=$1 AND provider_id=$2)",
-            )
-            .bind(tag)
-            .bind(&plan.provider_id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if !valid {
-                return Err(StorageError::InvalidAdminUpdate("请选择同平台的供应号池"));
-            }
-        }
+        crate::api_groups::require_supplier_tags(&mut tx, &plan.tag_ids).await?;
+        let models: Vec<String> = plan.models()?.into_iter().map(|r| r.model).collect();
+        crate::api_groups::require_catalog_models(&mut tx, &models).await?;
         let now = chrono::Utc::now().timestamp_millis();
         let changed = if let Some(revision) = expected {
             sqlx::query("UPDATE virtual_plans SET name=$1,config=$2::jsonb,allow_purchase=$3,revision=revision+1,updated_at_ms=$4,plan_type=$5 WHERE id=$6 AND revision=$7 AND provider_id=$8")
@@ -189,6 +159,21 @@ impl Storage {
                 .bind(&plan.provider_id).bind(&plan.id).bind(plan.name.trim()).bind(&plan.plan_type).bind(plan.config.to_string()).bind(plan.allow_purchase).bind(now).execute(&mut *tx).await?.rows_affected()
         };
         if changed == 1 {
+            sqlx::query("DELETE FROM virtual_plan_tags WHERE plan_id=$1")
+                .bind(&plan.id)
+                .execute(&mut *tx)
+                .await?;
+            for tag in plan
+                .tag_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+            {
+                sqlx::query("INSERT INTO virtual_plan_tags(plan_id,tag_id) VALUES($1,$2)")
+                    .bind(&plan.id)
+                    .bind(tag)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             sqlx::query(
                 "UPDATE platform_accounts SET plan_type=$1 WHERE plan_id=$2 AND provider_id=$3",
             )
@@ -247,7 +232,8 @@ impl Storage {
         let value = match key {
             "quota" => json!({"spending_windows":windows}),
             "subscription_entitlements" => {
-                json!({plan.plan_type:{"models":config["models"],"spending_windows":windows}})
+                let models: Vec<String> = plan.models()?.into_iter().map(|r| r.model).collect();
+                json!({plan.plan_type:{"models":models,"spending_windows":windows}})
             }
             _ => {
                 return Err(StorageError::InvalidAdminUpdate(

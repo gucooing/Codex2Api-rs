@@ -24,19 +24,30 @@ redis.call('ZADD', KEYS[1], now + ARGV[3], ARGV[2])
 redis.call('PEXPIRE', KEYS[1], ARGV[3])
 return 1
 "#;
+// Every window is checked before any window consumes; ARGV holds one limit per key,
+// then the consume flag and the member identity.
 const RPM: &str = r#"
 local clock = redis.call('TIME')
 local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - 60000)
-local n = redis.call('ZCARD', KEYS[1])
-local limit = tonumber(ARGV[1])
-if limit > 0 and n >= limit then
-    local v = redis.call('ZRANGE', KEYS[1], n - limit, n - limit, 'WITHSCORES')
-    return math.max(1, math.ceil((tonumber(v[2]) + 60000 - now) / 1000))
+local count = #KEYS
+for i = 1, count do
+    local limit = tonumber(ARGV[i])
+    if limit > 0 then
+        redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', now - 60000)
+        local n = redis.call('ZCARD', KEYS[i])
+        if n >= limit then
+            local v = redis.call('ZRANGE', KEYS[i], n - limit, n - limit, 'WITHSCORES')
+            return math.max(1, math.ceil((tonumber(v[2]) + 60000 - now) / 1000))
+        end
+    end
 end
-if ARGV[2] == '1' and limit > 0 then
-    redis.call('ZADD', KEYS[1], now, ARGV[3])
-    redis.call('PEXPIRE', KEYS[1], 60000)
+if ARGV[count + 1] == '1' then
+    for i = 1, count do
+        if tonumber(ARGV[i]) > 0 then
+            redis.call('ZADD', KEYS[i], now, ARGV[count + 2])
+            redis.call('PEXPIRE', KEYS[i], 60000)
+        end
+    end
 end
 return 0
 "#;
@@ -159,21 +170,22 @@ impl Runtime {
         live.touched = Some(Instant::now());
         true
     }
-    pub async fn rpm(&self, owner: &str, limit: u32, consume: bool) -> Result<Option<u32>> {
-        if limit == 0 {
+    /// Rolling-minute windows admitted atomically; a zero limit is an unlimited scope.
+    pub async fn rpm_scopes(&self, scopes: &[(String, u32)], consume: bool) -> Result<Option<u32>> {
+        if scopes.iter().all(|(_, limit)| *limit == 0) {
             return Ok(None);
         }
-        let key = format!("rpm:{owner}");
-        let delay: i64 = self
-            .redis
-            .script(
-                &RPM_SCRIPT
-                    .key(self.redis.key(&key))
-                    .arg(limit)
-                    .arg(u8::from(consume))
-                    .arg(uuid::Uuid::new_v4().to_string()),
-            )
-            .await?;
+        let mut script = RPM_SCRIPT.prepare_invoke();
+        for (key, _) in scopes {
+            script.key(self.redis.key(key));
+        }
+        for (_, limit) in scopes {
+            script.arg(*limit);
+        }
+        script
+            .arg(u8::from(consume))
+            .arg(uuid::Uuid::new_v4().to_string());
+        let delay: i64 = self.redis.script(&script).await?;
         Ok((delay > 0).then_some(delay as u32))
     }
     pub fn metrics(&self, key: &str) -> RuntimeMetrics {
@@ -401,17 +413,6 @@ impl crate::Storage {
     }
     pub async fn acquire_supplier(&self, id: &str, limit: u32) -> Result<Option<RuntimePermit>> {
         self.runtime.acquire(&format!("supplier:{id}"), limit).await
-    }
-    pub async fn acquire_consumer(&self, id: &str) -> Result<Option<RuntimePermit>> {
-        self.runtime
-            .acquire(
-                &format!("consumer:{id}"),
-                self.virtual_rpm_limit(id).await?.effective_concurrency,
-            )
-            .await
-    }
-    pub fn consumer_active(&self, id: &str) -> u32 {
-        self.runtime.metrics(&format!("consumer:{id}")).active
     }
     pub async fn wait_supplier(
         &self,

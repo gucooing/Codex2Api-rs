@@ -425,7 +425,7 @@ impl Storage {
             .await?.rows_affected())
     }
     pub async fn insert_usage(&self, record: &UsageRecord) -> Result<()> {
-        let prices = self.billing_snapshot(&record.provider_id).await?;
+        let prices = self.billing_snapshot().await?;
         self.write_request(crate::request_writer::Write::Start {
             record: Box::new(record.clone()),
             prices,

@@ -10,7 +10,6 @@ export type ApiGroup = {
   id: string;
   name: string;
   description: string;
-  provider_id: string;
   multiplier: string;
   search_price_usd: string | null;
   concurrency_limit: number;
@@ -34,7 +33,7 @@ export type ApiTokenPrice = {
 };
 export type ApiImagePrice = { resolution: string; base_price_usd: string; price_usd: string };
 export type ApiCatalogModel = {
-  provider_id: string;
+  platform: string;
   model: string;
   kind: "text" | "image";
   multiplier: string;
@@ -60,7 +59,6 @@ export type ApiKey = {
   name: string;
   group_id: string;
   group_name: string;
-  provider_id: string;
   key_prefix: string;
   enabled: boolean;
   revoked_at: string | null;

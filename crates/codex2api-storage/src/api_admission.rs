@@ -3,12 +3,20 @@ use crate::billing::{BillingSnapshot, PriceRequirement};
 use crate::usage_wallet::NANO_PER_CENT;
 use crate::{ApiPrincipal, Result, Storage, StorageError, UsageRecord};
 
+/// Endpoints that are ChatGPT protocol operations and run only on ChatGPT suppliers.
+pub fn chatgpt_only_endpoint(endpoint: &str) -> bool {
+    matches!(endpoint, "/v1/alpha/search" | "/v1/responses/input_tokens")
+}
+
 impl Storage {
+    /// Admit the request and open its ledger row. The returned record carries the
+    /// platform the ledger identifies the request with: the ChatGPT platform for its
+    /// protocol operations, otherwise the requested model's platform label.
     pub async fn admit_api_request(
         &self,
         principal: &ApiPrincipal,
         record: &UsageRecord,
-    ) -> Result<()> {
+    ) -> Result<UsageRecord> {
         let model = record
             .model
             .as_deref()
@@ -30,12 +38,8 @@ impl Storage {
             "/v1/images/generations" | "/v1/images/edits" => {
                 PriceRequirement::Image(record.image_size.as_deref())
             }
-            "/v1/alpha/search" if record.provider_id == codex2api_common::CHATGPT => {
-                PriceRequirement::Operation("search")
-            }
-            "/v1/responses/input_tokens" if record.provider_id == codex2api_common::CHATGPT => {
-                PriceRequirement::ReadOnly
-            }
+            "/v1/alpha/search" => PriceRequirement::Operation("search"),
+            "/v1/responses/input_tokens" => PriceRequirement::ReadOnly,
             _ => {
                 return Err(StorageError::Api {
                     code: "unsupported_endpoint",
@@ -43,7 +47,7 @@ impl Storage {
                 });
             }
         };
-        let prices = self.billing_catalog(&record.provider_id).await?;
+        let prices = self.billing_catalog().await?;
         let mut tx = self.pool().begin().await?;
         crate::storage::lock_user(&mut tx, &principal.user_id).await?;
         let current = crate::api_access::principal_on(self, &mut tx, &principal.key_id, false)
@@ -59,37 +63,29 @@ impl Storage {
                 message: "API 组规则已更改，请重试",
             });
         }
-        if current.group.provider_id != record.provider_id {
-            return Err(StorageError::Api {
-                code: "invalid_model",
-                message: "模型平台与 API 组不一致",
-            });
-        }
-        let prices = self
-            .billing_catalog_on(&mut tx, &record.provider_id, prices)
-            .await?;
+        let prices = self.billing_catalog_on(&mut tx, prices).await?;
         let kind = if matches!(requirement, PriceRequirement::Image(_)) {
             "image"
         } else {
             "text"
         };
-        let supported = prices
-            .models
-            .iter()
-            .any(|m| m.model == model && m.kind == kind && m.enabled && !m.deleted)
-            && (current.group.allowed_models.is_empty()
-                || current.group.allowed_models.iter().any(|m| m == model));
-        if !supported {
-            return Err(StorageError::Api {
+        let config = prices
+            .model(model)
+            .filter(|m| m.kind == kind && m.enabled && !m.deleted && current.group.allows(model))
+            .ok_or(StorageError::Api {
                 code: "model_not_available",
                 message: "该 API 组不支持此模型",
-            });
-        }
+            })?;
+        let platform = if chatgpt_only_endpoint(&record.endpoint) {
+            codex2api_common::CHATGPT.to_owned()
+        } else {
+            config.platform.clone()
+        };
         let multiplier = match requirement {
             PriceRequirement::Operation(_) => "1",
             _ => current.group.model_multiplier(model),
         };
-        let multiplier_micros = crate::api_groups::multiplier_micros(&multiplier)?;
+        let multiplier_micros = crate::api_groups::multiplier_micros(multiplier)?;
         let mut operations: Vec<crate::OperationPrice> = Vec::new();
         let mut cost_operations = None;
         let has_price = match requirement {
@@ -113,12 +109,12 @@ impl Storage {
                     prices
                         .operations
                         .iter()
-                        .filter(|p| p.operation == operation)
+                        .filter(|p| p.provider_id == platform && p.operation == operation)
                         .cloned()
                         .collect(),
                 );
                 operations.push(crate::OperationPrice {
-                    provider_id: current.group.provider_id.clone(),
+                    provider_id: platform.clone(),
                     operation: operation.into(),
                     price_nano_usd: current
                         .group
@@ -179,6 +175,7 @@ impl Storage {
             prices.journal.clone()
         };
         let mut record = record.clone();
+        record.provider_id = platform;
         record.status = "in_progress".into();
         record.subject_kind = "api_key".into();
         record.subject_id = current.key_id.clone();
@@ -204,6 +201,6 @@ impl Storage {
                 .await?;
         }
         tx.commit().await?;
-        Ok(())
+        Ok(record)
     }
 }

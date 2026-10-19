@@ -3,50 +3,43 @@ use codex2api_storage::{UsageFilter, UsageRecord, preset_model_prices};
 use serde_json::json;
 
 fn supported(model: &str) -> SupportedModel {
-    SupportedModel {
-        provider_id: "chatgpt".into(),
-        model: model.into(),
-        kind: "text".into(),
-        preset_key: None,
-    }
+    SupportedModel::builtin("chatgpt", model)
 }
 
 #[tokio::test]
-async fn new_models_are_priced_once_unknown_prices_stay_disabled_and_restarts_are_idempotent() {
+async fn builtin_models_register_enabled_with_prices_once_and_restarts_are_idempotent() {
     let dir = codex2api_storage::test_support::tempdir().unwrap();
     let path = dir.path().join("models-pg");
     let storage = codex2api_storage::test_support::open(&path).await.unwrap();
-    let models = [
-        supported("gpt-6.1-sol"),
-        supported("gpt-5.5"),
-        supported("future-supported"),
-    ];
+    // Every platform's built-in model is already registered by the fixture bootstrap.
+    for entry in codex2api_common::BUILTIN_MODELS {
+        let config = storage.model_config(entry.model).await.unwrap().unwrap();
+        assert!(config.enabled, "{}", entry.model);
+        assert_eq!(config.platform, entry.platform, "{}", entry.model);
+    }
+    let prices = storage.model_prices().await.unwrap();
+    assert!(
+        prices
+            .iter()
+            .any(|p| p.model == "grok-4.6" && p.min_input_tokens == 200_000)
+    );
+    assert!(
+        prices
+            .iter()
+            .any(|p| p.model == "claude-haiku-5.5" && p.min_input_tokens == 100_001)
+    );
+    let models = [supported("gpt-6.1-sol"), supported("future-supported")];
     let (a, b) = tokio::join!(
         storage.sync_supported_models(&models),
         storage.sync_supported_models(&models)
     );
-    assert_eq!(a.unwrap() + b.unwrap(), 3);
-    let config = storage
-        .model_config("chatgpt", "gpt-6.1-sol")
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(config.enabled);
-    assert!(
-        storage
-            .model_config("chatgpt", "gpt-5.5")
-            .await
-            .unwrap()
-            .unwrap()
-            .enabled
-    );
+    assert_eq!(a.unwrap() + b.unwrap(), 1);
     let pending = storage
-        .model_config("chatgpt", "future-supported")
+        .model_config("future-supported")
         .await
         .unwrap()
         .unwrap();
     assert!(!pending.enabled);
-    let prices = storage.model_prices("chatgpt").await.unwrap();
     assert!(!prices.iter().any(|price| price.model == "future-supported"));
     let base = prices
         .iter()
@@ -63,14 +56,17 @@ async fn new_models_are_priced_once_unknown_prices_stay_disabled_and_restarts_ar
         ),
         (2_000_000, 100_000, 2_500_000, 10_000_000)
     );
-    let before = json!([storage.model_configs("chatgpt").await.unwrap(), prices]);
+    let before = json!([
+        storage.model_configs().await.unwrap(),
+        storage.model_prices().await.unwrap()
+    ]);
     storage.close().await;
     let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
     assert_eq!(reopened.sync_supported_models(&models).await.unwrap(), 0);
     assert_eq!(
         json!([
-            reopened.model_configs("chatgpt").await.unwrap(),
-            reopened.model_prices("chatgpt").await.unwrap()
+            reopened.model_configs().await.unwrap(),
+            reopened.model_prices().await.unwrap()
         ]),
         before
     );
@@ -83,7 +79,6 @@ async fn registration_preserves_custom_prices_disabled_models_tombstones_and_req
         .await
         .unwrap();
     let models = [supported("gpt-6.1-sol")];
-    storage.sync_supported_models(&models).await.unwrap();
     let mut record = UsageRecord {
         id: "before-price-edit".into(),
         subject_id: "owner".into(),
@@ -93,14 +88,8 @@ async fn registration_preserves_custom_prices_disabled_models_tombstones_and_req
         ..Default::default()
     };
     storage.insert_usage(&record).await.unwrap();
-    let mut model = storage
-        .model_config("chatgpt", "gpt-6.1-sol")
-        .await
-        .unwrap()
-        .unwrap();
-    let mut custom = preset_model_prices("chatgpt", "gpt-6.1-sol")
-        .unwrap()
-        .remove(0);
+    let mut model = storage.model_config("gpt-6.1-sol").await.unwrap().unwrap();
+    let mut custom = preset_model_prices("gpt-6.1-sol").unwrap().remove(0);
     custom.input_rate = 9_000_000;
     custom.source = "custom".into();
     model.enabled = false;
@@ -111,14 +100,14 @@ async fn registration_preserves_custom_prices_disabled_models_tombstones_and_req
             .unwrap()
     );
     let before = json!([
-        storage.model_config("chatgpt", &model.model).await.unwrap(),
-        storage.model_prices("chatgpt").await.unwrap()
+        storage.model_config(&model.model).await.unwrap(),
+        storage.model_prices().await.unwrap()
     ]);
     assert_eq!(storage.sync_supported_models(&models).await.unwrap(), 0);
     assert_eq!(
         json!([
-            storage.model_config("chatgpt", &model.model).await.unwrap(),
-            storage.model_prices("chatgpt").await.unwrap()
+            storage.model_config(&model.model).await.unwrap(),
+            storage.model_prices().await.unwrap()
         ]),
         before
     );
@@ -137,21 +126,17 @@ async fn registration_preserves_custom_prices_disabled_models_tombstones_and_req
             .cost_nano_usd,
         Some(2_000_000)
     );
-    let current = storage
-        .model_config("chatgpt", &model.model)
-        .await
-        .unwrap()
-        .unwrap();
+    let current = storage.model_config(&model.model).await.unwrap().unwrap();
     assert!(
         storage
-            .delete_model_config("chatgpt", &model.model, current.revision)
+            .delete_model_config(&model.model, current.revision)
             .await
             .unwrap()
     );
     assert_eq!(storage.sync_supported_models(&models).await.unwrap(), 0);
     assert!(
         storage
-            .model_config("chatgpt", &model.model)
+            .model_config(&model.model)
             .await
             .unwrap()
             .unwrap()
@@ -159,7 +144,7 @@ async fn registration_preserves_custom_prices_disabled_models_tombstones_and_req
     );
     assert!(
         !storage
-            .model_prices("chatgpt")
+            .model_prices()
             .await
             .unwrap()
             .iter()
@@ -173,29 +158,88 @@ async fn newly_verified_prices_enable_only_untouched_pending_records() {
     let storage = codex2api_storage::test_support::open(dir.path().join("pending-pg"))
         .await
         .unwrap();
-    sqlx::query("INSERT INTO model_catalog(provider_id,model,kind,enabled) VALUES('chatgpt','gpt-6.1-sol','text',FALSE)").execute(storage.pool()).await.unwrap();
-    let models = [supported("gpt-6.1-sol")];
+    sqlx::query("INSERT INTO model_catalog(model,platform,kind,enabled) VALUES('gpt-pending','chatgpt','text',FALSE)")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE model_catalog SET revision=1 WHERE model='gpt-pending'")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    // A pending marker alone cannot price a model the table does not know.
+    sqlx::query("INSERT INTO meta(key,value) VALUES('model_preset_pending:gpt-pending','1')")
+        .execute(storage.pool())
+        .await
+        .unwrap();
     assert_eq!(
-        storage.sync_supported_models(&models).await.unwrap(),
-        0,
-        "an unmarked disabled record is not ours to enable"
+        storage
+            .sync_supported_models(&[supported("gpt-pending")])
+            .await
+            .unwrap(),
+        0
     );
-    sqlx::query(
-        "INSERT INTO meta(key,value) VALUES('model_preset_pending:chatgpt:gpt-6.1-sol','1')",
-    )
-    .execute(storage.pool())
-    .await
-    .unwrap();
-    assert_eq!(storage.sync_supported_models(&models).await.unwrap(), 1);
+    // An unmarked disabled record of a priced model is an administrator decision.
+    let mut sol = storage.model_config("gpt-6-sol").await.unwrap().unwrap();
+    sol.enabled = false;
+    let prices = storage
+        .model_prices()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.model == "gpt-6-sol")
+        .collect::<Vec<_>>();
     assert!(
         storage
-            .model_config("chatgpt", "gpt-6.1-sol")
+            .save_model_config(&sol, &prices, &[], Some(sol.revision))
+            .await
+            .unwrap()
+    );
+    sqlx::query("DELETE FROM model_prices WHERE model='gpt-6-sol'")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .sync_supported_models(&[supported("gpt-6-sol")])
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        !storage
+            .model_config("gpt-6-sol")
             .await
             .unwrap()
             .unwrap()
             .enabled
     );
-    assert_eq!(storage.sync_supported_models(&models).await.unwrap(), 0);
+    // A seeded, never edited, unpriced row carries the pending marker and is enabled.
+    sqlx::query("INSERT INTO model_catalog(model,platform,kind,enabled) VALUES('gpt-5.6-sol-copy','chatgpt','text',FALSE)")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO meta(key,value) VALUES('model_preset_pending:gpt-5.6-sol-copy','1')")
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    let mut copy = supported("gpt-5.6-sol-copy");
+    copy.preset_key = Some("gpt-5.6-sol".into());
+    assert_eq!(
+        storage
+            .sync_supported_models(&[copy.clone()])
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        storage
+            .model_config("gpt-5.6-sol-copy")
+            .await
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+    assert_eq!(storage.sync_supported_models(&[copy]).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -206,27 +250,17 @@ async fn invalid_seed_rolls_back_the_entire_registration() {
         .unwrap();
     assert!(
         storage
-            .sync_supported_models(&[supported("gpt-6.1-sol"), supported("bad model")])
+            .sync_supported_models(&[supported("gpt-new"), supported("bad model")])
             .await
             .is_err()
     );
-    assert!(
-        storage
-            .model_config("chatgpt", "gpt-6.1-sol")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(storage.model_config("gpt-new").await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn gpt55_global_tier_multipliers_and_cache_writes_keep_request_snapshots() {
     let dir = codex2api_storage::test_support::tempdir().unwrap();
     let storage = codex2api_storage::test_support::open(dir.path().join("gpt55-pg"))
-        .await
-        .unwrap();
-    storage
-        .sync_supported_models(&[supported("gpt-5.5")])
         .await
         .unwrap();
     for (id, tier, input, writes, expected, status) in [

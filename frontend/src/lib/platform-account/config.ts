@@ -56,9 +56,7 @@ export function useConfigForm({
     committed[item.key]?.revision > item.revision ? { ...item, ...committed[item.key] } : item,
   );
   const models = useResource<List<ModelOption>>(
-    items.some((item) => item.key === "conversation_metadata")
-      ? "/models/options?provider_id=chatgpt"
-      : null,
+    items.some((item) => item.key === "conversation_metadata") ? "/models/options" : null,
   );
   useErrorToast(models.error);
   const valueOf = (config: Config) =>

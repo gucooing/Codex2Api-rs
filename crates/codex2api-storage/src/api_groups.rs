@@ -1,19 +1,9 @@
 //! API product policy and public prices. Supplier routing never enters user DTOs.
 use crate::{ImagePrice, ListPage, ModelConfig, ModelPrice, Result, Storage, StorageError};
+use codex2api_common::ModelRule;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, Postgres, QueryBuilder};
 use std::collections::BTreeSet;
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ApiModelRule {
-    pub model: String,
-    pub multiplier: Option<String>,
-    #[serde(default)]
-    pub concurrency_limit: u32,
-    #[serde(default)]
-    pub rpm_limit: u32,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -21,15 +11,15 @@ pub struct ApiGroup {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub provider_id: String,
     pub enabled: bool,
+    /// Supplier pools of any platform; execution picks a member that serves the model.
     pub tag_ids: Vec<String>,
-    pub allowed_models: Vec<String>,
+    /// Manually granted models with their rules; the group's only model access.
+    pub models: Vec<ModelRule>,
     pub multiplier: String,
     pub search_price_usd: Option<String>,
     pub concurrency_limit: u32,
     pub rpm_limit: u32,
-    pub model_rules: Vec<ApiModelRule>,
     pub revision: i64,
 }
 
@@ -38,7 +28,6 @@ pub struct ApiPublicGroup {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub provider_id: String,
     pub multiplier: String,
     pub search_price_usd: Option<String>,
     pub concurrency_limit: u32,
@@ -53,7 +42,8 @@ pub struct ApiListQuery {
     pub user_id: String,
     pub group_id: String,
     pub key_id: String,
-    pub provider_id: String,
+    /// Model platform label filter for catalogs.
+    pub platform: String,
     pub status: String,
     pub page: u32,
     pub page_size: u32,
@@ -67,7 +57,7 @@ impl Default for ApiListQuery {
             user_id: String::new(),
             group_id: String::new(),
             key_id: String::new(),
-            provider_id: String::new(),
+            platform: String::new(),
             status: String::new(),
             page: 1,
             page_size: 20,
@@ -85,7 +75,7 @@ impl ApiListQuery {
                 &self.user_id,
                 &self.group_id,
                 &self.key_id,
-                &self.provider_id,
+                &self.platform,
                 &self.status,
             ]
             .iter()
@@ -115,17 +105,15 @@ struct GroupRow {
     id: String,
     name: String,
     description: String,
-    provider_id: String,
     enabled: bool,
     tag_ids: sqlx::types::Json<Vec<String>>,
-    allowed_models: sqlx::types::Json<Vec<String>>,
+    models: sqlx::types::Json<Vec<ModelRule>>,
     multiplier_micros: i64,
     search_price_nano_usd: Option<i64>,
     #[sqlx(try_from = "i64")]
     concurrency_limit: u32,
     #[sqlx(try_from = "i64")]
     rpm_limit: u32,
-    model_rules: sqlx::types::Json<Vec<ApiModelRule>>,
     revision: i64,
 }
 impl TryFrom<GroupRow> for ApiGroup {
@@ -135,45 +123,115 @@ impl TryFrom<GroupRow> for ApiGroup {
             id: row.id,
             name: row.name,
             description: row.description,
-            provider_id: row.provider_id,
             enabled: row.enabled,
             tag_ids: row.tag_ids.0,
-            allowed_models: row.allowed_models.0,
+            models: row.models.0,
             multiplier: crate::format_units(row.multiplier_micros, 6),
             search_price_usd: row
                 .search_price_nano_usd
                 .map(|price| crate::format_units(price, 9)),
             concurrency_limit: row.concurrency_limit,
             rpm_limit: row.rpm_limit,
-            model_rules: row.model_rules.0,
             revision: row.revision,
         })
     }
 }
 const GROUP_COLUMNS: &str = "g.*,COALESCE((SELECT jsonb_agg(tag_id ORDER BY tag_id) FROM api_group_tags WHERE group_id=g.id),'[]'::jsonb) AS tag_ids";
 
-pub(crate) fn multiplier_micros(value: &str) -> Result<i64> {
+pub fn multiplier_micros(value: &str) -> Result<i64> {
     crate::decimal_units(value, 6)
         .filter(|v| (0..=1_000_000_000).contains(v))
         .ok_or(StorageError::InvalidAdminUpdate(
             "倍率须为 0 到 1000，最多六位小数",
         ))
 }
+
+/// Shared by plans and API groups: names, limits and multipliers of a manual model list.
+pub(crate) fn validate_model_rules(rules: &[ModelRule], limit: usize) -> Result<()> {
+    if rules.len() > limit {
+        return Err(StorageError::InvalidAdminUpdate("模型列表过长"));
+    }
+    let mut seen = BTreeSet::new();
+    for rule in rules {
+        if !codex2api_common::valid_model(&rule.model)
+            || !seen.insert(rule.model.as_str())
+            || rule.concurrency_limit > 1_000_000
+            || rule.rpm_limit > 1_000_000
+        {
+            return Err(StorageError::InvalidAdminUpdate(
+                "模型倍率或限制规则无效或重复",
+            ));
+        }
+        if let Some(value) = &rule.multiplier {
+            multiplier_micros(value)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every listed model must exist in the catalog; deleted tombstones cannot be granted.
+pub(crate) async fn require_catalog_models(
+    connection: &mut PgConnection,
+    models: &[String],
+) -> Result<()> {
+    let models: Vec<&str> = models
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let found: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM model_catalog WHERE deleted=FALSE AND model=ANY($1)",
+    )
+    .bind(&models)
+    .fetch_one(connection)
+    .await?;
+    if found != models.len() as i64 {
+        return Err(StorageError::InvalidAdminUpdate("请先在计费配置中添加模型"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn require_supplier_tags(
+    connection: &mut PgConnection,
+    tags: &[String],
+) -> Result<()> {
+    let tags: Vec<&str> = tags
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let found: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM supplier_tags WHERE id=ANY($1)")
+        .bind(&tags)
+        .fetch_one(connection)
+        .await?;
+    if found != tags.len() as i64 {
+        return Err(StorageError::InvalidAdminUpdate("标签不存在"));
+    }
+    Ok(())
+}
+
 impl ApiGroup {
-    pub fn model_rule(&self, model: &str) -> Option<&ApiModelRule> {
-        self.model_rules.iter().find(|r| r.model == model)
+    pub fn model_rule(&self, model: &str) -> Option<&ModelRule> {
+        self.models.iter().find(|r| r.model == model)
+    }
+    pub fn allows(&self, model: &str) -> bool {
+        self.model_rule(model).is_some()
     }
     pub fn model_multiplier(&self, model: &str) -> &str {
         self.model_rule(model)
             .and_then(|r| r.multiplier.as_deref())
             .unwrap_or(&self.multiplier)
     }
+    pub fn model_names(&self) -> Vec<String> {
+        self.models.iter().map(|r| r.model.clone()).collect()
+    }
     pub(crate) fn public(&self, models_count: i64) -> ApiPublicGroup {
         ApiPublicGroup {
             id: self.id.clone(),
             name: self.name.clone(),
             description: self.description.clone(),
-            provider_id: self.provider_id.clone(),
             multiplier: self.multiplier.clone(),
             search_price_usd: self.search_price_usd.clone(),
             concurrency_limit: self.concurrency_limit,
@@ -233,7 +291,8 @@ impl Storage {
     }
     pub async fn api_group_page(&self, query: &ApiListQuery) -> Result<ListPage<ApiGroup>> {
         query.validate()?;
-        let condition = "g.deleted=FALSE AND ($1='' OR g.provider_id=$2) AND ($3='' OR strpos(lower(g.name||' '||g.description),lower($4))>0)";
+        let condition =
+            "g.deleted=FALSE AND ($1='' OR strpos(lower(g.name||' '||g.description),lower($2))>0)";
         let mut tx = self
             .pool()
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -241,14 +300,12 @@ impl Storage {
         let total: i64 = sqlx::query_scalar(&format!(
             "SELECT COUNT(*) FROM api_groups g WHERE {condition}"
         ))
-        .bind(&query.provider_id)
-        .bind(&query.provider_id)
         .bind(&query.search)
         .bind(&query.search)
         .fetch_one(&mut *tx)
         .await?;
-        let items=sqlx::query_as::<_, GroupRow>(&format!("SELECT {GROUP_COLUMNS} FROM api_groups g WHERE {condition} ORDER BY g.name,g.id LIMIT $5 OFFSET $6"))
-            .bind(&query.provider_id).bind(&query.provider_id).bind(&query.search).bind(&query.search)
+        let items=sqlx::query_as::<_, GroupRow>(&format!("SELECT {GROUP_COLUMNS} FROM api_groups g WHERE {condition} ORDER BY g.name,g.id LIMIT $3 OFFSET $4"))
+            .bind(&query.search).bind(&query.search)
             .bind(i64::from(query.page_size)).bind(query.offset_for(total)).fetch_all(&mut *tx).await?.into_iter().map(TryInto::try_into).collect::<Result<Vec<_>>>()?;
         tx.commit().await?;
         Ok(ListPage {
@@ -260,11 +317,6 @@ impl Storage {
     }
     pub async fn save_api_group(&self, group: &ApiGroup, expected: Option<i64>) -> Result<bool> {
         let multiplier = multiplier_micros(&group.multiplier)?;
-        if group.provider_id != codex2api_common::CHATGPT && group.search_price_usd.is_some() {
-            return Err(StorageError::InvalidAdminUpdate(
-                "只有 ChatGPT 平台可以配置搜索单价",
-            ));
-        }
         let search_price = group
             .search_price_usd
             .as_deref()
@@ -280,36 +332,14 @@ impl Storage {
             || group.name.len() > 160
             || group.description.len() > 2000
             || group.tag_ids.len() > 100
-            || group.allowed_models.len() > 2048
-            || group.model_rules.len() > 2048
             || group.concurrency_limit > 1_000_000
             || group.rpm_limit > 1_000_000
         {
             return Err(StorageError::InvalidAdminUpdate(
-                "API 组名称、介绍、模型或限制无效",
+                "API 组名称、介绍、标签或限制无效",
             ));
         }
-        let mut seen = BTreeSet::new();
-        for model in &group.allowed_models {
-            if !codex2api_common::valid_model(model) || !seen.insert(model) {
-                return Err(StorageError::InvalidAdminUpdate("模型列表无效或重复"));
-            }
-        }
-        seen.clear();
-        for rule in &group.model_rules {
-            if !codex2api_common::valid_model(&rule.model)
-                || !seen.insert(&rule.model)
-                || rule.concurrency_limit > 1_000_000
-                || rule.rpm_limit > 1_000_000
-            {
-                return Err(StorageError::InvalidAdminUpdate(
-                    "模型倍率或限制规则无效或重复",
-                ));
-            }
-            if let Some(value) = &rule.multiplier {
-                multiplier_micros(value)?;
-            }
-        }
+        validate_model_rules(&group.models, 2048)?;
         let mut tx = self.pool().begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':api-group:' || $1,0))")
             .bind(&group.id).execute(&mut *tx).await?;
@@ -325,48 +355,12 @@ impl Storage {
         {
             return Ok(false);
         }
-        if current
-            .as_ref()
-            .is_some_and(|g| g.provider_id != group.provider_id)
-        {
-            return Err(StorageError::InvalidAdminUpdate("API 组的平台不可更改"));
-        }
-        let valid_provider: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM providers WHERE id=$1)")
-                .bind(&group.provider_id)
-                .fetch_one(&mut *tx)
-                .await?;
-        if !valid_provider {
-            return Err(StorageError::InvalidAdminUpdate("平台无效"));
-        }
-        for tag in &group.tag_ids {
-            let valid: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM supplier_tags WHERE id=$1 AND provider_id=$2)",
-            )
-            .bind(tag)
-            .bind(&group.provider_id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if !valid {
-                return Err(StorageError::InvalidAdminUpdate("请选择同平台的标签"));
-            }
-        }
-        for model in group
-            .allowed_models
-            .iter()
-            .chain(group.model_rules.iter().map(|r| &r.model))
-        {
-            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM model_catalog WHERE provider_id=$1 AND model=$2 AND deleted=FALSE)").bind(&group.provider_id).bind(model).fetch_one(&mut *tx).await?;
-            if !valid {
-                return Err(StorageError::InvalidAdminUpdate(
-                    "请先在计费配置中添加同平台模型",
-                ));
-            }
-        }
-        sqlx::query("INSERT INTO api_groups(id,name,description,provider_id,enabled,allowed_models,multiplier_micros,search_price_nano_usd,concurrency_limit,rpm_limit,model_rules,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,enabled=excluded.enabled,allowed_models=excluded.allowed_models,multiplier_micros=excluded.multiplier_micros,search_price_nano_usd=excluded.search_price_nano_usd,concurrency_limit=excluded.concurrency_limit,rpm_limit=excluded.rpm_limit,model_rules=excluded.model_rules,revision=api_groups.revision+1")
-            .bind(&group.id).bind(group.name.trim()).bind(group.description.trim()).bind(&group.provider_id).bind(group.enabled)
-            .bind(serde_json::to_string(&group.allowed_models)?).bind(multiplier).bind(search_price).bind(i64::from(group.concurrency_limit)).bind(i64::from(group.rpm_limit))
-            .bind(serde_json::to_string(&group.model_rules)?).bind(chrono::Utc::now().to_rfc3339()).execute(&mut *tx).await?;
+        require_supplier_tags(&mut tx, &group.tag_ids).await?;
+        require_catalog_models(&mut tx, &group.model_names()).await?;
+        sqlx::query("INSERT INTO api_groups(id,name,description,enabled,models,multiplier_micros,search_price_nano_usd,concurrency_limit,rpm_limit,created_at) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,enabled=excluded.enabled,models=excluded.models,multiplier_micros=excluded.multiplier_micros,search_price_nano_usd=excluded.search_price_nano_usd,concurrency_limit=excluded.concurrency_limit,rpm_limit=excluded.rpm_limit,revision=api_groups.revision+1")
+            .bind(&group.id).bind(group.name.trim()).bind(group.description.trim()).bind(group.enabled)
+            .bind(serde_json::to_string(&group.models)?).bind(multiplier).bind(search_price).bind(i64::from(group.concurrency_limit)).bind(i64::from(group.rpm_limit))
+            .bind(chrono::Utc::now().to_rfc3339()).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM api_group_tags WHERE group_id=$1")
             .bind(&group.id)
             .execute(&mut *tx)
@@ -454,8 +448,7 @@ fn standard_price_multiplier(price: &ModelPrice, prices: &[ModelPrice]) -> Optio
     let base = prices
         .iter()
         .filter(|p| {
-            p.provider_id == price.provider_id
-                && p.model == price.model
+            p.model == price.model
                 && p.tier == "standard"
                 && p.min_input_tokens <= price.min_input_tokens
         })
@@ -494,7 +487,7 @@ fn standard_price_multiplier(price: &ModelPrice, prices: &[ModelPrice]) -> Optio
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ApiCatalogModel {
-    pub provider_id: String,
+    pub platform: String,
     pub model: String,
     pub kind: String,
     pub multiplier: String,
@@ -520,7 +513,7 @@ fn scaled(value: i128, places: u32) -> String {
 }
 
 /// One model policy for catalogs and admission. Tags select execution suppliers;
-/// only the platform catalog and the group's optional allowlist grant model access.
+/// the enabled catalog and the group's manual model list grant model access.
 pub(crate) fn model_catalog_query<'a>(
     projection: &'static str,
     group: Option<&'a ApiGroup>,
@@ -531,20 +524,13 @@ pub(crate) fn model_catalog_query<'a>(
     ));
     if let Some(group) = group {
         query
-            .push(" AND m.provider_id=")
-            .push_bind(&group.provider_id);
-        if !group.allowed_models.is_empty() {
-            query
-                .push(" AND m.model = ANY(")
-                .push_bind(&group.allowed_models)
-                .push(")");
-        }
+            .push(" AND m.model = ANY(")
+            .push_bind(group.model_names())
+            .push(")");
     }
     if let Some(filters) = filters {
-        if !filters.provider_id.is_empty() {
-            query
-                .push(" AND m.provider_id=")
-                .push_bind(&filters.provider_id);
+        if !filters.platform.is_empty() {
+            query.push(" AND m.platform=").push_bind(&filters.platform);
         }
         if !filters.search.is_empty() {
             query
@@ -566,21 +552,26 @@ pub(crate) async fn catalog_on(
         .fetch_one(&mut *connection)
         .await?;
     let configs: Vec<ModelConfig> = model_catalog_query("m.*", group, query)?
-        .push(" ORDER BY m.provider_id,m.model LIMIT ")
+        .push(" ORDER BY m.platform,m.model LIMIT ")
         .push_bind(query.map(|q| i64::from(q.page_size)))
         .push(" OFFSET ")
         .push_bind(query.map_or(0, |q| q.offset_for(total)))
         .build_query_as()
         .fetch_all(&mut *connection)
         .await?;
-    let selected = serde_json::to_string(
-        &configs
-            .iter()
-            .map(|m| (&m.provider_id, &m.model))
-            .collect::<Vec<_>>(),
-    )?;
-    let prices:Vec<ModelPrice>=sqlx::query_as("SELECT p.* FROM model_prices p JOIN jsonb_array_elements($1::jsonb) j ON p.provider_id=(j.value::jsonb #>> '{0}') AND p.model=(j.value::jsonb #>> '{1}') ORDER BY p.provider_id,p.model,p.tier,p.min_input_tokens").bind(&selected).fetch_all(&mut *connection).await?;
-    let images:Vec<ImagePrice>=sqlx::query_as("SELECT p.* FROM model_image_prices p JOIN jsonb_array_elements($1::jsonb) j ON p.provider_id=(j.value::jsonb #>> '{0}') AND p.model=(j.value::jsonb #>> '{1}') ORDER BY p.provider_id,p.model,p.resolution").bind(&selected).fetch_all(&mut *connection).await?;
+    let selected: Vec<String> = configs.iter().map(|m| m.model.clone()).collect();
+    let prices: Vec<ModelPrice> = sqlx::query_as(
+        "SELECT p.* FROM model_prices p WHERE p.model=ANY($1) ORDER BY p.model,p.tier,p.min_input_tokens",
+    )
+    .bind(&selected)
+    .fetch_all(&mut *connection)
+    .await?;
+    let images: Vec<ImagePrice> = sqlx::query_as(
+        "SELECT p.* FROM model_image_prices p WHERE p.model=ANY($1) ORDER BY p.model,p.resolution",
+    )
+    .bind(&selected)
+    .fetch_all(&mut *connection)
+    .await?;
     let mut items = Vec::new();
     for config in configs {
         let multiplier = group.map_or("1", |g| g.model_multiplier(&config.model));
@@ -588,7 +579,7 @@ pub(crate) async fn catalog_on(
         let rule = group.and_then(|g| g.model_rule(&config.model));
         let token_prices = prices
             .iter()
-            .filter(|p| p.provider_id == config.provider_id && p.model == config.model)
+            .filter(|p| p.model == config.model)
             .map(|p| ApiTokenPrice {
                 tier: p.tier.clone(),
                 min_input_tokens: p.min_input_tokens,
@@ -606,19 +597,19 @@ pub(crate) async fn catalog_on(
             .collect();
         let image_prices = images
             .iter()
-            .filter(|p| p.provider_id == config.provider_id && p.model == config.model)
+            .filter(|p| p.model == config.model)
             .map(|p| ApiImagePrice {
                 resolution: p.resolution.clone(),
                 base_price_usd: crate::format_units(p.price_nano_usd, 9),
                 price_usd: scaled(i128::from(p.price_nano_usd) * factor, 15),
             })
             .collect();
-        let search_price = (config.provider_id == codex2api_common::CHATGPT
-            && config.kind == "text")
+        // Search is a ChatGPT protocol operation; it is displayed with that platform's text models.
+        let search_price = (config.platform == codex2api_common::CHATGPT && config.kind == "text")
             .then(|| group.and_then(|g| g.search_price_usd.clone()))
             .flatten();
         items.push(ApiCatalogModel {
-            provider_id: config.provider_id,
+            platform: config.platform,
             model: config.model.clone(),
             kind: config.kind,
             multiplier: multiplier.into(),

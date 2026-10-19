@@ -89,26 +89,40 @@ async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_indep
     for id in [&first, &second] {
         assert!(
             storage
-                .admit_virtual_request(id, true)
+                .admit_virtual_request(id, None, true)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             storage
-                .admit_virtual_request(id, true)
+                .admit_virtual_request(id, None, true)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert_eq!(
-            storage.admit_virtual_request(id, true).await.unwrap(),
+            storage.admit_virtual_request(id, None, true).await.unwrap(),
             Some(60)
         );
     }
-    let permit = storage.acquire_consumer(&first).await.unwrap().unwrap();
-    assert!(storage.acquire_consumer(&first).await.unwrap().is_none());
-    let other = storage.acquire_consumer(&second).await.unwrap().unwrap();
+    let permit = storage
+        .acquire_consumer(&first, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        storage
+            .acquire_consumer(&first, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let other = storage
+        .acquire_consumer(&second, None)
+        .await
+        .unwrap()
+        .unwrap();
     drop((permit, other));
     storage
         .save_virtual_request_limits(&second, Some(0), Some(3))
@@ -116,7 +130,7 @@ async fn subscriptions_are_explicit_and_same_platform_limits_and_state_are_indep
         .unwrap();
     assert!(
         storage
-            .admit_virtual_request(&second, true)
+            .admit_virtual_request(&second, None, true)
             .await
             .unwrap()
             .is_none()

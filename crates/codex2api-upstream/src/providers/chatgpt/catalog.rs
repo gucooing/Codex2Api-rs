@@ -45,11 +45,6 @@ pub fn supported_models() -> Vec<codex2api_common::SupportedModel> {
         .flatten()
         .filter(|model| model["visibility"] == "list" && model["supported_in_api"] == true)
         .filter_map(|model| model["slug"].as_str())
-        .map(|model| codex2api_common::SupportedModel {
-            provider_id: codex2api_common::CHATGPT.into(),
-            model: model.into(),
-            kind: "text".into(),
-            preset_key: None,
-        })
+        .map(|model| codex2api_common::SupportedModel::builtin(codex2api_common::CHATGPT, model))
         .collect()
 }

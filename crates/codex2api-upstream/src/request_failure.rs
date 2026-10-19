@@ -79,6 +79,13 @@ impl RequestFailureLog {
         });
     }
 
+    /// The platform the ledger identifies the request with, once it is known.
+    pub fn provider(provider: &str) {
+        let _ = CURRENT.try_with(|current| {
+            current.state.lock().unwrap().record.provider_id = provider.to_owned();
+        });
+    }
+
     pub fn diagnostic(message: &str) {
         let _ = CURRENT.try_with(|current| {
             current.state.lock().unwrap().diagnostic = Some(diagnostic_text(message, 512));

@@ -74,7 +74,7 @@ pub(crate) trait ProtocolObserver: Send + Sync {
 }
 pub(crate) struct RequestLog {
     supplier_permit: Option<codex2api_storage::RuntimePermit>,
-    consumer_permit: Option<codex2api_storage::RuntimePermit>,
+    consumer_permits: Vec<codex2api_storage::RuntimePermit>,
     timing: Option<codex2api_upstream::ResponseTiming>,
     attempt_reported: bool,
     observer: Option<Box<dyn ProtocolObserver>>,
@@ -91,8 +91,8 @@ impl RequestLog {
     pub(crate) fn set_supplier_permit(&mut self, permit: codex2api_storage::RuntimePermit) {
         self.supplier_permit = Some(permit);
     }
-    pub(crate) fn set_consumer_permit(&mut self, permit: codex2api_storage::RuntimePermit) {
-        self.consumer_permit = Some(permit);
+    pub(crate) fn set_consumer_permits(&mut self, permits: Vec<codex2api_storage::RuntimePermit>) {
+        self.consumer_permits = permits;
     }
     pub(crate) fn release_supplier_permit(&mut self) {
         self.supplier_permit = None;
@@ -124,7 +124,7 @@ impl RequestLog {
             self.attempt_reported = true;
         }
         self.supplier_permit = None;
-        self.consumer_permit = None;
+        self.consumer_permits.clear();
     }
     pub(crate) fn set_protocol_observer(&mut self, observer: impl ProtocolObserver + 'static) {
         self.observer = Some(Box::new(observer));
@@ -214,7 +214,7 @@ impl RequestLog {
         codex2api_upstream::RequestFailureLog::recorded();
         Ok(Self {
             supplier_permit: None,
-            consumer_permit: None,
+            consumer_permits: Vec::new(),
             attempt_reported: false,
             timing: None,
             observer: None,
@@ -1935,7 +1935,7 @@ mod tests {
             .await
             .unwrap();
         let model = ModelConfig {
-            provider_id: "chatgpt".into(),
+            platform: "chatgpt".into(),
             model: "image-test".into(),
             kind: "image".into(),
             enabled: true,
@@ -1948,13 +1948,11 @@ mod tests {
                 &[],
                 &[
                     ImagePrice {
-                        provider_id: "chatgpt".into(),
                         model: model.model.clone(),
                         resolution: "1K".into(),
                         price_nano_usd: 40_000_000,
                     },
                     ImagePrice {
-                        provider_id: "chatgpt".into(),
                         model: model.model.clone(),
                         resolution: "2K".into(),
                         price_nano_usd: 80_000_000,
@@ -1995,7 +1993,7 @@ mod tests {
         );
         assert!(
             storage
-                .set_model_enabled("chatgpt", &model.model, false, 1)
+                .set_model_enabled(&model.model, false, 1)
                 .await
                 .unwrap()
         );
@@ -2324,7 +2322,7 @@ mod tests {
         };
         storage.save_account_fixture(&consumer).await.unwrap();
         for model in ["warmup", "one", "two", "interrupted", "voice-model"] {
-            sqlx::query("INSERT INTO model_catalog(provider_id,model,kind) VALUES('chatgpt',$1,'text') ON CONFLICT DO NOTHING").bind(model).execute(storage.pool()).await.unwrap();
+            sqlx::query("INSERT INTO model_catalog(model,platform,kind) VALUES($1,'chatgpt','text') ON CONFLICT DO NOTHING").bind(model).execute(storage.pool()).await.unwrap();
             storage
                 .add_supplier_model(&supplier.id, model)
                 .await

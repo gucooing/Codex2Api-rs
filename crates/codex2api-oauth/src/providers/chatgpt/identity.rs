@@ -69,9 +69,7 @@ pub(crate) async fn model_catalog(
     owner: &str,
     value: &mut Value,
 ) -> crate::Result<()> {
-    let models = storage
-        .available_virtual_models(owner, codex2api_common::CHATGPT)
-        .await?;
+    let models = storage.available_virtual_models(owner).await?;
     let allowed: std::collections::BTreeSet<_> = models
         .iter()
         .filter(|m| m.kind == "text")
@@ -171,9 +169,7 @@ pub(crate) async fn model_catalog(
 
 pub(crate) async fn codex_model_catalog(storage: &Storage, owner: &str) -> crate::Result<Value> {
     let ultrafast = super::model_tiers::ultrafast_models(storage).await?;
-    let models = storage
-        .available_virtual_models(owner, codex2api_common::CHATGPT)
-        .await?;
+    let models = storage.available_virtual_models(owner).await?;
     let descriptors = models
         .iter()
         .filter(|m| m.kind == "text")

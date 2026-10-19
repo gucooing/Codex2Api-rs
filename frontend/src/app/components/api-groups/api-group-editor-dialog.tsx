@@ -1,6 +1,6 @@
 "use client";
-import { ApiGroupModelRules } from "@/app/components/api-groups/api-group-model-rules";
 import { useApiGroupEditor } from "@/app/data/api-groups";
+import { ModelRulesTable } from "@/components/forms/model-rules-table";
 import { ApiGroupSearchPrice } from "@/components/providers/chatgpt/billing";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,19 +22,12 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import type { ApiGroup } from "@/lib/api-access";
-import { providerOptions } from "@/lib/providers";
+import { providerLabel } from "@/lib/providers";
 
 export function ApiGroupEditorDialog({
   group,
@@ -47,20 +40,25 @@ export function ApiGroupEditorDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const editor = useApiGroupEditor(group, ready, onSaved);
   const {
     id,
     value,
     update,
-    setProvider,
     limits,
     setLimits,
+    rules,
+    setRule,
+    modelSearch,
+    setModelSearch,
     tags,
+    models,
     toggleTag,
+    toggleModel,
+    selectVisible,
     busy,
     disabled,
     submit,
-  } = editor;
+  } = useApiGroupEditor(group, ready, onSaved);
   return (
     <Dialog
       open
@@ -92,37 +90,16 @@ export function ApiGroupEditorDialog({
               <TabsContent value="group" className="pr-3">
                 <FieldSet disabled={disabled}>
                   <FieldGroup className="gap-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Field>
-                        <FieldLabel htmlFor={id + "-name"}>名称</FieldLabel>
-                        <Input
-                          id={id + "-name"}
-                          required
-                          maxLength={128}
-                          value={value.name}
-                          onChange={(event) => update("name", event.target.value)}
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor={id + "-provider"}>所属平台</FieldLabel>
-                        <Select
-                          value={value.provider_id}
-                          disabled={Boolean(group.id)}
-                          onValueChange={setProvider}
-                        >
-                          <SelectTrigger id={id + "-provider"} className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent position="popper">
-                            {providerOptions.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                    </div>
+                    <Field>
+                      <FieldLabel htmlFor={id + "-name"}>名称</FieldLabel>
+                      <Input
+                        id={id + "-name"}
+                        required
+                        maxLength={128}
+                        value={value.name}
+                        onChange={(event) => update("name", event.target.value)}
+                      />
+                    </Field>
                     <Field>
                       <FieldLabel htmlFor={id + "-description"}>介绍</FieldLabel>
                       <Textarea
@@ -151,21 +128,21 @@ export function ApiGroupEditorDialog({
                               checked={value.tag_ids.includes(tag.id)}
                               onCheckedChange={(checked) => toggleTag(tag.id, checked === true)}
                             />
-                            <FieldLabel htmlFor={id + "-tag-" + tag.id}>{tag.name}</FieldLabel>
+                            <FieldLabel htmlFor={id + "-tag-" + tag.id}>
+                              {tag.name} · {providerLabel(tag.provider_id)}
+                            </FieldLabel>
                           </Field>
                         ))}
                       </div>
                       {tags.ready && tags.data?.items.length === 0 && (
-                        <FieldDescription>该平台暂无标签。</FieldDescription>
+                        <FieldDescription>暂无标签。</FieldDescription>
                       )}
                     </FieldSet>
-                    {value.provider_id === "chatgpt" && (
-                      <ApiGroupSearchPrice
-                        id={id + "-search-price"}
-                        value={value.search_price_usd}
-                        onChange={(price) => update("search_price_usd", price)}
-                      />
-                    )}
+                    <ApiGroupSearchPrice
+                      id={id + "-search-price"}
+                      value={value.search_price_usd}
+                      onChange={(price) => update("search_price_usd", price)}
+                    />
                     <div className="grid gap-3 sm:grid-cols-3">
                       <Field>
                         <FieldLabel htmlFor={id + "-multiplier"}>组计费倍率</FieldLabel>
@@ -209,7 +186,19 @@ export function ApiGroupEditorDialog({
                 </FieldSet>
               </TabsContent>
               <TabsContent value="models" className="pr-3">
-                <ApiGroupModelRules editor={editor} />
+                <ModelRulesTable
+                  id={id}
+                  options={models.data?.items}
+                  ready={models.ready}
+                  rules={rules}
+                  baseMultiplier={value.multiplier}
+                  search={modelSearch}
+                  onSearch={setModelSearch}
+                  onToggle={toggleModel}
+                  onSelectVisible={selectVisible}
+                  onRule={setRule}
+                  disabled={busy}
+                />
               </TabsContent>
             </ScrollArea>
           </Tabs>

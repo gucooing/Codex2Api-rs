@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 pub(super) async fn ultrafast_models(storage: &Storage) -> crate::Result<BTreeSet<String>> {
     Ok(storage
-        .model_prices(codex2api_common::CHATGPT)
+        .model_prices()
         .await?
         .into_iter()
         .filter(|price| price.tier == "ultrafast" && price.min_input_tokens == 0)

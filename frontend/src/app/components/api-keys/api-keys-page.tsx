@@ -32,7 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { date } from "@/lib/format";
-import { apiCost, apiKeyStatus, apiPlatform, apiTokens } from "@/lib/api-access";
+import { apiCost, apiKeyStatus, apiTokens } from "@/lib/api-access";
 import {
   ChevronLeft,
   ChevronRight,
@@ -194,10 +194,7 @@ export default function ApiKeysPage() {
                     </p>
                     <p className="font-mono text-xs text-muted-foreground">{key.key_prefix}…</p>
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("API 组")}>
-                    {key.group_name}
-                    <p className="text-xs text-muted-foreground">{apiPlatform(key.provider_id)}</p>
-                  </TableCell>
+                  <TableCell hidden={!columns.isVisible("API 组")}>{key.group_name}</TableCell>
                   <TableCell hidden={!columns.isVisible("状态")}>
                     <Badge variant={key.enabled && !key.revoked_at ? "secondary" : "outline"}>
                       {apiKeyStatus(key)}

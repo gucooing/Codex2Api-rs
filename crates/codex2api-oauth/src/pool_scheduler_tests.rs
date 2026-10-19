@@ -87,7 +87,7 @@ async fn fixture_for(
         .unwrap();
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            provider_id: provider.into(),
+            platform: provider.into(),
             model: "fixture-model".into(),
             kind: "text".into(),
             preset_key: None,
@@ -107,7 +107,7 @@ async fn fixture_for(
         .await
         .unwrap();
     storage
-        .save_pool_route("owner", provider, Some("pool"), Some(1))
+        .save_pool_route("owner", provider, Some(&["pool".into()]), Some(1))
         .await
         .unwrap();
     let mut settings = storage.gateway_settings().await.unwrap();
@@ -158,7 +158,7 @@ async fn both_providers_share_concurrent_scheduling_and_recheck_stale_model_snap
             assert_eq!(state.storage.supplier_metrics("supplier").active, 0);
             let cached = state
                 .storage
-                .pool_candidates("pool", provider, request.model.as_deref())
+                .pool_candidates("pool", Some(provider), request.model.as_deref())
                 .await
                 .unwrap();
             assert_eq!(cached.len(), 1);

@@ -262,13 +262,16 @@ async fn quote_on(
             "所选支付方式不可用，请选择钱包余额",
         ));
     }
-    let plan: VirtualPlan =
-        sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1 AND revision=$2")
-            .bind(&input.plan_id)
-            .bind(input.plan_revision)
-            .fetch_optional(&mut *connection)
-            .await?
-            .ok_or_else(|| checkout_error("plan_changed", "套餐信息已变化，请重新预览"))?;
+    let plan: VirtualPlan = sqlx::query_as(&format!(
+        "SELECT {} FROM virtual_plans p WHERE p.id=$1 AND p.revision=$2",
+        crate::virtual_plans::PLAN_COLUMNS
+    ))
+    .bind(&input.plan_id)
+    .bind(input.plan_revision)
+    .fetch_optional(&mut *connection)
+    .await?
+    .ok_or_else(|| checkout_error("plan_changed", "套餐信息已变化，请重新预览"))?;
+    let platform = plan.provider_id.as_str();
     if !plan.allow_purchase {
         return Err(checkout_error("plan_not_for_sale", "该套餐已关闭购买"));
     }
@@ -279,7 +282,7 @@ async fn quote_on(
     let current = crate::user_subscriptions::subscription_account(
         &mut *connection,
         owner,
-        &plan.provider_id,
+        platform,
         input.subscription_id.as_deref(),
     )
     .await?;
@@ -371,7 +374,7 @@ async fn quote_on(
     };
     Ok(CheckoutQuote {
         input: input.clone(),
-        provider_id: plan.provider_id,
+        provider_id: platform.to_owned(),
         plan_name: plan.name,
         kind: kind.into(),
         subscription_id: current.as_ref().map(|(a, _)| a.id.clone()),
@@ -618,11 +621,13 @@ impl Storage {
                 "订单已过期，请重新预览并确认订单",
             ));
         }
-        let plan: Option<VirtualPlan> =
-            sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1 FOR SHARE")
-                .bind(&order.plan_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let plan: Option<VirtualPlan> = sqlx::query_as(&format!(
+            "SELECT {} FROM virtual_plans p WHERE p.id=$1 FOR SHARE OF p",
+            crate::virtual_plans::PLAN_COLUMNS
+        ))
+        .bind(&order.plan_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         if let Some(id) = order.subscription_id.as_deref() {
             crate::storage::lock_subscription(&mut tx, id).await?;
         }

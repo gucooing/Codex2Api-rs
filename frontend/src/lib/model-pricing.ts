@@ -1,26 +1,17 @@
 import type { ImagePrice, Model, ModelPreset, TokenPrice } from "./api";
 
-export function findModelPreset(
-  presets: ModelPreset[] | undefined,
-  provider: string,
-  model: string,
-) {
-  return presets?.find(
-    (preset) => preset.provider_id === provider && preset.model === model.trim(),
-  );
+export function findModelPreset(presets: ModelPreset[] | undefined, model: string) {
+  return presets?.find((preset) => preset.model === model.trim());
 }
 
 export function withModelPreset(model: Model, preset: ModelPreset): Model {
-  if (
-    !preset.token_prices.length ||
-    model.provider_id !== preset.provider_id ||
-    model.model.trim() !== preset.model
-  ) {
+  if (!preset.token_prices.length || model.model.trim() !== preset.model) {
     throw new Error("该模型没有完整预设价格。");
   }
   return {
     ...model,
     model: preset.model,
+    platform: preset.platform,
     kind: preset.kind,
     token_prices: preset.token_prices.map((price) => ({ ...price })),
     image_prices: [],

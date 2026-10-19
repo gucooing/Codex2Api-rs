@@ -147,7 +147,7 @@ pub(crate) async fn insert_usage_on(
     }
     let source_name: Option<String> = if record.subject_kind == "virtual_account" {
         sqlx::query_scalar(
-            "SELECT p.name FROM platform_accounts a JOIN virtual_plans p ON p.id=a.plan_id AND p.provider_id=a.provider_id WHERE a.id=$1 AND a.provider_id=$2"
+            "SELECT p.name FROM platform_accounts a JOIN virtual_plans p ON p.id=a.plan_id WHERE a.id=$1 AND a.provider_id=$2"
         )
         .bind(&record.subject_id).bind(&record.provider_id)
         .fetch_optional(&mut *connection).await?

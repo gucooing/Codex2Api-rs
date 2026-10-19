@@ -74,11 +74,7 @@ pub(crate) async fn admit(
         .as_deref()
         .filter(|model| codex2api_common::valid_model(model))
         .ok_or_else(|| ApiError::bad_request("model must name a configured model"))?;
-    let rule = principal
-        .group
-        .model_rules
-        .iter()
-        .find(|rule| rule.model == model);
+    let rule = principal.group.model_rule(model);
     let limits = Limits {
         group_concurrency: principal.group.concurrency_limit,
         group_rpm: principal.group.rpm_limit,
@@ -90,7 +86,6 @@ pub(crate) async fn admit(
     let started = clock.started;
     let record = UsageRecord {
         id: uuid::Uuid::new_v4().to_string(),
-        provider_id: principal.group.provider_id.clone(),
         subject_id: principal.key_id.clone(),
         subject_kind: "api_key".into(),
         endpoint: endpoint.into(),
@@ -118,7 +113,7 @@ pub(crate) async fn admit(
         status: "in_progress".into(),
         ..Default::default()
     };
-    state.storage.admit_api_request(principal, &record).await?;
+    let record = state.storage.admit_api_request(principal, &record).await?;
     let mut log = ApiLog::new(state.storage.clone(), record, started);
     let permit = match state
         .runtime

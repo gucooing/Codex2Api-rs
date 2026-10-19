@@ -1,8 +1,9 @@
 //! PostgreSQL persistence for administrators, provider accounts, virtual accounts and usage.
 //!
 //! `Storage` is the repository entry point; `types` contains persisted records;
-//! `password` and `token` implement credential primitives. schema.sql defines fresh
-//! databases. This crate does not register HTTP routes or call official services.
+//! `password` and `token` implement credential primitives. `migrations/0000_baseline.sql`
+//! creates fresh databases and numbered migrations evolve every database. This crate
+//! does not register HTTP routes or call official services.
 
 mod account_scope;
 pub use account_scope::AccountScope;
@@ -10,12 +11,13 @@ mod admission_cache;
 mod api_access;
 mod api_admission;
 pub use admission_cache::{AdmissionError, ApiLimits, ApiPermit};
+pub use api_admission::chatgpt_only_endpoint;
 mod api_groups;
 mod usage_wallet;
 pub use api_access::{ApiKeyView, ApiPrincipal, CreatedApiKey};
 pub use api_groups::{
-    ApiCatalogModel, ApiGroup, ApiImagePrice, ApiListQuery, ApiModelRule, ApiPublicGroup,
-    ApiTokenPrice,
+    ApiCatalogModel, ApiGroup, ApiImagePrice, ApiListQuery, ApiPublicGroup, ApiTokenPrice,
+    multiplier_micros,
 };
 #[cfg(test)]
 extern crate self as codex2api_storage;
@@ -41,7 +43,7 @@ mod entitlements;
 mod error;
 mod execution_routes;
 pub use entitlements::EffectiveEntitlements;
-pub use execution_routes::ExecutionRoute;
+pub use execution_routes::{ExecutionRoute, RouteOverride};
 mod client_fields;
 mod client_ownership;
 mod desktop_support;

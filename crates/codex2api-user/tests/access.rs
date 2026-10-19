@@ -383,7 +383,7 @@ async fn orders_show_exact_quote_and_require_owner_session_csrf_and_server_amoun
     let mut plan = storage.virtual_plan("plus").await.unwrap().unwrap();
     plan.config["sale_price_usd"] = json!("12.34");
     plan.config["duration_days"] = json!(30);
-    plan.config["supplier_tag_id"] = json!("private-pool");
+    plan.tag_ids = vec!["private-pool".into()];
     storage
         .save_virtual_plan(&plan, Some(plan.revision))
         .await
@@ -615,6 +615,7 @@ async fn user_reads_are_owner_scoped_and_mutations_require_their_browser_csrf() 
             "token_hash",
             "supplier_account_id",
             "supplier_tag_id",
+            "private-pool",
             "installation_id",
         ] {
             assert!(!text.contains(secret), "{path}: {secret}");

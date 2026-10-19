@@ -19,7 +19,6 @@ pub struct ApiKeyView {
     pub name: String,
     pub group_id: String,
     pub group_name: String,
-    pub provider_id: String,
     pub key_prefix: String,
     pub enabled: bool,
     pub revoked_at: Option<String>,
@@ -47,7 +46,6 @@ struct KeyRow {
     name: String,
     group_id: String,
     group_name: String,
-    provider_id: String,
     key_prefix: String,
     enabled: bool,
     revoked_at: Option<String>,
@@ -69,7 +67,6 @@ impl KeyRow {
             name: self.name,
             group_id: self.group_id,
             group_name: self.group_name,
-            provider_id: self.provider_id,
             key_prefix: self.key_prefix,
             enabled: self.enabled,
             revoked_at: self.revoked_at,
@@ -86,7 +83,7 @@ impl KeyRow {
         }
     }
 }
-const KEY_COLUMNS:&str="k.id,k.name,k.group_id,g.name AS group_name,g.provider_id,k.key_prefix,k.enabled,k.revoked_at,k.created_at,k.last_used_at,k.revision,k.user_id,u.username,
+const KEY_COLUMNS:&str="k.id,k.name,k.group_id,g.name AS group_name,k.key_prefix,k.enabled,k.revoked_at,k.created_at,k.last_used_at,k.revision,k.user_id,u.username,
  (SELECT COUNT(*) FROM usage_records r WHERE r.key_id=k.id) AS total_requests,
  (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(input_tokens)=COUNT(*) THEN SUM(input_tokens)::bigint END FROM usage_records r WHERE r.key_id=k.id) AS input_tokens,
  (SELECT CASE WHEN COUNT(*)=0 THEN 0 WHEN COUNT(output_tokens)=COUNT(*) THEN SUM(output_tokens)::bigint END FROM usage_records r WHERE r.key_id=k.id) AS output_tokens,
@@ -137,7 +134,7 @@ impl Storage {
     ) -> Result<ListPage<ApiKeyView>> {
         query.validate()?;
         let selected_owner = owner.unwrap_or(&query.user_id);
-        let condition = "($1='' OR k.user_id=$2) AND ($3='' OR k.group_id=$4) AND ($5='' OR k.id=$6) AND ($7='' OR g.provider_id=$8) AND ($9='' OR strpos(lower(k.name||' '||k.key_prefix||' '||u.username),lower($10))>0) AND ($11='' OR ($12 IN ('active','enabled') AND k.enabled=TRUE AND k.revoked_at IS NULL) OR ($13='disabled' AND k.enabled=FALSE AND k.revoked_at IS NULL) OR ($14='revoked' AND k.revoked_at IS NOT NULL))";
+        let condition = "($1='' OR k.user_id=$2) AND ($3='' OR k.group_id=$4) AND ($5='' OR k.id=$6) AND ($7='' OR strpos(lower(k.name||' '||k.key_prefix||' '||u.username),lower($8))>0) AND ($9='' OR ($10 IN ('active','enabled') AND k.enabled=TRUE AND k.revoked_at IS NULL) OR ($11='disabled' AND k.enabled=FALSE AND k.revoked_at IS NULL) OR ($12='revoked' AND k.revoked_at IS NOT NULL))";
         let mut tx = self
             .pool()
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -146,10 +143,10 @@ impl Storage {
             crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
         }
         let total:i64=sqlx::query_scalar(&format!("SELECT COUNT(*) FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {condition}"))
-            .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id).bind(&query.provider_id).bind(&query.provider_id)
+            .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id)
             .bind(&query.search).bind(&query.search).bind(&query.status).bind(&query.status).bind(&query.status).bind(&query.status).fetch_one(&mut *tx).await?;
-        let items=sqlx::query_as::<_,KeyRow>(&format!("SELECT {KEY_COLUMNS} FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {condition} ORDER BY k.created_at DESC,k.id LIMIT $15 OFFSET $16"))
-            .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id).bind(&query.provider_id).bind(&query.provider_id)
+        let items=sqlx::query_as::<_,KeyRow>(&format!("SELECT {KEY_COLUMNS} FROM api_keys k JOIN regular_users u ON u.id=k.user_id JOIN api_groups g ON g.id=k.group_id WHERE {condition} ORDER BY k.created_at DESC,k.id LIMIT $13 OFFSET $14"))
+            .bind(selected_owner).bind(selected_owner).bind(&query.group_id).bind(&query.group_id).bind(&query.key_id).bind(&query.key_id)
             .bind(&query.search).bind(&query.search).bind(&query.status).bind(&query.status).bind(&query.status).bind(&query.status)
             .bind(i64::from(query.page_size)).bind(query.offset_for(total)).fetch_all(&mut *tx).await?.into_iter().map(|r|r.view(owner.is_none())).collect();
         tx.commit().await?;
@@ -205,18 +202,12 @@ impl UserStore {
         };
         let (total, items) =
             crate::api_groups::catalog_on(&mut tx, group.as_ref(), Some(query)).await?;
-        let provider = group
-            .as_ref()
-            .map(|g| g.provider_id.as_str())
-            .unwrap_or(query.provider_id.as_str());
-        let operations = match provider {
-            "" | codex2api_common::CHATGPT
-                if query.provider_id.is_empty()
-                    || query.provider_id == codex2api_common::CHATGPT =>
-            {
-                crate::providers::chatgpt::catalog_operation_prices(&mut tx, group.as_ref()).await?
-            }
-            _ => Vec::new(),
+        // Search is a ChatGPT protocol operation shown with that platform's catalog.
+        let operations = if query.platform.is_empty() || query.platform == codex2api_common::CHATGPT
+        {
+            crate::providers::chatgpt::catalog_operation_prices(&mut tx, group.as_ref()).await?
+        } else {
+            Vec::new()
         };
         tx.commit().await?;
         Ok(

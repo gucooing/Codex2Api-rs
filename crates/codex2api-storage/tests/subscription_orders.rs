@@ -247,17 +247,15 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(route.tag_id.as_deref(), Some("replacement"));
-    let persisted: Option<String> =
-        sqlx::query_scalar("SELECT tag_id FROM execution_routes WHERE virtual_account_id=$1")
-            .bind(&subscription.id)
-            .fetch_one(storage.pool())
-            .await
-            .unwrap();
-    assert!(
-        persisted.is_none(),
-        "a subscription must never store its own pool"
-    );
+    assert_eq!(route.tag_ids, ["replacement"]);
+    let inherited: bool = sqlx::query_scalar(
+        "SELECT tag_ids IS NULL FROM execution_routes WHERE virtual_account_id=$1",
+    )
+    .bind(&subscription.id)
+    .fetch_one(storage.pool())
+    .await
+    .unwrap();
+    assert!(inherited, "a subscription must never store its own pool");
     assert_eq!(
         storage
             .select_pool_supplier(&subscription.id, "chatgpt", &[])
@@ -282,7 +280,7 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .save_pool_route(
                 &subscription.id,
                 "chatgpt",
-                Some("private-pool"),
+                Some(&["private-pool".into()]),
                 Some(route.revision)
             )
             .await
@@ -294,9 +292,8 @@ async fn purchased_subscriptions_follow_current_plan_pools_without_changing_hist
             .await
             .unwrap()
             .unwrap()
-            .tag_id
-            .as_deref(),
-        Some("private-pool")
+            .tag_ids,
+        ["private-pool"]
     );
     let revision = storage
         .execution_route(&subscription.id, "chatgpt")

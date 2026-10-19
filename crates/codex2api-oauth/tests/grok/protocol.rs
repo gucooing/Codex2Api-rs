@@ -293,7 +293,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     let upstream = codex2api_upstream::grok::GrokUpstream::new(grok);
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            provider_id: "grok".into(),
+            platform: "grok".into(),
             model: "grok-4.7".into(),
             kind: "text".into(),
             preset_key: None,
@@ -309,14 +309,14 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     assert!(!discovered.to_string().contains("private-supplier"));
     assert!(
         storage
-            .model_config("grok", "future-grok-model")
+            .model_config("future-grok-model")
             .await
             .unwrap()
             .is_none()
     );
-    let prices = storage.model_prices("grok").await.unwrap();
+    let prices = storage.model_prices().await.unwrap();
     let custom_model = "operator-only-model-91e8";
-    assert!(codex2api_common::model_price_preset("grok", custom_model).is_none());
+    assert!(codex2api_common::model_price_preset(custom_model).is_none());
     assert!(
         !storage
             .supplier_models(&supplier.id)
@@ -326,7 +326,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
             .any(|m| m.model == custom_model)
     );
     let custom = codex2api_storage::ModelConfig {
-        provider_id: "grok".into(),
+        platform: "grok".into(),
         model: custom_model.into(),
         kind: "text".into(),
         enabled: true,
@@ -365,7 +365,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
         .await
         .unwrap();
     storage
-        .save_pool_route(&account.id, "grok", Some("grok-pool"), Some(1))
+        .save_pool_route(&account.id, "grok", Some(&["grok-pool".into()]), Some(1))
         .await
         .unwrap();
     let accounts = codex2api_suppliers::SupplierAccountStore::open(storage.clone());

@@ -31,8 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiLimit, apiPlatform } from "@/lib/api-access";
-import { providerOptions } from "@/lib/providers";
+import { apiLimit } from "@/lib/api-access";
 import {
   ChevronLeft,
   ChevronRight,
@@ -79,29 +78,6 @@ export default function ApiGroupsPage() {
                 value={filters.search}
                 onChange={(event) => setFilters({ ...filters, search: event.target.value })}
               />
-            </Field>
-            <Field className="min-w-0 sm:w-32">
-              <FieldLabel className="sr-only" htmlFor={id + "-platform"}>
-                平台
-              </FieldLabel>
-              <Select
-                value={filters.provider_id || "all"}
-                onValueChange={(provider) =>
-                  setFilters({ ...filters, provider_id: provider === "all" ? "" : provider })
-                }
-              >
-                <SelectTrigger id={id + "-platform"} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  <SelectItem value="all">全部平台</SelectItem>
-                  {providerOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </Field>
             <div className="col-span-2 flex flex-wrap items-center gap-1.5 sm:col-auto sm:flex-1">
               <Button type="submit" size="sm">
@@ -198,13 +174,8 @@ export default function ApiGroupsPage() {
                       </p>
                     )}
                   </TableCell>
-                  <TableCell hidden={!columns.isVisible("平台")}>
-                    {apiPlatform(group.provider_id)}
-                  </TableCell>
-                  <TableCell hidden={!columns.isVisible("模型范围")}>
-                    {group.allowed_models.length
-                      ? group.allowed_models.length + " 个指定模型"
-                      : "该平台的全部模型"}
+                  <TableCell hidden={!columns.isVisible("模型与标签")}>
+                    {group.models.length} 个模型
                     <p className="text-xs text-muted-foreground">
                       {group.tag_ids.length} 个关联标签
                     </p>
@@ -212,8 +183,7 @@ export default function ApiGroupsPage() {
                   <TableCell hidden={!columns.isVisible("倍率")}>
                     {group.multiplier}×
                     <p className="text-xs text-muted-foreground">
-                      {group.model_rules.filter((rule) => rule.multiplier !== null).length}{" "}
-                      个模型覆盖
+                      {group.models.filter((rule) => rule.multiplier !== null).length} 个模型覆盖
                     </p>
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("每用户限制")}>

@@ -31,7 +31,9 @@ export function AntigravityOfficialData({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{section === "quota" ? "Antigravity 模型额度" : "Antigravity 官方资料"}</CardTitle>
+        <CardTitle>
+          {section === "quota" ? "Antigravity 模型额度" : "Antigravity 官方资料"}
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">

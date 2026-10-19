@@ -456,18 +456,22 @@ pub async fn consume_reset_credit(
 
 pub async fn routes(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     require(&s, &id).await?;
-    let routes = s
-        .storage
-        .execution_routes(&id)
-        .await?
-        .into_iter()
-        .map(|r| crate::rest::dto::Route {
-            tag_id: r.tag_id,
+    let mut routes = Vec::new();
+    for r in s.storage.execution_route_overrides(&id).await? {
+        let effective = s
+            .storage
+            .execution_route(&r.virtual_account_id, &r.provider_id)
+            .await?
+            .map(|route| route.tag_ids)
+            .unwrap_or_default();
+        routes.push(crate::rest::dto::Route {
+            tag_ids: r.tag_ids,
+            effective_tag_ids: effective,
             virtual_account_id: r.virtual_account_id,
             provider_id: r.provider_id,
             revision: r.revision,
-        })
-        .collect::<Vec<_>>();
+        });
+    }
     Ok(Json(crate::rest::dto::value(crate::rest::dto::Routes {
         items: routes,
     })))
@@ -476,7 +480,8 @@ pub async fn routes(State(s): State<AdminState>, Path(id): Path<String>) -> ApiR
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteInput {
-    tag_id: Option<String>,
+    /// An explicit tag set; `null` restores the plan's pool.
+    tag_ids: Option<Vec<String>>,
     revision: Option<i64>,
 }
 
@@ -488,12 +493,7 @@ pub async fn save_route(
     let account = require(&s, &id).await?;
     if !s
         .storage
-        .save_pool_route(
-            &id,
-            &account.provider_id,
-            f.tag_id.as_deref().filter(|s| !s.is_empty()),
-            f.revision,
-        )
+        .save_pool_route(&id, &account.provider_id, f.tag_ids.as_deref(), f.revision)
         .await?
     {
         return Err(ApiError::conflict());

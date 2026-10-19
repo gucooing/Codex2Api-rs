@@ -22,12 +22,14 @@ pub(crate) async fn select(
         .storage
         .execution_route(&oauth.virtual_account_id, &oauth.provider_id)
         .await?
+        .filter(|route| !route.tag_ids.is_empty())
         .ok_or_else(crate::pool_execution::exhausted)?;
-    let tag = route.tag_id.ok_or_else(crate::pool_execution::exhausted)?;
+    // A subscription executes only on suppliers of its own client platform.
     let target = codex2api_upstream::scheduler::SupplierRoute {
         owner_id: oauth.virtual_account_id.clone(),
-        provider_id: oauth.provider_id.clone(),
-        tag_ids: vec![tag.clone()],
+        scope: oauth.provider_id.clone(),
+        provider_id: Some(oauth.provider_id.clone()),
+        tag_ids: route.tag_ids.clone(),
     };
     let result = codex2api_upstream::scheduler::select(
         &state.storage,
@@ -45,8 +47,7 @@ pub(crate) async fn select(
                 .execution_route(&oauth.virtual_account_id, &oauth.provider_id)
                 .await?;
             if !current.is_some_and(|current| {
-                current.tag_id.as_deref() == Some(tag.as_str())
-                    && current.revision == route.revision
+                current.tag_ids == route.tag_ids && current.revision == route.revision
             }) {
                 return Err(codex2api_upstream::scheduler::exhausted());
             }

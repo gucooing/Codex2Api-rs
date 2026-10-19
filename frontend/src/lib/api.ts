@@ -2,7 +2,13 @@ export { ApiError, query, request } from "./http";
 
 export type List<T> = { items: T[] };
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-export type ModelRef = { provider_id: string; model: string };
+/** A manually granted model with its optional multiplier and per-user limits. */
+export type ModelRule = {
+  model: string;
+  multiplier: string | null;
+  concurrency_limit: number;
+  rpm_limit: number;
+};
 export type Fingerprint = {
   os_type: string;
   os_version: string;
@@ -95,13 +101,13 @@ export type Plan = {
   description: string;
   sale_price_usd: string | null;
   duration_days: number;
-  supplier_tag_id: string | null;
+  tag_ids: string[];
   plan_type: string;
   id: string;
   name: string;
+  /** Client platform of the plan's subscriptions: chatgpt or grok. */
   provider_id: string;
-  model_access: "all" | "selected" | "none";
-  models: ModelRef[];
+  models: ModelRule[];
   spending_windows: SpendingWindow[];
   allow_purchase: boolean;
   revision: number;
@@ -122,7 +128,7 @@ export type TokenPrice = {
 };
 export type ImagePrice = { resolution: string; price: string };
 export type Model = {
-  provider_id: string;
+  platform: string;
   model: string;
   kind: "text" | "image";
   enabled: boolean;
@@ -131,7 +137,7 @@ export type Model = {
   image_prices: ImagePrice[];
 };
 export type ModelPreset = {
-  provider_id: string;
+  platform: string;
   model: string;
   kind: "text" | "image";
   version: string;
@@ -331,5 +337,5 @@ export type DesktopSettings = {
 };
 
 export type PlanOption = Pick<Plan, "id" | "name" | "provider_id" | "plan_type">;
-export type ModelOption = Pick<Model, "provider_id" | "model" | "kind" | "enabled">;
+export type ModelOption = Pick<Model, "platform" | "model" | "kind" | "enabled">;
 export type ProxyOption = Pick<Proxy, "id" | "name" | "display_url">;

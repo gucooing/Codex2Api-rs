@@ -1,22 +1,57 @@
 use crate::{Result, Storage};
 use sqlx::FromRow;
 
-#[derive(Clone, Debug, FromRow, serde::Serialize, serde::Deserialize)]
+/// The effective supplier pool of a subscription: its explicit override or the plan's tags.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionRoute {
     pub virtual_account_id: String,
     pub provider_id: String,
-    pub tag_id: Option<String>,
+    pub tag_ids: Vec<String>,
     pub revision: i64,
 }
 
+#[derive(FromRow)]
+struct EffectiveRow {
+    virtual_account_id: String,
+    provider_id: String,
+    tag_ids: sqlx::types::Json<Vec<String>>,
+    revision: i64,
+}
+
+/// The stored route row; `tag_ids` is absent while the subscription inherits its plan.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RouteOverride {
+    pub virtual_account_id: String,
+    pub provider_id: String,
+    pub tag_ids: Option<Vec<String>>,
+    pub revision: i64,
+}
+
+#[derive(FromRow)]
+struct OverrideRow {
+    virtual_account_id: String,
+    provider_id: String,
+    tag_ids: Option<sqlx::types::Json<Vec<String>>>,
+    revision: i64,
+}
+
 impl Storage {
-    pub async fn execution_routes(&self, owner: &str) -> Result<Vec<ExecutionRoute>> {
-        Ok(sqlx::query_as(
-            "SELECT * FROM execution_routes WHERE virtual_account_id=$1 ORDER BY provider_id",
+    pub async fn execution_route_overrides(&self, owner: &str) -> Result<Vec<RouteOverride>> {
+        let rows: Vec<OverrideRow> = sqlx::query_as(
+            "SELECT virtual_account_id,provider_id,tag_ids,revision FROM execution_routes WHERE virtual_account_id=$1 ORDER BY provider_id",
         )
         .bind(owner)
         .fetch_all(self.pool())
-        .await?)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| RouteOverride {
+                virtual_account_id: row.virtual_account_id,
+                provider_id: row.provider_id,
+                tag_ids: row.tag_ids.map(|tags| tags.0),
+                revision: row.revision,
+            })
+            .collect())
     }
 
     pub async fn execution_route(
@@ -28,13 +63,19 @@ impl Storage {
         self.runtime
             .snapshots
             .read(key.clone(), async {
-                let value = sqlx::query_as(
-            "SELECT * FROM effective_execution_routes WHERE virtual_account_id=$1 AND provider_id=$2",
-        )
-        .bind(owner)
-        .bind(provider)
-        .fetch_optional(self.pool())
-        .await?;
+                let row: Option<EffectiveRow> = sqlx::query_as(
+                    "SELECT virtual_account_id,provider_id,tag_ids,revision FROM effective_execution_routes WHERE virtual_account_id=$1 AND provider_id=$2",
+                )
+                .bind(owner)
+                .bind(provider)
+                .fetch_optional(self.pool())
+                .await?;
+                let value = row.map(|row| ExecutionRoute {
+                    virtual_account_id: row.virtual_account_id,
+                    provider_id: row.provider_id,
+                    tag_ids: row.tag_ids.0,
+                    revision: row.revision,
+                });
                 let ttl_ms = if value.is_some() {
                     self.effective_entitlements(owner)
                         .await?

@@ -35,8 +35,13 @@ impl AccountFixture for Storage {
         plan.plan_type = "supergrok".into();
         plan.name = "Fixture Grok".into();
         plan.allow_purchase = false;
-        plan.config["model_access"] = serde_json::json!("all");
-        plan.config["models"] = serde_json::json!([]);
+        plan.config["models"] = serde_json::json!(
+            self.model_configs()
+                .await?
+                .into_iter()
+                .map(|model| codex2api_common::ModelRule::granted(&model.model))
+                .collect::<Vec<_>>()
+        );
         self.save_virtual_plan(&plan, None).await?;
         Ok(self.virtual_plan(&plan.id).await?.unwrap())
     }
@@ -60,11 +65,12 @@ impl AccountFixture for Storage {
             self.save_supplier_tag(tag, provider, tag).await?;
             self.edit_supplier_tags(&[supplier.into()], std::slice::from_ref(tag), false)
                 .await?;
-            for model in self.model_configs(provider).await? {
+            for model in self.model_configs().await? {
                 self.add_supplier_model(supplier, &model.model).await?;
             }
         }
-        self.save_pool_route(owner, provider, tag.as_deref(), current)
+        let tags = tag.map(|tag| vec![tag]);
+        self.save_pool_route(owner, provider, tags.as_deref(), current)
             .await
     }
 

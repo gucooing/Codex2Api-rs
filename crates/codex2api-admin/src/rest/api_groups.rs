@@ -8,7 +8,8 @@ use axum::{
     extract::{Path, Query, State},
     routing::get,
 };
-use codex2api_storage::{ApiGroup, ApiListQuery, ApiModelRule};
+use codex2api_common::ModelRule;
+use codex2api_storage::{ApiGroup, ApiListQuery};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -24,9 +25,13 @@ async fn list(State(state): State<AdminState>, Query(query): Query<ApiListQuery>
 }
 
 async fn options(State(state): State<AdminState>) -> ApiResult {
-    let items = state.storage.api_groups().await?.into_iter().map(|group| {
-        json!({"id":group.id,"name":group.name,"provider_id":group.provider_id,"enabled":group.enabled})
-    }).collect::<Vec<_>>();
+    let items = state
+        .storage
+        .api_groups()
+        .await?
+        .into_iter()
+        .map(|group| json!({"id":group.id,"name":group.name,"enabled":group.enabled}))
+        .collect::<Vec<_>>();
     Ok(Json(json!({"items":items})))
 }
 
@@ -45,17 +50,13 @@ struct GroupInput {
     name: String,
     #[serde(default)]
     description: String,
-    provider_id: String,
     enabled: bool,
     tag_ids: Vec<String>,
-    #[serde(default)]
-    allowed_models: Vec<String>,
+    models: Vec<ModelRule>,
     multiplier: String,
     search_price_usd: Option<String>,
     concurrency_limit: u32,
     rpm_limit: u32,
-    #[serde(default)]
-    model_rules: Vec<ApiModelRule>,
     revision: Option<i64>,
 }
 
@@ -65,15 +66,13 @@ impl GroupInput {
             id,
             name: self.name,
             description: self.description,
-            provider_id: self.provider_id,
             enabled: self.enabled,
             tag_ids: self.tag_ids,
-            allowed_models: self.allowed_models,
+            models: self.models,
             multiplier: self.multiplier,
             search_price_usd: self.search_price_usd,
             concurrency_limit: self.concurrency_limit,
             rpm_limit: self.rpm_limit,
-            model_rules: self.model_rules,
             revision: self.revision.unwrap_or(0),
         }
     }

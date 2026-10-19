@@ -228,18 +228,37 @@ impl Collector {
     }
 }
 
+/// Affinity seeds for supplier selection. A route pinned to one protocol platform
+/// uses that platform's rules; a route open to every platform uses the public
+/// Responses fields that all adapters understand.
 pub fn scheduling(
-    provider: &str,
+    provider: Option<&str>,
     headers: &HeaderMap,
     body: &Value,
 ) -> Result<crate::scheduler::ScheduleRequest> {
     match provider {
-        codex2api_common::CHATGPT => Ok(crate::providers::chatgpt::api::scheduling(headers, body)),
-        codex2api_common::GROK => Ok(crate::providers::grok::api::scheduling(headers, body)),
-        codex2api_common::ANTIGRAVITY => Ok(crate::providers::antigravity::api::scheduling(
+        Some(codex2api_common::CHATGPT) => {
+            Ok(crate::providers::chatgpt::api::scheduling(headers, body))
+        }
+        Some(codex2api_common::GROK) => Ok(crate::providers::grok::api::scheduling(headers, body)),
+        Some(codex2api_common::ANTIGRAVITY) => Ok(crate::providers::antigravity::api::scheduling(
             headers, body,
         )),
-        _ => Err(Error::bad_request("Unsupported supplier platform")),
+        Some(_) => Err(Error::bad_request("Unsupported supplier platform")),
+        None => {
+            use crate::scheduler::{body_seed, hash, header_seed, text};
+            let seed = header_seed(headers)
+                .or_else(|| text(body, "prompt_cache_key"))
+                .or_else(|| text(body, "previous_response_id"))
+                .or_else(|| body_seed(body));
+            Ok(crate::scheduler::ScheduleRequest {
+                model: text(body, "model"),
+                session_hash: seed.map(|seed| hash(&seed)),
+                previous_response: text(body, "previous_response_id"),
+                previous_can_move: false,
+                ..Default::default()
+            })
+        }
     }
 }
 pub fn chatgpt_context(body: &mut Value, headers: &HeaderMap) -> Result<HeaderMap> {

@@ -1,16 +1,21 @@
 import { Box } from "lucide-react";
 import { OpenAIIcon } from "./chatgpt/brand-icon";
+import { ClaudeIcon } from "./claude/brand-icon";
+import { GeminiIcon } from "./gemini/brand-icon";
 import { XAIIcon } from "./grok/brand-icon";
 
-export function modelVendor(provider: string) {
-  switch (provider) {
+/** Vendor name and icon for a catalog model's platform label. */
+export function modelVendor(platform: string) {
+  switch (platform) {
     case "chatgpt":
       return { name: "OpenAI", Icon: OpenAIIcon };
     case "grok":
       return { name: "xAI", Icon: XAIIcon };
-    case "antigravity":
-      return { name: "Antigravity", Icon: Box };
+    case "gemini":
+      return { name: "Google", Icon: GeminiIcon };
+    case "claude":
+      return { name: "Anthropic", Icon: ClaudeIcon };
     default:
-      return { name: provider, Icon: Box };
+      return { name: platform, Icon: Box };
   }
 }

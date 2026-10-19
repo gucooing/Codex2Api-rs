@@ -41,9 +41,7 @@ export function SupplierTagEditor({
       <FieldSet disabled={!ready || busy}>
         <FieldLegend>
           所属标签
-          {provider
-            ? ` · ${providerLabel(provider)}`
-            : ""}
+          {provider ? ` · ${providerLabel(provider)}` : ""}
         </FieldLegend>
         {!provider && accounts.length > 0 && (
           <FieldDescription>请选择同一平台的账户。</FieldDescription>

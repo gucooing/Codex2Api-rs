@@ -75,7 +75,7 @@ async fn fixture_with_issuer(issuer: Option<&str>) -> Fixture {
         .unwrap();
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            provider_id: "grok".into(),
+            platform: "grok".into(),
             model: "grok-4.7".into(),
             kind: "text".into(),
             preset_key: None,
@@ -145,7 +145,7 @@ async fn fixture_with_issuer(issuer: Option<&str>) -> Fixture {
         .await
         .unwrap();
     storage
-        .save_pool_route(&owner.id, "grok", Some("pool"), Some(1))
+        .save_pool_route(&owner.id, "grok", Some(&["pool".into()]), Some(1))
         .await
         .unwrap();
     let accounts = codex2api_suppliers::SupplierAccountStore::open(storage.clone());

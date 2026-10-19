@@ -1,3 +1,8 @@
+-- Baseline of the complete schema and initial data at migration version 0006.
+-- A fresh database runs this file once and continues with the migrations above
+-- that version; existing databases never run it. Schema changes are new numbered
+-- migrations, never edits to this baseline.
+
 -- Current PostgreSQL schema.
 
 CREATE TABLE meta (
@@ -68,26 +73,22 @@ CREATE TABLE providers (
 );
 
 CREATE TABLE model_catalog (
-    provider_id TEXT NOT NULL REFERENCES providers(id),
-    model TEXT NOT NULL,
+    model TEXT PRIMARY KEY,
+    platform TEXT NOT NULL CHECK(length(platform) BETWEEN 1 AND 64),
     kind TEXT NOT NULL CHECK(kind IN ('text','image')),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     deleted BOOLEAN NOT NULL DEFAULT FALSE,
-    revision BIGINT NOT NULL DEFAULT 1,
-    PRIMARY KEY(provider_id,model)
+    revision BIGINT NOT NULL DEFAULT 1
 );
 
 CREATE TABLE model_image_prices (
-    provider_id TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model TEXT NOT NULL REFERENCES model_catalog(model),
     resolution TEXT NOT NULL,
     price_nano_usd BIGINT NOT NULL CHECK(price_nano_usd>=0),
-    PRIMARY KEY(provider_id,model,resolution),
-    FOREIGN KEY(provider_id,model) REFERENCES model_catalog(provider_id,model)
+    PRIMARY KEY(model,resolution)
 );
 
 CREATE TABLE model_prices (
-    provider_id TEXT NOT NULL REFERENCES providers(id),
     model TEXT NOT NULL,
     tier TEXT NOT NULL,
     min_input_tokens BIGINT NOT NULL DEFAULT 0,
@@ -98,7 +99,7 @@ CREATE TABLE model_prices (
     source TEXT NOT NULL,
     revision BIGINT NOT NULL DEFAULT 1,
     max_input_tokens BIGINT CHECK(max_input_tokens IS NULL OR max_input_tokens >= min_input_tokens),
-    PRIMARY KEY(provider_id,model,tier,min_input_tokens)
+    PRIMARY KEY(model,tier,min_input_tokens)
 );
 
 CREATE TABLE admin_subscription_operations (
@@ -186,6 +187,12 @@ CREATE TABLE virtual_plans (
     sort_id BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE
 );
 
+CREATE TABLE virtual_plan_tags (
+    plan_id TEXT NOT NULL REFERENCES virtual_plans(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES supplier_tags(id) ON DELETE RESTRICT,
+    PRIMARY KEY(plan_id,tag_id)
+);
+
 CREATE TABLE operation_prices (
     provider_id TEXT NOT NULL,
     operation TEXT NOT NULL,
@@ -221,17 +228,15 @@ CREATE TABLE api_groups (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    provider_id TEXT NOT NULL REFERENCES providers(id),
     enabled BOOLEAN NOT NULL DEFAULT TRUE CHECK(enabled IN (FALSE,TRUE)),
     deleted BOOLEAN NOT NULL DEFAULT FALSE CHECK(deleted IN (FALSE,TRUE)),
-    allowed_models JSONB NOT NULL DEFAULT '[]',
+    models JSONB NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(models)='array'),
     multiplier_micros BIGINT NOT NULL DEFAULT 1000000 CHECK(multiplier_micros BETWEEN 0 AND 1000000000),
     concurrency_limit BIGINT NOT NULL DEFAULT 0 CHECK(concurrency_limit BETWEEN 0 AND 1000000),
     rpm_limit BIGINT NOT NULL DEFAULT 0 CHECK(rpm_limit BETWEEN 0 AND 1000000),
-    model_rules JSONB NOT NULL DEFAULT '[]',
     revision BIGINT NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
-    search_price_nano_usd BIGINT CHECK(search_price_nano_usd IS NULL OR (provider_id='chatgpt' AND search_price_nano_usd>=0))
+    search_price_nano_usd BIGINT CHECK(search_price_nano_usd IS NULL OR search_price_nano_usd>=0)
 );
 
 CREATE TABLE api_group_tags (
@@ -329,8 +334,8 @@ CREATE TABLE platform_accounts (
     revision BIGINT NOT NULL DEFAULT 1
 );
 
-CREATE TABLE billing_cache_revisions (
-    provider_id TEXT PRIMARY KEY,
+CREATE TABLE billing_cache_revision (
+    id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(id),
     revision BIGINT NOT NULL DEFAULT 0
 );
 
@@ -595,7 +600,7 @@ CREATE TABLE coupons (
 CREATE TABLE execution_routes (
     virtual_account_id TEXT NOT NULL REFERENCES platform_accounts(id) ON DELETE CASCADE,
     provider_id TEXT NOT NULL REFERENCES providers(id),
-    tag_id TEXT REFERENCES supplier_tags(id) ON DELETE RESTRICT,
+    tag_ids JSONB CHECK(tag_ids IS NULL OR jsonb_typeof(tag_ids)='array'),
     revision BIGINT NOT NULL DEFAULT 1,
     PRIMARY KEY(virtual_account_id,provider_id),
     UNIQUE(virtual_account_id)
@@ -720,7 +725,9 @@ CREATE INDEX subscription_orders_status_time ON subscription_orders(status,creat
 
 CREATE INDEX subscription_orders_coupon ON subscription_orders(coupon_id,user_id,status,quote_expires_at_ms);
 
-CREATE INDEX execution_route_tag ON execution_routes(tag_id);
+CREATE INDEX execution_route_tags ON execution_routes USING GIN (tag_ids);
+
+CREATE INDEX virtual_plan_tags_tag ON virtual_plan_tags(tag_id);
 
 CREATE INDEX supplier_models_model ON supplier_models(model,account_id);
 
@@ -773,17 +780,15 @@ CREATE VIEW regular_users AS SELECT * FROM user_identities WHERE kind='regular';
 
 CREATE VIEW regular_platforms AS SELECT * FROM platform_principals WHERE kind='regular';
 
-CREATE VIEW regular_subscription_pools AS SELECT a.id AS virtual_account_id,a.provider_id,p.id AS plan_id,(p.config::jsonb #>> '{supplier_tag_id}') AS tag_id FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id;
+CREATE VIEW regular_subscription_pools AS SELECT a.id AS virtual_account_id,a.provider_id,p.id AS plan_id,COALESCE((SELECT jsonb_agg(t.tag_id ORDER BY t.tag_id) FROM virtual_plan_tags t WHERE t.plan_id=p.id),'[]'::jsonb) AS tag_ids FROM regular_platforms a JOIN virtual_plans p ON p.id=a.plan_id;
 
-CREATE VIEW effective_execution_routes AS SELECT r.virtual_account_id,r.provider_id,r.revision,COALESCE(r.tag_id,p.tag_id) AS tag_id FROM execution_routes r JOIN regular_subscription_pools p ON p.virtual_account_id=r.virtual_account_id;
+CREATE VIEW effective_execution_routes AS SELECT r.virtual_account_id,r.provider_id,r.revision,COALESCE(r.tag_ids,p.tag_ids) AS tag_ids FROM execution_routes r JOIN regular_subscription_pools p ON p.virtual_account_id=r.virtual_account_id;
 
 CREATE UNIQUE INDEX accounts_username_folded ON accounts(account_type,lower(username));
 
 CREATE UNIQUE INDEX supplier_tags_name_folded ON supplier_tags(provider_id,lower(name));
 
 CREATE UNIQUE INDEX coupons_code_folded ON coupons(lower(code));
-
-CREATE INDEX plans_supplier_tag ON virtual_plans ((config->>'supplier_tag_id'));
 
 CREATE INDEX resources_lookup ON virtual_resources (virtual_account_id,kind,created_at_ms DESC,id);
 
@@ -993,17 +998,6 @@ $$;
 CREATE TRIGGER subscription_credit_immutable BEFORE UPDATE OF credit_value_cents,credit_duration_ms ON subscription_pricing_periods
 FOR EACH ROW EXECUTE FUNCTION subscription_credit_immutable_fn();
 
-CREATE FUNCTION plan_provider_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-IF NEW.provider_id!=OLD.provider_id THEN
-RAISE EXCEPTION USING MESSAGE = 'plan provider is immutable', ERRCODE = '23514';
-END IF;
-RETURN NEW;
-END;
-$$;
-CREATE TRIGGER plan_provider_immutable BEFORE UPDATE OF provider_id ON virtual_plans
-FOR EACH ROW EXECUTE FUNCTION plan_provider_immutable_fn();
-
 CREATE FUNCTION user_kind_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 IF NEW.kind!=OLD.kind THEN
@@ -1058,6 +1052,17 @@ END;
 $$;
 CREATE TRIGGER subscription_order_owner_immutable BEFORE UPDATE OF user_id ON subscription_orders
 FOR EACH ROW EXECUTE FUNCTION subscription_order_owner_immutable_fn();
+
+CREATE FUNCTION plan_provider_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+IF NEW.provider_id!=OLD.provider_id THEN
+RAISE EXCEPTION USING MESSAGE = 'plan provider is immutable', ERRCODE = '23514';
+END IF;
+RETURN NEW;
+END;
+$$;
+CREATE TRIGGER plan_provider_immutable BEFORE UPDATE OF provider_id ON virtual_plans
+FOR EACH ROW EXECUTE FUNCTION plan_provider_immutable_fn();
 
 CREATE FUNCTION platform_owner_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -1157,7 +1162,7 @@ FOR EACH ROW EXECUTE FUNCTION user_authorization_enabled_fn();
 CREATE FUNCTION execution_route_provider_insert_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 IF NOT EXISTS(SELECT 1 FROM platform_accounts p WHERE p.id=NEW.virtual_account_id AND p.provider_id=NEW.provider_id)
- OR (NEW.tag_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM supplier_tags WHERE id=NEW.tag_id AND provider_id=NEW.provider_id)) THEN
+ OR (NEW.tag_ids IS NOT NULL AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(NEW.tag_ids) t WHERE NOT EXISTS(SELECT 1 FROM supplier_tags WHERE id=t))) THEN
 RAISE EXCEPTION USING MESSAGE = 'execution route pool mismatch', ERRCODE = '23514';
 END IF;
 RETURN NEW;
@@ -1169,7 +1174,7 @@ FOR EACH ROW EXECUTE FUNCTION execution_route_provider_insert_fn();
 CREATE FUNCTION execution_route_provider_update_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 IF NEW.virtual_account_id!=OLD.virtual_account_id OR NEW.provider_id!=OLD.provider_id
- OR (NEW.tag_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM supplier_tags WHERE id=NEW.tag_id AND provider_id=NEW.provider_id)) THEN
+ OR (NEW.tag_ids IS NOT NULL AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(NEW.tag_ids) t WHERE NOT EXISTS(SELECT 1 FROM supplier_tags WHERE id=t))) THEN
 RAISE EXCEPTION USING MESSAGE = 'execution route pool mismatch', ERRCODE = '23514';
 END IF;
 RETURN NEW;
@@ -1177,28 +1182,6 @@ END;
 $$;
 CREATE TRIGGER execution_route_provider_update BEFORE UPDATE ON execution_routes
 FOR EACH ROW EXECUTE FUNCTION execution_route_provider_update_fn();
-
-CREATE FUNCTION api_group_provider_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-IF NEW.provider_id!=OLD.provider_id THEN
-RAISE EXCEPTION USING MESSAGE = 'API group provider is immutable', ERRCODE = '23514';
-END IF;
-RETURN NEW;
-END;
-$$;
-CREATE TRIGGER api_group_provider_immutable BEFORE UPDATE OF provider_id ON api_groups
-FOR EACH ROW EXECUTE FUNCTION api_group_provider_immutable_fn();
-
-CREATE FUNCTION api_group_tag_provider_fn() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-IF NOT EXISTS(SELECT 1 FROM api_groups g JOIN supplier_tags t ON t.provider_id=g.provider_id WHERE g.id=NEW.group_id AND t.id=NEW.tag_id) THEN
-RAISE EXCEPTION USING MESSAGE = 'API group tag provider mismatch', ERRCODE = '23514';
-END IF;
-RETURN NEW;
-END;
-$$;
-CREATE TRIGGER api_group_tag_provider BEFORE INSERT ON api_group_tags
-FOR EACH ROW EXECUTE FUNCTION api_group_tag_provider_fn();
 
 CREATE FUNCTION api_group_tag_immutable_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -1238,7 +1221,7 @@ CREATE FUNCTION usage_owner_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 IF (NEW.user_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM regular_users WHERE id=NEW.user_id))
  OR (NEW.subject_kind='api_key' AND NOT EXISTS(SELECT 1 FROM api_keys k JOIN api_groups g ON g.id=k.group_id
-     WHERE k.id=NEW.key_id AND k.id=NEW.subject_id AND k.user_id=NEW.user_id AND g.id=NEW.group_id AND g.provider_id=NEW.provider_id))
+     WHERE k.id=NEW.key_id AND k.id=NEW.subject_id AND k.user_id=NEW.user_id AND g.id=NEW.group_id))
  OR (NEW.subject_kind='virtual_account' AND NEW.user_id IS NOT NULL AND NOT EXISTS(
      SELECT 1 FROM regular_platforms WHERE id=NEW.subject_id AND user_id=NEW.user_id AND provider_id=NEW.provider_id)) THEN
 RAISE EXCEPTION USING MESSAGE = 'usage ownership mismatch', ERRCODE = '23514';
@@ -1414,11 +1397,9 @@ CREATE TRIGGER subscription_price_owner BEFORE INSERT ON subscription_pricing_pe
 FOR EACH ROW EXECUTE FUNCTION subscription_price_owner_fn();
 
 CREATE FUNCTION billing_catalog_changed() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE provider text;
 BEGIN
-    provider := CASE WHEN TG_OP = 'DELETE' THEN OLD.provider_id ELSE NEW.provider_id END;
-    INSERT INTO billing_cache_revisions(provider_id,revision) VALUES(provider,1)
-    ON CONFLICT(provider_id) DO UPDATE SET revision=billing_cache_revisions.revision+1;
+    INSERT INTO billing_cache_revision(id,revision) VALUES(TRUE,1)
+    ON CONFLICT(id) DO UPDATE SET revision=billing_cache_revision.revision+1;
     RETURN NULL;
 END;
 $$;
@@ -1430,3 +1411,24 @@ CREATE TRIGGER model_prices_changed AFTER INSERT OR UPDATE OR DELETE ON model_pr
 CREATE TRIGGER model_image_prices_changed AFTER INSERT OR UPDATE OR DELETE ON model_image_prices FOR EACH ROW EXECUTE FUNCTION billing_catalog_changed();
 
 CREATE TRIGGER operation_prices_changed AFTER INSERT OR UPDATE OR DELETE ON operation_prices FOR EACH ROW EXECUTE FUNCTION billing_catalog_changed();
+
+-- Providers, initial plans and billing bookkeeping. Built-in models of every platform
+-- are registered together at startup from code; no user subscriptions are created.
+
+INSERT INTO providers (id,name) VALUES
+('chatgpt','ChatGPT'),
+('grok','Grok'),
+('antigravity','Antigravity');
+
+INSERT INTO virtual_plans (id,name,plan_type,config,allow_purchase,revision,updated_at_ms,provider_id) VALUES
+('plus','ChatGPT Plus','plus','{"models":[],"spending_windows":[],"rpm_limit":40,"concurrency_limit":10}',TRUE,0,0,'chatgpt'),
+('pro','ChatGPT Pro 200','pro','{"models":[],"spending_windows":[],"rpm_limit":40,"concurrency_limit":10}',TRUE,0,0,'chatgpt'),
+('business','ChatGPT Business','business','{"models":[],"spending_windows":[],"rpm_limit":40,"concurrency_limit":10}',TRUE,0,0,'chatgpt'),
+('enterprise','ChatGPT Enterprise','enterprise','{"models":[],"spending_windows":[],"rpm_limit":40,"concurrency_limit":10}',TRUE,0,0,'chatgpt'),
+('edu','ChatGPT Edu','edu','{"models":[],"spending_windows":[],"rpm_limit":40,"concurrency_limit":10}',TRUE,0,0,'chatgpt');
+
+INSERT INTO meta(key,value) VALUES('billing_started_at',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'));
+
+INSERT INTO billing_cache_revision(id,revision) VALUES(TRUE,0);
+
+INSERT INTO meta(key,value) VALUES('schema_migration_version','6');

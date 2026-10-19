@@ -49,7 +49,10 @@ impl SchedulerError {
 pub struct SupplierRoute {
     /// Namespaced consumer identity, never a credential or a supplier identity.
     pub owner_id: String,
-    pub provider_id: String,
+    /// Affinity namespace shared by every transport of the same consumer.
+    pub scope: String,
+    /// Protocol platform the selected supplier must speak; `None` admits every platform.
+    pub provider_id: Option<String>,
     pub tag_ids: Vec<String>,
 }
 

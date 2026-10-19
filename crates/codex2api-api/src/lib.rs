@@ -103,16 +103,8 @@ async fn websocket(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    match credential.principal.group.provider_id.as_str() {
-        codex2api_common::CHATGPT => {
-            providers::chatgpt::websocket::connect(state, credential, headers, upgrade).await
-        }
-        _ => Err(ApiError::new(
-            http::StatusCode::NOT_IMPLEMENTED,
-            "unsupported_transport",
-            "This platform does not support Responses WebSocket transport.",
-        )),
-    }
+    // The Responses WebSocket is the ChatGPT protocol transport; it runs on ChatGPT suppliers.
+    providers::chatgpt::websocket::connect(state, credential, headers, upgrade).await
 }
 
 async fn require_key(
@@ -128,7 +120,8 @@ async fn require_key(
         .await?
         .ok_or_else(ApiError::invalid_key)?;
     let log = codex2api_upstream::RequestFailureLog::new(codex2api_storage::UsageRecord {
-        provider_id: principal.group.provider_id.clone(),
+        // Known once the requested model's platform or the executing supplier is resolved.
+        provider_id: String::new(),
         subject_id: principal.key_id.clone(),
         subject_kind: "api_key".into(),
         user_id: Some(principal.user_id.clone()),
@@ -165,7 +158,7 @@ async fn models(
         .storage
         .api_group_models(&credential.principal.group.id)
         .await?;
-    let values=models.into_iter().map(|model|json!({"id":model.model,"object":"model","created":0,"owned_by":model.provider_id})).collect::<Vec<_>>();
+    let values=models.into_iter().map(|model|json!({"id":model.model,"object":"model","created":0,"owned_by":model.platform})).collect::<Vec<_>>();
     Ok(Json(json!({"object":"list","data":values})))
 }
 async fn handle(
@@ -180,19 +173,15 @@ async fn handle(
         tokio::task::spawn_blocking(move || codex2api_upstream::decode_body(&body, &inbound))
             .await
             .map_err(|_| ApiError::internal())??;
-    codex2api_upstream::RequestFailureLog::metadata(&codex2api_upstream::request_metadata_value(
-        &value,
-    ));
-    // ChatGPT keeps stored-response continuation only on its native WebSocket transport.
-    if credential.principal.group.provider_id == codex2api_common::CHATGPT
-        && protocol == Protocol::Responses
-        && value
-            .get("previous_response_id")
-            .is_some_and(|v| !v.is_null())
-    {
-        return Err(ApiError::bad_request(
-            "previous_response_id requires the Responses WebSocket transport for ChatGPT",
-        ));
+    let metadata = codex2api_upstream::request_metadata_value(&value);
+    codex2api_upstream::RequestFailureLog::metadata(&metadata);
+    if let Some(config) = match metadata.model.as_deref() {
+        Some(model) if codex2api_common::valid_model(model) => {
+            state.storage.model_config(model).await?
+        }
+        _ => None,
+    } {
+        codex2api_upstream::RequestFailureLog::provider(&config.platform);
     }
     let prepared = InboundRequest::new(protocol, value, headers.clone())?;
     execute_prepared(

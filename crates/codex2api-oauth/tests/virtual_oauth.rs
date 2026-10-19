@@ -660,7 +660,7 @@ async fn updated_workspace_quota_and_catalog_are_accepted_by_the_actual_native_c
         .unwrap();
     let (app, account) = fixture(&storage).await;
     let mut ultrafast = storage
-        .model_prices("chatgpt")
+        .model_prices()
         .await
         .unwrap()
         .into_iter()
@@ -1383,13 +1383,9 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
     .await;
     assert_eq!(identity["account"]["plan_type"], "plus");
     assert_eq!(identity["account"]["id"], account.id);
-    let config = storage
-        .model_config("chatgpt", "gpt-5.6-luna")
-        .await
-        .unwrap()
-        .unwrap();
+    let config = storage.model_config("gpt-5.6-luna").await.unwrap().unwrap();
     storage
-        .set_model_enabled("chatgpt", &config.model, false, config.revision)
+        .set_model_enabled(&config.model, false, config.revision)
         .await
         .unwrap();
     let models = json_body(
@@ -1421,7 +1417,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
         "model_unavailable"
     );
     storage
-        .set_model_enabled("chatgpt", &config.model, true, config.revision + 1)
+        .set_model_enabled(&config.model, true, config.revision + 1)
         .await
         .unwrap();
     let models = json_body(
@@ -1438,7 +1434,7 @@ async fn custom_named_plan_model_checkboxes_control_client_catalog_and_request_p
     .await;
     assert_eq!(models["models"].as_array().unwrap().len(), 1);
     storage
-        .delete_model_config("chatgpt", &config.model, config.revision + 2)
+        .delete_model_config(&config.model, config.revision + 2)
         .await
         .unwrap();
     let blocked = app

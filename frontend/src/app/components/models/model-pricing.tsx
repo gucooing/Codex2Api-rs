@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { money } from "@/lib/format";
+import { platformLabel, platformOptions } from "@/lib/providers";
 import {
   ChevronLeft,
   ChevronRight,
@@ -89,8 +90,31 @@ export function ModelPricing() {
                 aria-label={"搜索模型"}
                 value={filters.search}
                 onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-                placeholder="搜索模型名称或提供商"
+                placeholder="搜索模型名称或平台"
               />
+            </Field>
+            <Field className="min-w-0 sm:w-32">
+              <FieldLabel className="sr-only" htmlFor={fieldId + "-platform"}>
+                平台
+              </FieldLabel>
+              <Select
+                value={filters.platform || "all"}
+                onValueChange={(platform) =>
+                  setFilters({ ...filters, platform: platform === "all" ? "" : platform })
+                }
+              >
+                <SelectTrigger id={fieldId + "-platform"} aria-label="平台" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="all">全部平台</SelectItem>
+                  {platformOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <Field className="min-w-0 sm:w-32">
               <FieldLabel
@@ -314,7 +338,7 @@ export function ModelPricing() {
                 {pagination.rows.length ? (
                   <>
                     {pagination.rows.map((model) => (
-                      <TableRow role="row" key={`${model.provider_id}/${model.model}`}>
+                      <TableRow role="row" key={model.model}>
                         <TableCell
                           hidden={!tableColumns0.isVisible("模型")}
                           className=" max-md:overflow-hidden"
@@ -323,7 +347,7 @@ export function ModelPricing() {
                         >
                           <div className="max-md:hidden">
                             <strong>{model.model}</strong>
-                            <CardDescription>{model.provider_id}</CardDescription>
+                            <CardDescription>{platformLabel(model.platform)}</CardDescription>
                           </div>
                           <ModelRecordDialog model={model} />
                         </TableCell>

@@ -28,24 +28,26 @@ pub(crate) fn supplier_predicate(q: &mut QueryBuilder<'static, Postgres>, filter
 }
 
 impl Storage {
+    /// Plans whose client tier can be presented on the requested platform.
     pub async fn plan_options(&self, provider: &str) -> Result<Vec<serde_json::Value>> {
-        let rows: Vec<(String,String,String,String)> = sqlx::query_as("SELECT id,name,provider_id,plan_type FROM virtual_plans WHERE ($1='' OR provider_id=$2) ORDER BY provider_id,name,id")
-            .bind(provider).bind(provider).fetch_all(self.pool()).await?;
+        let rows: Vec<(String,String,String,String)> = sqlx::query_as("SELECT id,name,provider_id,plan_type FROM virtual_plans WHERE ($1='' OR provider_id=$1) ORDER BY provider_id,name,id")
+            .bind(provider).fetch_all(self.pool()).await?;
         Ok(rows.into_iter().map(|(id,name,provider,kind)|serde_json::json!({"id":id,"name":name,"provider_id":provider,"plan_type":kind})).collect())
     }
 
+    /// Enabled catalog models plus the disabled ones a plan already lists.
     pub async fn model_options(
         &self,
-        provider: &str,
+        platform: &str,
         search: &str,
         plan_id: &str,
     ) -> Result<Vec<serde_json::Value>> {
         if search.len() > 1024 || plan_id.len() > 128 {
             return Err(crate::StorageError::InvalidAdminUpdate("模型查询参数无效"));
         }
-        let rows: Vec<(String,String,String,bool)> = sqlx::query_as("SELECT provider_id,model,kind,enabled FROM model_catalog m WHERE deleted=FALSE AND ($1='' OR provider_id=$2) AND strpos(lower(model),lower($3))>0 AND (enabled=TRUE OR EXISTS(SELECT 1 FROM virtual_plans p,jsonb_array_elements(p.config::jsonb #> '{models}') s WHERE p.id=$4 AND (s.value::jsonb #>> '{provider_id}')=m.provider_id AND (s.value::jsonb #>> '{model}')=m.model)) ORDER BY provider_id,model")
-            .bind(provider).bind(provider).bind(search.trim()).bind(plan_id).fetch_all(self.pool()).await?;
-        Ok(rows.into_iter().map(|(provider,model,kind,enabled)|serde_json::json!({"provider_id":provider,"model":model,"kind":kind,"enabled":enabled})).collect())
+        let rows: Vec<(String,String,String,bool)> = sqlx::query_as("SELECT platform,model,kind,enabled FROM model_catalog m WHERE deleted=FALSE AND ($1='' OR platform=$1) AND strpos(lower(model),lower($2))>0 AND (enabled=TRUE OR EXISTS(SELECT 1 FROM virtual_plans p,jsonb_array_elements(p.config::jsonb #> '{models}') s WHERE p.id=$3 AND (s.value::jsonb #>> '{model}')=m.model)) ORDER BY platform,model")
+            .bind(platform).bind(search.trim()).bind(plan_id).fetch_all(self.pool()).await?;
+        Ok(rows.into_iter().map(|(platform,model,kind,enabled)|serde_json::json!({"platform":platform,"model":model,"kind":kind,"enabled":enabled})).collect())
     }
 
     pub async fn tag_options(&self, provider: &str) -> Result<Vec<SupplierTag>> {
@@ -68,27 +70,22 @@ impl Storage {
             .collect()
     }
 
-    pub async fn model_token_prices(
-        &self,
-        provider: &str,
-        model: &str,
-    ) -> Result<Vec<crate::ModelPrice>> {
-        Ok(sqlx::query_as("SELECT * FROM model_prices WHERE provider_id=$1 AND model=$2 ORDER BY tier,min_input_tokens")
-            .bind(provider).bind(model).fetch_all(self.pool()).await?)
-    }
-
-    pub async fn model_image_prices(
-        &self,
-        provider: &str,
-        model: &str,
-    ) -> Result<Vec<crate::ImagePrice>> {
+    pub async fn model_token_prices(&self, model: &str) -> Result<Vec<crate::ModelPrice>> {
         Ok(sqlx::query_as(
-            "SELECT * FROM model_image_prices WHERE provider_id=$1 AND model=$2 ORDER BY resolution",
+            "SELECT * FROM model_prices WHERE model=$1 ORDER BY tier,min_input_tokens",
         )
-        .bind(provider)
         .bind(model)
         .fetch_all(self.pool())
         .await?)
+    }
+
+    pub async fn model_image_prices(&self, model: &str) -> Result<Vec<crate::ImagePrice>> {
+        Ok(
+            sqlx::query_as("SELECT * FROM model_image_prices WHERE model=$1 ORDER BY resolution")
+                .bind(model)
+                .fetch_all(self.pool())
+                .await?,
+        )
     }
 
     pub async fn outbound_proxy_account_count(&self, id: &str) -> Result<i64> {
@@ -192,14 +189,20 @@ impl Storage {
     }
 
     pub async fn plan_page(&self, filter: &ListQuery) -> Result<ListPage<VirtualPlan>> {
-        self.read_list(filter, "p.*", "virtual_plans p", "p.sort_id", |q| {
-            search(
-                q,
-                &["p.name", "p.provider_id", "p.plan_type"],
-                &filter.search,
-            );
-            exact(q, "p.provider_id", &filter.provider_id);
-        })
+        self.read_list(
+            filter,
+            crate::virtual_plans::PLAN_COLUMNS,
+            "virtual_plans p",
+            "p.sort_id",
+            |q| {
+                search(
+                    q,
+                    &["p.name", "p.provider_id", "p.plan_type"],
+                    &filter.search,
+                );
+                exact(q, "p.provider_id", &filter.provider_id);
+            },
+        )
         .await
     }
 
@@ -213,11 +216,11 @@ impl Storage {
             filter,
             "m.*",
             "model_catalog m",
-            "m.provider_id,m.model",
+            "m.platform,m.model",
             |q| {
                 q.push(" AND m.deleted=FALSE");
-                search(q, &["m.model", "m.provider_id"], &filter.search);
-                exact(q, "m.provider_id", &filter.provider_id);
+                search(q, &["m.model", "m.platform"], &filter.search);
+                exact(q, "m.platform", &filter.platform);
                 exact(q, "m.kind", &filter.kind);
                 if !filter.status.is_empty() {
                     q.push(" AND m.enabled=")

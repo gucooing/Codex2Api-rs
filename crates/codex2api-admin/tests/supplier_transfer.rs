@@ -89,7 +89,7 @@ async fn batch_models_replace_both_sources_atomically_and_allow_names_outside_ca
     }
     assert!(
         !f.storage
-            .model_configs("chatgpt")
+            .model_configs()
             .await
             .unwrap()
             .iter()

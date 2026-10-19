@@ -10,6 +10,8 @@ pub struct ListQuery {
     pub page_size: Option<u32>,
     pub search: String,
     pub provider_id: String,
+    /// Model platform label filter for catalog lists.
+    pub platform: String,
     pub status: String,
     pub kind: String,
     pub protocol: String,
@@ -28,6 +30,7 @@ impl Default for ListQuery {
             page_size: None,
             search: String::new(),
             provider_id: String::new(),
+            platform: String::new(),
             status: String::new(),
             kind: String::new(),
             protocol: String::new(),
@@ -47,6 +50,7 @@ impl ListQuery {
             || [
                 &self.search,
                 &self.provider_id,
+                &self.platform,
                 &self.status,
                 &self.kind,
                 &self.protocol,

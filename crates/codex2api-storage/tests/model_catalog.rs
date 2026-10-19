@@ -41,7 +41,7 @@ async fn in_flight_resolution_snapshots_keep_their_original_price() {
         .await
         .unwrap();
     let model = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -49,7 +49,6 @@ async fn in_flight_resolution_snapshots_keep_their_original_price() {
         revision: 0,
     };
     let mut price = ImagePrice {
-        provider_id: "chatgpt".into(),
         model: model.model.clone(),
         resolution: "1K".into(),
         price_nano_usd: 40_000_000,
@@ -94,7 +93,7 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
         .await
         .unwrap();
     let model = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -103,13 +102,11 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
     };
     let prices = vec![
         ImagePrice {
-            provider_id: "chatgpt".into(),
             model: model.model.clone(),
             resolution: "1K".into(),
             price_nano_usd: 40_000_000,
         },
         ImagePrice {
-            provider_id: "chatgpt".into(),
             model: model.model.clone(),
             resolution: "2K".into(),
             price_nano_usd: 80_000_000,
@@ -167,12 +164,7 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
             .await
             .unwrap()
     );
-    assert!(
-        storage
-            .delete_model_config("chatgpt", &model.model, 2)
-            .await
-            .unwrap()
-    );
+    assert!(storage.delete_model_config(&model.model, 2).await.unwrap());
     record.image_count = Some(3);
     record.image_usage_json = Some(
         serde_json::to_string(&vec![
@@ -210,22 +202,15 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
     assert_eq!(quota["rate_limit"]["secondary_window"]["used_percent"], 32);
     assert!(
         storage
-            .model_configs("chatgpt")
+            .model_configs()
             .await
             .unwrap()
             .iter()
             .all(|m| m.model != "image-test")
     );
     assert!(
-        storage
-            .unavailable_models("chatgpt")
-            .await
-            .unwrap()
-            .contains(&model.model)
-    );
-    assert!(
         !storage
-            .virtual_plan_model_choices("chatgpt")
+            .virtual_plan_model_choices()
             .await
             .unwrap()
             .contains(&model.model)
@@ -236,11 +221,7 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
             .await
             .unwrap()
     );
-    let current = storage
-        .model_config("chatgpt", &model.model)
-        .await
-        .unwrap()
-        .unwrap();
+    let current = storage.model_config(&model.model).await.unwrap().unwrap();
     assert!(current.revision > 2);
     assert!(current.enabled);
 }
@@ -252,7 +233,7 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         .await
         .unwrap();
     let model = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -260,7 +241,6 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         revision: 0,
     };
     let prices = vec![ImagePrice {
-        provider_id: "chatgpt".into(),
         model: model.model.clone(),
         resolution: "1K".into(),
         price_nano_usd: 1,
@@ -348,7 +328,6 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         assert_eq!(saved.cost_nano_usd, cost, "{id}");
     }
     let invalid = [ImagePrice {
-        provider_id: "chatgpt".into(),
         model: model.model.clone(),
         resolution: "auto".into(),
         price_nano_usd: 1,
@@ -375,7 +354,7 @@ async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
     let path = dir.path().join("uniform-images-pg");
     let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let model = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "uniform-image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -383,7 +362,6 @@ async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
         revision: 0,
     };
     let price = ImagePrice {
-        provider_id: model.provider_id.clone(),
         model: model.model.clone(),
         resolution: IMAGE_UNIFORM_RESOLUTION.into(),
         price_nano_usd: 30_000_000,
@@ -489,7 +467,7 @@ async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
     assert_eq!(saved.cost_nano_usd, None);
     storage.close().await;
     let reopened = codex2api_storage::test_support::open(&path).await.unwrap();
-    let prices = reopened.image_prices("chatgpt").await.unwrap();
+    let prices = reopened.image_prices().await.unwrap();
     assert!(
         prices.iter().any(|p| p.model == model.model
             && p.resolution == "*"

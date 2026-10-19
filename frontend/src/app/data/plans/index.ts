@@ -12,6 +12,13 @@ import {
 import { useColumnVisibility } from "@/lib/columns";
 import { planWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
+import {
+  ruleDraft,
+  rulesFromDrafts,
+  setRuleField,
+  toggleRule,
+  type ModelRuleDraft,
+} from "@/lib/model-rules";
 import { useListResource } from "@/lib/pagination";
 import { grokSubscriptionChoices, subscriptionChoices } from "@/lib/subscriptions";
 import { useId, useState } from "react";
@@ -21,14 +28,13 @@ export const emptyPlan: Plan = {
   concurrency_limit: 10,
   description: "",
   id: "",
-  provider_id: "chatgpt",
   name: "",
   plan_type: "plus",
-  model_access: "all",
+  provider_id: "chatgpt",
   models: [],
   sale_price_usd: null,
   duration_days: 30,
-  supplier_tag_id: null,
+  tag_ids: [],
   allow_purchase: true,
   revision: 0,
   updated_at_ms: 0,
@@ -41,6 +47,16 @@ export const emptyPlan: Plan = {
 export const windowLabel = (duration: number) =>
   duration === 18000 ? "5 小时" : duration === 604800 ? "7 天" : "30 天";
 
+/** Plans exist only for the client platforms with subscription tiers. */
+export const planProviders = [
+  { value: "chatgpt", label: "ChatGPT" },
+  { value: "grok", label: "Grok" },
+];
+export const tiersFor = (provider: string) =>
+  (provider === "grok" ? grokSubscriptionChoices : subscriptionChoices).filter(
+    (tier) => tier.value !== "free",
+  );
+
 export function usePlanEditor({
   plan,
   ready,
@@ -50,30 +66,27 @@ export function usePlanEditor({
   ready: boolean;
   onSaved: () => void;
 }) {
-  const [value, setValue] = useState(() => ({
-    ...plan,
-    description: plan.description ?? "",
-    plan_type: plan.plan_type,
-  }));
+  const [value, setValue] = useState(() => ({ ...plan, description: plan.description ?? "" }));
   const [rpmText, setRpmText] = useState(String(plan.rpm_limit));
   const [concurrencyText, setConcurrencyText] = useState(String(plan.concurrency_limit));
   const [search, setSearch] = useState("");
+  const [rules, setRules] = useState<ModelRuleDraft[]>(plan.models.map(ruleDraft));
   const models = useResource<List<ModelOption>>(
-    `/models/options${query({ provider_id: value.provider_id, search, plan_id: plan.id })}`,
+    `/models/options${query({ search, plan_id: plan.id })}`,
     250,
   );
-  const tags = useResource<List<SupplierTag>>(
-    `/supplier-tags/options${query({ provider_id: value.provider_id })}`,
-  );
+  const tags = useResource<List<SupplierTag>>("/supplier-tags/options");
   const actions = useActions();
   const focus = useDialogFocus();
   const id = useId();
   const busy = actions.isBusy("plan-save");
-  const tiers = (
-    value.provider_id === "grok" ? grokSubscriptionChoices : subscriptionChoices
-  ).filter((tier) => tier.value !== "free");
   const update = <K extends keyof Plan>(key: K, next: Plan[K]) =>
     setValue((v) => ({ ...v, [key]: next }));
+  const selectProvider = (provider: string) => {
+    if (plan.id || !planProviders.some((item) => item.value === provider)) return;
+    setValue((v) => ({ ...v, provider_id: provider, plan_type: tiersFor(provider)[0].value }));
+  };
+  const tiers = tiersFor(value.provider_id);
   const outer = value.spending_windows[0];
   const inner = value.spending_windows[1];
   const windowChange = (index: number, window: SpendingWindow) =>
@@ -81,18 +94,32 @@ export function usePlanEditor({
       "spending_windows",
       value.spending_windows.map((w, i) => (i === index ? window : w)),
     );
-  const choices = models.data?.items ?? [];
+  const toggleTag = (tag: string, checked: boolean) =>
+    update(
+      "tag_ids",
+      checked ? [...new Set([...value.tag_ids, tag])] : value.tag_ids.filter((t) => t !== tag),
+    );
+  const toggleModel = (model: string, checked: boolean) =>
+    setRules((current) => toggleRule(current, model, checked));
+  const selectVisible = (checked: boolean) =>
+    setRules((current) =>
+      (models.data?.items ?? []).reduce(
+        (rules, option) => toggleRule(rules, option.model, checked),
+        current,
+      ),
+    );
+  const setRule = (model: string, field: keyof Omit<ModelRuleDraft, "model">, next: string) =>
+    setRules((current) => setRuleField(current, model, field, next));
   useErrorToast(models.error);
   useErrorToast(tags.error);
   const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) =>
     actions.submit(e, "plan-save", async () => {
-      if (!ready || !models.ready || !tags.ready) throw new Error("请先加载套餐、模型和号池资料");
-      if (value.model_access === "selected" && !value.models.length)
-        throw new Error("请至少选择一个模型");
+      if (!ready || !models.ready || !tags.ready) throw new Error("请先加载套餐、模型和标签资料");
       await request(plan.id ? `/plans/${plan.id}` : "/plans", {
         method: plan.id ? "PUT" : "POST",
         body: planWrite({
           ...value,
+          models: rulesFromDrafts(rules),
           rpm_limit: requestLimit(rpmText, "RPM 限制"),
           concurrency_limit: requestLimit(concurrencyText, "并发限制"),
         }),
@@ -110,20 +137,24 @@ export function usePlanEditor({
         setConcurrencyText(event.target.value),
     },
     value,
-    setValue,
+    selectProvider,
+    tiers,
     search,
     setSearch,
     models,
     tags,
+    rules,
+    toggleTag,
+    toggleModel,
+    selectVisible,
+    setRule,
     focus,
     id,
     busy,
-    tiers,
     update,
     outer,
     inner,
     windowChange,
-    choices,
     handleSubmit,
   } as const;
 }
@@ -131,7 +162,7 @@ export function usePlanEditor({
 export function usePlansPage() {
   const columns = useColumnVisibility(
     "plans",
-    ["套餐", "售价 / 有效期", "模型权限", "费用上限", "允许购买", "操作"],
+    ["套餐", "售价 / 有效期", "模型与标签", "费用上限", "允许购买", "操作"],
     ["套餐", "售价 / 有效期", "操作"],
   );
   const [search, setSearch] = useState("");

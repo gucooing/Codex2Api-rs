@@ -170,7 +170,7 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
             .save_supplier_tag(&tag, provider, "Private supplier pool")
             .await
             .unwrap();
-        let input = json!({"name":format!("{provider} API"),"description":"Public API description","provider_id":provider,"enabled":true,"tag_ids":[tag],"allowed_models":[],"multiplier":"1.25","concurrency_limit":2,"rpm_limit":30,"model_rules":[]});
+        let input = json!({"name":format!("{provider} API"),"description":"Public API description","enabled":true,"tag_ids":[tag],"models":[{"model":"gpt-6-astra","multiplier":null,"concurrency_limit":0,"rpm_limit":0}],"multiplier":"1.25","concurrency_limit":2,"rpm_limit":30});
         assert_eq!(
             send(
                 &apps.admin,
@@ -191,7 +191,7 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
         send(
             &apps.admin,
             "GET",
-            "/admin/api/api-groups?provider_id=grok",
+            "/admin/api/api-groups?search=grok",
             Value::Null,
             &admin,
         )
@@ -199,7 +199,7 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
     )
     .await;
     assert_eq!(listed["total"], 1);
-    assert_eq!(listed["items"][0]["provider_id"], "grok");
+    assert_eq!(listed["items"][0]["name"], "grok API");
     let public = body(
         send(
             &apps.user,

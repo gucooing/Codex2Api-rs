@@ -82,7 +82,7 @@ mod tests {
                 .unwrap();
         }
         let mut plan = storage.virtual_plan("pro").await.unwrap().unwrap();
-        plan.config = json!({"model_access":"all","models":[],"spending_windows":[
+        plan.config = json!({"models":[],"spending_windows":[
             {"duration_seconds":2592000,"cost_limit_usd":"2"},
             {"duration_seconds":18000,"cost_limit_usd":"1"}
         ]});
@@ -828,10 +828,13 @@ async fn resettable_windows(
     if !account.subscription_active_at(now / 1000) {
         return Ok(None);
     }
-    let plan: VirtualPlan = sqlx::query_as("SELECT * FROM virtual_plans WHERE id=$1")
-        .bind(&account.plan_id)
-        .fetch_one(&mut *connection)
-        .await?;
+    let plan: VirtualPlan = sqlx::query_as(&format!(
+        "SELECT {} FROM virtual_plans p WHERE p.id=$1",
+        crate::virtual_plans::PLAN_COLUMNS
+    ))
+    .bind(&account.plan_id)
+    .fetch_one(&mut *connection)
+    .await?;
     let rules = crate::plan_spending_windows(&plan.config)?;
     let anchor:i64=sqlx::query_scalar("SELECT COALESCE(floor(extract(epoch FROM (subscription_started_at)::timestamptz))::bigint,floor(extract(epoch FROM (created_at)::timestamptz))::bigint) FROM platform_accounts WHERE id=$1")
         .bind(&account.id).fetch_one(&mut *connection).await?;

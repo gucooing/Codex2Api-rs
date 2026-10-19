@@ -1,8 +1,36 @@
 use chrono::Utc;
+use codex2api_common::ModelRule;
 use codex2api_storage::{
-    ApiGroup, ApiListQuery, ApiModelRule, ApiPrincipal, ImagePrice, ModelConfig, ModelPrice,
-    NewSupplierAccount, Storage, StorageError, UsageRecord, User, UserKind, WalletAdjustment,
+    ApiGroup, ApiListQuery, ApiPrincipal, ImagePrice, ModelConfig, ModelPrice, NewSupplierAccount,
+    Storage, StorageError, UsageRecord, User, UserKind, WalletAdjustment,
 };
+
+fn rule(
+    model: &str,
+    multiplier: Option<&str>,
+    concurrency_limit: u32,
+    rpm_limit: u32,
+) -> ModelRule {
+    ModelRule {
+        model: model.into(),
+        multiplier: multiplier.map(str::to_owned),
+        concurrency_limit,
+        rpm_limit,
+    }
+}
+
+/// Grant one more catalog model to the group and return its saved state.
+async fn grant(storage: &Storage, group: &ApiGroup, model: &str) -> ApiGroup {
+    let mut next = group.clone();
+    next.models.push(ModelRule::granted(model));
+    assert!(
+        storage
+            .save_api_group(&next, Some(group.revision))
+            .await
+            .unwrap()
+    );
+    storage.api_group(&group.id).await.unwrap().unwrap()
+}
 use serde_json::json;
 
 async fn setup() -> (
@@ -63,7 +91,7 @@ async fn setup() -> (
         .unwrap();
     for name in ["api-text", "api-other", "api-unpriced"] {
         let config = ModelConfig {
-            provider_id: "chatgpt".into(),
+            platform: "chatgpt".into(),
             model: name.into(),
             kind: "text".into(),
             enabled: true,
@@ -71,7 +99,6 @@ async fn setup() -> (
             revision: 0,
         };
         let prices = vec![ModelPrice {
-            provider_id: "chatgpt".into(),
             model: name.into(),
             tier: "standard".into(),
             min_input_tokens: 0,
@@ -106,15 +133,15 @@ async fn setup() -> (
         id: "group".into(),
         name: "API group".into(),
         description: "Public description".into(),
-        provider_id: "chatgpt".into(),
         enabled: true,
         tag_ids: vec!["pool".into()],
-        allowed_models: vec![],
+        models: ["api-text", "api-other", "api-unpriced"]
+            .map(ModelRule::granted)
+            .to_vec(),
         multiplier: "1.5".into(),
         search_price_usd: None,
         concurrency_limit: 5,
         rpm_limit: 60,
-        model_rules: vec![],
         revision: 0,
     };
     storage.save_api_group(&group, None).await.unwrap();
@@ -444,7 +471,7 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
         .await
         .unwrap();
     let mut price = storage
-        .model_prices("chatgpt")
+        .model_prices()
         .await
         .unwrap()
         .into_iter()
@@ -662,12 +689,11 @@ async fn api_settlement_snapshots_prices_rounds_once_accumulates_subcents_and_re
 #[tokio::test]
 async fn concurrent_settlement_keeps_overdraft_debt_and_blocks_new_paid_admissions() {
     let (_dir, storage, user, mut group, _) = setup().await;
-    group.model_rules = vec![ApiModelRule {
-        model: "api-text".into(),
-        multiplier: Some("2".into()),
-        concurrency_limit: 2,
-        rpm_limit: 10,
-    }];
+    group.models = vec![
+        rule("api-text", Some("2"), 2, 10),
+        ModelRule::granted("api-other"),
+        ModelRule::granted("api-unpriced"),
+    ];
     storage
         .save_api_group(&group, Some(group.revision))
         .await
@@ -816,12 +842,11 @@ async fn concurrent_completion_of_one_request_debits_the_wallet_once() {
 #[tokio::test]
 async fn search_compact_and_input_count_share_usage_with_operation_specific_billing() {
     let (_dir, storage, user, mut group, _) = setup().await;
-    group.model_rules = vec![ApiModelRule {
-        model: "api-unpriced".into(),
-        multiplier: Some("7".into()),
-        concurrency_limit: 0,
-        rpm_limit: 0,
-    }];
+    group.models = vec![
+        ModelRule::granted("api-text"),
+        ModelRule::granted("api-other"),
+        rule("api-unpriced", Some("7"), 0, 0),
+    ];
     storage
         .save_api_group(&group, Some(group.revision))
         .await
@@ -873,16 +898,6 @@ async fn search_compact_and_input_count_share_usage_with_operation_specific_bill
             .as_deref(),
         Some("0.07")
     );
-    let mut grok = second.clone();
-    grok.id = "grok-group".into();
-    grok.provider_id = "grok".into();
-    grok.tag_ids.clear();
-    grok.model_rules.clear();
-    assert!(storage.save_api_group(&grok, None).await.is_err());
-    assert!(sqlx::query("INSERT INTO api_groups(id,name,provider_id,created_at,search_price_nano_usd) VALUES('invalid-grok','Grok','grok','2026-01-01',1)")
-        .execute(storage.pool()).await.is_err());
-    grok.search_price_usd = None;
-    assert!(storage.save_api_group(&grok, None).await.unwrap());
 
     let catalog = storage.api_group_models(&group.id).await.unwrap();
     let unpriced = catalog.iter().find(|m| m.model == "api-unpriced").unwrap();
@@ -982,7 +997,10 @@ async fn search_compact_and_input_count_share_usage_with_operation_specific_bill
     count.id = "count-outside-group".into();
     count.model = Some("api-other".into());
     group = storage.api_group(&group.id).await.unwrap().unwrap();
-    group.allowed_models = vec!["api-text".into(), "api-unpriced".into()];
+    group.models = vec![
+        ModelRule::granted("api-text"),
+        ModelRule::granted("api-unpriced"),
+    ];
     storage
         .save_api_group(&group, Some(group.revision))
         .await
@@ -1031,264 +1049,12 @@ async fn search_compact_and_input_count_share_usage_with_operation_specific_bill
 }
 
 #[tokio::test]
-async fn api_model_membership_pagination_and_provider_boundaries_follow_current_configuration() {
-    let (_dir, storage, user, mut group, _) = setup().await;
-    let all = storage.api_group_models(&group.id).await.unwrap();
-    assert!(all.iter().any(|model| model.model == "api-other"));
-    assert!(all.iter().all(|model| model.provider_id == "chatgpt"));
-    assert_eq!(
-        storage.user_store().api_groups(&user.id).await.unwrap()[0].models_count,
-        all.len() as i64
-    );
-
-    // Model access stays platform-wide even when the group has no supplier tags.
-    group.tag_ids.clear();
-    storage
-        .save_api_group(&group, Some(group.revision))
-        .await
-        .unwrap();
-    group = storage.api_group(&group.id).await.unwrap().unwrap();
-    assert_eq!(
-        storage
-            .api_group_models(&group.id)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|model| model.model)
-            .collect::<Vec<_>>(),
-        all.iter()
-            .map(|model| model.model.clone())
-            .collect::<Vec<_>>()
-    );
-    let (_, principal) = credential(&storage, &user, &group).await;
-    let mut untagged = request("untagged-model-admission");
-    untagged.model = Some("api-other".into());
-    storage
-        .admit_api_request(&principal, &untagged)
-        .await
-        .unwrap();
-
-    let new_model = ModelConfig {
-        provider_id: "chatgpt".into(),
-        model: "api-new".into(),
-        kind: "text".into(),
-        enabled: true,
-        deleted: false,
-        revision: 0,
-    };
-    let mut new_price = storage
-        .model_prices("chatgpt")
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|price| price.model == "api-text")
-        .unwrap();
-    new_price.model = new_model.model.clone();
-    storage
-        .save_model_config(&new_model, &[new_price.clone()], &[], None)
-        .await
-        .unwrap();
-    assert!(
-        storage
-            .api_group_models(&group.id)
-            .await
-            .unwrap()
-            .iter()
-            .any(|model| model.model == new_model.model)
-    );
-    let foreign = ModelConfig {
-        provider_id: "grok".into(),
-        model: "api-grok-only".into(),
-        ..new_model.clone()
-    };
-    let foreign_price = ModelPrice {
-        provider_id: foreign.provider_id.clone(),
-        model: foreign.model.clone(),
-        ..new_price.clone()
-    };
-    storage
-        .save_model_config(&foreign, &[foreign_price], &[], None)
-        .await
-        .unwrap();
-    assert!(
-        !storage
-            .api_group_models(&group.id)
-            .await
-            .unwrap()
-            .iter()
-            .any(|model| model.model == foreign.model)
-    );
-    let mut rejected = request("cross-provider-model");
-    rejected.model = Some(foreign.model);
-    assert!(matches!(
-        storage.admit_api_request(&principal, &rejected).await,
-        Err(StorageError::Api {
-            code: "model_not_available",
-            ..
-        })
-    ));
-
-    // A newly enabled model joins all-model groups without editing those groups.
-    let mut request_new = request("new-catalog-model");
-    request_new.model = Some(new_model.model.clone());
-    storage
-        .admit_api_request(&principal, &request_new)
-        .await
-        .unwrap();
-    storage
-        .set_model_enabled("chatgpt", &new_model.model, false, 1)
-        .await
-        .unwrap();
-    assert!(
-        !storage
-            .api_group_models(&group.id)
-            .await
-            .unwrap()
-            .iter()
-            .any(|model| model.model == new_model.model)
-    );
-    request_new.id = "disabled-catalog-model".into();
-    assert!(matches!(
-        storage.admit_api_request(&principal, &request_new).await,
-        Err(StorageError::Api {
-            code: "model_not_available",
-            ..
-        })
-    ));
-    storage
-        .delete_model_config("chatgpt", &new_model.model, 2)
-        .await
-        .unwrap();
-    request_new.id = "deleted-catalog-model".into();
-    assert!(matches!(
-        storage.admit_api_request(&principal, &request_new).await,
-        Err(StorageError::Api {
-            code: "model_not_available",
-            ..
-        })
-    ));
-
-    group.tag_ids = vec!["pool".into()];
-    group.allowed_models = vec!["api-other".into()];
-    storage
-        .save_api_group(&group, Some(group.revision))
-        .await
-        .unwrap();
-    let market = storage
-        .user_store()
-        .api_catalog(
-            &user.id,
-            &ApiListQuery {
-                group_id: group.id.clone(),
-                page: 99,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(market["total"], 1);
-    assert_eq!(market["page"], 1);
-    assert_eq!(market["items"].as_array().unwrap().len(), 1);
-    assert_eq!(market["items"][0]["model"], "api-other");
-    group = storage.api_group(&group.id).await.unwrap().unwrap();
-    let (_, selected_principal) = credential(&storage, &user, &group).await;
-    untagged.id = "selected-untagged-model".into();
-    storage
-        .admit_api_request(&selected_principal, &untagged)
-        .await
-        .unwrap();
-    assert!(matches!(
-        storage
-            .admit_api_request(&selected_principal, &request("outside-allowlist"))
-            .await,
-        Err(StorageError::Api {
-            code: "model_not_available",
-            ..
-        })
-    ));
-    let empty = storage
-        .user_store()
-        .api_catalog(
-            &user.id,
-            &ApiListQuery {
-                group_id: group.id.clone(),
-                search: "unavailable".into(),
-                page: 99,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(empty["total"], 0);
-    assert_eq!(empty["page"], 1);
-    assert_eq!(
-        storage
-            .admin_api_keys(&ApiListQuery {
-                page: 99,
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-            .page,
-        1
-    );
-    assert_eq!(
-        storage
-            .api_group_page(&ApiListQuery {
-                page: 99,
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-            .page,
-        1
-    );
-    assert_eq!(
-        storage
-            .query_usage(&codex2api_storage::UsageFilter {
-                page: 99,
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-            .page,
-        1
-    );
-    storage
-        .save_supplier_tag("grok-pool", "grok", "Grok pool")
-        .await
-        .unwrap();
-    let mut group = storage.api_group(&group.id).await.unwrap().unwrap();
-    group.tag_ids = vec!["grok-pool".into()];
-    assert!(
-        storage
-            .save_api_group(&group, Some(group.revision))
-            .await
-            .is_err()
-    );
-    assert!(
-        sqlx::query("INSERT INTO api_group_tags(group_id,tag_id) VALUES('group','grok-pool')")
-            .execute(storage.pool())
-            .await
-            .is_err()
-    );
-    assert!(storage.delete_supplier_tag("pool").await.is_err());
-    assert!(
-        storage
-            .delete_api_group(&group.id, group.revision)
-            .await
-            .unwrap()
-    );
-    storage.delete_supplier_tag("pool").await.unwrap();
-}
-
-#[tokio::test]
 async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage() {
     let (_dir, storage, user, group, supplier) = setup().await;
     storage
         .save_model_config(
             &ModelConfig {
-                provider_id: "chatgpt".into(),
+                platform: "chatgpt".into(),
                 model: "api-image".into(),
                 kind: "image".into(),
                 enabled: true,
@@ -1297,7 +1063,6 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
             },
             &[],
             &[ImagePrice {
-                provider_id: "chatgpt".into(),
                 model: "api-image".into(),
                 resolution: "1K".into(),
                 price_nano_usd: 20_000_000,
@@ -1310,6 +1075,7 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
         .add_supplier_model(&supplier, "api-image")
         .await
         .unwrap();
+    let group = grant(&storage, &group, "api-image").await;
     let (_, principal) = credential(&storage, &user, &group).await;
     let mut image = request("image");
     image.endpoint = "/v1/images/edits".into();
@@ -1388,7 +1154,7 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
         "not_charged"
     );
     let mut price = storage
-        .model_prices("chatgpt")
+        .model_prices()
         .await
         .unwrap()
         .into_iter()
@@ -1649,12 +1415,12 @@ impl SettleUsage for Storage {
 async fn market_ranges_and_tier_multipliers_match_actual_settlement() {
     use codex2api_storage::{UsageFilter, preset_model_prices};
     let (_dir, storage, user, group, supplier) = setup().await;
-    let mut prices = preset_model_prices("chatgpt", "gpt-5.5").unwrap();
+    let mut prices = preset_model_prices("gpt-5.5").unwrap();
     for price in &mut prices {
         price.model = "tier-test".into();
     }
     let model = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "tier-test".into(),
         kind: "text".into(),
         enabled: true,
@@ -1669,6 +1435,7 @@ async fn market_ranges_and_tier_multipliers_match_actual_settlement() {
         .add_supplier_model(&supplier, &model.model)
         .await
         .unwrap();
+    let group = grant(&storage, &group, &model.model).await;
     for group_id in [String::new(), group.id.clone()] {
         let catalog = storage
             .user_store()
@@ -1734,7 +1501,7 @@ async fn market_ranges_and_tier_multipliers_match_actual_settlement() {
         let saved = rows.iter().find(|r| r.id == record.id).unwrap();
         assert_eq!(saved.cost_nano_usd, amount, "{tier} {input}");
     }
-    let stored = storage.model_prices("chatgpt").await.unwrap();
+    let stored = storage.model_prices().await.unwrap();
     assert!(
         stored
             .iter()
@@ -1818,7 +1585,7 @@ async fn market_other_billing_uses_base_or_group_search_price_without_multiplica
         .api_catalog(
             &user.id,
             &ApiListQuery {
-                provider_id: "grok".into(),
+                platform: "grok".into(),
                 ..Default::default()
             },
         )
@@ -1831,7 +1598,7 @@ async fn market_other_billing_uses_base_or_group_search_price_without_multiplica
 async fn metered_uniform_images_admit_and_charge_independent_of_resolution() {
     let (_dir, storage, user, group, supplier) = setup().await;
     let config = ModelConfig {
-        provider_id: "chatgpt".into(),
+        platform: "chatgpt".into(),
         model: "api-uniform-image".into(),
         kind: "image".into(),
         enabled: true,
@@ -1843,7 +1610,6 @@ async fn metered_uniform_images_admit_and_charge_independent_of_resolution() {
             &config,
             &[],
             &[ImagePrice {
-                provider_id: config.provider_id.clone(),
                 model: config.model.clone(),
                 resolution: "*".into(),
                 price_nano_usd: 20_000_000,
@@ -1856,6 +1622,7 @@ async fn metered_uniform_images_admit_and_charge_independent_of_resolution() {
         .add_supplier_model(&supplier, &config.model)
         .await
         .unwrap();
+    let group = grant(&storage, &group, &config.model).await;
     let created = storage
         .user_store()
         .create_api_key(&user.id, "image", &group.id)

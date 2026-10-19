@@ -9,7 +9,7 @@ import { useId, useState, type FormEvent } from "react";
 export function useModelMarketPage() {
   const id = useId();
   const [groupId, setGroupId] = useState("");
-  const [filters, setFilters] = useState({ search: "", provider_id: "" });
+  const [filters, setFilters] = useState({ search: "", platform: "" });
   const [applied, setApplied] = useState(filters);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
@@ -44,7 +44,7 @@ export function useModelMarketPage() {
     resource.reload();
   };
   const reset = () => {
-    const empty = { search: "", provider_id: "" };
+    const empty = { search: "", platform: "" };
     setFilters(empty);
     setApplied(empty);
     setPage(1);
@@ -66,9 +66,7 @@ export function useModelMarketPage() {
     showOtherBilling:
       (!applied.search.trim() ||
         "chatgpt openai 搜索 search".includes(applied.search.trim().toLowerCase())) &&
-      (!applied.provider_id || applied.provider_id === "chatgpt") &&
-      (!groupId ||
-        groups.data?.items.find((group) => group.id === groupId)?.provider_id === "chatgpt"),
+      (!applied.platform || applied.platform === "chatgpt"),
     searchPrice: resource.data?.operations.find(
       (price) => price.provider_id === "chatgpt" && price.operation === "search",
     ),
