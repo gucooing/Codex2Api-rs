@@ -124,6 +124,14 @@ enum Item {
     },
 }
 impl Item {
+    fn id(&self) -> &str {
+        match self {
+            Self::Reasoning { id, .. }
+            | Self::Message { id, .. }
+            | Self::FunctionCall { id, .. } => id,
+        }
+    }
+
     fn value(&self) -> Value {
         match self {
             Self::Reasoning {
@@ -207,11 +215,11 @@ impl ToResponses {
         let item = match block["type"].as_str() {
             Some("text") => Item::Message {
                 id: item_id("msg"),
-                text: block["text"].as_str().unwrap_or_default().to_owned(),
+                text: String::new(),
             },
             Some("thinking") => Item::Reasoning {
                 id: item_id("rs"),
-                text: block["thinking"].as_str().unwrap_or_default().to_owned(),
+                text: String::new(),
                 signature: None,
             },
             Some("redacted_thinking") => Item::Reasoning {
@@ -241,7 +249,7 @@ impl ToResponses {
             out.push(
                 json!({"type":"response.output_item.added","output_index":position,"item":added}),
             );
-            out.push(json!({"type":"response.content_part.added","output_index":position,"content_index":0,
+            out.push(json!({"type":"response.content_part.added","item_id":self.items[position].id(),"output_index":position,"content_index":0,
                 "part":{"type":"output_text","text":"","annotations":[]}}));
         } else {
             if added["type"] == "function_call" {
@@ -252,54 +260,75 @@ impl ToResponses {
                 json!({"type":"response.output_item.added","output_index":position,"item":added}),
             );
         }
+        // A block can carry its first content before any delta arrives. Emit it
+        // once so streaming readers and the completed item see the same content.
+        for (field, kind) in [("text", "text_delta"), ("thinking", "thinking_delta")] {
+            if let Some(text) = block[field].as_str().filter(|text| !text.is_empty()) {
+                self.delta(index, &json!({"type":kind,field:text}), out);
+            }
+        }
+        if let Some(input) = block
+            .get("input")
+            .and_then(Value::as_object)
+            .filter(|input| !input.is_empty())
+        {
+            self.delta(index, &json!({"type":"input_json_delta","partial_json":Value::Object(input.clone()).to_string()}), out);
+        }
     }
     fn delta(&mut self, index: u64, delta: &Value, out: &mut Vec<Value>) {
         let Some(&position) = self.blocks.get(&index) else {
             return;
         };
         match (&mut self.items[position], delta["type"].as_str()) {
-            (Item::Message { text, .. }, Some("text_delta")) => {
+            (Item::Message { id, text, .. }, Some("text_delta")) => {
                 let piece = delta["text"].as_str().unwrap_or_default();
                 text.push_str(piece);
-                out.push(json!({"type":"response.output_text.delta","output_index":position,"content_index":0,"delta":piece}));
+                out.push(json!({"type":"response.output_text.delta","item_id":id,"output_index":position,"content_index":0,"delta":piece,"logprobs":[]}));
             }
-            (Item::Reasoning { text, .. }, Some("thinking_delta")) => {
+            (Item::Reasoning { id, text, .. }, Some("thinking_delta")) => {
                 let piece = delta["thinking"].as_str().unwrap_or_default();
+                if piece.is_empty() {
+                    return;
+                }
+                if text.is_empty() {
+                    out.push(json!({"type":"response.reasoning_summary_part.added","item_id":id,"output_index":position,"summary_index":0,"part":{"type":"summary_text","text":""}}));
+                }
                 text.push_str(piece);
-                out.push(json!({"type":"response.reasoning_summary_text.delta","output_index":position,"summary_index":0,"delta":piece}));
+                out.push(json!({"type":"response.reasoning_summary_text.delta","item_id":id,"output_index":position,"summary_index":0,"delta":piece}));
             }
             (Item::Reasoning { signature, .. }, Some("signature_delta")) => {
                 *signature = delta["signature"].as_str().map(str::to_owned);
             }
-            (Item::FunctionCall { arguments, .. }, Some("input_json_delta")) => {
+            (Item::FunctionCall { id, arguments, .. }, Some("input_json_delta")) => {
                 let piece = delta["partial_json"].as_str().unwrap_or_default();
                 arguments.push_str(piece);
-                out.push(json!({"type":"response.function_call_arguments.delta","output_index":position,"delta":piece}));
+                out.push(json!({"type":"response.function_call_arguments.delta","item_id":id,"output_index":position,"delta":piece}));
             }
             _ => {}
         }
     }
     fn close(&mut self, index: u64, out: &mut Vec<Value>) {
-        let Some(&position) = self.blocks.get(&index) else {
+        let Some(position) = self.blocks.remove(&index) else {
             return;
         };
         let item = &mut self.items[position];
         match item {
-            Item::Reasoning { text, .. } => {
+            Item::Reasoning { id, text, .. } => {
                 if !text.is_empty() {
-                    out.push(json!({"type":"response.reasoning_summary_text.done","output_index":position,"summary_index":0,"text":text}));
+                    out.push(json!({"type":"response.reasoning_summary_text.done","item_id":id,"output_index":position,"summary_index":0,"text":text}));
+                    out.push(json!({"type":"response.reasoning_summary_part.done","item_id":id,"output_index":position,"summary_index":0,"part":{"type":"summary_text","text":text}}));
                 }
             }
-            Item::Message { text, .. } => {
-                out.push(json!({"type":"response.output_text.done","output_index":position,"content_index":0,"text":text}));
-                out.push(json!({"type":"response.content_part.done","output_index":position,"content_index":0,
+            Item::Message { id, text, .. } => {
+                out.push(json!({"type":"response.output_text.done","item_id":id,"output_index":position,"content_index":0,"text":text,"logprobs":[]}));
+                out.push(json!({"type":"response.content_part.done","item_id":id,"output_index":position,"content_index":0,
                     "part":item.value()["content"][0]}));
             }
-            Item::FunctionCall { arguments, .. } => {
+            Item::FunctionCall { id, arguments, .. } => {
                 if arguments.is_empty() {
                     *arguments = "{}".into();
                 }
-                out.push(json!({"type":"response.function_call_arguments.done","output_index":position,"arguments":arguments}));
+                out.push(json!({"type":"response.function_call_arguments.done","item_id":id,"output_index":position,"arguments":arguments}));
             }
         }
         out.push(
@@ -355,14 +384,6 @@ impl EventConversion for ToResponses {
                     let position = position as u64;
                     self.open(position, block, &mut out);
                     match block["type"].as_str() {
-                        Some("tool_use") => {
-                            let input = block["input"].to_string();
-                            self.delta(
-                                position,
-                                &json!({"type":"input_json_delta","partial_json":input}),
-                                &mut out,
-                            );
-                        }
                         Some("thinking") => {
                             if let Some(signature) = block["signature"].as_str() {
                                 self.delta(
@@ -518,10 +539,21 @@ impl EventConversion for ToChat {
                         let position = self.next_tool;
                         self.next_tool += 1;
                         self.tools.insert(index, position);
+                        let arguments = block
+                            .get("input")
+                            .and_then(Value::as_object)
+                            .filter(|input| !input.is_empty())
+                            .map(|input| Value::Object(input.clone()).to_string())
+                            .unwrap_or_default();
                         out.push(self.delta(json!({"tool_calls":[{"index":position,"id":block["id"],"type":"function",
-                            "function":{"name":block["name"],"arguments":""}}]})));
+                            "function":{"name":block["name"],"arguments":arguments}}]})));
                     }
                     Some("thinking") => {
+                        if let Some(text) =
+                            block["thinking"].as_str().filter(|text| !text.is_empty())
+                        {
+                            out.push(self.delta(json!({"reasoning_content":text})));
+                        }
                         self.thinking.insert(
                             index,
                             (

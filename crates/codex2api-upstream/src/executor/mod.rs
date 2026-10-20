@@ -49,6 +49,10 @@ use serde_json::Value;
 /// The downstream ledger's view of supplier attempts. Every attempt is attributed to
 /// its supplier; recovered failures stay administrator-only.
 pub trait AttemptLedger {
+    /// Track actual supplier HTTP destinations for a persisted execution ledger.
+    fn endpoint_log(&self) -> Option<crate::RequestEndpoint> {
+        None
+    }
     fn rebind(
         &mut self,
         account: &SupplierAccount,
@@ -235,11 +239,14 @@ impl<'a, L: AttemptLedger> Execution<'a, L> {
                 let operation = request.operation;
                 let revision = self.storage.supplier_auth_revision(&account.id).await?;
                 let attempt = async {
-                    let response = self
+                    let send = self
                         .pool
-                        .send_at(&account, request, self.inbound.path.as_deref())
-                        .await
-                        .map_err(|error| inspect::send_failure(error, model.as_deref()))?;
+                        .send_at(&account, request, self.inbound.path.as_deref());
+                    let response = match self.ledger.endpoint_log() {
+                        Some(log) => log.scope(send).await,
+                        None => send.await,
+                    }
+                    .map_err(|error| inspect::send_failure(error, model.as_deref()))?;
                     inspect::inspect(wire, model.as_deref(), response).await
                 }
                 .await;

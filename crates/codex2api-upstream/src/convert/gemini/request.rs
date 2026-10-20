@@ -591,6 +591,13 @@ pub fn from_chat(body: &Value, headers: &HeaderMap) -> Result<Value> {
                     let arguments = payload
                         .and_then(|p| p["arguments"].as_str().or_else(|| p["input"].as_str()))
                         .unwrap_or("{}");
+                    if let Some(signature) = call
+                        .pointer("/extra_content/google/thought_signature")
+                        .and_then(Value::as_str)
+                        .filter(|signature| !signature.is_empty())
+                    {
+                        contents.pending_signature = Some(signature.to_owned());
+                    }
                     contents.function_call(
                         call["id"].as_str().unwrap_or_default(),
                         name,

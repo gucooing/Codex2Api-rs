@@ -15,6 +15,7 @@ pub(crate) enum Write {
         supplier: String,
         name: String,
         provider: String,
+        endpoint: Option<String>,
     },
     Attempt(Box<crate::UsageAttempt>),
     Start {
@@ -96,8 +97,8 @@ async fn execute(
     match write {
         Write::TouchAccess { hash, at } => Ok(sqlx::query("UPDATE virtual_devices SET last_used_at=$1 WHERE id IN(SELECT device_id FROM virtual_access_tokens WHERE token_hash=$2 AND expires_at>$3)")
             .bind(at.to_rfc3339()).bind(hash.as_str()).bind(at.timestamp()).execute(connection).await?.rows_affected()),
-        Write::Reroute { id, supplier, name, provider } => Ok(sqlx::query("UPDATE usage_records SET account_id=$1,account_name=$2,account_provider_id=$3 WHERE id=$4 AND status='in_progress'")
-            .bind(supplier.as_str()).bind(name.as_str()).bind(provider.as_str()).bind(id.as_str()).execute(connection).await?.rows_affected()),
+        Write::Reroute { id, supplier, name, provider, endpoint } => Ok(sqlx::query("UPDATE usage_records SET account_id=$1,account_name=$2,account_provider_id=$3,upstream_endpoint=$5 WHERE id=$4 AND status='in_progress'")
+            .bind(supplier.as_str()).bind(name.as_str()).bind(provider.as_str()).bind(id.as_str()).bind(endpoint.as_deref()).execute(connection).await?.rows_affected()),
         // Attempts of one request are sequential, so the next number cannot race.
         Write::Attempt(attempt) => Ok(sqlx::query("INSERT INTO usage_attempts(usage_record_id,attempt,account_id,account_name,account_provider_id,upstream_endpoint,http_status,error_code,error_message,recovery,started_at_ms,total_ms) SELECT $1,COALESCE(MAX(attempt),0)+1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 FROM usage_attempts WHERE usage_record_id=$1")
             .bind(&attempt.usage_record_id).bind(&attempt.account_id).bind(&attempt.account_name).bind(&attempt.account_provider_id).bind(&attempt.upstream_endpoint).bind(attempt.http_status)

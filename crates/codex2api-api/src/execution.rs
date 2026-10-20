@@ -45,12 +45,6 @@ async fn run(
         user_agent.as_deref(),
     )
     .await?;
-    // The ledger records the canonical protocol path, never a supplier wire path.
-    state
-        .storage
-        .set_usage_upstream_endpoint(&log.record.id, endpoint)
-        .await?;
-    log.record.upstream_endpoint = Some(endpoint.into());
     let result = crate::dispatch::forward(&state, &principal, &token, &input, &mut log).await;
     match result {
         Ok((executed, route)) => {

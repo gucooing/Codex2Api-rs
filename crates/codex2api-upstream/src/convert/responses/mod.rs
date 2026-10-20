@@ -13,6 +13,39 @@ use crate::convert::EventConversion;
 use crate::inbound::{Inbound, Result};
 use serde_json::Value;
 
+/// Locally generated Responses streams share a monotonically increasing event
+/// sequence. Native Responses streams retain the supplier's own sequence.
+pub(crate) struct Sequenced {
+    inner: Box<dyn EventConversion>,
+    next: u64,
+}
+
+impl Sequenced {
+    pub(crate) fn new(inner: Box<dyn EventConversion>) -> Self {
+        Self { inner, next: 0 }
+    }
+
+    fn number(&mut self, mut events: Vec<Value>) -> Vec<Value> {
+        for event in &mut events {
+            event["sequence_number"] = self.next.into();
+            self.next += 1;
+        }
+        events
+    }
+}
+
+impl EventConversion for Sequenced {
+    fn event(&mut self, value: Value) -> Result<Vec<Value>> {
+        let events = self.inner.event(value)?;
+        Ok(self.number(events))
+    }
+
+    fn finish(&mut self) -> Result<Vec<Value>> {
+        let events = self.inner.finish()?;
+        Ok(self.number(events))
+    }
+}
+
 /// Events of a Responses-family wire delivered to a caller of `inbound`.
 pub enum Events {
     /// Responses callers and native clients read the wire's events as they are.

@@ -63,7 +63,7 @@ pub(crate) use providers::chatgpt::timezone;
 pub(crate) use providers::chatgpt::websocket;
 pub use stream::{buffered_sse_lines, sse_data};
 pub use timing::{RequestClock, ResponseTiming, TokenProtocol};
-pub use transport::{HttpFuture, HttpTransport, ReqwestTransport};
+pub use transport::{HttpFuture, HttpTransport, RequestEndpoint, ReqwestTransport};
 
 #[cfg(test)]
 #[path = "../../codex2api-suppliers/tests/support/proxy.rs"]

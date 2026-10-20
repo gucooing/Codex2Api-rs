@@ -74,6 +74,7 @@ pub(crate) trait ProtocolObserver: Send + Sync {
     fn observe(&mut self, bytes: &[u8]) -> Vec<serde_json::Value>;
 }
 pub(crate) struct RequestLog {
+    endpoint_log: codex2api_upstream::RequestEndpoint,
     supplier_permit: Option<codex2api_storage::RuntimePermit>,
     consumer_permits: Vec<codex2api_storage::RuntimePermit>,
     timing: Option<codex2api_upstream::ResponseTiming>,
@@ -140,6 +141,7 @@ impl RequestLog {
                     &record.account_id,
                     &record.account_name,
                     &account.provider_id,
+                    record.upstream_endpoint.as_deref(),
                 )
                 .await?;
         }
@@ -188,6 +190,10 @@ impl RequestLog {
         storage.insert_usage(&record).await?;
         codex2api_upstream::RequestFailureLog::recorded();
         Ok(Self {
+            endpoint_log: codex2api_upstream::RequestEndpoint::new(
+                storage.clone(),
+                record.id.clone(),
+            ),
             supplier_permit: None,
             consumer_permits: Vec::new(),
             attempt_reported: false,
@@ -626,9 +632,11 @@ impl RequestLog {
         recovery: &str,
     ) -> crate::Result<()> {
         if let Some(record) = &self.record {
+            let mut record = record.clone();
+            record.upstream_endpoint = self.endpoint_log.latest().or(record.upstream_endpoint);
             self.storage
                 .record_usage_attempt(&codex2api_upstream::request_failure::failed_attempt(
-                    record,
+                    &record,
                     error,
                     recovery,
                     record.requested_at_ms,
@@ -671,6 +679,9 @@ impl RequestLog {
     fn take_finished(&mut self, status: &str) -> Option<UsageRecord> {
         self.capture_timing();
         let mut record = self.record.take()?;
+        if let Some(endpoint) = self.endpoint_log.latest() {
+            record.upstream_endpoint = Some(endpoint);
+        }
         if record.status == "in_progress" {
             record.status = status.into();
         }
@@ -834,11 +845,20 @@ impl Drop for RequestLog {
 /// attempt and keep recovered failures for the administrator.
 pub(crate) struct Ledger<'a>(pub(crate) &'a mut Option<RequestLog>);
 impl AttemptLedger for Ledger<'_> {
+    fn endpoint_log(&self) -> Option<codex2api_upstream::RequestEndpoint> {
+        self.0.as_ref().map(|log| log.endpoint_log.clone())
+    }
     async fn rebind(
         &mut self,
         account: &codex2api_storage::SupplierAccount,
     ) -> std::result::Result<(), codex2api_upstream::UpstreamError> {
         if let Some(log) = self.0 {
+            if let Some(record) = &mut log.record
+                && record.account_id != account.id
+            {
+                log.endpoint_log.clear();
+                record.upstream_endpoint = None;
+            }
             log.rebind_supplier(account)
                 .await
                 .map_err(|error| codex2api_upstream::UpstreamError::Internal(error.to_string()))?;

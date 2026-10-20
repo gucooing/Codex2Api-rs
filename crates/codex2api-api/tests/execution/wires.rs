@@ -5,11 +5,18 @@ use std::collections::VecDeque;
 struct WireMock {
     replies: Mutex<VecDeque<(u16, String)>>,
     calls: std::sync::atomic::AtomicUsize,
+    paths: Mutex<Vec<String>>,
     change_group: Option<(Storage, ApiGroup)>,
 }
 impl codex2api_upstream::HttpTransport for WireMock {
     fn send(&self, request: reqwest::RequestBuilder) -> codex2api_upstream::HttpFuture {
         let request = request.build();
+        if let Ok(request) = &request {
+            self.paths
+                .lock()
+                .unwrap()
+                .push(request.url().path().to_owned());
+        }
         let reply = self
             .replies
             .lock()
@@ -74,7 +81,7 @@ async fn api_fixture(
             "fixture",
             codex2api_suppliers::api::ApiCredentials {
                 api_key: "fixture-key".into(),
-                base_url: "https://example.test/v1".into(),
+                base_url: "https://example.test/gateway/v1".into(),
                 wire: wire.into(),
                 auth_scheme: "bearer".into(),
                 retry_statuses: vec![503],
@@ -115,6 +122,7 @@ async fn api_fixture(
     let mock = Arc::new(WireMock {
         replies: Mutex::new(replies.into()),
         calls: Default::default(),
+        paths: Default::default(),
         change_group: revoke.then(|| (f.storage.clone(), group)),
     });
     let accounts = codex2api_suppliers::SupplierAccountStore::open(f.storage.clone());
@@ -124,6 +132,249 @@ async fn api_fixture(
     .with_transport(mock.clone());
     f.router = codex2api_api::router(codex2api_api::ApiState::new(f.storage.clone(), pool));
     (f, mock)
+}
+
+struct StagedStream {
+    first: String,
+    rest: Mutex<Option<tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>>>,
+}
+impl codex2api_upstream::HttpTransport for StagedStream {
+    fn send(&self, request: reqwest::RequestBuilder) -> codex2api_upstream::HttpFuture {
+        let request = request.build();
+        if let Ok(request) = &request
+            && request.method() == http::Method::GET
+        {
+            // ChatGPT performs its workspace discovery before generation.
+            let workspace = request.headers()["chatgpt-account-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            return Box::pin(async move {
+                Ok(http::Response::builder().header("content-type","application/json")
+                    .body(reqwest::Body::from(json!({"accounts":[{"id":workspace,
+                        "workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}).to_string()))
+                    .unwrap().into())
+            });
+        }
+        // Split frames and UTF-8 across transport chunks, then leave the wire open.
+        let first: Vec<_> = self
+            .first
+            .as_bytes()
+            .chunks(7)
+            .map(|bytes| Ok::<_, std::io::Error>(Bytes::copy_from_slice(bytes)))
+            .collect();
+        let rest = self
+            .rest
+            .lock()
+            .unwrap()
+            .take()
+            .expect("unexpected supplier replay");
+        Box::pin(async move {
+            request?;
+            let stream = futures::stream::iter(first)
+                .chain(tokio_stream::wrappers::ReceiverStream::new(rest));
+            Ok(http::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(reqwest::Body::wrap_stream(stream))
+                .unwrap()
+                .into())
+        })
+    }
+}
+
+fn staged_events(wire: &str) -> [Vec<Value>; 3] {
+    match wire {
+        "gemini" => [
+            vec![
+                json!({"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"思考 phase-one"}]}}]}}),
+            ],
+            vec![json!({"response":{"candidates":[{"content":{"parts":[
+                {"text":"正文 phase-two"},
+                {"functionCall":{"id":"call_1","name":"lookup","args":{"city":"Taipei"}},"thoughtSignature":"call-signature"}
+            ]},"finishReason":"STOP"}]}})],
+            vec![
+                json!({"response":{"usageMetadata":{"promptTokenCount":10000,"candidatesTokenCount":4000,"thoughtsTokenCount":1000}}}),
+            ],
+        ],
+        "chat_completions" => [
+            vec![
+                json!({"id":"chat_1","model":"custom-model","choices":[{"index":0,"delta":{"reasoning":"思考 phase-one"},"finish_reason":null}]}),
+            ],
+            vec![
+                json!({"id":"chat_1","choices":[{"index":0,"delta":{"content":"正文 phase-two","tool_calls":[
+                {"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Taipei\"}"}}
+            ]},"finish_reason":"tool_calls"}]}),
+            ],
+            vec![
+                json!({"id":"chat_1","choices":[],"usage":{"prompt_tokens":10000,"completion_tokens":5000,"completion_tokens_details":{"reasoning_tokens":1000}}}),
+            ],
+        ],
+        "messages" => [
+            vec![
+                json!({"type":"message_start","message":{"id":"msg_1","model":"custom-model","role":"assistant","content":[],"usage":{"input_tokens":10000,"output_tokens":0}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"思考 phase-one"}}),
+            ],
+            vec![
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"thinking-signature"}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"正文 phase-two"}}),
+                json!({"type":"content_block_stop","index":1}),
+                json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call_1","name":"lookup","input":{}}}),
+                json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"Taipei\"}"}}),
+                json!({"type":"content_block_stop","index":2}),
+            ],
+            vec![
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5000}}),
+                json!({"type":"message_stop"}),
+            ],
+        ],
+        _ => {
+            let reasoning = json!({"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"思考 phase-one"}],"encrypted_content":"thinking-signature"});
+            let message = json!({"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"正文 phase-two","annotations":[]}]});
+            let tool = json!({"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"city\":\"Taipei\"}","status":"completed"});
+            [
+                vec![
+                    json!({"type":"response.created","response":{"id":"resp_1","model":"custom-model","created_at":100,"status":"in_progress"}}),
+                    json!({"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[]}}),
+                    json!({"type":"response.reasoning_summary_part.added","output_index":0,"item_id":"rs_1","summary_index":0,"part":{"type":"summary_text","text":""}}),
+                    json!({"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_1","summary_index":0,"delta":"思考 phase-one"}),
+                ],
+                vec![
+                    json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
+                    json!({"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}),
+                    json!({"type":"response.content_part.added","output_index":1,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+                    json!({"type":"response.output_text.delta","output_index":1,"item_id":"msg_1","content_index":0,"delta":"正文 phase-two"}),
+                    json!({"type":"response.output_item.done","output_index":1,"item":message}),
+                    json!({"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":""}}),
+                    json!({"type":"response.function_call_arguments.delta","output_index":2,"item_id":"fc_1","delta":"{\"city\":\"Taipei\"}"}),
+                    json!({"type":"response.output_item.done","output_index":2,"item":tool}),
+                ],
+                vec![
+                    json!({"type":"response.completed","response":{"id":"resp_1","model":"custom-model","created_at":100,"status":"completed","output":[reasoning,message,tool],
+                    "usage":{"input_tokens":10000,"output_tokens":5000,"output_tokens_details":{"reasoning_tokens":1000}}}}),
+                ],
+            ]
+        }
+    }
+}
+
+fn sse(events: &[Value]) -> String {
+    events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect()
+}
+
+#[tokio::test]
+async fn every_wire_delivers_thoughts_text_and_tools_before_the_upstream_closes() {
+    use std::time::Duration;
+    for wire in [
+        "gemini",
+        "chat_completions",
+        "messages",
+        "openai_responses",
+        "chatgpt",
+        "grok",
+    ] {
+        for (path, body, terminal) in [
+            (
+                "/v1/responses",
+                json!({"model":"custom-model","input":"hello","stream":true}),
+                "response.completed",
+            ),
+            (
+                "/v1/chat/completions",
+                json!({"model":"custom-model","messages":[{"role":"user","content":"hello"}],"stream":true,"stream_options":{"include_usage":true}}),
+                "[DONE]",
+            ),
+            (
+                "/v1/messages",
+                json!({"model":"custom-model","max_tokens":100,"messages":[{"role":"user","content":"hello"}],"stream":true}),
+                "message_stop",
+            ),
+        ] {
+            let mut f = match wire {
+                "gemini" => fixture("antigravity").await,
+                "chatgpt" | "grok" => fixture(wire).await,
+                _ => api_fixture(wire, vec![], false).await.0,
+            };
+            let stages = staged_events(wire);
+            let (sender, receiver) = tokio::sync::mpsc::channel(2);
+            let mock = Arc::new(StagedStream {
+                first: sse(&stages[0]),
+                rest: Mutex::new(Some(receiver)),
+            });
+            let accounts = codex2api_suppliers::SupplierAccountStore::open(f.storage.clone());
+            let pool = codex2api_upstream::UpstreamPool::new(
+                codex2api_suppliers::AuthService::new(accounts).unwrap(),
+            )
+            .with_transport(mock);
+            f.router = codex2api_api::router(codex2api_api::ApiState::new(f.storage.clone(), pool));
+            let response = tokio::time::timeout(
+                Duration::from_secs(5),
+                f.router.clone().oneshot(request(path, &f.token, body)),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{wire} {path}: headers waited for upstream completion"))
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{wire} {path}");
+            let mut body = response.into_body().into_data_stream();
+            let mut received = String::new();
+            for (phase, needle) in [(0, "phase-one"), (1, "Taipei")] {
+                if phase == 1 {
+                    sender.send(Ok(Bytes::from(sse(&stages[1])))).await.unwrap();
+                }
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !received.contains(needle) {
+                        let next = body
+                            .next()
+                            .await
+                            .expect("stream ended before the next phase")
+                            .unwrap();
+                        received.push_str(std::str::from_utf8(&next).unwrap());
+                    }
+                })
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("{wire} {path}: {needle} waited for upstream completion: {received}")
+                });
+                assert!(
+                    !received.contains(terminal),
+                    "premature completion: {received}"
+                );
+            }
+            assert!(received.contains("phase-two"));
+            let status: String = sqlx::query_scalar("SELECT status FROM usage_records")
+                .fetch_one(f.storage.pool())
+                .await
+                .unwrap();
+            assert_eq!(status, "in_progress");
+            sender.send(Ok(Bytes::from(sse(&stages[2])))).await.unwrap();
+            drop(sender);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(next) = body.next().await {
+                    received.push_str(std::str::from_utf8(&next.unwrap()).unwrap());
+                }
+            })
+            .await
+            .expect("stream did not complete");
+            assert!(received.contains(terminal), "{wire} {path}: {received}");
+            assert!(!received.contains("upstream_protocol_error"), "{received}");
+            let row: (String, Option<i64>, Option<i64>, i64) = sqlx::query_as(
+                "SELECT status,input_tokens,output_tokens,wallet_debit_cents FROM usage_records",
+            )
+            .fetch_one(f.storage.pool())
+            .await
+            .unwrap();
+            assert_eq!(
+                (&row.0, row.1, row.2),
+                (&"completed".to_owned(), Some(10000), Some(5000))
+            );
+            assert!(row.3 > 0);
+        }
+    }
 }
 
 #[tokio::test]
@@ -179,6 +430,19 @@ async fn api_wire_tail_is_delivered_and_wallet_uses_final_usage() {
                     )
                 );
                 assert_eq!(mock.calls.load(Ordering::Relaxed), 1);
+                let endpoint: Option<String> =
+                    sqlx::query_scalar("SELECT upstream_endpoint FROM usage_records")
+                        .fetch_one(f.storage.pool())
+                        .await
+                        .unwrap();
+                let suffix = if wire == "messages" {
+                    "messages"
+                } else {
+                    "chat/completions"
+                };
+                let expected = format!("/gateway/v1/{suffix}");
+                assert_eq!(endpoint.as_deref(), Some(expected.as_str()));
+                assert_eq!(*mock.paths.lock().unwrap(), [expected]);
             }
         }
     }
@@ -228,6 +492,15 @@ async fn retry_is_recorded_once_and_revalidates_the_consumer() {
             .await
             .unwrap();
         assert_eq!(recovery, ["retry"]);
+        let attempt_endpoint: Option<String> =
+            sqlx::query_scalar("SELECT upstream_endpoint FROM usage_attempts")
+                .fetch_one(f.storage.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            attempt_endpoint.as_deref(),
+            Some("/gateway/v1/chat/completions")
+        );
         let row: (String, Option<i64>) =
             sqlx::query_as("SELECT status,output_tokens FROM usage_records")
                 .fetch_one(f.storage.pool())
@@ -287,6 +560,12 @@ async fn configured_but_blocked_model_returns_unavailable_not_missing() {
         "no_available_supplier"
     );
     assert!(f.mock.requests.lock().unwrap().is_empty());
+    let endpoint: Option<String> =
+        sqlx::query_scalar("SELECT upstream_endpoint FROM usage_records")
+            .fetch_one(f.storage.pool())
+            .await
+            .unwrap();
+    assert!(endpoint.is_none(), "no supplier request was sent");
     f.storage
         .remove_supplier_model("supplier", "custom-model")
         .await
@@ -306,4 +585,134 @@ async fn configured_but_blocked_model_returns_unavailable_not_missing() {
         json_body(response).await["error"]["code"],
         "model_not_found"
     );
+}
+
+async fn failover_fixture(first: &str, second: &str) -> Fixture {
+    let f = fixture(first).await;
+    add_supplier(&f.storage, second, "supplier-two").await;
+    f.storage
+        .save_supplier_tag("second-tag", second, second)
+        .await
+        .unwrap();
+    f.storage
+        .edit_supplier_tags(&["supplier-two".into()], &["second-tag".into()], false)
+        .await
+        .unwrap();
+    let mut group = f
+        .storage
+        .authenticate_api_key(&f.token)
+        .await
+        .unwrap()
+        .unwrap()
+        .group;
+    group.tag_ids.push("second-tag".into());
+    f.storage
+        .save_api_group(&group, Some(group.revision))
+        .await
+        .unwrap();
+    let mut settings = f.storage.gateway_settings().await.unwrap();
+    settings.scheduler_mode = "traditional".into();
+    f.storage.save_gateway_settings(&settings).await.unwrap();
+    f.storage
+        .save_supplier_scheduling(
+            "supplier-two",
+            &codex2api_storage::SupplierScheduling {
+                priority: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    f
+}
+
+#[tokio::test]
+async fn cross_channel_failover_records_each_actual_wire_path() {
+    let f = failover_fixture("antigravity", "chatgpt").await;
+    *f.mock.antigravity_reply.lock().unwrap() = Some((429, json!({"error":{
+        "code":429,"status":"RESOURCE_EXHAUSTED","message":"You have exhausted your capacity on this model.",
+        "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED"},
+            {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"120s"}]
+    }}).to_string()));
+    let response = f.router.clone().oneshot(request("/v1/messages", &f.token,
+        json!({"model":"custom-model","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["type"], "message");
+    let calls: Vec<String> = f
+        .mock
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.0.clone())
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            "/v1internal:streamGenerateContent",
+            "/backend-api/codex/responses"
+        ]
+    );
+    let attempt: (String, Option<String>, String) =
+        sqlx::query_as("SELECT account_provider_id,upstream_endpoint,recovery FROM usage_attempts")
+            .fetch_one(f.storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        attempt,
+        (
+            "antigravity".into(),
+            Some(calls[0].clone()),
+            "failover".into()
+        )
+    );
+    let final_record: (String, Option<String>, String) =
+        sqlx::query_as("SELECT account_provider_id,upstream_endpoint,status FROM usage_records")
+            .fetch_one(f.storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        final_record,
+        ("chatgpt".into(), Some(calls[1].clone()), "completed".into())
+    );
+}
+
+#[tokio::test]
+async fn conversion_failure_after_failover_does_not_inherit_the_previous_destination() {
+    let f = failover_fixture("chatgpt", "antigravity").await;
+    *f.mock.status.lock().unwrap() = Some(429);
+    // Codex accepts a remote image, but Gemini conversion rejects it before send.
+    let response = f
+        .router
+        .clone()
+        .oneshot(request(
+            "/v1/responses",
+            &f.token,
+            json!({"model":"custom-model","input":[{"role":"user","content":[
+                {"type":"input_image","image_url":"https://example.test/image.png"}
+            ]}]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    json_body(response).await;
+    let calls: Vec<_> = f
+        .mock
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.0.clone())
+        .collect();
+    assert_eq!(calls, ["/backend-api/codex/responses"]);
+    let attempt: (String, Option<String>) = sqlx::query_as(
+        "SELECT account_provider_id,upstream_endpoint FROM usage_attempts WHERE recovery='failover'",
+    ).fetch_one(f.storage.pool()).await.unwrap();
+    assert_eq!(attempt, ("chatgpt".into(), Some(calls[0].clone())));
+    let record: (String, Option<String>, String) =
+        sqlx::query_as("SELECT account_provider_id,upstream_endpoint,status FROM usage_records")
+            .fetch_one(f.storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(record, ("antigravity".into(), None, "failed".into()));
 }

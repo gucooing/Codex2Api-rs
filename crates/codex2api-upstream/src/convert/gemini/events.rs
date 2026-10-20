@@ -27,6 +27,14 @@ enum Item {
 }
 
 impl Item {
+    fn id(&self) -> &str {
+        match self {
+            Self::Reasoning { id, .. }
+            | Self::Message { id, .. }
+            | Self::FunctionCall { id, .. } => id,
+        }
+    }
+
     fn value(&self) -> Value {
         match self {
             Self::Reasoning {
@@ -163,7 +171,7 @@ impl Converter {
                 json!({"type":"response.output_item.added","output_index":index,"item":added}),
             );
             out.push(
-                json!({"type":"response.content_part.added","output_index":index,"content_index":0,
+                json!({"type":"response.content_part.added","item_id":self.items[index].id(),"output_index":index,"content_index":0,
                 "part":{"type":"output_text","text":"","annotations":[]}}),
             );
             for annotation in std::mem::take(&mut self.pending_annotations) {
@@ -189,18 +197,19 @@ impl Converter {
         let index = self.index();
         let item = &self.items[index];
         match item {
-            Item::Reasoning { text, .. } => {
+            Item::Reasoning { id, text, .. } => {
                 if !text.is_empty() {
-                    out.push(json!({"type":"response.reasoning_summary_text.done","output_index":index,"summary_index":0,"text":text}));
+                    out.push(json!({"type":"response.reasoning_summary_text.done","item_id":id,"output_index":index,"summary_index":0,"text":text}));
+                    out.push(json!({"type":"response.reasoning_summary_part.done","item_id":id,"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":text}}));
                 }
             }
-            Item::Message { text, .. } => {
-                out.push(json!({"type":"response.output_text.done","output_index":index,"content_index":0,"text":text}));
-                out.push(json!({"type":"response.content_part.done","output_index":index,"content_index":0,
+            Item::Message { id, text, .. } => {
+                out.push(json!({"type":"response.output_text.done","item_id":id,"output_index":index,"content_index":0,"text":text,"logprobs":[]}));
+                out.push(json!({"type":"response.content_part.done","item_id":id,"output_index":index,"content_index":0,
                     "part":item.value()["content"][0]}));
             }
-            Item::FunctionCall { arguments, .. } => {
-                out.push(json!({"type":"response.function_call_arguments.done","output_index":index,"arguments":arguments}));
+            Item::FunctionCall { id, arguments, .. } => {
+                out.push(json!({"type":"response.function_call_arguments.done","item_id":id,"output_index":index,"arguments":arguments}));
             }
         }
         out.push(
@@ -216,21 +225,12 @@ impl Converter {
         self.open && matches!(self.items.last(), Some(Item::Message { .. }))
     }
 
-    /// A signature on a non-thought part belongs to the reasoning that produced it;
-    /// without one it travels as an empty reasoning item so callers can replay it.
+    /// Keep a non-thought signature separate from preceding thought text. The
+    /// empty item binds it to the following part when the caller replays history.
     fn carry_signature(&mut self, signature: Option<String>, out: &mut Vec<Value>) {
         let Some(signature) = signature else {
             return;
         };
-        if self.open_reasoning()
-            && let Some(Item::Reasoning {
-                signature: slot, ..
-            }) = self.items.last_mut()
-            && slot.is_none()
-        {
-            *slot = Some(signature);
-            return;
-        }
         self.open_item(
             Item::Reasoning {
                 id: item_id("rs"),
@@ -260,13 +260,15 @@ impl Converter {
         if let Some(Item::Message { text: buffer, .. }) = self.items.last_mut() {
             buffer.push_str(text);
         }
-        out.push(json!({"type":"response.output_text.delta","output_index":index,"content_index":0,"delta":text}));
+        out.push(json!({"type":"response.output_text.delta","item_id":self.items[index].id(),"output_index":index,"content_index":0,"delta":text,"logprobs":[]}));
     }
 
     fn annotate(&mut self, mut annotation: Value, out: &mut Vec<Value>) {
         let index = self.index();
         let Some(Item::Message {
-            text, annotations, ..
+            id,
+            text,
+            annotations,
         }) = self.items.last_mut()
         else {
             return;
@@ -276,7 +278,7 @@ impl Converter {
         annotation["end_index"] = offset.into();
         let position = annotations.len();
         annotations.push(annotation.clone());
-        out.push(json!({"type":"response.output_text.annotation.added","output_index":index,"content_index":0,
+        out.push(json!({"type":"response.output_text.annotation.added","item_id":id,"output_index":index,"content_index":0,
             "annotation_index":position,"annotation":annotation}));
     }
 
@@ -305,7 +307,7 @@ impl Converter {
                 out,
             );
             let index = self.index();
-            out.push(json!({"type":"response.function_call_arguments.delta","output_index":index,"delta":arguments}));
+            out.push(json!({"type":"response.function_call_arguments.delta","item_id":self.items[index].id(),"output_index":index,"delta":arguments}));
             self.close(out);
             return;
         }
@@ -322,17 +324,21 @@ impl Converter {
             }
             let index = self.index();
             if let Some(Item::Reasoning {
+                id,
                 text: buffer,
                 signature: slot,
-                ..
             }) = self.items.last_mut()
             {
                 if let Some(text) = part["text"].as_str().filter(|t| !t.is_empty()) {
+                    if buffer.is_empty() {
+                        out.push(json!({"type":"response.reasoning_summary_part.added","item_id":id,"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":""}}));
+                    }
                     buffer.push_str(text);
-                    out.push(json!({"type":"response.reasoning_summary_text.delta","output_index":index,"summary_index":0,"delta":text}));
+                    out.push(json!({"type":"response.reasoning_summary_text.delta","item_id":id,"output_index":index,"summary_index":0,"delta":text}));
                 }
                 if signature.is_some() {
                     *slot = signature;
+                    self.close(out);
                 }
             }
             return;
@@ -754,9 +760,6 @@ impl EventConversion for ToChat {
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned);
                 if let Some(call) = part.get("functionCall").filter(|c| c.is_object()) {
-                    if signature.is_some() {
-                        self.signature = signature;
-                    }
                     self.close_reasoning(&mut out);
                     let arguments = call
                         .get("args")
@@ -768,8 +771,12 @@ impl EventConversion for ToChat {
                     );
                     let index = self.tools;
                     self.tools += 1;
-                    out.push(self.delta(json!({"tool_calls":[{"index":index,"id":id,"type":"function",
-                        "function":{"name":call["name"].as_str().unwrap_or_default(),"arguments":arguments}}]})));
+                    let mut tool = json!({"index":index,"id":id,"type":"function",
+                        "function":{"name":call["name"].as_str().unwrap_or_default(),"arguments":arguments}});
+                    if let Some(signature) = signature {
+                        tool["extra_content"] = json!({"google":{"thought_signature":signature}});
+                    }
+                    out.push(self.delta(json!({"tool_calls":[tool]})));
                     continue;
                 }
                 if part["thought"] == true {
@@ -779,9 +786,11 @@ impl EventConversion for ToChat {
                     }
                     if signature.is_some() {
                         self.signature = signature;
+                        self.close_reasoning(&mut out);
                     }
                     continue;
                 }
+                self.close_reasoning(&mut out);
                 if signature.is_some() {
                     self.signature = signature;
                 }
@@ -971,6 +980,7 @@ impl EventConversion for ToMessages {
                     .map(str::to_owned);
                 if let Some(call) = part.get("functionCall").filter(|c| c.is_object()) {
                     if let Some(signature) = signature {
+                        self.close_open(&mut out);
                         let key = self.block_of(
                             Kind::Thinking,
                             json!({"type":"thinking","thinking":""}),
@@ -1012,6 +1022,7 @@ impl EventConversion for ToMessages {
                     continue;
                 }
                 if let Some(signature) = signature {
+                    self.close_open(&mut out);
                     let key = self.block_of(
                         Kind::Thinking,
                         json!({"type":"thinking","thinking":""}),

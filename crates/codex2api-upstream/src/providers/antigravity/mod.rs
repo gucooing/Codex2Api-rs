@@ -1,5 +1,5 @@
 //! Antigravity transport: the desktop client's v1internal envelope on the account's
-//! frozen identity and Google OAuth. Shared code only ever receives Responses events.
+//! frozen identity and Google OAuth. Gemini replies feed the wire conversion matrix.
 use crate::{Result, SupplierAuthRevision, UpstreamError};
 use bytes::Bytes;
 use codex2api_common::providers::antigravity as models;
@@ -89,10 +89,12 @@ impl AntigravityUpstream {
                 .header(http::header::CONTENT_TYPE, "application/json")
                 .body(body.clone());
             // Bound the wait for headers; generations stay with the stream watchdog.
-            let response =
-                tokio::time::timeout(Duration::from_secs(120), self.transport.send(request))
-                    .await
-                    .map_err(|_| UpstreamError::StreamIdleTimeout)?;
+            let response = tokio::time::timeout(
+                Duration::from_secs(120),
+                crate::transport::send(self.transport.as_ref(), request),
+            )
+            .await
+            .map_err(|_| UpstreamError::StreamIdleTimeout)?;
             match response {
                 Ok(response) if response.status() == http::StatusCode::NOT_FOUND && more => {}
                 Ok(response) => return Ok(response),
@@ -115,7 +117,7 @@ impl AntigravityUpstream {
         resolve_model(model, effort, descriptor.as_ref()).map_err(UpstreamError::InvalidRequest)
     }
 
-    /// A streamed generation; the reply is a Responses event stream or a normalized error.
+    /// A streamed generation; the reply is a Gemini event stream or a normalized error.
     pub async fn generate(&self, id: &str, body: Value) -> Result<reqwest::Response> {
         let model = body["model"]
             .as_str()

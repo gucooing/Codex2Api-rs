@@ -14,6 +14,7 @@ use std::time::Instant;
 
 pub(crate) struct ApiLog {
     storage: Storage,
+    endpoint_log: codex2api_upstream::RequestEndpoint,
     pub(crate) record: UsageRecord,
     pub(crate) lifecycle: ResponseLifecycle,
     pub(crate) auth_revision: Option<i64>,
@@ -31,6 +32,10 @@ impl ApiLog {
     pub(crate) fn new(storage: Storage, record: UsageRecord, started: Instant) -> Self {
         codex2api_upstream::RequestFailureLog::recorded();
         Self {
+            endpoint_log: codex2api_upstream::RequestEndpoint::new(
+                storage.clone(),
+                record.id.clone(),
+            ),
             storage,
             record,
             lifecycle: ResponseLifecycle::default(),
@@ -67,9 +72,11 @@ impl ApiLog {
         error: &codex2api_upstream::UpstreamError,
         recovery: &str,
     ) -> Result<()> {
+        let mut record = self.record.clone();
+        record.upstream_endpoint = self.endpoint_log.latest().or(record.upstream_endpoint);
         self.storage
             .record_usage_attempt(&codex2api_upstream::request_failure::failed_attempt(
-                &self.record,
+                &record,
                 error,
                 recovery,
                 self.attempt_started,
@@ -241,6 +248,9 @@ impl ApiLog {
         Ok(())
     }
     fn finalize_record(&mut self) {
+        if let Some(endpoint) = self.endpoint_log.latest() {
+            self.record.upstream_endpoint = Some(endpoint);
+        }
         self.record.first_token_ms = self
             .timing
             .as_ref()
@@ -298,11 +308,30 @@ impl ApiLog {
 }
 
 impl AttemptLedger for ApiLog {
+    fn endpoint_log(&self) -> Option<codex2api_upstream::RequestEndpoint> {
+        Some(self.endpoint_log.clone())
+    }
     async fn rebind(
         &mut self,
         account: &codex2api_storage::SupplierAccount,
     ) -> std::result::Result<(), codex2api_upstream::UpstreamError> {
+        if self.record.account_id == account.id {
+            return Ok(());
+        }
+        // A new supplier has not received a request yet. Keep the preceding
+        // destination on its failed attempt, never on this supplier's record.
+        self.endpoint_log.clear();
+        self.record.upstream_endpoint = None;
         self.supplier(account);
+        self.storage
+            .reroute_usage(
+                &self.record.id,
+                &self.record.account_id,
+                &self.record.account_name,
+                &account.provider_id,
+                None,
+            )
+            .await?;
         Ok(())
     }
     async fn attempt_failed(

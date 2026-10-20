@@ -817,6 +817,13 @@ async fn disconnection_keeps_generation_lease_and_settles_without_oauth() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(fixture.state.runtime().current_for_key(&fixture.key_id), 1);
+    let endpoint: Option<String> = sqlx::query_scalar(
+        "SELECT upstream_endpoint FROM usage_records WHERE status='in_progress'",
+    )
+    .fetch_one(fixture.storage.pool())
+    .await
+    .unwrap();
+    assert_eq!(endpoint.as_deref(), Some("/backend-api/codex/responses"));
     let rejected = fixture
         .router
         .clone()
@@ -1752,7 +1759,17 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
             .usage("user", &codex2api_storage::UserUsageFilter::default())
             .await
             .unwrap();
-        assert_eq!(public["items"][0]["upstream_endpoint"], "/v1/responses");
+        assert!(public["items"][0].get("upstream_endpoint").is_none());
+        assert_eq!(public["items"][0]["endpoint"], path);
+        let endpoint: Option<String> =
+            sqlx::query_scalar("SELECT upstream_endpoint FROM usage_records")
+                .fetch_one(fixture.storage.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("/v1internal:streamGenerateContent")
+        );
         let calls = fixture.mock.requests.lock().unwrap();
         assert_eq!(calls.len(), 1);
         let (upstream_path, headers, envelope) = &calls[0];
@@ -1814,8 +1831,8 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
         assert!(gemini.get("metadata").is_none());
     }
 
-    // Explicit quota exhaustion cools down the exhausted model alone; a shared
-    // capacity shortage is forwarded without touching supplier state.
+    // Explicit quota exhaustion cools down the exhausted model alone. Generic
+    // server errors retry twice, then switch without creating a quota block.
     let fixture = fixture("antigravity").await;
     let generate = || {
         request(
@@ -1829,7 +1846,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     let status = response.status();
     let value = json_body(response).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
-    assert_eq!(value["error"]["code"], "service_unavailable");
+    assert_eq!(value["error"]["code"], "no_available_supplier");
     assert!(!value.to_string().contains("private-supplier"));
     let cooldowns = fixture
         .storage
@@ -1876,7 +1893,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     let status = response.status();
     let value = json_body(response).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
-    assert_eq!(value["error"]["code"], "service_unavailable", "{value}");
+    assert_eq!(value["error"]["code"], "no_available_supplier", "{value}");
     assert!(
         fixture
             .storage
@@ -1885,7 +1902,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
             .unwrap()
             .is_empty()
     );
-    assert_eq!(fixture.mock.requests.lock().unwrap().len(), 2);
+    assert_eq!(fixture.mock.requests.lock().unwrap().len(), 4);
     *fixture.mock.status.lock().unwrap() = None;
     let response = fixture.router.clone().oneshot(generate()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);

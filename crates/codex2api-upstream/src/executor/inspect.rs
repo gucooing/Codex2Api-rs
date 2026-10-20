@@ -57,14 +57,14 @@ pub fn generation_observed(value: &Value) -> bool {
                     .get("delta")
                     .or_else(|| choice.get("message"))
                     .unwrap_or(choice);
-                message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| !text.is_empty())
-                    || message
-                        .get("reasoning_content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|text| !text.is_empty())
+                ["content", "reasoning_content", "reasoning", "refusal"]
+                    .iter()
+                    .any(|field| {
+                        message[*field]
+                            .as_str()
+                            .is_some_and(|text| !text.is_empty())
+                    })
+                    || nonempty_array(&message["reasoning"])
                     || message.get("function_call").is_some_and(|v| !v.is_null())
                     || nonempty_array(&message["tool_calls"])
             })

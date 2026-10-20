@@ -373,12 +373,14 @@ impl Storage {
         account: &str,
         name: &str,
         provider: &str,
+        endpoint: Option<&str>,
     ) -> Result<()> {
         self.write_request(crate::request_writer::Write::Reroute {
             id: id.into(),
             supplier: account.into(),
             name: name.into(),
             provider: provider.into(),
+            endpoint: endpoint.map(str::to_owned),
         })
         .await?;
         Ok(())

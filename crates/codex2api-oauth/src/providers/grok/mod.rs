@@ -318,7 +318,6 @@ pub(crate) async fn forward(
                 &format!("/v1/grok/v1/{endpoint}"),
                 "http",
             )
-            .with_upstream_endpoint(format!("/v1/{endpoint}"))
             .with_user_agent(&headers)
             .with_supplier_permit(ctx.permit.take())
             .start_admitted(admission, start, requested_at)

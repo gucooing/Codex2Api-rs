@@ -1,5 +1,5 @@
 //! Protocol completion and conversion share a stream lifetime. Finish reasons can
-//! precede usage and closing events; only the wire's actual end releases the tail.
+//! precede usage and closing events; only terminal events wait for the actual end.
 use super::{EventConversion, Observation, Outcome};
 use crate::{
     inbound::{Error, Inbound, Result},
@@ -70,10 +70,9 @@ impl Stream {
             });
         }
         if self.pending.is_some() {
-            self.tail.extend(events);
             Ok(Frame {
                 observation,
-                events: Vec::new(),
+                events: self.defer_completion(events),
             })
         } else {
             Ok(Frame {
@@ -83,11 +82,62 @@ impl Stream {
         }
     }
 
+    /// A finish reason can share a chunk with the last text or tool arguments.
+    /// Deliver that content now; hold only completion and usage until settlement.
+    fn defer_completion(&mut self, events: Vec<Value>) -> Vec<Value> {
+        let mut ready = Vec::new();
+        for mut event in events {
+            if matches!(
+                event["type"].as_str(),
+                Some(
+                    "message_delta"
+                        | "message_stop"
+                        | "response.completed"
+                        | "response.incomplete"
+                        | "response.failed"
+                        | "error"
+                )
+            ) {
+                self.tail.push(event);
+            } else if let Some(choices) = event["choices"].as_array() {
+                if choices.is_empty() {
+                    self.tail.push(event);
+                } else if choices
+                    .iter()
+                    .any(|choice| choice["finish_reason"].is_string())
+                {
+                    let mut terminal = event.clone();
+                    let mut has_delta = false;
+                    for choice in event["choices"].as_array_mut().expect("choices") {
+                        has_delta |= choice["delta"]
+                            .as_object()
+                            .is_some_and(|delta| !delta.is_empty());
+                        choice["finish_reason"] = Value::Null;
+                    }
+                    if has_delta {
+                        event.as_object_mut().expect("event").remove("usage");
+                        ready.push(event);
+                        for choice in terminal["choices"].as_array_mut().expect("choices") {
+                            choice["delta"] = serde_json::json!({});
+                            choice["logprobs"] = Value::Null;
+                        }
+                    }
+                    self.tail.push(terminal);
+                } else {
+                    ready.push(event);
+                }
+            } else {
+                ready.push(event);
+            }
+        }
+        ready
+    }
+
     pub fn finish(&mut self) -> Result<Frame> {
         if self.ended || !matches!(self.wire, Wire::ChatCompletions | Wire::Gemini) {
-            return Err(Error::upstream_incomplete());
+            return Err(Error::stream_incomplete());
         }
-        let outcome = self.pending.take().ok_or_else(Error::upstream_incomplete)?;
+        let outcome = self.pending.take().ok_or_else(Error::stream_incomplete)?;
         self.ended = true;
         self.tail.extend(self.converter.finish()?);
         Ok(Frame {

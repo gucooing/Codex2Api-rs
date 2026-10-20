@@ -272,7 +272,7 @@ impl UpstreamClient {
                 request = request.body(prepared.body.clone());
             }
             let timing = crate::ResponseTiming::default();
-            let mut response = self.transport.send(request).await?;
+            let mut response = crate::transport::send(self.transport.as_ref(), request).await?;
             if method == http::Method::POST
                 && reqwest::Url::parse(url)
                     .ok()

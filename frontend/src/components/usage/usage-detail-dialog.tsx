@@ -128,6 +128,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
                 </FieldTitle>
                 <FieldDescription className="whitespace-pre-wrap break-words">
                   {`${attempt.account_name} · ${attempt.account_provider_id} · HTTP ${attempt.http_status ?? "-"} · ${attempt.error_code ?? "-"} · ${duration(attempt.total_ms)}`}
+                  {`\n上游接口: ${attempt.upstream_endpoint ?? "—"}`}
                   {attempt.error_message ? `\n${attempt.error_message}` : ""}
                 </FieldDescription>
               </Field>

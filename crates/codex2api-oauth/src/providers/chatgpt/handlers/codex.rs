@@ -93,14 +93,6 @@ pub async fn forward(
                     &format!("/v1/{path}"),
                     "http",
                 )
-                .with_upstream_endpoint(format!(
-                    "/v1/{}",
-                    if endpoint.is_response() {
-                        codex2api_upstream::Endpoint::Responses.codex_path()
-                    } else {
-                        path.as_str()
-                    }
-                ))
                 .with_user_agent(&headers)
                 .with_supplier_permit(ctx.permit.take())
                 .start_admitted(admission, start, requested_at)

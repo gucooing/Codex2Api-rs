@@ -26,7 +26,6 @@ export type UsageRecord = {
   key_id: string | null;
   source_name: string | null;
   endpoint: string;
-  upstream_endpoint: string | null;
   client_ip: string | null;
   transport: string;
   stream: boolean | null;

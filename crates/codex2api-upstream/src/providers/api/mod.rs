@@ -65,9 +65,12 @@ impl ApiUpstream {
             None => http.client.get(url).headers(headers),
         };
         // Bound the wait for headers; generations stay with the stream watchdog.
-        tokio::time::timeout(Duration::from_secs(120), self.transport.send(request))
-            .await
-            .map_err(|_| UpstreamError::StreamIdleTimeout)?
+        tokio::time::timeout(
+            Duration::from_secs(120),
+            crate::transport::send(self.transport.as_ref(), request),
+        )
+        .await
+        .map_err(|_| UpstreamError::StreamIdleTimeout)?
     }
 
     /// One generation in the account's wire; the reply is the vendor's own stream.

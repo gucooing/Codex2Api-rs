@@ -123,6 +123,14 @@ enum Item {
     },
 }
 impl Item {
+    fn id(&self) -> &str {
+        match self {
+            Self::Reasoning { id, .. }
+            | Self::Message { id, .. }
+            | Self::FunctionCall { id, .. } => id,
+        }
+    }
+
     fn value(&self) -> Value {
         match self {
             Self::Reasoning { id, text } => {
@@ -156,7 +164,7 @@ struct ToResponses {
     started: bool,
     finished: bool,
     items: Vec<Item>,
-    open: bool,
+    open: Option<usize>,
     /// Tool call index of the chunk stream to the item it feeds.
     tools: HashMap<u64, usize>,
     usage: Option<Value>,
@@ -171,7 +179,7 @@ impl ToResponses {
             started: false,
             finished: false,
             items: Vec::new(),
-            open: false,
+            open: None,
             tools: HashMap::new(),
             usage: None,
             finish: None,
@@ -187,8 +195,10 @@ impl ToResponses {
         self.close(out);
         let mut added = item.value();
         self.items.push(item);
-        self.open = true;
         let index = self.index();
+        if added["type"] != "function_call" {
+            self.open = Some(index);
+        }
         if added["type"] == "message" {
             added["status"] = "in_progress".into();
             added["content"] = json!([]);
@@ -196,7 +206,7 @@ impl ToResponses {
                 json!({"type":"response.output_item.added","output_index":index,"item":added}),
             );
             out.push(
-                json!({"type":"response.content_part.added","output_index":index,"content_index":0,
+                json!({"type":"response.content_part.added","item_id":self.items[index].id(),"output_index":index,"content_index":0,
                 "part":{"type":"output_text","text":"","annotations":[]}}),
             );
         } else {
@@ -210,25 +220,34 @@ impl ToResponses {
         }
     }
     fn close(&mut self, out: &mut Vec<Value>) {
-        if !self.open {
+        let Some(index) = self.open.take() else {
             return;
+        };
+        self.close_item(index, out);
+    }
+    fn close_tools(&mut self, out: &mut Vec<Value>) {
+        let mut indices: Vec<_> = std::mem::take(&mut self.tools).into_values().collect();
+        indices.sort_unstable();
+        for index in indices {
+            self.close_item(index, out);
         }
-        self.open = false;
-        let index = self.index();
+    }
+    fn close_item(&self, index: usize, out: &mut Vec<Value>) {
         let item = &self.items[index];
         match item {
-            Item::Reasoning { text, .. } => {
+            Item::Reasoning { id, text, .. } => {
                 if !text.is_empty() {
-                    out.push(json!({"type":"response.reasoning_summary_text.done","output_index":index,"summary_index":0,"text":text}));
+                    out.push(json!({"type":"response.reasoning_summary_text.done","item_id":id,"output_index":index,"summary_index":0,"text":text}));
+                    out.push(json!({"type":"response.reasoning_summary_part.done","item_id":id,"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":text}}));
                 }
             }
-            Item::Message { text, .. } => {
-                out.push(json!({"type":"response.output_text.done","output_index":index,"content_index":0,"text":text}));
-                out.push(json!({"type":"response.content_part.done","output_index":index,"content_index":0,
+            Item::Message { id, text, .. } => {
+                out.push(json!({"type":"response.output_text.done","item_id":id,"output_index":index,"content_index":0,"text":text,"logprobs":[]}));
+                out.push(json!({"type":"response.content_part.done","item_id":id,"output_index":index,"content_index":0,
                     "part":item.value()["content"][0]}));
             }
-            Item::FunctionCall { arguments, .. } => {
-                out.push(json!({"type":"response.function_call_arguments.done","output_index":index,"arguments":arguments}));
+            Item::FunctionCall { id, arguments, .. } => {
+                out.push(json!({"type":"response.function_call_arguments.done","item_id":id,"output_index":index,"arguments":arguments}));
             }
         }
         out.push(
@@ -236,7 +255,7 @@ impl ToResponses {
         );
     }
     fn open_kind(&self, reasoning: bool) -> bool {
-        self.open
+        self.open.is_some()
             && match self.items.last() {
                 Some(Item::Reasoning { .. }) => reasoning,
                 Some(Item::Message { .. }) => !reasoning,
@@ -244,6 +263,9 @@ impl ToResponses {
             }
     }
     fn reasoning(&mut self, text: &str, out: &mut Vec<Value>) {
+        if text.is_empty() {
+            return;
+        }
         if !self.open_kind(true) {
             self.open_item(
                 Item::Reasoning {
@@ -254,10 +276,13 @@ impl ToResponses {
             );
         }
         let index = self.index();
-        if let Some(Item::Reasoning { text: buffer, .. }) = self.items.last_mut() {
+        if let Some(Item::Reasoning { id, text: buffer }) = self.items.last_mut() {
+            if buffer.is_empty() {
+                out.push(json!({"type":"response.reasoning_summary_part.added","item_id":id,"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":""}}));
+            }
             buffer.push_str(text);
         }
-        out.push(json!({"type":"response.reasoning_summary_text.delta","output_index":index,"summary_index":0,"delta":text}));
+        out.push(json!({"type":"response.reasoning_summary_text.delta","item_id":self.items[index].id(),"output_index":index,"summary_index":0,"delta":text}));
     }
     fn text(&mut self, text: &str, out: &mut Vec<Value>) {
         if !self.open_kind(false) {
@@ -273,7 +298,7 @@ impl ToResponses {
         if let Some(Item::Message { text: buffer, .. }) = self.items.last_mut() {
             buffer.push_str(text);
         }
-        out.push(json!({"type":"response.output_text.delta","output_index":index,"content_index":0,"delta":text}));
+        out.push(json!({"type":"response.output_text.delta","item_id":self.items[index].id(),"output_index":index,"content_index":0,"delta":text,"logprobs":[]}));
     }
     fn tool_call(&mut self, call: &Value, position: u64, out: &mut Vec<Value>) {
         let index = call["index"].as_u64().unwrap_or(position);
@@ -282,17 +307,7 @@ impl ToResponses {
             .and_then(|p| p["arguments"].as_str().or_else(|| p["input"].as_str()))
             .unwrap_or_default();
         let item = match self.tools.get(&index) {
-            Some(&item) if self.open && item == self.index() => item,
-            Some(&item) => {
-                // A continued call after another item: append without reopening.
-                if let Item::FunctionCall {
-                    arguments: buffer, ..
-                } = &mut self.items[item]
-                {
-                    buffer.push_str(arguments);
-                }
-                return;
-            }
+            Some(&item) => item,
             None => {
                 let name = payload
                     .and_then(|p| p["name"].as_str())
@@ -325,10 +340,11 @@ impl ToResponses {
         {
             buffer.push_str(arguments);
         }
-        out.push(json!({"type":"response.function_call_arguments.delta","output_index":item,"delta":arguments}));
+        out.push(json!({"type":"response.function_call_arguments.delta","item_id":self.items[item].id(),"output_index":item,"delta":arguments}));
     }
     fn fail(&mut self, error: Value, mut out: Vec<Value>) -> Vec<Value> {
         self.close(&mut out);
+        self.close_tools(&mut out);
         let mut response = self.response("failed");
         response["error"] = error;
         response["output"] = self.items.iter().map(Item::value).collect();
@@ -384,6 +400,7 @@ impl EventConversion for ToResponses {
         if let Some(reason) = finish_reason(&chunk) {
             self.finish = Some(reason.to_owned());
             self.close(&mut out);
+            self.close_tools(&mut out);
         }
         Ok(out)
     }
@@ -393,6 +410,7 @@ impl EventConversion for ToResponses {
             return Ok(out);
         }
         self.close(&mut out);
+        self.close_tools(&mut out);
         let reason = match self.finish.as_deref() {
             Some(reason) => reason,
             // Some services end the stream without a finish reason once output exists.
@@ -463,10 +481,10 @@ impl EventConversion for ToChat {
             .flatten()
         {
             if let Some(delta) = choice.get_mut("delta").and_then(Value::as_object_mut)
-                && let Some(reasoning) = delta.remove("reasoning").filter(Value::is_string)
-                && !delta.contains_key("reasoning_content")
+                && delta.get("reasoning").is_some_and(Value::is_string)
             {
-                delta.insert("reasoning_content".into(), reasoning);
+                let reasoning = delta.remove("reasoning").expect("reasoning string");
+                delta.entry("reasoning_content").or_insert(reasoning);
             }
         }
         Ok(vec![chunk])
@@ -623,7 +641,6 @@ impl EventConversion for ToMessages {
                         );
                         self.tools.insert(index, key);
                         self.kinds.insert(key, Kind::Tool);
-                        self.current = Some(key);
                         key
                     }
                 };
@@ -638,6 +655,13 @@ impl EventConversion for ToMessages {
         if let Some(reason) = finish_reason(&chunk) {
             self.finish = Some(reason.to_owned());
             self.close_current(&mut out);
+            // No argument fragments follow the wire's finish reason. Release
+            // queued parallel blocks now, without waiting for the usage tail.
+            let mut tools: Vec<_> = std::mem::take(&mut self.tools).into_values().collect();
+            tools.sort_unstable();
+            for key in tools {
+                self.writer.close(key, &mut out);
+            }
         }
         Ok(out)
     }

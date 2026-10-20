@@ -66,7 +66,6 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
                 : "-",
             ],
             ["入站接口", selected?.endpoint],
-            ["上游接口", selected?.upstream_endpoint ?? "—"],
             ["IP", selected?.client_ip ?? "—"],
             ["来源", usageSourceDetail(selected)],
             ["类型", usageType(selected?.stream, selected?.transport)],

@@ -146,6 +146,18 @@ supplier identity. `convert::supports(inbound, wire)` declares the matrix, and a
 supplier whose wire has no conversion for the request is excluded at selection.
 Conversion runs after selection and is rebuilt on every switch.
 
+Generated Responses streams retain one stable item ID across item creation,
+content and reasoning parts, text and tool-argument deltas, and completion. Their
+event sequence numbers increase across the entire response. Parallel tool calls
+stay open until their arguments are complete; terminal snapshots contain exactly
+the content emitted by the stream. Text, thoughts and tool arguments are forwarded
+as they arrive, including content sharing a chunk with the wire's finish reason.
+Only completion and final usage wait for the wire's closing event and settlement.
+Supplier HTTP paths in the administrator's
+usage and attempt records come from the actual outbound request URL, including
+an API account's Base URL path, and never from the caller's endpoint. User usage
+records expose only the caller's endpoint.
+
 Every channel always requests a stream, as its official client does. The executor
 buffers the prelude of a reply until the first output event: an HTTP error, a
 transport fault or a failure event before output is one attempt's failure for the

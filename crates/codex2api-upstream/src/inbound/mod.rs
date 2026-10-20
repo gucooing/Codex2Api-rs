@@ -30,6 +30,14 @@ impl Error {
             body: json!({"error":{"type":"server_error","code":"upstream_protocol_error","message":"The supplier returned an incomplete or unsupported protocol payload."}}),
         }
     }
+    /// EOF without the wire's required completion is a truncated generation,
+    /// distinct from a malformed protocol payload.
+    pub fn stream_incomplete() -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            body: json!({"error":{"type":"server_error","code":"upstream_incomplete","message":"The upstream stream ended without a complete response.","param":null}}),
+        }
+    }
     /// A supplier failure value delivered as the caller's error.
     pub fn upstream_value(value: &Value) -> Self {
         let status = crate::ResponseFailure::from_error(None, value)

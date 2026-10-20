@@ -226,12 +226,7 @@ export function UsageTable({ records, empty }: { records: UsageRecord[]; empty?:
                       role="cell"
                       className="whitespace-nowrap text-xs"
                     >
-                      <div>
-                        <strong>入站:</strong> {record.endpoint || "—"}
-                      </div>
-                      <div>
-                        <strong>上游:</strong> {record.upstream_endpoint ?? "—"}
-                      </div>
+                      {record.endpoint || "—"}
                     </TableCell>
                     <TableCell
                       hidden={!tableColumns0.isVisible("IP")}

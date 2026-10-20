@@ -11,6 +11,9 @@ pub mod sanitize;
 pub mod stream;
 pub(crate) mod usage;
 
+#[cfg(test)]
+mod stream_contract_tests;
+
 pub use crate::inbound::{Error, Result};
 pub use observe::{Observation, Outcome, Usage, observe};
 
@@ -113,7 +116,7 @@ pub fn events(
     include_usage: bool,
     model: &str,
 ) -> Box<dyn EventConversion> {
-    match wire {
+    let events: Box<dyn EventConversion> = match wire {
         Wire::Codex | Wire::Xai | Wire::OpenAiResponses => {
             Box::new(responses::Events::new(inbound, include_usage))
         }
@@ -122,6 +125,11 @@ pub fn events(
             chat_completions::events::conversion(inbound, include_usage, model)
         }
         Wire::Messages => messages::events::conversion(inbound, include_usage, model),
+    };
+    if inbound == Inbound::Responses && !wire.responses_family() {
+        Box::new(responses::Sequenced::new(events))
+    } else {
+        events
     }
 }
 

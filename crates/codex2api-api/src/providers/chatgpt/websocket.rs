@@ -224,7 +224,12 @@ impl Turn {
     fn supplier(&mut self, connection: &Connection) {
         if let Some(log) = &mut self.log {
             log.supplier(&connection.context.account);
-            log.record.upstream_endpoint = Some(Protocol::Responses.endpoint().into());
+            log.record.upstream_endpoint = Some(
+                url::Url::parse(&codex2api_upstream::Endpoint::Responses.url())
+                    .expect("official Responses URL")
+                    .path()
+                    .into(),
+            );
             log.headers(StatusCode::SWITCHING_PROTOCOLS, &connection.headers);
             log.auth_revision = connection.revision;
         }
@@ -341,7 +346,10 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     connection.context = selected;
                 }
                 turn.supplier(&connection);
-                if let Some(log)=&turn.log {session.state.storage.set_usage_upstream_endpoint(&log.record.id,Protocol::Responses.endpoint()).await?;}
+                if let Some(log)=&turn.log
+                    && let Some(endpoint)=&log.record.upstream_endpoint {
+                    session.state.storage.set_usage_upstream_endpoint(&log.record.id,endpoint).await?;
+                }
                 connection.create(&turn.body, &turn.headers).await?;
                 last_upstream = tokio::time::Instant::now();
             }

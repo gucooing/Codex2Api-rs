@@ -67,11 +67,7 @@ impl ApiError {
         self
     }
     pub(crate) fn upstream_incomplete() -> Self {
-        Self::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_incomplete",
-            "The upstream stream ended without a complete response.",
-        )
+        convert::Error::stream_incomplete().into()
     }
     /// No supplier in the pool can serve the request now.
     pub(crate) fn no_supplier(model_not_found: bool) -> Self {

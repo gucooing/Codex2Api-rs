@@ -190,7 +190,9 @@ async fn unary(
         return Err(ApiError::wire_failure(input.format, None, &value));
     }
     convert::sanitize::metadata(&mut value);
-    if let Some(metadata) = &input.metadata {
+    if input.format != Inbound::Messages
+        && let Some(metadata) = &input.metadata
+    {
         value["metadata"] = metadata.clone();
     }
     log.settle().await?;
@@ -457,7 +459,9 @@ async fn consume_stream(
         return Ok(Value::Null);
     }
     let mut value = reply.ok_or_else(ApiError::upstream_incomplete)?;
-    if let Some(metadata) = &input.metadata {
+    if inbound != Inbound::Messages
+        && let Some(metadata) = &input.metadata
+    {
         value["metadata"] = metadata.clone();
     }
     Ok(value)

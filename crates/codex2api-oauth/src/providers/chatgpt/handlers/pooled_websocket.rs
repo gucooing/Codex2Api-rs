@@ -43,14 +43,11 @@ fn context(
         &format!("/v1/{}", endpoint.codex_path()),
         "websocket",
     )
-    .with_upstream_endpoint(format!(
-        "/v1/{}",
-        if endpoint.is_response() {
-            Endpoint::Responses.codex_path()
-        } else {
-            endpoint.codex_path()
-        }
-    ))
+    .with_upstream_endpoint(
+        reqwest::Url::parse(&endpoint.url())
+            .expect("official Codex endpoint URL")
+            .path(),
+    )
     .with_user_agent(headers)
     .with_supplier_permit(conn.ctx.permit.take())
 }

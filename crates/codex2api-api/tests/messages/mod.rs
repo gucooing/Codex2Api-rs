@@ -62,8 +62,14 @@ async fn messages_use_each_suppliers_responses_and_settle_before_completion() {
                 .await
                 .unwrap();
             assert_eq!(public["items"][0]["endpoint"], "/v1/messages");
-            assert_eq!(public["items"][0]["upstream_endpoint"], "/v1/responses");
+            assert!(public["items"][0].get("upstream_endpoint").is_none());
             assert!(public["items"][0].get("account_id").is_none());
+            let endpoint: Option<String> =
+                sqlx::query_scalar("SELECT upstream_endpoint FROM usage_records")
+                    .fetch_one(f.storage.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(endpoint.as_deref(), Some(path));
             let calls = f.mock.requests.lock().unwrap();
             assert_eq!(calls[0].0, path);
             assert!(!calls[0].1.contains_key("x-api-key"));

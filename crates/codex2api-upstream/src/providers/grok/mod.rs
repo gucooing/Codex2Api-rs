@@ -189,7 +189,7 @@ impl GrokUpstream {
         let timing = crate::ResponseTiming::default();
         let mut response = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            self.transport.send(request),
+            crate::transport::send(self.transport.as_ref(), request),
         )
         .await
         .map_err(|_| UpstreamError::StreamIdleTimeout)??;
