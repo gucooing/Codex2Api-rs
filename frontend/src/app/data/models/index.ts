@@ -29,7 +29,7 @@ export const tokenRule = (): TokenPrice => ({
 });
 
 export const emptyModel = (): Model => ({
-  platform: "chatgpt",
+  platform: "openai",
   model: "",
   kind: "text",
   enabled: true,

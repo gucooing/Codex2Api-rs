@@ -140,7 +140,7 @@ pub use proxy::{OutboundProxy, ProxyConnectionCheck, ProxyQualityCheck, parse_pr
 pub use public_urls::{PublicUrlSettings, normalize_public_origin};
 pub use quota::{QuotaSnapshot, SupplierInfoSection};
 pub use remote_servers::{RemoteServer, RemoteServerRegistration};
-pub use settings::{GatewaySettings, UaMode};
+pub use settings::{GatewaySettings, MAX_REQUEST_RETRIES, UaMode};
 pub use storage::{DEFAULT_ADMIN_SESSION_TTL, DEFAULT_OAUTH_PENDING_TTL, Storage};
 pub use token::hash_token;
 pub use types::{

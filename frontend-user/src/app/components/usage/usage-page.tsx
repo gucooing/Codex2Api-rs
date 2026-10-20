@@ -7,13 +7,17 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Pagination, PaginationContent, PaginationItem } from "@/components/ui/pagination";
+import { ModelPlatformIcon } from "@/components/model-platforms";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { platformOptions } from "@/lib/model-platforms";
 import { usageStatuses } from "@/lib/usage-display";
 import { usageCost } from "@/lib/usage";
 import {
@@ -63,10 +67,20 @@ export default function UsagePage() {
                     </SelectTrigger>
                     <SelectContent position="popper">
                       <SelectItem value="all">全部平台</SelectItem>
-                      <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                      <SelectItem value="grok">Grok</SelectItem>
-                      <SelectItem value="gemini">Gemini</SelectItem>
-                      <SelectItem value="claude">Claude</SelectItem>
+                      <SelectGroup>
+                        <SelectLabel>订阅</SelectLabel>
+                        <SelectItem value="chatgpt">ChatGPT</SelectItem>
+                        <SelectItem value="grok">Grok</SelectItem>
+                      </SelectGroup>
+                      <SelectGroup>
+                        <SelectLabel>模型平台</SelectLabel>
+                        {platformOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            <ModelPlatformIcon platform={option.value} />
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 </Field>

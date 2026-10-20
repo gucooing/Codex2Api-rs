@@ -1,7 +1,7 @@
 "use client";
 import { ModelCallLimits } from "./model-call-limits";
 import type { ModelMarketItem } from "@/app/data/model-market/pricing";
-import { modelVendor } from "@/components/providers/model-vendor";
+import { ModelPlatformIcon } from "@/components/model-platforms";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { apiPrice, apiTier } from "@/lib/api-access";
+import { platformLabel } from "@/lib/model-platforms";
 
 export function ModelMarketCard({
   item,
@@ -23,13 +24,12 @@ export function ModelMarketCard({
   onSelect: () => void;
 }) {
   const { model, pricing } = item;
-  const { Icon, name } = modelVendor(model.platform);
   const price = pricing.startingToken;
   return (
     <Card size="sm" className="relative h-full min-w-0">
       <CardHeader>
         <CardTitle className="flex min-w-0 items-center gap-2">
-          <Icon className="size-5 shrink-0" />
+          <ModelPlatformIcon platform={model.platform} className="size-5 shrink-0" />
           <Button
             type="button"
             variant="link"
@@ -45,7 +45,7 @@ export function ModelMarketCard({
         </CardTitle>
         <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <span>
-            {name} · {model.kind === "image" ? "图像" : "文本"}
+            {platformLabel(model.platform)} · {model.kind === "image" ? "图像" : "文本"}
           </span>
           {grouped && <span className="tabular-nums">倍率 {model.multiplier}×</span>}
         </CardDescription>

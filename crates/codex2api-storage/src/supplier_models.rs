@@ -171,21 +171,7 @@ impl Storage {
             provider = Some(current);
         }
         for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
-            sqlx::query("DELETE FROM supplier_models WHERE account_id=$1 AND NOT (model=ANY($2))")
-                .bind(id)
-                .bind(models)
-                .execute(&mut *tx)
-                .await?;
-            for model in models.iter().collect::<std::collections::BTreeSet<_>>() {
-                sqlx::query(
-                    "INSERT INTO supplier_models(account_id,model,source) VALUES($1,$2,'custom')
-                     ON CONFLICT(account_id,model) DO UPDATE SET source='custom'",
-                )
-                .bind(id)
-                .bind(model)
-                .execute(&mut *tx)
-                .await?;
-            }
+            replace_models_on(&mut tx, id, models).await?;
         }
         tx.commit().await?;
         self.runtime.snapshots.invalidate(&[
@@ -309,4 +295,36 @@ impl Storage {
             })
             .await
     }
+}
+
+/// Replace one account's complete availability list inside a transaction that holds
+/// the account's lock. Every listed model becomes an administrator-chosen entry.
+pub(crate) async fn replace_models_on(
+    connection: &mut sqlx::PgConnection,
+    id: &str,
+    models: &[String],
+) -> Result<()> {
+    if models.len() > 2048
+        || models
+            .iter()
+            .any(|model| !codex2api_common::valid_model(model))
+    {
+        return Err(StorageError::Constraint("账户或模型列表无效".into()));
+    }
+    sqlx::query("DELETE FROM supplier_models WHERE account_id=$1 AND NOT (model=ANY($2))")
+        .bind(id)
+        .bind(models)
+        .execute(&mut *connection)
+        .await?;
+    for model in models.iter().collect::<std::collections::BTreeSet<_>>() {
+        sqlx::query(
+            "INSERT INTO supplier_models(account_id,model,source) VALUES($1,$2,'custom')
+             ON CONFLICT(account_id,model) DO UPDATE SET source='custom'",
+        )
+        .bind(id)
+        .bind(model)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
 }

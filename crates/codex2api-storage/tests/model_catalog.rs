@@ -39,7 +39,7 @@ async fn in_flight_resolution_snapshots_keep_their_original_price() {
         .await
         .unwrap();
     let model = ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -91,7 +91,7 @@ async fn image_billing_uses_resolution_counts_and_start_prices_after_edit_or_del
         .await
         .unwrap();
     let model = ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -231,7 +231,7 @@ async fn image_unknowns_are_explicit_and_failures_without_images_are_not_charged
         .await
         .unwrap();
     let model = ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "image-test".into(),
         kind: "image".into(),
         enabled: true,
@@ -352,7 +352,7 @@ async fn uniform_image_prices_cover_all_dimensions_and_keep_start_snapshots() {
     let path = dir.path().join("uniform-images-pg");
     let storage = codex2api_storage::test_support::open(&path).await.unwrap();
     let model = ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "uniform-image-test".into(),
         kind: "image".into(),
         enabled: true,

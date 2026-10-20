@@ -66,7 +66,7 @@ export function useModelMarketPage() {
     showOtherBilling:
       (!applied.search.trim() ||
         "chatgpt openai 搜索 search".includes(applied.search.trim().toLowerCase())) &&
-      (!applied.platform || applied.platform === "chatgpt"),
+      (!applied.platform || applied.platform === "openai"),
     searchPrice: resource.data?.operations.find(
       (price) => price.provider_id === "chatgpt" && price.operation === "search",
     ),

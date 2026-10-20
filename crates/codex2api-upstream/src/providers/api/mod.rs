@@ -101,27 +101,57 @@ impl ApiUpstream {
         Ok(response)
     }
 
-    /// Model identifiers the vendor lists for this key; every vendor's listing is a
-    /// `data` array of objects with an `id`.
-    pub async fn discover_supplier_models(&self, id: &str) -> Result<Value> {
-        let (credentials, revision) = self.credentials(id).await?;
-        let http = self.auth.account_http(id).await?;
+    /// The vendor's model listing for a key; every vendor's listing is a `data` array
+    /// of objects with an `id`.
+    async fn read_models(
+        &self,
+        credentials: &ApiCredentials,
+        http: &codex2api_suppliers::api::ApiHttpClient,
+        revision: Option<i64>,
+    ) -> Result<Vec<Value>> {
         let response = self
-            .post(&credentials, &http, version::MODELS_PATH, None, false)
+            .post(credentials, http, version::MODELS_PATH, None, false)
             .await?;
         let status = response.status();
         let headers = response.headers().clone();
         let bytes = response.bytes().await?;
         if !status.is_success() {
-            return Err(UpstreamError::status_with_headers(
+            let error = UpstreamError::status_with_headers(
                 status,
                 String::from_utf8_lossy(&bytes).into_owned(),
                 headers,
-            )
-            .with_auth_revision(revision));
+            );
+            return Err(match revision {
+                Some(revision) => error.with_auth_revision(revision),
+                None => error,
+            });
         }
-        let value: Value = serde_json::from_slice(&bytes)?;
-        let models = descriptors(&value)?;
+        descriptors(&serde_json::from_slice(&bytes)?)
+    }
+
+    /// The model identifiers an endpoint lists for a key before any account exists, read
+    /// on a client used only for this listing. Nothing is stored.
+    pub async fn list_models(
+        &self,
+        credentials: &ApiCredentials,
+        proxy: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let http = codex2api_suppliers::api::ApiHttpClient::with_proxy(proxy)?;
+        Ok(self
+            .read_models(credentials, &http, None)
+            .await?
+            .into_iter()
+            .filter_map(|model| model["model"].as_str().map(str::to_owned))
+            .collect())
+    }
+
+    /// Replace the account's upstream models with the vendor's current listing.
+    pub async fn discover_supplier_models(&self, id: &str) -> Result<Value> {
+        let (credentials, revision) = self.credentials(id).await?;
+        let http = self.auth.account_http(id).await?;
+        let models = self
+            .read_models(&credentials, &http, Some(revision))
+            .await?;
         let storage = self.auth.storage()?;
         if !storage.sync_supplier_models(id, revision, &models).await? {
             return Err(UpstreamError::WorkspaceChanged);

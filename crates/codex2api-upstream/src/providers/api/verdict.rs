@@ -3,7 +3,8 @@
 //! permanent, permission failures, wrong endpoints and overloads block briefly, quota
 //! rejections block until the vendor's retry advice, an unknown model blocks that
 //! model, and every server-side failure switches without persisting. Statuses the
-//! administrator listed retry the same account first.
+//! administrator listed retry the same account first, as many times as the account
+//! configures.
 use crate::supply::{
     AvoidScope, AvoidTarget, TransportFault, UpstreamFailure, Verdict, error_fields, retry_after,
 };
@@ -19,7 +20,11 @@ const QUOTA_CODES: [&str; 6] = [
     "project_spend_limit_exceeded",
 ];
 
-pub(crate) fn verdict(failure: &UpstreamFailure, retry_statuses: &[u16]) -> Verdict {
+pub(crate) fn verdict(
+    failure: &UpstreamFailure,
+    retry_statuses: &[u16],
+    retry_count: u32,
+) -> Verdict {
     let now = failure.now;
     if let Some(fault) = failure.transport {
         return match fault {
@@ -200,8 +205,8 @@ pub(crate) fn verdict(failure: &UpstreamFailure, retry_statuses: &[u16]) -> Verd
     };
     match (status, &base) {
         (Some(status), Verdict::ClientError { .. }) if retry_statuses.contains(&status) => base,
-        (Some(status), _) if retry_statuses.contains(&status) => {
-            Verdict::retry_same(Duration::from_secs(1), 2, base)
+        (Some(status), _) if retry_count > 0 && retry_statuses.contains(&status) => {
+            Verdict::retry_same(Duration::from_secs(1), retry_count, base)
         }
         _ => base,
     }
@@ -271,7 +276,7 @@ mod tests {
             ),
             (405, Value::Null, BlockKind::Penalty, AvoidScope::Until(700)),
         ] {
-            match verdict(&failure(Some(status), body), &[]) {
+            match verdict(&failure(Some(status), body), &[], 2) {
                 Verdict::Avoid {
                     kind: observed,
                     scope: observed_scope,
@@ -289,6 +294,7 @@ mod tests {
                 json!({"error":{"code":"model_not_found","message":"The model `gpt-5` does not exist"}}),
             ),
             &[],
+            2,
         ) {
             Verdict::Avoid {
                 target: AvoidTarget::Model(model),
@@ -300,12 +306,13 @@ mod tests {
         assert!(matches!(
             verdict(
                 &failure(Some(400), json!({"error":{"code":"invalid_prompt"}})),
-                &[]
+                &[],
+                2
             ),
             Verdict::ClientError { status: 400, .. }
         ));
         assert!(matches!(
-            verdict(&failure(Some(503), Value::Null), &[]),
+            verdict(&failure(Some(503), Value::Null), &[], 2),
             Verdict::Avoid {
                 scope: AvoidScope::Request,
                 ..
@@ -315,9 +322,9 @@ mod tests {
 
     #[test]
     fn administrator_retry_statuses_retry_the_same_account_before_switching() {
-        match verdict(&failure(Some(502), Value::Null), &[502]) {
+        match verdict(&failure(Some(502), Value::Null), &[502], 4) {
             Verdict::RetrySame { max, fallback, .. } => {
-                assert_eq!(max, 2);
+                assert_eq!(max, 4);
                 assert!(matches!(
                     *fallback,
                     Verdict::Avoid {
@@ -331,12 +338,16 @@ mod tests {
         assert!(matches!(
             verdict(
                 &failure(Some(400), json!({"error":{"message":"bad"}})),
-                &[400]
+                &[400],
+                2
             ),
             Verdict::ClientError { .. }
         ));
         let mut committed = failure(Some(502), Value::Null);
         committed.output_committed = true;
-        assert!(matches!(verdict(&committed, &[502]), Verdict::Stop { .. }));
+        assert!(matches!(
+            verdict(&committed, &[502], 2),
+            Verdict::Stop { .. }
+        ));
     }
 }

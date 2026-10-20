@@ -174,6 +174,29 @@ export function GatewayScheduling({ form }: { form: GatewayForm }) {
           </div>
           <Input {...form.wait} type="number" min={1} max={60000} step={1} />
         </Field>
+        <Field>
+          <div className="flex items-center gap-1">
+            <FieldLabel htmlFor={form.retries.id}>请求重试次数</FieldLabel>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="size-5 text-muted-foreground"
+                  aria-label="请求重试次数说明"
+                >
+                  <CircleAlert className="size-3" aria-hidden="true" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" collisionPadding={16} aria-label="请求重试次数说明">
+                选中的供应账户请求失败后，同一次请求最多改选几次其他供应账户，所有渠道共用。0
+                表示不改选，直接返回暂无可用供应账户。
+              </PopoverContent>
+            </Popover>
+          </div>
+          <Input {...form.retries} type="number" min={0} max={20} step={1} />
+        </Field>
         <Field orientation="horizontal">
           <div className="flex flex-1 items-center gap-1">
             <FieldLabel htmlFor={`${form.id}-weighted`}>粘性加权</FieldLabel>

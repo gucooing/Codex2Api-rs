@@ -3,7 +3,7 @@ use codex2api_storage::{UsageFilter, UsageRecord, preset_model_prices};
 use serde_json::json;
 
 fn supported(model: &str) -> SupportedModel {
-    SupportedModel::builtin("chatgpt", model)
+    SupportedModel::builtin("openai", model)
 }
 
 #[tokio::test]

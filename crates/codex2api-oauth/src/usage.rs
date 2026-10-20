@@ -1979,7 +1979,7 @@ mod tests {
             .await
             .unwrap();
         let model = ModelConfig {
-            platform: "chatgpt".into(),
+            platform: "openai".into(),
             model: "image-test".into(),
             kind: "image".into(),
             enabled: true,

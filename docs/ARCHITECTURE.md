@@ -557,9 +557,11 @@ manual disablement, authorization rejection, credentials and official snapshots
 remain intact. A subsequent explicit upstream failure can block the account again.
 
 HTTP Responses, the API gateway's three protocols and the Responses WebSocket run
-the same executor loop: a request switches suppliers at most ten times, each
-candidate is tried once per request, same-supplier retries are bounded by the
-verdict, and the small pre-generation prelude is buffered so a rejected attempt does
+the same executor loop: a request switches suppliers at most as many times as the
+gateway's request retry setting allows (`request_retries`, default 3, 0 to 20,
+shared by every channel and transport), each candidate is tried once per request,
+same-supplier retries are bounded by the verdict (an API-key account's own retry
+statuses and count), and the small pre-generation prelude is buffered so a rejected attempt does
 not leak its error or response ID into the client's successful generation. Prices and
 RPM admission are captured once; only the winning attempt's reported usage settles
 the request. Exhausted pools return the service's own 503 `no_available_supplier`
@@ -770,9 +772,13 @@ device list and revoke operation manage both browser and device-code logins.
 ### Built-in models and price presets
 
 The administrator's enabled model catalog is the model availability policy. Model
-names are the catalog key; the `platform` column is an identification label of the
-model's vendor (ChatGPT, Grok, Gemini, Claude) used for display and filtering, never a
-routing or grant restriction. Supplier channels such as Antigravity are not labels.
+names are the catalog key; the `platform` column is the model's vendor label
+(`codex2api_common::model_platforms`: OpenAI, Anthropic, Google, xAI, DeepSeek,
+Alibaba Qwen, Zhipu, Moonshot Kimi, MiniMax, ByteDance Doubao, Xiaomi MiMo, Tencent
+Hunyuan, Baidu ERNIE, StepFun, Meta, Mistral, and `other` for vendors not yet listed)
+used for display, filtering and vendor icons, never a routing or grant restriction.
+Labels are independent of supplier channels: most vendors have no subscription
+login, and one channel (Antigravity, an API key) serves models of several vendors.
 Provider adapters expose configured models within each consumer's entitlement,
 including model names absent from bundled or discovered metadata. Official
 descriptors and verified prices are defaults, never an admission allowlist.

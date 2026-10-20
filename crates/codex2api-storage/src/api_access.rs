@@ -203,8 +203,9 @@ impl UserStore {
         };
         let (total, items) =
             crate::api_groups::catalog_on(&mut tx, group.as_ref(), Some(query)).await?;
-        // Search is a ChatGPT protocol operation shown with that platform's catalog.
-        let operations = if query.platform.is_empty() || query.platform == codex2api_common::CHATGPT
+        // Search is a ChatGPT channel operation shown with the OpenAI catalog.
+        let operations = if query.platform.is_empty()
+            || query.platform == codex2api_common::model_platforms::OPENAI
         {
             crate::providers::chatgpt::catalog_operation_prices(&mut tx, group.as_ref()).await?
         } else {

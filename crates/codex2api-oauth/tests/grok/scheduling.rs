@@ -75,7 +75,7 @@ async fn fixture_with_issuer(issuer: Option<&str>) -> Fixture {
         .unwrap();
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            platform: "grok".into(),
+            platform: "xai".into(),
             model: "grok-4.7".into(),
             kind: "text".into(),
         }])

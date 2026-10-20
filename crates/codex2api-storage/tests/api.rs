@@ -86,7 +86,7 @@ async fn setup() -> (
         .unwrap();
     for name in ["api-text", "api-other", "api-unpriced"] {
         let config = ModelConfig {
-            platform: "chatgpt".into(),
+            platform: "openai".into(),
             model: name.into(),
             kind: "text".into(),
             enabled: true,
@@ -1239,7 +1239,7 @@ async fn image_prices_and_unknown_measurements_remain_distinct_from_free_usage()
     storage
         .save_model_config(
             &ModelConfig {
-                platform: "chatgpt".into(),
+                platform: "openai".into(),
                 model: "api-image".into(),
                 kind: "image".into(),
                 enabled: true,
@@ -1431,7 +1431,7 @@ async fn market_ranges_and_tier_multipliers_match_actual_settlement() {
         price.model = "tier-test".into();
     }
     let model = ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "tier-test".into(),
         kind: "text".into(),
         enabled: true,
@@ -1596,7 +1596,7 @@ async fn market_other_billing_uses_base_or_group_search_price_without_multiplica
         .api_catalog(
             &user.id,
             &ApiListQuery {
-                platform: "grok".into(),
+                platform: "xai".into(),
                 ..Default::default()
             },
         )
@@ -1609,7 +1609,7 @@ async fn market_other_billing_uses_base_or_group_search_price_without_multiplica
 async fn metered_uniform_images_admit_and_charge_independent_of_resolution() {
     let (_dir, storage, user, group, supplier) = setup().await;
     let config = ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "api-uniform-image".into(),
         kind: "image".into(),
         enabled: true,

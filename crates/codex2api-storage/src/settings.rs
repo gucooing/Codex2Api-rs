@@ -10,8 +10,9 @@ pub enum UaMode {
     Whitelist,
 }
 
-/// Shared supplier scheduling and OAuth client User-Agent rules.
-/// API-key requests share scheduling but do not use the OAuth User-Agent rules.
+/// Shared supplier scheduling, request recovery and OAuth client User-Agent rules.
+/// API-key requests share scheduling and recovery but do not use the OAuth
+/// User-Agent rules.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewaySettings {
@@ -23,7 +24,13 @@ pub struct GatewaySettings {
     pub sticky_ttl_seconds: u64,
     pub pool_top_k: usize,
     pub pool_wait_ms: u64,
+    /// How many times one request selects another supplier after the selected one
+    /// failed; every channel and transport shares it.
+    pub request_retries: u32,
 }
+
+/// Upper bound of [`GatewaySettings::request_retries`].
+pub const MAX_REQUEST_RETRIES: u32 = 20;
 
 impl Default for GatewaySettings {
     fn default() -> Self {
@@ -36,6 +43,7 @@ impl Default for GatewaySettings {
             sticky_ttl_seconds: 3600,
             pool_top_k: 7,
             pool_wait_ms: 10000,
+            request_retries: 3,
         }
     }
 }

@@ -4,6 +4,7 @@ import { ModelMarketCard } from "./model-market-card";
 import { ModelPriceDialog } from "./model-price-dialog";
 import { SearchBillingCard } from "@/components/providers/chatgpt/search-billing-card";
 import { useModelMarketPage } from "@/app/data/model-market";
+import { ModelPlatformIcon } from "@/components/model-platforms";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -17,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { platformOptions } from "@/lib/model-platforms";
 import {
   ChevronLeft,
   ChevronRight,
@@ -84,10 +86,12 @@ export default function ModelMarketPage() {
                 </SelectTrigger>
                 <SelectContent position="popper">
                   <SelectItem value="all">全部平台</SelectItem>
-                  <SelectItem value="chatgpt">ChatGPT</SelectItem>
-                  <SelectItem value="grok">Grok</SelectItem>
-                  <SelectItem value="gemini">Gemini</SelectItem>
-                  <SelectItem value="claude">Claude</SelectItem>
+                  {platformOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      <ModelPlatformIcon platform={option.value} />
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>

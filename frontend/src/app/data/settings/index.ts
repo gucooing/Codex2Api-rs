@@ -69,7 +69,7 @@ export function useDesktop() {
   } as const;
 }
 
-type GatewayNumber = "pool_top_k" | "sticky_ttl_seconds" | "pool_wait_ms";
+type GatewayNumber = "pool_top_k" | "sticky_ttl_seconds" | "pool_wait_ms" | "request_retries";
 type GatewayDraft = Partial<
   Omit<GatewaySettings, GatewayNumber | "ua_rules"> & Record<GatewayNumber | "ua_rules", string>
 >;
@@ -112,6 +112,7 @@ export function useGateway() {
           pool_top_k: integer("pool_top_k", "候选账户数", 1, 100),
           sticky_ttl_seconds: integer("sticky_ttl_seconds", "会话有效期", 60, 604800),
           pool_wait_ms: integer("pool_wait_ms", "粘连等待时间", 1, 60000),
+          request_retries: integer("request_retries", "请求重试次数", 0, 20),
           scheduler_mode: mode ?? resource.data.scheduler_mode,
           sticky_weighted: draft.sticky_weighted ?? resource.data.sticky_weighted,
           sticky_escape: draft.sticky_escape ?? resource.data.sticky_escape,
@@ -132,6 +133,7 @@ export function useGateway() {
     candidates: { ...numberInput("pool_top_k"), disabled: disabled || mode !== "advanced" },
     sessionTtl: numberInput("sticky_ttl_seconds"),
     wait: numberInput("pool_wait_ms"),
+    retries: numberInput("request_retries"),
     mode: {
       value: mode ?? "",
       disabled,

@@ -15,12 +15,18 @@ import { mergeOAuth } from "@/lib/domain";
 import { useQueryId, useResource } from "@/lib/hooks";
 import { useListResource } from "@/lib/pagination";
 import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
-import { channelFingerprint, providerOptions, supplierChannel } from "@/lib/providers";
+import {
+  channelFingerprint,
+  loginChannel,
+  providerOptions,
+  supplierChannel,
+} from "@/lib/providers";
 import { parseRefreshTokenLines } from "@/lib/refresh-tokens";
 import type { SupplierSelection } from "@/lib/supplier-selection";
 import { commonSupplierTags, selectedSupplierProvider } from "@/lib/supplier-selection";
 import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useApiAccountWizard } from "./api-accounts";
 
 type SupplierModel = { model: string; source: "upstream" | "custom"; observed_at: string | null };
 type SupplierModelOption = { model: string; enabled: boolean };
@@ -194,17 +200,18 @@ export function useOAuthWizard({
   const fieldId = useId();
   const actions = useActions();
   const [provider, setProvider] = useState(supplierProvider);
-  const channel = supplierChannel(provider);
+  const isApi = provider === "api";
+  const channel = loginChannel(provider);
   const setup = useResource<{ fingerprint: Fingerprint }>(
-    supplierId ? null : `${channel.oauthPrefix}/setup`,
+    supplierId ? null : `${supplierChannel(provider).oauthPrefix}/setup`,
   );
   const proxies = useResource<List<ProxyOption>>(supplierId ? null : "/proxies/options");
   useErrorToast(setup.error);
   useErrorToast(proxies.error);
-  const [step, setStep] = useState(supplierId ? 1 : 0);
+  const [step, setStep] = useState(supplierId && supplierProvider !== "api" ? 1 : 0);
   const [fingerprint, setFingerprint] = useState<Fingerprint>();
-  const [method, setMethod] = useState<"callback" | "device" | "refresh_token" | "api_key">(
-    channel.methods[0] as "callback" | "device" | "refresh_token" | "api_key",
+  const [method, setMethod] = useState<"callback" | "device" | "refresh_token">(
+    channel.methods[0] as "callback" | "device" | "refresh_token",
   );
   const [refreshToken, setRefreshToken] = useState("");
   const [batchResults, setBatchResults] = useState<
@@ -221,18 +228,34 @@ export function useOAuthWizard({
   const pending = flow?.status === "pending" ? flow : undefined;
   const busy = actions.running.size > 0;
   const ready = Boolean(supplierId) || (setup.ready && proxies.ready);
+  const config = fingerprint ?? setup.data?.fingerprint;
+  const api = useApiAccountWizard({ active: isApi, supplierId, config, actions, onComplete });
   const methodOptions: Record<string, { label: string; description: string }> = {
     callback: { label: channel.callbackLabel, description: channel.callbackDescription },
     device: { label: "设备码", description: "在设备授权页面输入一次性代码" },
     refresh_token: { label: "RT 授权", description: "使用 Refresh Token 完成授权" },
-    api_key: { label: "API Key 录入", description: "每行一个 Key，每个 Key 成为一个供应账户" },
   };
   const methods = channel.methods.map((value) => ({ value, ...methodOptions[value] }));
-  const steps = [
-    ...(!supplierId ? [{ value: 0, label: channel.setupLabel }] : []),
-    { value: 1, label: "授权方式" },
-    { value: 2, label: "开始授权" },
-  ];
+  const steps = isApi
+    ? supplierId
+      ? [{ value: 0, label: "更换 Key" }]
+      : [
+          { value: 0, label: "接入配置" },
+          { value: 1, label: "模型列表" },
+          { value: 2, label: "确认" },
+        ]
+    : [
+        ...(!supplierId ? [{ value: 0, label: channel.setupLabel }] : []),
+        { value: 1, label: "授权方式" },
+        { value: 2, label: "开始授权" },
+      ];
+  const selectProvider = (value: string) => {
+    setProvider(value);
+    setFingerprint(undefined);
+    setBatchResults([]);
+    setMethod(loginChannel(value).methods[0] as typeof method);
+    api.reset();
+  };
   const accept = (response: OAuth | { status: "pending" }) => {
     const value = mergeOAuth(flow, response);
     setFlow(value);
@@ -276,8 +299,7 @@ export function useOAuthWizard({
   };
   const start = async () => {
     if (!ready) throw new Error("请先加载授权资料");
-    const batch = method === "refresh_token" || method === "api_key";
-    if (batch && !supplierId) {
+    if (method === "refresh_token" && !supplierId) {
       const rows = parseRefreshTokenLines(refreshToken, channel.tokenLabel);
       const previous = new Map(batchResults.map((row) => [row.line, row]));
       setBatchResults(
@@ -306,22 +328,14 @@ export function useOAuthWizard({
           );
         updateResult("running", "正在授权");
         try {
-          const base = fingerprint ?? setup.data?.fingerprint;
           const result = await request<OAuth>(`${channel.oauthPrefix}/start`, {
             method: "POST",
-            body:
-              method === "api_key"
-                ? {
-                    method,
-                    fingerprint: base && channelFingerprint(provider, base),
-                    api_key: row.token,
-                  }
-                : {
-                    method,
-                    fingerprint: base,
-                    independent_fingerprint: rows.length > 1,
-                    refresh_token: row.token,
-                  },
+            body: {
+              method,
+              fingerprint: config,
+              independent_fingerprint: rows.length > 1,
+              refresh_token: row.token,
+            },
           });
           if (result.status !== "complete") throw new Error("授权未完成");
           updateResult(
@@ -344,12 +358,10 @@ export function useOAuthWizard({
         {
           method: "POST",
           body: supplierId
-            ? method === "api_key"
-              ? { method, api_key: refreshToken }
-              : { method, refresh_token: method === "refresh_token" ? refreshToken : undefined }
+            ? { method, refresh_token: method === "refresh_token" ? refreshToken : undefined }
             : {
                 method,
-                fingerprint: fingerprint ?? setup.data?.fingerprint,
+                fingerprint: config,
                 refresh_token: method === "refresh_token" ? refreshToken : undefined,
               },
         },
@@ -379,13 +391,20 @@ export function useOAuthWizard({
   const handleSubmit = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy || !ready || !validateForm(event.currentTarget)) return;
+    if (isApi) {
+      if (supplierId) void actions.run("supplier-api-key", api.replaceKey, { success: "" });
+      else if (step < 2) {
+        if (api.accept(step)) setStep(step + 1);
+      } else void actions.run("supplier-api-create", api.create, { success: "" });
+      return;
+    }
     if (step === 0) {
       setStep(1);
       return;
     }
     if (step === 1) {
       setStep(2);
-      if (method !== "refresh_token" && method !== "api_key")
+      if (method !== "refresh_token")
         void actions.run("supplier-oauth-start", start, { success: "" });
       return;
     }
@@ -404,12 +423,14 @@ export function useOAuthWizard({
     fieldId,
     actions,
     provider,
-    setProvider,
+    selectProvider,
+    isApi,
+    api,
     channel,
     setup,
     proxies,
     step,
-    fingerprint,
+    config,
     setFingerprint,
     method,
     setMethod,

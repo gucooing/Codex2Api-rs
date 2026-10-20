@@ -291,7 +291,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
     let upstream = codex2api_upstream::grok::GrokUpstream::new(grok);
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            platform: "grok".into(),
+            platform: "xai".into(),
             model: "grok-4.7".into(),
             kind: "text".into(),
         }])
@@ -323,7 +323,7 @@ async fn native_login_dynamic_models_inference_billing_refresh_and_provider_isol
             .any(|m| m.model == custom_model)
     );
     let custom = codex2api_storage::ModelConfig {
-        platform: "grok".into(),
+        platform: "xai".into(),
         model: custom_model.into(),
         kind: "text".into(),
         enabled: true,

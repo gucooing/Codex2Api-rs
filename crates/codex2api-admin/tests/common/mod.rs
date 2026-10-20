@@ -106,7 +106,7 @@ pub async fn body(response: Response) -> Value {
         .unwrap_or_else(|_| panic!("non-JSON {status}: {}", String::from_utf8_lossy(&bytes)))
 }
 pub fn model_input(model: &str) -> Value {
-    json!({"platform":"chatgpt","model":model,"kind":"text","enabled":true,"revision":null,"token_prices":[{"tier":"standard","min_input_tokens":0,"input_rate":"2.5","cached_rate":"0.5","cache_write_rate":"1","output_rate":"10"}],"image_prices":[]})
+    json!({"platform":"openai","model":model,"kind":"text","enabled":true,"revision":null,"token_prices":[{"tier":"standard","min_input_tokens":0,"input_rate":"2.5","cached_rate":"0.5","cache_write_rate":"1","output_rate":"10"}],"image_prices":[]})
 }
 pub fn plan_input() -> Value {
     json!({"rpm_limit":40,"concurrency_limit":10,"sale_price_usd":null,"duration_days":30,"tag_ids":[],"plan_type":"plus","provider_id":"chatgpt","name":"Integration Plan","models":[{"model":"gpt-6-astra","multiplier":null,"concurrency_limit":0,"rpm_limit":0}],"spending_windows":[{"duration_seconds":604800,"cost_limit_usd":"10"},{"duration_seconds":18000,"cost_limit_usd":"2"}],"allow_purchase":true,"revision":null})

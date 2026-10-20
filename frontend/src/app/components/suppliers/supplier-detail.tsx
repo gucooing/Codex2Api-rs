@@ -49,7 +49,9 @@ export function SupplierDetail() {
     <>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="mr-auto flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium">{account?.email ?? "—"}</span>
+          <span className="truncate text-sm font-medium">
+            {account?.email || account?.display_name || "—"}
+          </span>
           {account && (
             <Badge
               variant={
@@ -118,7 +120,9 @@ export function SupplierDetail() {
                 <FieldGroup className="grid gap-4 sm:grid-cols-2 gap-3">
                   {[
                     { label: "提供商", value: account?.provider_id },
-                    { label: "邮箱", value: account?.email },
+                    account?.provider_id === "api"
+                      ? { label: "名称", value: account?.display_name }
+                      : { label: "邮箱", value: account?.email },
                     {
                       label: "状态",
                       value: (

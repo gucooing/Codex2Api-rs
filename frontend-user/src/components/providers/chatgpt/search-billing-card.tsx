@@ -1,4 +1,4 @@
-import { OpenAIIcon } from "./brand-icon";
+import { ModelPlatformIcon } from "@/components/model-platforms";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiPrice, type ApiOperationPrice } from "@/lib/api-access";
 
@@ -13,7 +13,7 @@ export function SearchBillingCard({
     <Card size="sm" className="h-full min-w-0">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <OpenAIIcon className="size-5 shrink-0" />
+          <ModelPlatformIcon platform="openai" className="size-5 shrink-0" />
           搜索
         </CardTitle>
         <CardDescription className="text-xs">OpenAI · 其他计费</CardDescription>

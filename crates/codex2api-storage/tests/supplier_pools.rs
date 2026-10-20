@@ -40,7 +40,7 @@ async fn request_journal_commits_valid_rows_and_settles_each_request_once() {
     );
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            platform: "chatgpt".into(),
+            platform: "openai".into(),
             model: "gpt-5.5".into(),
             kind: "text".into(),
         }])
@@ -126,7 +126,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .unwrap();
         storage
             .sync_supported_models(&[codex2api_common::SupportedModel {
-                platform: provider.into(),
+                platform: if provider == "grok" { "xai" } else { "openai" }.into(),
                 model: "shared-model".into(),
                 kind: "text".into(),
             }])

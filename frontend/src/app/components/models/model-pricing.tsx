@@ -35,7 +35,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { money } from "@/lib/format";
-import { platformLabel, platformOptions } from "@/lib/providers";
+import { ModelPlatformIcon } from "@/components/model-platforms";
+import { platformLabel, platformOptions } from "@/lib/model-platforms";
 import {
   ChevronLeft,
   ChevronRight,
@@ -110,6 +111,7 @@ export function ModelPricing() {
                   <SelectItem value="all">全部平台</SelectItem>
                   {platformOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
+                      <ModelPlatformIcon platform={option.value} />
                       {option.label}
                     </SelectItem>
                   ))}
@@ -347,7 +349,10 @@ export function ModelPricing() {
                         >
                           <div className="max-md:hidden">
                             <strong>{model.model}</strong>
-                            <CardDescription>{platformLabel(model.platform)}</CardDescription>
+                            <CardDescription className="flex items-center gap-1">
+                              <ModelPlatformIcon platform={model.platform} className="size-3.5" />
+                              {platformLabel(model.platform)}
+                            </CardDescription>
                           </div>
                           <ModelRecordDialog model={model} />
                         </TableCell>

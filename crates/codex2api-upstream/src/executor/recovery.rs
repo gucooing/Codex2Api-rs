@@ -1,5 +1,7 @@
 //! One bounded recovery policy for HTTP and WebSocket attempts. Transports only
-//! carry out the returned retry, switch or rejection.
+//! carry out the returned retry, switch or rejection. Same-supplier retries are each
+//! channel's verdict; how many times a request moves to another supplier is the
+//! administrator's request retry setting, shared by every channel and transport.
 use super::ExecutorError;
 use crate::{
     UpstreamPool,
@@ -7,8 +9,6 @@ use crate::{
 };
 use codex2api_storage::{Storage, SupplierAccount};
 use std::{collections::HashMap, time::Duration};
-
-pub const MAX_SWITCHES: u32 = 10;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Recovery {
@@ -57,10 +57,11 @@ impl Attempts {
         }
     }
 
-    fn switch(&mut self, id: &str) -> Result<Recovery, ExecutorError> {
+    /// Give up on the supplier; `retries` is how many switches one request may make.
+    fn switch(&mut self, id: &str, retries: u32) -> Result<Recovery, ExecutorError> {
         self.exclude(id);
         self.switches += 1;
-        if self.switches > MAX_SWITCHES {
+        if self.switches > retries {
             Err(ExecutorError::NoSupplier {
                 model_not_found: false,
             })
@@ -106,7 +107,8 @@ impl Attempts {
             }
             Verdict::Stop { status, body } => Err(ExecutorError::Stopped { status, body, wire }),
             Verdict::Avoid { .. } => {
-                let recovery = self.switch(&account.id)?;
+                let retries = storage.gateway_settings().await?.request_retries;
+                let recovery = self.switch(&account.id, retries)?;
                 storage.report_supplier_result(&account.id, false, None);
                 Ok(recovery)
             }
@@ -119,22 +121,25 @@ impl Attempts {
 mod tests {
     use super::*;
     #[test]
-    fn all_transports_share_the_same_switch_budget() {
-        let mut attempts = Attempts::default();
-        attempts.exclude("unsupported");
-        for n in 0..MAX_SWITCHES {
-            assert_eq!(
-                attempts.switch(&format!("supplier-{n}")).unwrap(),
-                Recovery::Switch
-            );
+    fn a_request_switches_at_most_the_configured_retries() {
+        for retries in [0, 3] {
+            let mut attempts = Attempts::default();
+            // An unsupported conversion is never a candidate and costs no retry.
+            attempts.exclude("unsupported");
+            for n in 0..retries {
+                assert_eq!(
+                    attempts.switch(&format!("supplier-{n}"), retries).unwrap(),
+                    Recovery::Switch
+                );
+            }
+            assert!(matches!(
+                attempts.switch("last", retries),
+                Err(ExecutorError::NoSupplier {
+                    model_not_found: false
+                })
+            ));
+            assert_eq!(attempts.excluded().len(), retries as usize + 2);
         }
-        assert!(matches!(
-            attempts.switch("last"),
-            Err(ExecutorError::NoSupplier {
-                model_not_found: false
-            })
-        ));
-        assert_eq!(attempts.excluded().len(), MAX_SWITCHES as usize + 2);
     }
 
     #[test]

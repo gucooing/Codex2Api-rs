@@ -59,6 +59,12 @@ pub async fn save_gateway(
     {
         return Err(ApiError::bad("调度参数无效"));
     }
+    if f.request_retries > codex2api_storage::MAX_REQUEST_RETRIES {
+        return Err(ApiError::bad(format!(
+            "请求重试次数须为 0 到 {} 的整数",
+            codex2api_storage::MAX_REQUEST_RETRIES
+        )));
+    }
     if f.ua_rules.len() > 1000 || f.ua_rules.iter().any(|v| v.len() > 1024) {
         return Err(ApiError::bad("User-Agent 规则过长"));
     }

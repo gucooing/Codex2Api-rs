@@ -2,7 +2,7 @@
 import { ModelPriceTable } from "./model-price-table";
 import { ModelCallLimits } from "./model-call-limits";
 import type { ModelMarketItem } from "@/app/data/model-market/pricing";
-import { modelVendor } from "@/components/providers/model-vendor";
+import { ModelPlatformIcon } from "@/components/model-platforms";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import type { ApiGroup } from "@/lib/api-access";
+import { platformLabel } from "@/lib/model-platforms";
 
 export function ModelPriceDialog({
   item,
@@ -22,7 +23,6 @@ export function ModelPriceDialog({
   group: ApiGroup | null | undefined;
   onClose: () => void;
 }) {
-  const { Icon, name } = modelVendor(item?.model.platform ?? "");
   return (
     <Dialog
       open={!!item}
@@ -33,11 +33,11 @@ export function ModelPriceDialog({
       <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-3xl">
         <DialogHeader className="pr-6">
           <DialogTitle className="flex items-center gap-2">
-            <Icon className="size-5 shrink-0" />
+            <ModelPlatformIcon platform={item?.model.platform ?? ""} className="size-5 shrink-0" />
             <span className="min-w-0 break-all">{item?.model.model ?? "模型价格"}</span>
           </DialogTitle>
           <DialogDescription>
-            {name} · {group?.name ?? "基础价格"} ·{" "}
+            {platformLabel(item?.model.platform ?? "")} · {group?.name ?? "基础价格"} ·{" "}
             {item?.model.kind === "image" ? "USD / 张" : "USD / 百万 Token"}
             {group && ` · 计费倍率 ${item?.model.multiplier}×`}
           </DialogDescription>

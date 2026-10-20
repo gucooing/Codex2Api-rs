@@ -4,7 +4,7 @@
 //! admission, settlement and output formatting; channels own transport and verdicts.
 mod inspect;
 mod recovery;
-pub use recovery::{Attempts, MAX_SWITCHES, Recovery};
+pub use recovery::{Attempts, Recovery};
 
 use crate::{
     UpstreamError, UpstreamPool, convert,

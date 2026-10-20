@@ -65,7 +65,7 @@ const fn openai(
     tiers: &'static [Tier],
 ) -> BuiltinModel {
     BuiltinModel {
-        platform: crate::CHATGPT,
+        platform: crate::model_platforms::OPENAI,
         model,
         source: OPENAI,
         verified: "2026-10-09",
@@ -75,7 +75,7 @@ const fn openai(
 }
 const fn xai(model: &'static str, bands: &'static [Band]) -> BuiltinModel {
     BuiltinModel {
-        platform: crate::GROK,
+        platform: crate::model_platforms::XAI,
         model,
         source: XAI,
         verified: "2026-10-04",
@@ -83,10 +83,10 @@ const fn xai(model: &'static str, bands: &'static [Band]) -> BuiltinModel {
         tiers: &[],
     }
 }
-/// Models Antigravity serves are labelled by their vendor, not by the supplier platform.
+/// Models Antigravity serves are labelled by their vendor, not by the supplier channel.
 const fn gemini(model: &'static str, bands: &'static [Band]) -> BuiltinModel {
     BuiltinModel {
-        platform: crate::GEMINI,
+        platform: crate::model_platforms::GOOGLE,
         model,
         source: GOOGLE,
         verified: "2026-10-19",
@@ -96,7 +96,7 @@ const fn gemini(model: &'static str, bands: &'static [Band]) -> BuiltinModel {
 }
 const fn claude(model: &'static str, bands: &'static [Band]) -> BuiltinModel {
     BuiltinModel {
-        platform: crate::CLAUDE,
+        platform: crate::model_platforms::ANTHROPIC,
         model,
         source: ANTHROPIC,
         verified: "2026-10-19",

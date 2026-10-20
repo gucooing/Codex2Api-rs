@@ -14,7 +14,8 @@ import { Field, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { type Model } from "@/lib/api";
 import { money } from "@/lib/format";
 import { imagePriceLabel, priceTierLabels } from "@/lib/model-pricing";
-import { platformLabel } from "@/lib/providers";
+import { ModelPlatformIcon } from "@/components/model-platforms";
+import { platformLabel } from "@/lib/model-platforms";
 import { ChevronRight } from "lucide-react";
 
 type Props = {
@@ -50,7 +51,10 @@ export function ModelRecordDialog({ model }: Props) {
             <FieldTitle>模型</FieldTitle>
             <div className="min-w-0 break-words [&_*]:max-w-full">
               <strong>{model.model}</strong>
-              <CardDescription>{platformLabel(model.platform)}</CardDescription>
+              <CardDescription className="flex items-center gap-1">
+                <ModelPlatformIcon platform={model.platform} className="size-3.5" />
+                {platformLabel(model.platform)}
+              </CardDescription>
             </div>
           </Field>
           <Field>

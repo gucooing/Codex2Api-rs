@@ -208,14 +208,24 @@ readers or repeat UA data migrations for future releases.
   account is one key at one Base URL speaking one configured wire
   (`openai_responses`, `chat_completions` or `messages`) with one authentication
   header scheme and a fixed User-Agent; it has no device fingerprint (its identity
-  columns are NULL), no OAuth, no token refresh and no official quota read. Keys
-  are entered one per line; a rejected key is replaced by an administrator. Its
-  verdicts follow sub2api's OpenAI and Anthropic switching policy; sub2api
-  `apikey` rows import and export through the transfer adapter.
+  columns are NULL), no OAuth, no token refresh and no official quota read. The
+  OpenAI wires authenticate only with Bearer; Messages takes `x-api-key` or Bearer.
+  Creation takes one key on the first step with the account's name, which is its
+  only name, then its model list, then a confirmation; a rejected key is replaced
+  by an administrator. Same-account retry statuses and count are per-account
+  settings of this channel only. Its verdicts follow sub2api's OpenAI and
+  Anthropic switching policy; sub2api `apikey` rows import and export through the
+  transfer adapter.
+- How many times one request switches to another supplier is the gateway's request
+  retry setting (default 3), shared by every channel and transport; it is never a
+  supplier or channel property.
 - The administrator's enabled model catalog determines availability, subject to
   the consumer's plan. Official catalogs and price presets are references, never
   model allowlists. Custom models must remain addable and usable. Missing prices
   stay unknown; known prices snapshot at request start.
+- Catalog platforms label the model's vendor (`codex2api_common::model_platforms`),
+  independent of supplier channels and OAuth logins; `other` stays for vendors not
+  yet listed. Both frontends show each vendor's icon.
 - RT creation accepts one token per line. New accounts independently generate
   device fingerprints and installation IDs; reauthorization preserves the existing
   account identity. Never print, persist in browser preferences, or echo RT values

@@ -87,7 +87,7 @@ async fn fixture_for(
         .unwrap();
     storage
         .sync_supported_models(&[codex2api_common::SupportedModel {
-            platform: provider.into(),
+            platform: if provider == "grok" { "xai" } else { "openai" }.into(),
             model: "fixture-model".into(),
             kind: "text".into(),
         }])

@@ -5878,7 +5878,7 @@ async fn set_test_plan_config(
                     // A custom model joins the priced catalog before a plan can grant it.
                     let catalog = codex2api_storage::ModelConfig {
                         model: model.into(),
-                        platform: "chatgpt".into(),
+                        platform: "openai".into(),
                         kind: "text".into(),
                         enabled: true,
                         deleted: false,

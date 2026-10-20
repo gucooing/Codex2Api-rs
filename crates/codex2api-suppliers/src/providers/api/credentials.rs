@@ -1,6 +1,7 @@
 //! An API-key account's credentials: the key, where it is accepted, which wire the
-//! endpoint speaks and how the key is sent. Stored as `supplier_tokens.raw_auth_json`
-//! with the key mirrored in `access_token` for the pool's authorization check.
+//! endpoint speaks, how the key is sent and which statuses retry the same account.
+//! Stored as `supplier_tokens.raw_auth_json` with the key mirrored in `access_token`
+//! for the pool's authorization check.
 use super::{ApiAuthError, Result};
 use codex2api_common::providers::api as channel;
 use codex2api_storage::SupplierTokens;
@@ -18,6 +19,8 @@ pub struct ApiCredentials {
     /// is avoided, for endpoints known to fail intermittently.
     #[serde(default)]
     pub retry_statuses: Vec<u16>,
+    /// How many times one attempt retries the same account on those statuses.
+    pub retry_count: u32,
 }
 
 impl ApiCredentials {
@@ -39,8 +42,15 @@ impl ApiCredentials {
         if !channel::valid_wire(&self.wire) {
             return Err(ApiAuthError::Invalid("不支持的上游线格式".into()));
         }
-        if !channel::valid_auth_scheme(&self.auth_scheme) {
-            return Err(ApiAuthError::Invalid("不支持的认证头方式".into()));
+        if !channel::valid_auth_scheme(&self.wire, &self.auth_scheme) {
+            return Err(ApiAuthError::Invalid(
+                if self.wire == channel::WIRE_MESSAGES {
+                    "Anthropic Messages 只支持 x-api-key 或 Authorization: Bearer 认证头"
+                } else {
+                    "OpenAI 线格式只支持 Authorization: Bearer 认证头"
+                }
+                .into(),
+            ));
         }
         self.retry_statuses.sort_unstable();
         self.retry_statuses.dedup();
@@ -53,6 +63,12 @@ impl ApiCredentials {
             return Err(ApiAuthError::Invalid(
                 "同号重试状态码须为 400 到 599 之间的 HTTP 状态".into(),
             ));
+        }
+        if !(1..=channel::MAX_RETRY_COUNT).contains(&self.retry_count) {
+            return Err(ApiAuthError::Invalid(format!(
+                "同号重试次数须为 1 到 {} 的整数",
+                channel::MAX_RETRY_COUNT
+            )));
         }
         Ok(())
     }
@@ -135,6 +151,7 @@ mod tests {
             wire: "chat_completions".into(),
             auth_scheme: "bearer".into(),
             retry_statuses: vec![502, 502, 500],
+            retry_count: 2,
         };
         credentials.validate().unwrap();
         assert_eq!(credentials.api_key, "sk-test-1234");
@@ -152,6 +169,8 @@ mod tests {
             ("base_url", "https://host/v1?x=1"),
             ("wire", "gemini"),
             ("auth_scheme", "basic"),
+            // The OpenAI wires accept only a Bearer token.
+            ("auth_scheme", "x_api_key"),
             ("api_key", "a b"),
         ] {
             let mut broken = credentials.clone();
@@ -166,5 +185,10 @@ mod tests {
         let mut statuses = credentials.clone();
         statuses.retry_statuses = vec![200];
         assert!(statuses.validate().is_err());
+        for count in [0, channel::MAX_RETRY_COUNT + 1] {
+            let mut retries = credentials.clone();
+            retries.retry_count = count;
+            assert!(retries.validate().is_err(), "{count}");
+        }
     }
 }

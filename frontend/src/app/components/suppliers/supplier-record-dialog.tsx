@@ -65,7 +65,9 @@ export function SupplierRecordDialog({ item, now }: Props) {
               <Link href={`/suppliers/detail/?id=${encodeURIComponent(item.id)}`}>
                 <strong>{item.email || item.display_name || item.id}</strong>
               </Link>
-              <CardDescription>{item.email}</CardDescription>
+              <CardDescription>
+                {item.provider_id === "api" ? item.chatgpt_account_id : item.email}
+              </CardDescription>
             </div>
           </Field>
           <Field>

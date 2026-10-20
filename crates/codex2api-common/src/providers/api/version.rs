@@ -4,7 +4,7 @@
 /// The User-Agent of every API-key request, from this process's own version.
 pub const USER_AGENT: &str = concat!("codex2api/", env!("CARGO_PKG_VERSION"));
 
-/// Anthropic Messages API version sent with the `x_api_key` scheme.
+/// Anthropic Messages API version sent with every Messages request.
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 pub const X_API_KEY_HEADER: &str = "x-api-key";

@@ -3,8 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod model_platforms;
 mod model_presets;
 pub mod providers;
+pub use model_platforms::{MODEL_PLATFORMS, valid_model_platform};
 pub use model_presets::{
     BUILTIN_MODELS, BuiltinModel, MODEL_PRESET_VERSION, SupportedModel, TokenPricePreset,
     builtin_models, model_preset_source, model_price_preset,
@@ -23,25 +25,6 @@ pub const PROVIDERS: &[(&str, &str)] = &[
     (ANTIGRAVITY, "Antigravity"),
     (API, "API"),
 ];
-
-pub const GEMINI: &str = "gemini";
-pub const CLAUDE: &str = "claude";
-/// Catalog models of vendors without their own label.
-pub const OTHER: &str = "other";
-
-/// Identification labels of catalog models: the model's vendor. Supplier channels
-/// such as Antigravity are not vendors. Never a routing restriction.
-pub const MODEL_PLATFORMS: &[(&str, &str)] = &[
-    (CHATGPT, "ChatGPT"),
-    (GROK, "Grok"),
-    (GEMINI, "Gemini"),
-    (CLAUDE, "Claude"),
-    (OTHER, "Other"),
-];
-
-pub fn valid_model_platform(label: &str) -> bool {
-    MODEL_PLATFORMS.iter().any(|(id, _)| *id == label)
-}
 
 pub fn default_provider() -> String {
     CHATGPT.into()

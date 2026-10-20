@@ -1,6 +1,6 @@
-//! API-key supplier accounts: one Base URL, one key, one wire format. There is no
-//! OAuth, no token refresh and no device fingerprint; a rejected key is replaced by
-//! an administrator. Each account keeps its own HTTP client and outbound proxy.
+//! API-key supplier accounts: one name, one Base URL, one key, one wire format. There
+//! is no OAuth, no token refresh and no device fingerprint; a rejected key is replaced
+//! by an administrator. Each account keeps its own HTTP client and outbound proxy.
 mod credentials;
 mod error;
 pub use credentials::{ApiCredentials, normalize_base_url};
@@ -73,10 +73,6 @@ pub fn headers(credentials: &ApiCredentials, stream: bool) -> Result<HeaderMap> 
     match credentials.auth_scheme.as_str() {
         channel::AUTH_X_API_KEY => {
             headers.insert(version::X_API_KEY_HEADER, key(credentials.api_key.clone())?);
-            headers.insert(
-                version::ANTHROPIC_VERSION_HEADER,
-                HeaderValue::from_static(version::ANTHROPIC_VERSION),
-            );
         }
         _ => {
             headers.insert(
@@ -85,16 +81,50 @@ pub fn headers(credentials: &ApiCredentials, stream: bool) -> Result<HeaderMap> 
             );
         }
     }
+    // The version belongs to the Messages protocol, whichever header carries the key.
+    if credentials.wire == channel::WIRE_MESSAGES {
+        headers.insert(
+            version::ANTHROPIC_VERSION_HEADER,
+            HeaderValue::from_static(version::ANTHROPIC_VERSION),
+        );
+    }
     Ok(headers)
 }
 
-/// The display name of an account the administrator did not name: host and key tail.
-pub fn default_display_name(credentials: &ApiCredentials) -> String {
-    let host = url::Url::parse(&credentials.base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .unwrap_or_else(|| credentials.base_url.clone());
-    format!("{host} …{}", credentials.key_suffix())
+/// An account's name as the administrator entered it: the only name an API-key
+/// account has, since there is no login identity to name it.
+pub fn account_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.chars().count() > channel::MAX_NAME_CHARS
+        || name.chars().any(char::is_control)
+    {
+        return Err(ApiAuthError::Invalid(format!(
+            "名称须为 1 到 {} 个字符的单行文本",
+            channel::MAX_NAME_CHARS
+        )));
+    }
+    Ok(name.to_owned())
+}
+
+/// The model list an account is created with: at least one valid, distinct name.
+fn account_models(models: &[String]) -> Result<Vec<String>> {
+    let mut list: Vec<String> = models.iter().map(|model| model.trim().to_owned()).collect();
+    list.sort_unstable();
+    list.dedup();
+    if list.is_empty() {
+        return Err(ApiAuthError::Invalid("请至少配置一个模型".into()));
+    }
+    if list.len() > 2048 {
+        return Err(ApiAuthError::Invalid("模型列表最多 2048 个".into()));
+    }
+    if let Some(model) = list
+        .iter()
+        .find(|model| !codex2api_common::valid_model(model))
+    {
+        return Err(ApiAuthError::Invalid(format!("模型名称无效：{model}")));
+    }
+    Ok(list)
 }
 
 impl ApiAuthService {
@@ -160,15 +190,19 @@ impl ApiAuthService {
         Ok((credentials, snapshot.auth_revision))
     }
 
-    /// Create an account for a key, or return the existing account of the same key at
-    /// the same Base URL. The identity is the Base URL and the key's fingerprint.
+    /// Create an account for a key with its name and complete model list, or update
+    /// the existing account of the same key at the same Base URL. The identity is the
+    /// Base URL and the key's fingerprint.
     pub async fn create(
         &self,
-        name: Option<&str>,
+        name: &str,
         mut credentials: ApiCredentials,
         proxy: Option<&str>,
+        models: &[String],
     ) -> Result<(SupplierAccount, bool)> {
+        let name = account_name(name)?;
         credentials.validate()?;
+        let models = account_models(models)?;
         let storage = self.storage()?;
         let id = uuid::Uuid::new_v4().to_string();
         let mut new = NewSupplierAccount::without_identity(
@@ -179,27 +213,29 @@ impl ApiAuthService {
         new.status = codex2api_storage::SupplierStatus::Active;
         new.chatgpt_account_id = Some(credentials.base_url.clone());
         new.chatgpt_user_id = Some(credentials.key_fingerprint());
-        new.display_name = Some(
-            name.map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| default_display_name(&credentials)),
-        );
+        new.display_name = Some(name);
         let account = storage
-            .save_authorized_account(new, credentials.to_supplier_tokens(&id), proxy)
+            .save_authorized_account_with_models(
+                new,
+                credentials.to_supplier_tokens(&id),
+                proxy,
+                &models,
+            )
             .await?;
         let reused = account.id != id;
         self.evict_account_http(&account.id).await;
         Ok((account, reused))
     }
 
-    /// Replace the key, Base URL or wire of an existing account; the account keeps
-    /// its ID, scheduling, tags and models.
+    /// Replace the key or endpoint configuration of an existing account, and its name
+    /// when one is given; the account keeps its ID, scheduling, tags and models.
     pub async fn replace(
         &self,
         id: &str,
+        name: Option<&str>,
         mut credentials: ApiCredentials,
     ) -> Result<SupplierAccount> {
+        let name = name.map(account_name).transpose()?;
         credentials.validate()?;
         let storage = self.storage()?;
         let account = storage.require_account(id).await?;
@@ -222,7 +258,7 @@ impl ApiAuthService {
         );
         new.id = Some(id.to_owned());
         new.status = account.status;
-        new.display_name = account.display_name.clone();
+        new.display_name = name.or_else(|| account.display_name.clone());
         new.chatgpt_account_id = Some(credentials.base_url.clone());
         new.chatgpt_user_id = Some(credentials.key_fingerprint());
         let saved = storage

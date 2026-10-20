@@ -86,11 +86,13 @@ impl UpstreamPool {
                 crate::providers::antigravity::verdict::verdict(failure)
             }
             codex2api_common::API => {
-                let retry = match self.api().credentials(&account.id).await {
-                    Ok((credentials, _)) => credentials.retry_statuses.clone(),
-                    Err(_) => Vec::new(),
+                let (statuses, count) = match self.api().credentials(&account.id).await {
+                    Ok((credentials, _)) => {
+                        (credentials.retry_statuses.clone(), credentials.retry_count)
+                    }
+                    Err(_) => (Vec::new(), 0),
                 };
-                crate::providers::api::verdict::verdict(failure, &retry)
+                crate::providers::api::verdict::verdict(failure, &statuses, count)
             }
             _ => Verdict::avoid_request(),
         }

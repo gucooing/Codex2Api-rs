@@ -49,7 +49,7 @@ async fn image_pricing_cache_preserves_size_matching_and_price_edits() {
         .unwrap();
     let account = consumer(&storage).await;
     let model = codex2api_storage::ModelConfig {
-        platform: "chatgpt".into(),
+        platform: "openai".into(),
         model: "fixture-image".into(),
         kind: "image".into(),
         enabled: true,

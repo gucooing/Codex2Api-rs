@@ -607,6 +607,30 @@ impl Storage {
         tokens: SupplierTokens,
         proxy_id: Option<&str>,
     ) -> Result<(SupplierAccount, i64)> {
+        self.save_authorized(new, tokens, proxy_id, None).await
+    }
+
+    /// Save an authorized account and its complete model list in one transaction, for
+    /// a channel whose creation also configures the account's availability.
+    pub async fn save_authorized_account_with_models(
+        &self,
+        new: NewSupplierAccount,
+        tokens: SupplierTokens,
+        proxy_id: Option<&str>,
+        models: &[String],
+    ) -> Result<SupplierAccount> {
+        self.save_authorized(new, tokens, proxy_id, Some(models))
+            .await
+            .map(|(account, _)| account)
+    }
+
+    async fn save_authorized(
+        &self,
+        new: NewSupplierAccount,
+        tokens: SupplierTokens,
+        proxy_id: Option<&str>,
+        models: Option<&[String]>,
+    ) -> Result<(SupplierAccount, i64)> {
         if !codex2api_common::supported_provider(&new.provider_id) {
             return Err(StorageError::Constraint("Unknown supplier provider".into()));
         }
@@ -687,6 +711,9 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
         crate::supplier_blocks::complete_authorization(&mut tx, &account.id, revision).await?;
+        if let Some(models) = models {
+            crate::supplier_models::replace_models_on(&mut tx, &account.id, models).await?;
+        }
         tx.commit().await?;
         self.runtime.snapshots.invalidate(&[
             crate::snapshots::Domain::Suppliers,

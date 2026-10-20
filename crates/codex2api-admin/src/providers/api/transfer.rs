@@ -53,9 +53,12 @@ pub(crate) fn from_sub2api(
         wire: wire.to_owned(),
         auth_scheme: channel::default_auth_scheme(wire).to_owned(),
         retry_statuses: Vec::new(),
+        retry_count: channel::DEFAULT_RETRY_COUNT,
     };
     credentials
         .validate()
+        .map_err(|e| ApiError::bad(e.to_string()))?;
+    let name = codex2api_suppliers::api::account_name(&source.name)
         .map_err(|e| ApiError::bad(e.to_string()))?;
     let id = uuid::Uuid::new_v4().to_string();
     let mut account = NewSupplierAccount::without_identity(
@@ -64,13 +67,14 @@ pub(crate) fn from_sub2api(
     );
     account.id = Some(id.clone());
     account.status = SupplierStatus::Active;
-    account.display_name = Some(source.name.clone());
+    account.display_name = Some(name);
     account.chatgpt_account_id = Some(credentials.base_url.clone());
     account.chatgpt_user_id = Some(credentials.key_fingerprint());
     sub2api_record(source, account, credentials.to_supplier_tokens(&id))
 }
 
-/// A native export row: credentials decide the identity columns and no fingerprint exists.
+/// A native export row: credentials decide the identity columns, the account keeps
+/// its name and no fingerprint exists.
 pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiError> {
     let tokens = item
         .tokens
@@ -82,6 +86,10 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
     let credentials = ApiCredentials::from_supplier_tokens(tokens)
         .map_err(|_| ApiError::bad("API 账户凭据格式无效"))?;
     let a = &mut item.account;
+    a.display_name = Some(
+        codex2api_suppliers::api::account_name(a.display_name.as_deref().unwrap_or_default())
+            .map_err(|_| ApiError::bad("API 账户缺少有效名称"))?,
+    );
     let id =
         a.id.clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());

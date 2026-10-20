@@ -1,6 +1,9 @@
 "use client";
 import { useOAuthWizard } from "@/app/data/suppliers";
 import { supplierChannel } from "@/components/providers";
+import { ApiAccountModels } from "@/components/providers/api/account-models";
+import { ApiAccountSummary } from "@/components/providers/api/account-summary";
+import { ApiKeyField } from "@/components/providers/api/key-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CardDescription } from "@/components/ui/card";
@@ -54,12 +57,14 @@ export function OAuthWizard({
     fieldId,
     actions,
     provider,
-    setProvider,
+    selectProvider,
+    isApi,
+    api,
     channel,
     setup,
     proxies,
     step,
-    fingerprint,
+    config,
     setFingerprint,
     method,
     setMethod,
@@ -80,6 +85,25 @@ export function OAuthWizard({
     handleClick2,
   } = useOAuthWizard({ supplierId, supplierProvider, onClose, onComplete });
   const ChannelFingerprintFields = supplierChannel(provider).FingerprintFields;
+  const submitLabel = isApi
+    ? supplierId
+      ? busy
+        ? "正在保存…"
+        : "保存"
+      : step < 2
+        ? "下一步"
+        : busy
+          ? "正在创建…"
+          : "确认创建"
+    : step < 2
+      ? "下一步"
+      : busy
+        ? "正在提交…"
+        : pending?.method === "callback"
+          ? "提交回调"
+          : pending?.method === "device"
+            ? "检查授权结果"
+            : "开始授权";
   return (
     <Dialog
       open
@@ -141,176 +165,212 @@ export function OAuthWizard({
           >
             <ScrollArea className="min-h-0 [&>[data-slot=scroll-area-viewport]]:max-h-[calc(90dvh-14rem)]">
               <TabsContent value="0" className="space-y-3 pr-1">
-                <Field>
-                  <FieldLabel htmlFor={`${fieldId}-provider`}>提供商</FieldLabel>
-                  <Select
-                    value={provider}
-                    disabled={busy}
-                    onValueChange={(value) => {
-                      setProvider(value);
-                      setFingerprint(undefined);
-                      setBatchResults([]);
-                      setMethod(supplierChannel(value).methods[0] as typeof method);
-                    }}
-                  >
-                    <SelectTrigger id={`${fieldId}-provider`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent position="popper">
-                      {providerOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                {(!setup.ready || !proxies.ready) && (setup.error || proxies.error) && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => {
-                      setup.reload();
-                      proxies.reload();
-                    }}
-                  >
-                    重新加载授权配置
-                  </Button>
+                {supplierId ? (
+                  isApi && (
+                    <FieldSet disabled={busy}>
+                      <ApiKeyField
+                        id={`${fieldId}-api-key`}
+                        value={api.apiKey}
+                        onChange={api.setApiKey}
+                      />
+                    </FieldSet>
+                  )
+                ) : (
+                  <>
+                    <Field>
+                      <FieldLabel htmlFor={`${fieldId}-provider`}>提供商</FieldLabel>
+                      <Select value={provider} disabled={busy} onValueChange={selectProvider}>
+                        <SelectTrigger id={`${fieldId}-provider`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent position="popper">
+                          {providerOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    {(!setup.ready || !proxies.ready) && (setup.error || proxies.error) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => {
+                          setup.reload();
+                          proxies.reload();
+                        }}
+                      >
+                        重新加载授权配置
+                      </Button>
+                    )}
+                    <FieldSet disabled={!ready || busy} className="gap-3">
+                      <ChannelFingerprintFields
+                        value={
+                          config ?? {
+                            os_type: "",
+                            os_version: "",
+                            arch: "",
+                            terminal: "",
+                            proxy_id: null,
+                            timezone: "",
+                          }
+                        }
+                        onChange={setFingerprint}
+                        proxies={proxies.data?.items ?? []}
+                      />
+                      {isApi && (
+                        <ApiKeyField
+                          id={`${fieldId}-api-key`}
+                          value={api.apiKey}
+                          onChange={api.setApiKey}
+                        />
+                      )}
+                    </FieldSet>
+                  </>
                 )}
-                <FieldSet disabled={!ready || busy}>
-                  <ChannelFingerprintFields
-                    value={
-                      fingerprint ??
-                      setup.data?.fingerprint ?? {
-                        os_type: "",
-                        os_version: "",
-                        arch: "",
-                        terminal: "",
-                        proxy_id: null,
-                        timezone: "",
-                      }
-                    }
-                    onChange={setFingerprint}
-                    proxies={proxies.data?.items ?? []}
-                  />
-                </FieldSet>
               </TabsContent>
               <TabsContent value="1" className="pr-1">
-                <RadioGroup
-                  value={method}
-                  disabled={busy}
-                  aria-label="授权方式"
-                  onValueChange={(next) => {
-                    setMethod(next as typeof method);
-                    setRefreshToken("");
-                    setBatchResults([]);
-                  }}
-                >
-                  {methods.map((option) => (
-                    <FieldLabel key={option.value} htmlFor={`${fieldId}-${option.value}`}>
-                      <Field orientation="horizontal">
-                        <RadioGroupItem
-                          value={option.value}
-                          id={`${fieldId}-${option.value}`}
-                          aria-label={option.label}
-                        />
-                        <FieldContent>
-                          <FieldTitle>{option.label}</FieldTitle>
-                          <FieldDescription>{option.description}</FieldDescription>
-                        </FieldContent>
-                      </Field>
-                    </FieldLabel>
-                  ))}
-                </RadioGroup>
+                {isApi ? (
+                  <ApiAccountModels
+                    id={`${fieldId}-models`}
+                    models={api.models}
+                    choices={api.choices}
+                    search={api.search}
+                    loading={api.catalog.loading}
+                    fetching={api.fetching}
+                    disabled={busy}
+                    onSearch={api.setSearch}
+                    onChange={api.setModels}
+                    onRemove={api.remove}
+                    onFetch={api.fetchUpstream}
+                  />
+                ) : (
+                  <RadioGroup
+                    value={method}
+                    disabled={busy}
+                    aria-label="授权方式"
+                    onValueChange={(next) => {
+                      setMethod(next as typeof method);
+                      setRefreshToken("");
+                      setBatchResults([]);
+                    }}
+                  >
+                    {methods.map((option) => (
+                      <FieldLabel key={option.value} htmlFor={`${fieldId}-${option.value}`}>
+                        <Field orientation="horizontal">
+                          <RadioGroupItem
+                            value={option.value}
+                            id={`${fieldId}-${option.value}`}
+                            aria-label={option.label}
+                          />
+                          <FieldContent>
+                            <FieldTitle>{option.label}</FieldTitle>
+                            <FieldDescription>{option.description}</FieldDescription>
+                          </FieldContent>
+                        </Field>
+                      </FieldLabel>
+                    ))}
+                  </RadioGroup>
+                )}
               </TabsContent>
               <TabsContent value="2" className="space-y-4 pr-1">
-                <FieldSet disabled={busy} className="gap-4">
-                  {method === "refresh_token" || method === "api_key" ? (
-                    <Field>
-                      <FieldLabel htmlFor={`${fieldId}-refresh-token`}>
-                        {channel.tokenLabel}
-                      </FieldLabel>
-                      <Textarea
-                        id={`${fieldId}-refresh-token`}
-                        autoComplete="off"
-                        spellCheck={false}
-                        rows={supplierId ? 2 : 6}
-                        required
-                        value={refreshToken}
-                        onChange={(event) => {
-                          setRefreshToken(event.target.value);
-                          setBatchResults([]);
-                        }}
-                      />
-                      <FieldDescription>
-                        {supplierId ? `输入新的 ${channel.tokenLabel}` : "每行一条，最多 50 条"}
-                      </FieldDescription>
-                    </Field>
-                  ) : pending ? (
-                    <>
-                      {pending.authorize_url && (
-                        <Field>
-                          <FieldTitle>授权地址</FieldTitle>
-                          <div className="flex min-w-0 items-start gap-2">
-                            <a
-                              id={`${fieldId}-authorize-url`}
-                              className="min-w-0 flex-1 break-all text-sm underline underline-offset-4"
-                              href={pending.authorize_url}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {pending.authorize_url}
+                {isApi ? (
+                  <ApiAccountSummary
+                    config={config}
+                    apiKey={api.apiKey}
+                    models={api.models}
+                    proxies={proxies.data?.items ?? []}
+                  />
+                ) : (
+                  <FieldSet disabled={busy} className="gap-4">
+                    {method === "refresh_token" ? (
+                      <Field>
+                        <FieldLabel htmlFor={`${fieldId}-refresh-token`}>
+                          {channel.tokenLabel}
+                        </FieldLabel>
+                        <Textarea
+                          id={`${fieldId}-refresh-token`}
+                          autoComplete="off"
+                          spellCheck={false}
+                          rows={supplierId ? 2 : 6}
+                          required
+                          value={refreshToken}
+                          onChange={(event) => {
+                            setRefreshToken(event.target.value);
+                            setBatchResults([]);
+                          }}
+                        />
+                        <FieldDescription>
+                          {supplierId ? `输入新的 ${channel.tokenLabel}` : "每行一条，最多 50 条"}
+                        </FieldDescription>
+                      </Field>
+                    ) : pending ? (
+                      <>
+                        {pending.authorize_url && (
+                          <Field>
+                            <FieldTitle>授权地址</FieldTitle>
+                            <div className="flex min-w-0 items-start gap-2">
+                              <a
+                                id={`${fieldId}-authorize-url`}
+                                className="min-w-0 flex-1 break-all text-sm underline underline-offset-4"
+                                href={pending.authorize_url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {pending.authorize_url}
+                              </a>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={busy || actions.isBusy("copy-supplier-authorize")}
+                                onClick={() => handleClick2()}
+                              >
+                                <Copy />
+                                复制
+                              </Button>
+                            </div>
+                          </Field>
+                        )}
+                        {pending.verification_url && (
+                          <Button asChild className="w-fit">
+                            <a href={pending.verification_url} target="_blank" rel="noreferrer">
+                              打开设备验证页面
                             </a>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={busy || actions.isBusy("copy-supplier-authorize")}
-                              onClick={() => handleClick2()}
-                            >
-                              <Copy />
-                              复制
-                            </Button>
-                          </div>
-                        </Field>
-                      )}
-                      {pending.verification_url && (
-                        <Button asChild className="w-fit">
-                          <a href={pending.verification_url} target="_blank" rel="noreferrer">
-                            打开设备验证页面
-                          </a>
-                        </Button>
-                      )}
-                      {pending.user_code && (
-                        <Field>
-                          <FieldTitle>设备验证码</FieldTitle>
-                          <FieldDescription className="select-all font-mono text-xl">
-                            {pending.user_code}
-                          </FieldDescription>
-                        </Field>
-                      )}
-                      {pending.method === "callback" && (
-                        <Field>
-                          <FieldLabel htmlFor={`${fieldId}-callback`}>
-                            {channel.callbackInputLabel}
-                          </FieldLabel>
-                          <Textarea
-                            id={`${fieldId}-callback`}
-                            required
-                            rows={3}
-                            value={callback}
-                            onChange={(event) => setCallback(event.target.value)}
-                          />
-                        </Field>
-                      )}
-                    </>
-                  ) : (
-                    <CardDescription>
-                      {busy ? "正在准备授权…" : "点击开始授权，获取授权链接。"}
-                    </CardDescription>
-                  )}
-                </FieldSet>
+                          </Button>
+                        )}
+                        {pending.user_code && (
+                          <Field>
+                            <FieldTitle>设备验证码</FieldTitle>
+                            <FieldDescription className="select-all font-mono text-xl">
+                              {pending.user_code}
+                            </FieldDescription>
+                          </Field>
+                        )}
+                        {pending.method === "callback" && (
+                          <Field>
+                            <FieldLabel htmlFor={`${fieldId}-callback`}>
+                              {channel.callbackInputLabel}
+                            </FieldLabel>
+                            <Textarea
+                              id={`${fieldId}-callback`}
+                              required
+                              rows={3}
+                              value={callback}
+                              onChange={(event) => setCallback(event.target.value)}
+                            />
+                          </Field>
+                        )}
+                      </>
+                    ) : (
+                      <CardDescription>
+                        {busy ? "正在准备授权…" : "点击开始授权，获取授权链接。"}
+                      </CardDescription>
+                    )}
+                  </FieldSet>
+                )}
                 {batchResults.length > 0 && (
                   <Table>
                     <TableHeader>
@@ -368,15 +428,7 @@ export function OAuthWizard({
               )}
               <Button type="submit" disabled={!ready || busy}>
                 {busy && <Spinner />}
-                {step < 2
-                  ? "下一步"
-                  : busy
-                    ? "正在提交…"
-                    : pending?.method === "callback"
-                      ? "提交回调"
-                      : pending?.method === "device"
-                        ? "检查授权结果"
-                        : "开始授权"}
+                {submitLabel}
               </Button>
             </FieldGroup>
           </form>

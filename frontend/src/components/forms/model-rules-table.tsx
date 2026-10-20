@@ -19,7 +19,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { ModelRuleDraft, ModelRuleRow } from "@/lib/model-rules";
-import { platformLabel, platformOptions } from "@/lib/providers";
+import { ModelPlatformIcon } from "@/components/model-platforms";
+import { platformLabel, platformOptions } from "@/lib/model-platforms";
 
 /** Manual model grants with per-model multiplier and per-user limits. Rows keep the
  * catalog order whether or not they are checked; the search and platform narrow the
@@ -79,6 +80,7 @@ export function ModelRulesTable({
               <SelectItem value="all">全部平台</SelectItem>
               {platformOptions.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
+                  <ModelPlatformIcon platform={option.value} />
                   {option.label}
                 </SelectItem>
               ))}
@@ -136,7 +138,16 @@ export function ModelRulesTable({
                     <span className="ml-2 text-xs text-muted-foreground">已停用</span>
                   )}
                 </TableCell>
-                <TableCell>{row.platform ? platformLabel(row.platform) : "—"}</TableCell>
+                <TableCell>
+                  {row.platform ? (
+                    <span className="flex items-center gap-1">
+                      <ModelPlatformIcon platform={row.platform} className="size-3.5" />
+                      {platformLabel(row.platform)}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </TableCell>
                 <TableCell>
                   <Input
                     className="min-w-24"

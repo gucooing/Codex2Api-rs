@@ -593,7 +593,7 @@ mod tests {
                 WalletAdjustment { request_id: "fund".into(), amount_cents: 100, expected_revision: 1, reason: None }
             ).await.unwrap();
             storage.save_model_config(&ModelConfig {
-                model: "custom-model".into(), platform: "chatgpt".into(), kind: "text".into(),
+                model: "custom-model".into(), platform: "openai".into(), kind: "text".into(),
                 enabled: true, deleted: false, revision: 0,
             }, &[ModelPrice {
                 model: "custom-model".into(), tier: "standard".into(),

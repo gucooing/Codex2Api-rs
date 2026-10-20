@@ -16,11 +16,13 @@ export type Fingerprint = {
   terminal: string;
   proxy_id: string | null;
   timezone: string;
-  /** API-key channel endpoint configuration; absent on official-client channels. */
+  /** API-key channel configuration; absent on official-client channels. */
+  name?: string;
   base_url?: string;
   wire?: string;
   auth_scheme?: string;
   retry_statuses?: number[];
+  retry_count?: number;
   key_suffix?: string;
 };
 export type SupplierBlock = {
@@ -354,6 +356,7 @@ export type GatewaySettings = {
   sticky_ttl_seconds: number;
   pool_top_k: number;
   pool_wait_ms: number;
+  request_retries: number;
 };
 export type PublicUrlSettings = {
   oauth_url: string;

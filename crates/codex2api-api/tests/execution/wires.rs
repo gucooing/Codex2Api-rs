@@ -71,20 +71,18 @@ async fn api_fixture(
     let auth = codex2api_suppliers::api::ApiAuthService::new(Some(f.storage.clone()));
     let (account, _) = auth
         .create(
-            None,
+            "fixture",
             codex2api_suppliers::api::ApiCredentials {
                 api_key: "fixture-key".into(),
                 base_url: "https://example.test/v1".into(),
                 wire: wire.into(),
                 auth_scheme: "bearer".into(),
                 retry_statuses: vec![503],
+                retry_count: 2,
             },
             None,
+            &["custom-model".into()],
         )
-        .await
-        .unwrap();
-    f.storage
-        .add_supplier_model(&account.id, "custom-model")
         .await
         .unwrap();
     f.storage

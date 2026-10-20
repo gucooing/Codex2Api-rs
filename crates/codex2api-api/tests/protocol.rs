@@ -332,13 +332,14 @@ async fn fixture(provider: &str) -> Fixture {
         .await
         .unwrap();
     let model = ModelConfig {
-        // Catalog platforms label the model's vendor; Antigravity is a supplier
-        // channel, so the model it serves keeps a vendor label.
-        platform: if provider == codex2api_common::ANTIGRAVITY {
-            codex2api_common::GEMINI.into()
-        } else {
-            provider.into()
-        },
+        // Catalog platforms label the model's vendor, independent of the supplier
+        // channel that serves it.
+        platform: match provider {
+            codex2api_common::GROK => codex2api_common::model_platforms::XAI,
+            codex2api_common::ANTIGRAVITY => codex2api_common::model_platforms::GOOGLE,
+            _ => codex2api_common::model_platforms::OPENAI,
+        }
+        .into(),
         model: "custom-model".into(),
         kind: "text".into(),
         enabled: true,
@@ -1112,7 +1113,7 @@ async fn images_use_each_platform_transport_and_bill_actual_count() {
                 .storage
                 .save_model_config(
                     &ModelConfig {
-                        platform: provider.into(),
+                        platform: if provider == "grok" { "xai" } else { "openai" }.into(),
                         model: "custom-image".into(),
                         kind: "image".into(),
                         enabled: true,

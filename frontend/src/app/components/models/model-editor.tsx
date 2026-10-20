@@ -31,7 +31,8 @@ import {
   priceRangeLabel,
   priceTierLabels,
 } from "@/lib/model-pricing";
-import { platformOptions } from "@/lib/providers";
+import { ModelPlatformIcon } from "@/components/model-platforms";
+import { platformOptions } from "@/lib/model-platforms";
 import { Plus, Trash2, X } from "lucide-react";
 
 export function ModelEditor({
@@ -163,6 +164,7 @@ export function ModelEditor({
                               }
                               disabled={"disabled" in option && Boolean(option.disabled)}
                             >
+                              <ModelPlatformIcon platform={option.value} />
                               {option.label}
                             </SelectItem>
                           ))}

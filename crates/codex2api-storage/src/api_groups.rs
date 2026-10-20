@@ -604,8 +604,9 @@ pub(crate) async fn catalog_on(
                 price_usd: scaled(i128::from(p.price_nano_usd) * factor, 15),
             })
             .collect();
-        // Search is a ChatGPT protocol operation; it is displayed with that platform's text models.
-        let search_price = (config.platform == codex2api_common::CHATGPT && config.kind == "text")
+        // Search is a ChatGPT channel operation; it is displayed with OpenAI text models.
+        let search_price = (config.platform == codex2api_common::model_platforms::OPENAI
+            && config.kind == "text")
             .then(|| group.and_then(|g| g.search_price_usd.clone()))
             .flatten();
         items.push(ApiCatalogModel {

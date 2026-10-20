@@ -683,7 +683,11 @@ export default function SuppliersPage() {
                     >
                       <strong>{item.email || item.display_name || item.id}</strong>
                     </Link>
-                    <CardDescription>{item.email || "未提供邮箱"}</CardDescription>
+                    <CardDescription>
+                      {item.provider_id === "api"
+                        ? item.chatgpt_account_id
+                        : item.email || "未提供邮箱"}
+                    </CardDescription>
                   </div>
                   <Badge
                     className="shrink-0"
