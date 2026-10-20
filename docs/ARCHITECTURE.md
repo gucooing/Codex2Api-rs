@@ -195,8 +195,10 @@ streaming mode independently of supplier framing. The shared HTTP response
 reader identifies SSE framing across byte chunks before JSON/stream dispatch,
 including absent or inaccurate Content-Type, and preserves structured failures. Group/model
 limits belong to the ordinary user, not each key. The shared scheduler only
-reserves provider-scoped supplier capacity. Live revalidation protects revoked
-keys, disabled users/groups and changed group policy during waits and retries.
+reserves provider-scoped supplier capacity. Live revalidation protects deleted or
+disabled keys, disabled users/groups, keys moved to another group and changed group
+policy during waits and retries. Keys are enabled or disabled, rotate to a new secret
+under the same identity, and are soft-deleted so usage records keep their owner and name.
 Actual upstream usage drives the idempotent wallet settlement; API response
 conversion never invents usage or substitutes a successful completion for an
 upstream failure. HTTP and native ChatGPT WebSocket generations share admission and ledger

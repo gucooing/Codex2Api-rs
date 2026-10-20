@@ -221,7 +221,7 @@ impl From<codex2api_storage::StorageError> for ApiError {
         let error = match value {
             E::Api { code, message } => {
                 let status = match code.as_ref() {
-                    "invalid_api_key" | "api_key_revoked" => StatusCode::UNAUTHORIZED,
+                    "invalid_api_key" => StatusCode::UNAUTHORIZED,
                     "insufficient_balance" | "api_wallet_insufficient" => {
                         StatusCode::PAYMENT_REQUIRED
                     }

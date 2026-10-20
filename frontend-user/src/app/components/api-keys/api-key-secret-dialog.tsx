@@ -12,31 +12,34 @@ import {
 import { Copy } from "lucide-react";
 
 export function ApiKeySecretDialog({ state }: { state: ReturnType<typeof useApiKeysPage> }) {
-  const { created, setCreated, secretRef, copySecret } = state;
+  const { secret, setSecret, secretRef, copySecret } = state;
+  const rotated = secret?.action === "rotated";
   return (
     <Dialog
-      open={!!created}
+      open={!!secret}
       onOpenChange={(open) => {
-        if (!open) setCreated(undefined);
+        if (!open) setSecret(undefined);
       }}
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>密钥已创建</DialogTitle>
-          <DialogDescription>完整密钥仅显示一次，请复制并妥善保存。</DialogDescription>
+          <DialogTitle>{rotated ? "密钥已轮换" : "密钥已创建"}</DialogTitle>
+          <DialogDescription>
+            {rotated ? "旧密钥已失效。" : ""}完整密钥仅显示一次，请复制并妥善保存。
+          </DialogDescription>
         </DialogHeader>
         <p className="text-sm">
-          {created?.key.name} · {created?.key.group_name}
+          {secret?.key.name} · {secret?.key.group_name}
         </p>
         <p ref={secretRef} className="select-all break-all font-mono text-sm">
-          {created?.secret}
+          {secret?.secret}
         </p>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={copySecret}>
             <Copy />
             复制密钥
           </Button>
-          <Button type="button" onClick={() => setCreated(undefined)}>
+          <Button type="button" onClick={() => setSecret(undefined)}>
             已保存，关闭
           </Button>
         </DialogFooter>

@@ -272,18 +272,20 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
     )
     .await;
     assert_eq!(bob_list["total"], 0);
-    assert_ne!(
-        send(
-            &apps.user,
-            "POST",
-            &format!("/user/api/api-keys/{id}/revoke"),
-            json!({"revision":1}),
-            &bob_headers
-        )
-        .await
-        .status(),
-        StatusCode::OK
-    );
+    for action in ["delete", "rotate"] {
+        assert_ne!(
+            send(
+                &apps.user,
+                "POST",
+                &format!("/user/api/api-keys/{id}/{action}"),
+                json!({"revision":1}),
+                &bob_headers
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+    }
     assert_eq!(
         send(
             &apps.api,
@@ -340,12 +342,51 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
     assert_eq!(inspected["items"][0]["username"], "api-alice");
     assert_eq!(inspected["items"][0]["active_requests"], 0);
     assert!(!inspected.to_string().contains(secret));
+    let rotated = send(
+        &apps.user,
+        "POST",
+        &format!("/user/api/api-keys/{id}/rotate"),
+        json!({"revision":1}),
+        &alice_headers,
+    )
+    .await;
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated = body(rotated).await;
+    assert_eq!(rotated["key"]["id"], id);
+    assert_eq!(rotated["key"]["revision"], 2);
+    let rotated_secret = rotated["secret"].as_str().unwrap();
+    assert_ne!(rotated_secret, secret);
+    let rotated_auth = format!("Bearer {rotated_secret}");
+    assert_eq!(
+        send(
+            &apps.api,
+            "GET",
+            "/v1/models",
+            Value::Null,
+            &[("authorization", key_auth.as_str())]
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(
+            &apps.api,
+            "GET",
+            "/v1/models",
+            Value::Null,
+            &[("authorization", rotated_auth.as_str())]
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
     assert_eq!(
         send(
             &apps.user,
             "POST",
-            &format!("/user/api/api-keys/{id}/revoke"),
-            json!({"revision":1}),
+            &format!("/user/api/api-keys/{id}/delete"),
+            json!({"revision":2}),
             &alice_headers
         )
         .await
@@ -358,11 +399,25 @@ async fn api_management_keys_and_four_listeners_keep_their_ownership_boundaries(
             "GET",
             "/v1/models",
             Value::Null,
-            &[("authorization", key_auth.as_str())]
+            &[("authorization", rotated_auth.as_str())]
         )
         .await
         .status(),
         StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        body(
+            send(
+                &apps.user,
+                "GET",
+                "/user/api/api-keys",
+                Value::Null,
+                &alice_headers,
+            )
+            .await,
+        )
+        .await["total"],
+        0
     );
     let delete = format!("/admin/api/api-groups/{group_id}");
     assert_eq!(

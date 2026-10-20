@@ -73,7 +73,7 @@ export function ApiKeyEditorDialog({ state }: { state: ReturnType<typeof useApiK
             </Field>
             <Field>
               <FieldLabel htmlFor={id + "-group-editor"}>API 组</FieldLabel>
-              <Select value={groupId} disabled={!!editing} onValueChange={setGroupId}>
+              <Select value={groupId} onValueChange={setGroupId}>
                 <SelectTrigger id={id + "-group-editor"} className="w-full">
                   <SelectValue placeholder={editing?.group_name ?? "请选择 API 组"} />
                 </SelectTrigger>

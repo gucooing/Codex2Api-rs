@@ -117,7 +117,6 @@ export default function ApiKeysPage() {
                   <SelectItem value="all">全部状态</SelectItem>
                   <SelectItem value="enabled">已启用</SelectItem>
                   <SelectItem value="disabled">已停用</SelectItem>
-                  <SelectItem value="revoked">已撤销</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -196,7 +195,7 @@ export default function ApiKeysPage() {
                   </TableCell>
                   <TableCell hidden={!columns.isVisible("API 组")}>{key.group_name}</TableCell>
                   <TableCell hidden={!columns.isVisible("状态")}>
-                    <Badge variant={key.enabled && !key.revoked_at ? "secondary" : "outline"}>
+                    <Badge variant={key.enabled ? "secondary" : "outline"}>
                       {apiKeyStatus(key)}
                     </Badge>
                   </TableCell>

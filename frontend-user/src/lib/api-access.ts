@@ -61,7 +61,6 @@ export type ApiKey = {
   group_name: string;
   key_prefix: string;
   enabled: boolean;
-  revoked_at: string | null;
   created_at: string;
   last_used_at: string | null;
   revision: number;
@@ -86,8 +85,7 @@ export const apiCost = (nano: number | null | undefined) =>
   nano == null ? "—" : `$${(nano / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 })}`;
 export const apiDate = (value: string | number | null | undefined) =>
   value == null ? "—" : new Date(value).toLocaleString();
-export const apiKeyStatus = (key: Pick<ApiKey, "enabled" | "revoked_at">) =>
-  key.revoked_at ? "已撤销" : key.enabled ? "已启用" : "已停用";
+export const apiKeyStatus = (key: Pick<ApiKey, "enabled">) => (key.enabled ? "已启用" : "已停用");
 export const apiTier = (tier: string) =>
   ({ standard: "标准", fast: "Fast", flex: "Flex", ultrafast: "Ultrafast" })[tier] ?? tier;
 export const apiRange = (price: Pick<ApiTokenPrice, "min_input_tokens" | "max_input_tokens">) =>

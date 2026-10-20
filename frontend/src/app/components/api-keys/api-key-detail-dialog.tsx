@@ -43,8 +43,6 @@ export function ApiKeyDetailDialog({
           <dd>{date(selected?.created_at)}</dd>
           <dt className="text-muted-foreground">最后使用</dt>
           <dd>{date(selected?.last_used_at)}</dd>
-          <dt className="text-muted-foreground">撤销时间</dt>
-          <dd>{date(selected?.revoked_at)}</dd>
           <dt className="text-muted-foreground">请求数 / 当前并发</dt>
           <dd>
             {selected?.total_requests ?? "—"} / {selected?.active_requests ?? "—"}

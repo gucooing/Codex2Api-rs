@@ -25,7 +25,6 @@ export type ApiKey = {
   username: string;
   key_prefix: string;
   enabled: boolean;
-  revoked_at: string | null;
   created_at: string;
   last_used_at: string | null;
   revision: number;
@@ -46,5 +45,4 @@ export const apiTokens = (tokens: number | null) =>
       );
 export const apiCost = (nano: number | null) =>
   nano === null ? "—" : `$${(nano / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 })}`;
-export const apiKeyStatus = (key: Pick<ApiKey, "enabled" | "revoked_at">) =>
-  key.revoked_at ? "已撤销" : key.enabled ? "已启用" : "已停用";
+export const apiKeyStatus = (key: Pick<ApiKey, "enabled">) => (key.enabled ? "已启用" : "已停用");

@@ -20,7 +20,8 @@ pub(crate) fn router(state: UserState) -> Router {
             get(api_access::keys).post(api_access::create_key),
         )
         .route("/api-keys/{id}", post(api_access::update_key))
-        .route("/api-keys/{id}/revoke", post(api_access::revoke_key))
+        .route("/api-keys/{id}/rotate", post(api_access::rotate_key))
+        .route("/api-keys/{id}/delete", post(api_access::delete_key))
         .route("/session", get(profile::session))
         .route("/logout", post(auth::logout))
         .route("/password", post(profile::password))

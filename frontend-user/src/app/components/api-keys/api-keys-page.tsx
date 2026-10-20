@@ -1,6 +1,7 @@
 "use client";
+import { ApiKeyDeleteDialog } from "@/app/components/api-keys/api-key-delete-dialog";
 import { ApiKeyEditorDialog } from "@/app/components/api-keys/api-key-editor-dialog";
-import { ApiKeyRevokeDialog } from "@/app/components/api-keys/api-key-revoke-dialog";
+import { ApiKeyRotateDialog } from "@/app/components/api-keys/api-key-rotate-dialog";
 import { ApiKeySecretDialog } from "@/app/components/api-keys/api-key-secret-dialog";
 import { useApiKeysPage } from "@/app/data/api-keys";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +11,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -60,7 +62,10 @@ export default function ApiKeysPage() {
     openEditor,
     baseRef,
     copyBase,
-    setRevoking,
+    toggling,
+    toggle,
+    setRotating,
+    setDeleting,
   } = state;
   return (
     <>
@@ -133,7 +138,6 @@ export default function ApiKeysPage() {
               <SelectItem value="all">全部状态</SelectItem>
               <SelectItem value="enabled">已启用</SelectItem>
               <SelectItem value="disabled">已停用</SelectItem>
-              <SelectItem value="revoked">已撤销</SelectItem>
             </SelectContent>
           </Select>
         </Field>
@@ -190,7 +194,7 @@ export default function ApiKeysPage() {
                     <p className="text-xs text-muted-foreground">{key.group_name}</p>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={key.enabled && !key.revoked_at ? "secondary" : "outline"}>
+                    <Badge variant={key.enabled ? "secondary" : "outline"}>
                       {apiKeyStatus(key)}
                     </Badge>
                   </TableCell>
@@ -222,17 +226,30 @@ export default function ApiKeysPage() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem
-                          disabled={!resource.ready || !!key.revoked_at}
+                          disabled={!resource.ready}
                           onSelect={() => openEditor(key)}
                         >
                           编辑
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          variant="destructive"
-                          disabled={!resource.ready || !!key.revoked_at}
-                          onSelect={() => setRevoking(key)}
+                          disabled={!resource.ready || toggling}
+                          onSelect={() => toggle(key)}
                         >
-                          撤销
+                          {key.enabled ? "停用" : "启用"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={!resource.ready}
+                          onSelect={() => setRotating(key)}
+                        >
+                          轮换密钥
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={!resource.ready}
+                          onSelect={() => setDeleting(key)}
+                        >
+                          删除
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -301,7 +318,8 @@ export default function ApiKeysPage() {
       </Card>
       <ApiKeyEditorDialog state={state} />
       <ApiKeySecretDialog state={state} />
-      <ApiKeyRevokeDialog state={state} />
+      <ApiKeyRotateDialog state={state} />
+      <ApiKeyDeleteDialog state={state} />
     </>
   );
 }

@@ -76,6 +76,7 @@ pub(crate) async fn create_key(
 #[serde(deny_unknown_fields)]
 pub(crate) struct UpdateKey {
     name: String,
+    group_id: String,
     enabled: bool,
     revision: i64,
 }
@@ -92,6 +93,7 @@ pub(crate) async fn update_key(
             &session.user_id,
             &id,
             &input.name,
+            &input.group_id,
             input.enabled,
             input.revision,
         )
@@ -110,7 +112,30 @@ pub(crate) struct Revision {
     revision: i64,
 }
 
-pub(crate) async fn revoke_key(
+/// Issues a new secret for a key whose current secret is lost; the response shows
+/// the full secret once, exactly like creation.
+pub(crate) async fn rotate_key(
+    State(state): State<UserState>,
+    Extension(session): Extension<UserSession>,
+    Path(id): Path<String>,
+    Json(input): Json<Revision>,
+) -> Result<Json<Value>> {
+    let Some(rotated) = state
+        .storage
+        .rotate_api_key(&session.user_id, &id, input.revision)
+        .await?
+    else {
+        return Err(UserError::from(
+            codex2api_storage::StorageError::ProxyChanged,
+        ));
+    };
+    let active = (state.api_concurrency)(&rotated.key.id);
+    let mut value = json!(rotated);
+    value["key"]["active_requests"] = active.into();
+    Ok(Json(value))
+}
+
+pub(crate) async fn delete_key(
     State(state): State<UserState>,
     Extension(session): Extension<UserSession>,
     Path(id): Path<String>,
@@ -118,7 +143,7 @@ pub(crate) async fn revoke_key(
 ) -> Result<Json<Value>> {
     if !state
         .storage
-        .revoke_api_key(&session.user_id, &id, input.revision)
+        .delete_api_key(&session.user_id, &id, input.revision)
         .await?
     {
         return Err(UserError::from(

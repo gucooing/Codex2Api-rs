@@ -63,12 +63,15 @@ impl Storage {
         crate::storage::lock_user(&mut tx, &principal.user_id).await?;
         let current = crate::api_access::principal_on(self, &mut tx, &principal.key_id, false)
             .await?
-            .filter(|p| p.user_id == principal.user_id && p.group.id == principal.group.id)
+            .filter(|p| p.user_id == principal.user_id)
             .ok_or(StorageError::Api {
                 code: "invalid_api_key",
                 message: "API Key 不可用",
             })?;
-        if current.group.revision != principal.group.revision {
+        // The key moved to another group or the group's rules changed since authentication.
+        if current.group.id != principal.group.id
+            || current.group.revision != principal.group.revision
+        {
             return Err(StorageError::Api {
                 code: "api_group_changed",
                 message: "API 组规则已更改，请重试",

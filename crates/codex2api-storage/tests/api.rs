@@ -205,7 +205,7 @@ async fn cached_catalog_is_fenced_by_transactional_price_and_model_revisions() {
             ..
         })
     ));
-    sqlx::query("UPDATE api_keys SET revoked_at='revoked' WHERE id=$1")
+    sqlx::query("UPDATE api_keys SET deleted=TRUE,enabled=FALSE WHERE id=$1")
         .bind(&principal.key_id)
         .execute(storage.pool())
         .await
@@ -385,14 +385,22 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
     assert!(
         !storage
             .user_store()
-            .revoke_api_key(&second.id, &principal.key_id, 1)
+            .delete_api_key(&second.id, &principal.key_id, 1)
             .await
             .unwrap()
     );
     assert!(
+        storage
+            .user_store()
+            .rotate_api_key(&second.id, &principal.key_id, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
         !storage
             .user_store()
-            .update_api_key(&second.id, &principal.key_id, "Stolen", false, 1)
+            .update_api_key(&second.id, &principal.key_id, "Stolen", &group.id, false, 1)
             .await
             .unwrap()
     );
@@ -427,13 +435,19 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
             .await
             .is_err()
     );
-    assert!(
-        storage
-            .user_store()
-            .revoke_api_key(&user.id, &principal.key_id, 1)
-            .await
-            .unwrap()
-    );
+    // Rotation issues a new secret under the same key identity; the old secret
+    // stops authenticating at once and a stale revision cannot rotate again.
+    let rotated = storage
+        .user_store()
+        .rotate_api_key(&user.id, &principal.key_id, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rotated.key.id, principal.key_id);
+    assert_eq!(rotated.key.revision, 2);
+    assert_ne!(rotated.secret, secret);
+    assert_eq!(rotated.secret.len(), 71);
+    assert_eq!(rotated.key.key_prefix, rotated.secret[..15]);
     assert!(
         storage
             .authenticate_api_key(&secret)
@@ -441,13 +455,192 @@ async fn api_keys_catalogs_and_queries_enforce_regular_ownership_and_secret_isol
             .unwrap()
             .is_none()
     );
+    assert_eq!(
+        storage
+            .authenticate_api_key(&rotated.secret)
+            .await
+            .unwrap()
+            .unwrap()
+            .key_id,
+        principal.key_id
+    );
     assert!(
-        sqlx::query("UPDATE api_keys SET revoked_at=NULL,enabled=TRUE WHERE id=$1")
+        storage
+            .user_store()
+            .rotate_api_key(&user.id, &principal.key_id, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Editing moves the key only to an available group, and a request admitted
+    // with the principal from before the move reports the changed group.
+    let mut moved = group.clone();
+    moved.id = "second-group".into();
+    moved.name = "Second group".into();
+    moved.revision = 0;
+    assert!(storage.save_api_group(&moved, None).await.unwrap());
+    let mut disabled = group.clone();
+    disabled.id = "disabled-group".into();
+    disabled.name = "Disabled group".into();
+    disabled.enabled = false;
+    disabled.revision = 0;
+    assert!(storage.save_api_group(&disabled, None).await.unwrap());
+    assert!(matches!(
+        storage
+            .user_store()
+            .update_api_key(&user.id, &principal.key_id, "Moved", &disabled.id, true, 2)
+            .await,
+        Err(StorageError::Api {
+            code: "api_group_unavailable",
+            ..
+        })
+    ));
+    assert!(
+        sqlx::query("UPDATE api_keys SET group_id=$1 WHERE id=$2")
+            .bind(&disabled.id)
             .bind(&principal.key_id)
             .execute(storage.pool())
             .await
             .is_err()
     );
+    assert!(
+        storage
+            .user_store()
+            .update_api_key(&user.id, &principal.key_id, "Moved", &moved.id, true, 2)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .authenticate_api_key(&rotated.secret)
+            .await
+            .unwrap()
+            .unwrap()
+            .group
+            .id,
+        moved.id
+    );
+    assert!(matches!(
+        storage
+            .admit_api_request(&principal, &request("moved"))
+            .await,
+        Err(StorageError::Api {
+            code: "api_group_changed",
+            ..
+        })
+    ));
+    // Disabling stops authentication without deleting; the list filter knows only
+    // enabled and disabled.
+    assert!(
+        storage
+            .user_store()
+            .update_api_key(&user.id, &principal.key_id, "Moved", &moved.id, false, 3)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .authenticate_api_key(&rotated.secret)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        storage
+            .user_store()
+            .api_keys(
+                &user.id,
+                &ApiListQuery {
+                    status: "disabled".into(),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap()
+            .total,
+        1
+    );
+    assert!(matches!(
+        storage
+            .user_store()
+            .api_keys(
+                &user.id,
+                &ApiListQuery {
+                    status: "revoked".into(),
+                    ..Default::default()
+                }
+            )
+            .await,
+        Err(StorageError::InvalidAdminUpdate(_))
+    ));
+    // Deletion is irreversible: the key leaves every list, stops authenticating and
+    // refuses later edits, rotation, re-enabling or a fresh secret.
+    assert!(
+        storage
+            .user_store()
+            .delete_api_key(&user.id, &principal.key_id, 4)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .user_store()
+            .delete_api_key(&user.id, &principal.key_id, 5)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .user_store()
+            .rotate_api_key(&user.id, &principal.key_id, 5)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !storage
+            .user_store()
+            .update_api_key(&user.id, &principal.key_id, "Back", &moved.id, true, 5)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .authenticate_api_key(&rotated.secret)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        storage
+            .user_store()
+            .api_keys(&user.id, &ApiListQuery::default())
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    assert_eq!(
+        storage
+            .admin_api_keys(&ApiListQuery::default())
+            .await
+            .unwrap()
+            .total,
+        0
+    );
+    for sql in [
+        "UPDATE api_keys SET deleted=FALSE WHERE id=$1",
+        "UPDATE api_keys SET enabled=TRUE WHERE id=$1",
+        "UPDATE api_keys SET token_hash='fresh',key_prefix='fresh' WHERE id=$1",
+    ] {
+        assert!(
+            sqlx::query(sql)
+                .bind(&principal.key_id)
+                .execute(storage.pool())
+                .await
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]

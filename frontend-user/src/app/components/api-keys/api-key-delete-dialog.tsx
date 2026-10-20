@@ -11,46 +11,46 @@ import {
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 
-export function ApiKeyRevokeDialog({ state }: { state: ReturnType<typeof useApiKeysPage> }) {
-  const { revoking, setRevoking, revokingBusy, revoke, resource } = state;
+export function ApiKeyDeleteDialog({ state }: { state: ReturnType<typeof useApiKeysPage> }) {
+  const { deleting, setDeleting, deletingBusy, remove, resource } = state;
   return (
     <Dialog
-      open={!!revoking}
+      open={!!deleting}
       onOpenChange={(open) => {
-        if (!open && !revokingBusy) setRevoking(undefined);
+        if (!open && !deletingBusy) setDeleting(undefined);
       }}
     >
       <DialogContent
-        showCloseButton={!revokingBusy}
+        showCloseButton={!deletingBusy}
         onEscapeKeyDown={(event) => {
-          if (revokingBusy) event.preventDefault();
+          if (deletingBusy) event.preventDefault();
         }}
         onInteractOutside={(event) => {
-          if (revokingBusy) event.preventDefault();
+          if (deletingBusy) event.preventDefault();
         }}
       >
         <DialogHeader>
-          <DialogTitle>撤销密钥</DialogTitle>
+          <DialogTitle>删除密钥</DialogTitle>
           <DialogDescription>
-            撤销“{revoking?.name}”后，此密钥无法继续调用，也不能恢复。
+            删除“{deleting?.name}”后，此密钥立即失效并从列表移除，不能恢复；已产生的用量记录保留。
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button
             type="button"
             variant="outline"
-            disabled={revokingBusy}
-            onClick={() => setRevoking(undefined)}
+            disabled={deletingBusy}
+            onClick={() => setDeleting(undefined)}
           >
             取消
           </Button>
           <Button
             type="button"
             variant="destructive"
-            disabled={revokingBusy || !resource.ready}
-            onClick={revoke}
+            disabled={deletingBusy || !resource.ready}
+            onClick={remove}
           >
-            {revokingBusy && <Spinner />}确认撤销
+            {deletingBusy && <Spinner />}确认删除
           </Button>
         </DialogFooter>
       </DialogContent>
