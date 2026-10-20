@@ -167,7 +167,8 @@ impl Storage {
             .split_first()
             .expect("baseline migration");
         let mut tx = self.pool.begin().await?;
-        // Schema initialization and migrations share one transaction and schema lock.
+        // Schema initialization and migrations share one transaction and schema lock,
+        // so each migration drops the temporary tables it creates.
         sqlx::query(
             "SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':bootstrap', 0))",
         )

@@ -105,3 +105,6 @@ UPDATE virtual_plans p SET config=jsonb_set(p.config,'{models}',(
 WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(
         CASE WHEN jsonb_typeof(p.config->'models')='array' THEN p.config->'models' ELSE '[]'::jsonb END) e
     JOIN model_renames r ON r.former=e->>'model');
+
+-- A fresh database applies its migrations in one transaction; drop this file's work tables.
+DROP TABLE antigravity_models, model_renames, model_merges;
