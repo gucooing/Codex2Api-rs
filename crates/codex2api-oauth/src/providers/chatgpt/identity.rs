@@ -224,7 +224,9 @@ pub fn mask(
                 });
             for (key, item) in object.iter_mut() {
                 match key.as_str() {
-                    "error" if !item.is_null() => *item = crate::public_output::error(item),
+                    "error" if !item.is_null() => {
+                        *item = codex2api_upstream::convert::sanitize::error(item)
+                    }
                     "plan_type" | "chatgpt_plan_type" => *item = account.plan_type.as_str().into(),
                     "email" => *item = account.email.clone().into(),
                     "account_id" | "chatgpt_account_id" => *item = account.id.clone().into(),
@@ -367,7 +369,7 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
                                     .collect::<Vec<_>>();
                                 lines.push(format!("data: {value}"));
                                 output = Bytes::from(format!("{}\n\n", lines.join("\n")));
-                            } else if crate::public_output::metadata(&mut value) {
+                            } else if codex2api_upstream::convert::sanitize::metadata(&mut value) {
                                 let event_name = text.lines().find(|l| l.starts_with("event:"));
                                 output = Bytes::from(format!(
                                     "{}data: {value}\n\n",
@@ -506,7 +508,7 @@ pub(crate) async fn websocket_event(
     event: &mut Value,
 ) -> crate::Result<String> {
     if event["type"] != "codex.rate_limits" {
-        return Ok(if crate::public_output::metadata(event) {
+        return Ok(if codex2api_upstream::convert::sanitize::metadata(event) {
             event.to_string()
         } else {
             text.to_owned()

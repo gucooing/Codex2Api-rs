@@ -150,6 +150,7 @@ export function OAuthWizard({
                       setProvider(value);
                       setFingerprint(undefined);
                       setBatchResults([]);
+                      setMethod(supplierChannel(value).methods[0] as typeof method);
                     }}
                   >
                     <SelectTrigger id={`${fieldId}-provider`}>
@@ -225,9 +226,11 @@ export function OAuthWizard({
               </TabsContent>
               <TabsContent value="2" className="space-y-4 pr-1">
                 <FieldSet disabled={busy} className="gap-4">
-                  {method === "refresh_token" ? (
+                  {method === "refresh_token" || method === "api_key" ? (
                     <Field>
-                      <FieldLabel htmlFor={`${fieldId}-refresh-token`}>Refresh Token</FieldLabel>
+                      <FieldLabel htmlFor={`${fieldId}-refresh-token`}>
+                        {channel.tokenLabel}
+                      </FieldLabel>
                       <Textarea
                         id={`${fieldId}-refresh-token`}
                         autoComplete="off"
@@ -241,7 +244,7 @@ export function OAuthWizard({
                         }}
                       />
                       <FieldDescription>
-                        {supplierId ? "输入新的 RT" : "每行一条，最多 50 条"}
+                        {supplierId ? `输入新的 ${channel.tokenLabel}` : "每行一条，最多 50 条"}
                       </FieldDescription>
                     </Field>
                   ) : pending ? (

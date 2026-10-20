@@ -293,11 +293,7 @@ pub(crate) async fn forward(
             }
             let metadata = codex2api_upstream::request_metadata_value(&body);
             let schedule = scheduling::request(&inbound, &body);
-            Ok::<_, codex2api_upstream::UpstreamError>((
-                metadata,
-                schedule,
-                codex2api_upstream::grok::PreparedBody::new(body)?,
-            ))
+            Ok::<_, codex2api_upstream::UpstreamError>((metadata, schedule, body))
         })
         .await
         .map_err(|e| OAuthError::internal(e.to_string()))??;
@@ -331,25 +327,24 @@ pub(crate) async fn forward(
         log.as_mut()
             .expect("request ledger")
             .set_protocol_observer(usage::Observer::default());
-        let response = crate::pool_execution::execute_with_prelude(
-            &state,
-            &access,
-            ctx,
-            &mut log,
-            usage::prelude,
-            |id| {
-                let body = body.clone();
-                let headers = headers.clone();
-                let upstream = state.upstream.clone();
-                async move {
-                    upstream
-                        .grok()
-                        .grok_request_prepared(&id, Method::POST, endpoint, Some(body), &headers)
-                        .await
-                }
-            },
-        )
-        .await?;
+        let input = codex2api_upstream::inbound::InboundRequest::client(
+            codex2api_upstream::inbound::Inbound::GrokClient,
+            codex2api_upstream::supply::Operation::Generate,
+            body,
+            headers.clone(),
+            Some(endpoint.to_owned()),
+        );
+        let executed =
+            crate::pool_execution::execute(&state, &access, ctx, input, &mut log).await?;
+        let mut context = executed.context;
+        let mut response = executed.response;
+        match (&mut log, context.permit.take()) {
+            (Some(log), Some(permit)) => log.set_supplier_permit(permit),
+            (None, Some(permit)) => {
+                response.extensions_mut().insert(permit);
+            }
+            _ => {}
+        }
         let status = response.status();
         let mut response_headers = response.headers().clone();
         let sse = response_headers
@@ -427,7 +422,7 @@ fn isolate(body: Body) -> Body {
                     changed = true;
                     codex2api_upstream::grok::errors::normalize_response(&mut value);
                 }
-                changed |= crate::public_output::metadata(&mut value);
+                changed |= codex2api_upstream::convert::sanitize::metadata(&mut value);
                 let data = if changed {
                     value.to_string()
                 } else {

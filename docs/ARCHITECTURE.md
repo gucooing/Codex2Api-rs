@@ -90,73 +90,98 @@ registers HTTP routes.
 The two inference listeners have different contracts. `codex2api-oauth` serves configured ccodex, cgrok and hooked Desktop clients under `/v1/chatgpt` and `/v1/grok`; `codex2api-api` serves API-key callers under `/v1`. See [OAuth clients](OAUTH.md) for routing and configuration. The OAuth/client listener
 accepts the corresponding client's protocol, checks its account and subscription,
 and preserves conversation contents, protocol events and client request IDs while
-normalizing supplier identity. The API-key listener accepts public Responses,
-Chat Completions, Messages and image APIs and constructs a new official-client request.
-Client OAuth credentials identify the selected subscription. Supplier credentials
-are resolved separately by the supplier service and upstream transport. Standard
-API callers authenticate with API keys and use their own admission and settlement.
+the channel binds the supplier identity. The API-key listener accepts public Responses,
+Chat Completions, Messages and image APIs. Client OAuth credentials identify the
+selected subscription; supplier credentials are resolved separately by the supplier
+channel. Standard API callers authenticate with API keys and use their own admission
+and settlement. Neither listener knows which channel will serve a request.
 
 ```mermaid
 flowchart LR
     A[Public API request] --> B[API key and group]
     B --> C[Public API parsing]
     C --> E[Price snapshot and API admission]
-    E --> F[Supplier selection]
-    F --> D[Upstream protocol adapter for selected account]
-    D --> G[Account-bound official transport]
-    G --> H[Provider events and actual usage]
+    E --> F[Executor: select supplier]
+    F --> D[Convert request to the supplier's wire]
+    D --> G[Channel transport on the account's client]
+    G --> V{Channel verdict}
+    V -- client error --> J
+    V -- avoid / retry --> F
+    V -- output --> H[Wire events and actual usage]
     H --> I[Wallet settlement]
-    I --> J[Public JSON or stream completion]
+    I --> J[Caller-protocol JSON or stream]
     K[OAuth client request] --> L[Client protocol and subscription admission]
     L --> F
 ```
 
-`codex2api-upstream/src/protocol/request.rs` validates a public request once,
-separates caller response preferences and local metadata from inference input,
-and neither selects a supplier nor supplies credentials. Both official
-subscriptions use Responses upstream; the protocol is fixed per provider and never
-inferred from model descriptors or names. After selection, the request is converted
-once into the canonical Responses request: `protocol/responses.rs`,
-`protocol/chat/responses.rs` and `protocol/messages/responses.rs` serve Responses,
-Chat and Messages callers, each with its request conversion and event conversion back.
-Responses callers pass through the same canonicalization because standard clients
-vary. There is no intermediate pivot format. `PreparedRequest` carries the provider body, validated
-dynamic headers, local response metadata and the inbound and upstream protocols.
+Three layers are kept apart. The supply layer (`codex2api-suppliers` and
+`codex2api-upstream/src/providers/<channel>/`) owns each channel's credentials,
+isolated HTTP clients, transport and verdict. The executor
+(`codex2api-upstream/src/executor/`) selects a supplier from the route's tag pool
+with affinity and concurrency leases, converts the downstream request into that
+supplier's official wire, sends it, reads the reply up to its first output, and acts
+on the channel's verdict. The downstream listeners parse, admit, format and settle.
 
-Both providers always request a stream, as their official clients do. The API
-response loop measures supplier events in their own protocol for the ledger,
-converts each event once into the caller's protocol, and either streams it or
-collects it into the caller protocol's JSON reply. Terminal events are delivered
-only after settlement. Events and request bodies move through the pipeline by
-value: same-protocol events are forwarded without copies, text accumulates in
-place, and each attempt's body moves into the transport.
+`codex2api-upstream/src/inbound/` validates a public request once, separates
+caller response preferences and local metadata from inference input, and neither
+selects a supplier nor supplies credentials. The request keeps its own format
+(`codex_client`, `grok_client`, `responses`, `chat`, `messages`) until a supplier is
+selected. Each channel speaks one wire: ChatGPT the pinned Codex Responses dialect,
+Grok the xAI Responses dialect of Grok Build, Antigravity the Cloud Code Assist
+Gemini wire, and an API-key account the OpenAI Responses, Chat Completions or
+Anthropic Messages wire it is configured with. The wire is fixed per account and
+never inferred from model descriptors or names.
 
-ChatGPT builds the pinned Codex Responses request shape: `stream=true`,
-`store=false`, instructions as a developer input item and encrypted reasoning
-included. SDK controls the subscription endpoint does not accept are not sent.
-The adapter preserves supplied session/thread/window metadata and headers
-without deriving new caller identities from suppliers or API keys. Grok builds
-the Responses request in Grok Build's shape: official models declare
-`api_backend: responses` in the pinned client's `xai-grok-models/default_models.json`,
-system-level input uses the system role, `store=false` and encrypted reasoning is
-included. Conversion runs after selection and is rebuilt on failover.
-Antigravity converts the canonical Responses request to the Cloud Code Assist
-Gemini wire inside `providers/antigravity/` (request, events, schema and error
-modules) and sends the desktop client's v1internal envelope; its stream is
-converted back into Responses events before any shared code sees it, so the
-API layer handles only the canonical contract. Antigravity discovery groups
-upstream IDs into models by their reported display name, whose trailing effort
-label names the reasoning effort; the transport sends the selected account's ID
-for the request's effort and refuses any model and effort combination the account
-did not report.
-Image JSON and multipart inputs go through the corresponding provider builder.
+The conversion matrix in `codex2api-upstream/src/convert/` holds one direct
+conversion per (inbound format, wire) pair: a request builder from the downstream
+request as sent, and an event conversion from the wire's events into the caller's
+protocol. There is no intermediate standard format and no passthrough: a Responses
+caller reaching a ChatGPT account is rebuilt in the Codex dialect (`store=false`,
+`stream=true`, developer-role instructions, encrypted reasoning, SDK controls the
+subscription endpoint rejects removed), reaching Grok in Grok Build's shape, reaching
+an OpenAI API key in the API's field range, reaching Antigravity as Gemini contents,
+and reaching a Chat Completions or Messages key as that API's messages. A native
+client's request only goes to the wire it was written for; the channel binds the
+supplier identity. `convert::supports(inbound, wire)` declares the matrix, and a
+supplier whose wire has no conversion for the request is excluded at selection.
+Conversion runs after selection and is rebuilt on every switch.
+
+Every channel always requests a stream, as its official client does. The executor
+buffers the prelude of a reply until the first output event: an HTTP error, a
+transport fault or a failure event before output is one attempt's failure for the
+channel to judge; once output or usage is visible the reply belongs to the caller
+and is replayed unchanged. Downstream loops read usage, the reported model and the
+terminal outcome from the wire's own events through `convert::observe`, convert each
+event once into the caller's protocol, and either stream it or collect it into the
+caller protocol's JSON reply. Terminal events are delivered only after settlement.
+
+A channel's verdict on a failed attempt is one of four results. `ClientError`
+returns the supplier's reply to the caller in the caller's error format and leaves
+the supplier serving. `RetrySame` retries the same supplier after a bounded backoff,
+then falls back to the next result. `Avoid` records an avoidance for this request
+only, until a time, or permanently, for the whole account or for one model, and the
+executor switches to another candidate. `Stop` ends a generation that already
+produced output. The switch set every channel shares is 401, 402, 403, 405, 429,
+529, 5xx and transport faults; what each status means for the account is the
+channel's own rule (see [Grok](GROK.md), [Antigravity](ANTIGRAVITY.md) and
+[API accounts](API_ACCOUNTS.md)). An upstream 429 is never forwarded. When the
+candidates are exhausted the caller receives 503 `no_available_supplier`; when no
+supplier of the pool is configured for the model it receives 404 `model_not_found`.
+HTTP 429 reaches a caller only from this service's own limits: RPM, concurrency,
+queue and budget. A supplier reply that an auxiliary client call receives outside
+the executor follows the same rule: a caller fault keeps its status and reason, a
+switch-set status becomes 503 `no_available_supplier` without the supplier's
+authorization, billing or throttling details.
+
+Image JSON and multipart inputs go through the corresponding channel builder.
 Protocol conversion preserves the native tool, multimodal and replay payloads;
 provider validation remains authoritative for unsupported extensions. Search,
-compaction and input counting use their own real upstream wire contracts.
-[AI API gateway](API.md) documents these operations and their actual boundaries.
+compaction and input counting use their own real upstream wire contracts on the
+ChatGPT channel only. [AI API gateway](API.md) documents these operations and
+their actual boundaries.
 
 The selected supplier contributes credentials, installation ID, frozen HTTP
-fingerprint and outbound proxy only in the official transport. Caller API keys,
+fingerprint and outbound proxy only in the channel transport. Caller API keys,
 cookies, account selectors, `client_metadata` and privileged client flags cannot
 select or impersonate that identity. Request IDs remain fixed across retries of one API execution. Header values used to derive local affinity are not
 thereby authorized for upstream forwarding.
@@ -168,18 +193,12 @@ in `public_error_code`/`public_error_message`; `http_status` describes the trans
 `provider_id` is the platform the request is identified with (the model's vendor label,
 ChatGPT for its protocol operations, or the subscription platform) and is immutable;
 `account_provider_id` is the channel of the supplier that served the final attempt.
-Provider-specific normalization and failure classification always use the serving
-supplier's provider. Each failed supplier attempt the gateway recovers from (credential
-refresh or failover) is kept in administrator-only `usage_attempts`; the consumer sees
-only the request's final outcome. Supplier failures reach consumers through one shared
-policy, `codex2api_upstream::public_output::PublicFailure`, for both listeners: caller
-errors keep their code, parameter and a redacted message; throttling stays a rate-limit
-error with its retry advice; supplier credentials, billing, quota, permissions and pool
-capacity become `503 service_unavailable`; timeouts and transport faults become generic
-upstream errors. Local consumer errors (keys, wallets, subscriptions, limits, validation)
-are already in consumer terms and bypass the policy.
-It does not store `failure_kind` or `failure_status`. Provider classification and
-structured client errors remain part of execution, independent of these ledger fields.
+Each failed supplier attempt the executor recovers from (same-supplier retry or a
+switch) is kept in administrator-only `usage_attempts`; the consumer sees only the
+request's final outcome. Supplier credentials, billing, quota, permissions and pool
+capacity never reach a consumer: they are administrator-ledger detail behind a 503.
+Local consumer errors (keys, wallets, subscriptions, limits, validation) are already
+in consumer terms. The ledger does not store `failure_kind` or `failure_status`.
 Gateway admission snapshots
 model prices and group multipliers before execution. ChatGPT search uses the API
 group's independently configured final per-call USD price, without a multiplier or
@@ -204,6 +223,11 @@ conversion never invents usage or substitutes a successful completion for an
 upstream failure. HTTP and native ChatGPT WebSocket generations share admission and ledger
 finalization; terminal output is released after settlement. Accepted work
 continues to account for usage when the downstream disconnects.
+The attempt ledger uses `retry` for
+same-supplier retries and `failover` for switches. Failures with actual output or
+usage remain the final request outcome, settle their reported measurements, and
+never become a recoverable attempt. HTTP and WebSocket use the executor's shared
+recovery budget and revalidate consumer authorization before another attempt.
 
 ## Storage and supplier isolation
 
@@ -466,84 +490,80 @@ suppliers' provider. `POST /admin/api/suppliers/tags` requires `account_ids` and
 omitted fields cannot clear tags. Unselected suppliers and other account fields
 remain unchanged. Only edited selections are submitted.
 
-Supplier availability separates manual disablement, permanent credential rejection,
-billing rejection and quota exhaustion. The administrator `enabled` flag controls
-intent only; it can be changed in every availability state. Successful explicit
-reauthorization clears prior failure state in the same transaction as credentials,
-starts a new credential revision even for identical tokens, preserves manual
-disablement and frozen identity, and invalidates supplier eligibility caches. No manual
-authorization-recovery endpoint or button exists. Token refresh uses a revision
-check, cannot overwrite a concurrent login, and preserves billing and manual state.
-Ordinary request throttling remains a client retry concern.
-The ChatGPT adapter follows
-`codex-api/src/api_bridge.rs`, `sse/responses_error.rs` and
-`login/src/auth/manager.rs` in the pinned reference: `usage_limit_reached` and known
-quota/credit codes indicate exhaustion. `rate_limit_exceeded`, `slow_down` and
-unclassified HTTP 429 are forwarded with their retry information; they never
-change supplier health or affinity and are excluded from error EWMA samples. 403, network failures, policy errors
-and 5xx never permanently invalidate credentials. Refresh rejection follows the
-official permanent codes, including HTTP 400 `invalid_grant`; expired access tokens
-are refreshed before abandoning their supplier. Observations carry credential
-revisions so stale failures cannot disable newly replaced authorization.
+Supplier availability separates manual disablement from the blocks a channel's
+verdicts record. The administrator `enabled` flag controls intent only; it can be
+changed in every availability state. A block (`supplier_blocks`) is an account-wide or
+model-scoped avoidance of one kind: `auth`, `billing`, `rate_limit`, `quota`,
+`overload`, `transport`, `model_missing` or `penalty`, ending at a time or never.
+One active block exists per (account, scope, model); a permanent block outranks a
+timed one and a later expiry outranks an earlier one. Blocks carry the credential
+revision they were observed on, so a late failure cannot block freshly replaced
+credentials; checks started before an administrator reset are fenced by the
+observation revision. Successful explicit reauthorization deletes every block of the
+account in the same transaction as the credentials, starts a new credential revision
+even for identical tokens, preserves manual disablement and frozen identity, and
+invalidates supplier eligibility caches. No manual authorization-recovery endpoint
+or button exists. Token refresh uses a revision check and cannot overwrite a
+concurrent login.
 
-ChatGPT HTTP 402 `Payment Required`, including responses without a structured
-error code, records a persistent billing rejection and removes that supplier from
-the pool. `detail.code` is preserved when supplied. This rejection does not delete
-credentials or invoke authorization recovery, has no automatic expiry, and is not
-cleared by successful quota reads or ordinary token refresh. Explicit successful
-reauthorization or the administrator state-reset operation clears it. Grok does not
-inherit this ChatGPT-specific classification.
+The ChatGPT channel follows `codex-api/src/api_bridge.rs`, `sse/responses_error.rs`
+and `login/src/auth/manager.rs` in the pinned reference. HTTP 401 after the inline
+refresh is a permanent `auth` block; refresh rejection follows the official permanent
+codes, including HTTP 400 `invalid_grant`, and expired access tokens are refreshed
+before abandoning their supplier. ChatGPT HTTP 402 `Payment Required`, including
+responses without a structured error code, is a permanent `billing` block that keeps
+`detail.code`, deletes no credentials, invokes no authorization recovery and is not
+cleared by quota reads or token refresh; only explicit reauthorization or the
+administrator reset clears it. `usage_limit_reached` and the known quota/credit codes
+record a `quota` block until the official reset in the error body, the quota headers
+or `Retry-After`, or a sixty-second probe when timing is absent. `rate_limit_exceeded`,
+`slow_down` and unclassified HTTP 429 record a `rate_limit` block until the retry
+advice; model entitlement failures (`model_not_found`, `usage_not_included`) block
+that model for an hour; other 403s block the account ten minutes; 529 blocks ten
+minutes as `overload`; 5xx and timeouts avoid the supplier for this request only;
+connection failures block ten minutes as `transport`. Caller errors (400-class other
+than the above) return to the caller. Grok and Antigravity do not inherit these
+ChatGPT rules; their verdicts are documented with each channel.
 
-Quota cooldowns persist in PostgreSQL and expire automatically at the official reset or
-Retry-After time. When timing is absent, a sixty-second retry cooldown is used;
-it is not presented as an official quota reset. Fresh main quota responses can
-also record exhaustion; model-specific additional windows do not disable the whole
-account. Antigravity quota belongs to a model or to a pool of models (Claude and
-GPT-OSS share one): an explicit `RESOURCE_EXHAUSTED` with a reset wait of seven
-seconds or more, or an official quota read reporting the quota spent, records a
-cooldown in `supplier_model_cooldowns` for every model of that quota and the
-credential revision; models whose descriptors name the same `quota_pool` cool down
-and recover together. Other models of the account stay schedulable, the pool index applies
-the later of the account and model cooldowns, and a fresh read reporting remaining quota,
-a new login or the administrator reset clears it. Short waits are forwarded as ordinary
-throttling with `Retry-After`. A fresh ChatGPT response explicitly allowing execution or reporting usable
-credits clears quota exhaustion immediately, even before the old reset time, and
-invalidates pool eligibility caches. Unknown, failed or cached reads never prove recovery.
-Credential and quota observation revisions protect against late checks, including
-checks started before an administrator reset.
+Antigravity quota belongs to a model or to a pool of models (Claude and GPT-OSS
+share one): an explicit `RESOURCE_EXHAUSTED` or an official quota read reporting the
+quota spent records a `quota` block for every model of that quota; models whose
+descriptors name the same `quota_pool` block and recover together. Other models of
+the account stay schedulable: the pool index applies the later of the account block
+and the requested model's block. A fresh ChatGPT response explicitly allowing
+execution or reporting usable credits removes the quota block immediately, even
+before the old reset time, and invalidates pool eligibility caches. Unknown, failed
+or cached reads never prove recovery.
 
 The process runs a ChatGPT recovery sweep at startup and waits ten minutes after
-each sweep. It probes only currently quota-exhausted, enabled, authorized suppliers
-with current credentials, at most four concurrently; healthy, disabled, rejected, billing-blocked
-and already-expired cooldowns are excluded. It shares account clients, per-account
-cache locks and concurrent fresh observations with administrator checks. Failures
-use ChatGPT execution's normal authentication refresh/retry and supplier failure classification:
-permanent authorization rejection marks the credentials invalid, explicit exhaustion
-updates cooldowns, and transient transport/service failures do not disable accounts.
-Failed reads preserve the last quota snapshot; no separate probe failure counter is used.
-These wire-error and authentication rules remain in the ChatGPT adapter and are
-never applied to Grok or another provider.
-No browser is needed.
-The worker is cancelled before storage closes. Supplier lists use only the PostgreSQL
-snapshots included in the list DTO, including stale or missing snapshots. They do
-not call quota endpoints and have no refresh button or batch quota refresh. Query,
-view changes and UI timer ticks never call the provider. Explicit official refresh
-remains available on the account detail page.
+each sweep. It probes only enabled, authorized suppliers under a current `quota`
+block, at most four concurrently; healthy, disabled, rejected, billing-blocked and
+expired blocks are excluded. It shares account clients, per-account cache locks and
+concurrent fresh observations with administrator checks. Failures use ChatGPT
+execution's normal refresh/retry and the same verdict rules: permanent authorization
+rejection blocks the account, explicit exhaustion updates the quota block, and
+transient transport or service failures do not disable accounts. Failed reads
+preserve the last quota snapshot; no separate probe failure counter is used. No
+browser is needed. The worker is cancelled before storage closes. Supplier lists use
+only the PostgreSQL snapshots included in the list DTO, including stale or missing
+snapshots. They do not call quota endpoints and have no refresh button or batch
+quota refresh. Query, view changes and UI timer ticks never call the provider.
+Explicit official refresh remains available on the account detail page.
 
 Administrator `POST /admin/api/suppliers/{id}/reset-state` provides an offline retry
-through the list's **More / Reset state** action. It clears quota cooldowns and billing rejection,
-invalidates in-flight quota observation revisions and pool eligibility caches; manual
-disablement, authorization rejection, credentials and official snapshots remain
-intact. A subsequent explicit upstream exhaustion can mark the account again.
+through the list's **More / Reset state** action. It clears every block except the
+`auth` block, invalidates in-flight observation revisions and pool eligibility caches;
+manual disablement, authorization rejection, credentials and official snapshots
+remain intact. A subsequent explicit upstream failure can block the account again.
 
-HTTP Responses and Responses WebSocket internally try each eligible pool member
-at most once for unrecoverable authorization, explicit quota exhaustion or ChatGPT billing rejection.
-Authentication recovery remains bounded.
-SSE and WS buffer the small pre-generation prelude so a rejected attempt does not
-leak its error/response ID into the client's successful generation. Prices and RPM
-admission are captured once; only the winning attempt's reported usage settles the
-request. Exhausted pools return a service `supplier_pool_exhausted` error rather
-than the supplier's login or quota error.
+HTTP Responses, the API gateway's three protocols and the Responses WebSocket run
+the same executor loop: a request switches suppliers at most ten times, each
+candidate is tried once per request, same-supplier retries are bounded by the
+verdict, and the small pre-generation prelude is buffered so a rejected attempt does
+not leak its error or response ID into the client's successful generation. Prices and
+RPM admission are captured once; only the winning attempt's reported usage settles
+the request. Exhausted pools return the service's own 503 `no_available_supplier`
+rather than any supplier's login, billing, quota or throttling error.
 
 Once response output or a tool event has been released, the generation cannot be
 replayed safely. Network interruption, malformed streams and post-output failures
@@ -1012,10 +1032,12 @@ Overview subscription counts include all user-owned subscriptions; normal means 
 
 ## Provider module boundaries
 
-Channel-specific code belongs in `src/providers/chatgpt/` or `src/providers/grok/`
-in the common, suppliers, upstream, OAuth, API and admin crates. Root modules
-compose adapters. One adapter must not import or patch the other. Shared storage
-never shares channel credentials or protocols. Frontend channel forms and official
-record readers follow the same `components/providers/<provider>/` boundary.
-`check-module-boundaries.py` runs in CI. User consent shares account verification
+Channel-specific code belongs in `src/providers/chatgpt/`, `src/providers/grok/`,
+`src/providers/antigravity/` or `src/providers/api/` in the common, suppliers,
+upstream, OAuth, API and admin crates; wire conversions live in
+`codex2api-upstream/src/convert/` keyed by (inbound format, wire). Root modules
+compose channels and the pool dispatches by provider in one place. One channel must
+not import or patch another. Shared storage never shares channel credentials or
+protocols. Frontend channel forms and official record readers follow the same
+`components/providers/<provider>/` boundary. `check-module-boundaries.py` runs in CI. User consent shares account verification
 and confirmation mechanics but reads each channel's independent OAuth policy.

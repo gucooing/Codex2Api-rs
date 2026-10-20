@@ -13,15 +13,21 @@ pub use model_presets::{
 pub const CHATGPT: &str = "chatgpt";
 pub const GROK: &str = "grok";
 pub const ANTIGRAVITY: &str = "antigravity";
+/// The API-key channel: any OpenAI Responses, Chat Completions or Anthropic Messages
+/// endpoint reached with a key, configured per account.
+pub const API: &str = "api";
 
 pub const PROVIDERS: &[(&str, &str)] = &[
     (CHATGPT, "ChatGPT"),
     (GROK, "Grok"),
     (ANTIGRAVITY, "Antigravity"),
+    (API, "API"),
 ];
 
 pub const GEMINI: &str = "gemini";
 pub const CLAUDE: &str = "claude";
+/// Catalog models of vendors without their own label.
+pub const OTHER: &str = "other";
 
 /// Identification labels of catalog models: the model's vendor. Supplier channels
 /// such as Antigravity are not vendors. Never a routing restriction.
@@ -30,6 +36,7 @@ pub const MODEL_PLATFORMS: &[(&str, &str)] = &[
     (GROK, "Grok"),
     (GEMINI, "Gemini"),
     (CLAUDE, "Claude"),
+    (OTHER, "Other"),
 ];
 
 pub fn valid_model_platform(label: &str) -> bool {

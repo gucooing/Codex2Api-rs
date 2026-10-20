@@ -31,24 +31,30 @@ async fn run(
     principal: ApiPrincipal,
     token: String,
     headers: HeaderMap,
-    prepared: InboundRequest,
+    input: InboundRequest,
 ) -> Result<Response> {
     let user_agent = codex2api_upstream::request_user_agent(&headers);
+    let endpoint = crate::endpoint_of(&input);
     let (mut log, permit) = admit(
         &state,
         &principal,
-        &prepared.body,
-        prepared.protocol.endpoint(),
-        prepared.stream,
+        &input.body,
+        endpoint,
+        input.stream,
         "http",
         user_agent.as_deref(),
     )
     .await?;
-    let result = crate::dispatch::forward(&state, &principal, &token, &prepared, &mut log).await;
+    // The ledger records the canonical protocol path, never a supplier wire path.
+    state
+        .storage
+        .set_usage_upstream_endpoint(&log.record.id, endpoint)
+        .await?;
+    log.record.upstream_endpoint = Some(endpoint.into());
+    let result = crate::dispatch::forward(&state, &principal, &token, &input, &mut log).await;
     match result {
-        Ok((response, context, route, prepared)) => {
-            crate::response::response_body(state, log, permit, context, route, response, prepared)
-                .await
+        Ok((executed, route)) => {
+            crate::response::response_body(state, log, permit, executed, route, input).await
         }
         Err(error) => {
             log.fail(&error);

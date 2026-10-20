@@ -55,22 +55,24 @@ Grok 的错误解析和调度策略位于 `codex2api-upstream/src/providers/grok
 
 | 上游情况 | 处理 |
 | --- | --- |
-| HTTP 或流内 401 | 当前账号最多刷新一次并重试；刷新成功后仍被拒绝、缺少 RT，或刷新返回 `invalid_grant` / `invalid_client` 时记录授权失效并切号 |
-| 刷新服务限流、5xx、未知 OAuth 错误 | 保留失败状态和重试指示，不据此判定凭据永久失效，不切号 |
-| `subscription:free-usage-exhausted` | 记录额度耗尽并切号；支持平面、嵌套、WKE 和 JSON 字符串包装 |
-| 429 中明确的 “You've used all the included free usage for model … for now. Usage resets over a rolling …” | 无语义错误码时也识别为免费额度耗尽；仅出现 quota、upgrade 或普通限流字样不足以切号 |
-| `personal-team-blocked:spending-limit`、`insufficient_quota`、`insufficient_credits`、`billing_error` | 记录额度耗尽并切号 |
-| 普通 429、`rate_limit_exceeded`、`slow_down`、未分类的 429 | 返回结构化错误和 `Retry-After`、`retry-after-ms`、`x-should-retry`，由客户端退避；不改供应状态 |
-| 403 权限或内容策略拒绝，400/404/413/415/422 请求、模型、图片或上下文错误 | 保留错误，不刷新身份、不改模型或请求内容、不切号 |
-| 5xx、529 过载、Cloudflare 52x/530、连接失败或超时 | 保留状态和重试指示，由客户端决定重试；HTML 页面不作为额度耗尽证据 |
-| 未知错误、损坏响应、流提前结束 | 未知错误保留已知状态和错误码；协议及传输失败记录失败，不伪造完成，不因猜测切号 |
+| HTTP 或流内 401 | 当前账号最多刷新一次并重试；刷新成功后仍被拒绝、缺少 RT，或刷新返回 `invalid_grant` / `invalid_client` 时永久回避（授权失效）并换号 |
+| 刷新服务限流、5xx、未知 OAuth 错误 | 不据此判定凭据永久失效；本次请求回避并换号 |
+| `subscription:free-usage-exhausted` | 额度回避到 reset 时间并换号；支持平面、嵌套、WKE 和 JSON 字符串包装 |
+| 429 中明确的 “You've used all the included free usage for model … for now. Usage resets over a rolling …” | 无语义错误码时也识别为免费额度耗尽；仅出现 quota、upgrade 或普通限流字样不足以判定额度耗尽 |
+| `personal-team-blocked:spending-limit`、`insufficient_quota`、`insufficient_credits`、`billing_error` | 额度回避到 reset 时间并换号 |
+| HTTP 402 | 永久回避（账单受限）并换号 |
+| 普通 429、`rate_limit_exceeded`、`slow_down`、未分类的 429 | 限流回避到 `Retry-After`／重试秒数或毫秒数（缺省 60 秒）并换号，不转发给客户端 |
+| 403 内容策略或安全拒绝 | 原样返回调用者，不改账户状态 |
+| 403 账号被停用、封禁或终止 | 永久回避（授权失效）并换号 |
+| 其他 403 | 回避 10 分钟并换号 |
+| 404 模型不存在 | 回避该模型 1 小时并换号 |
+| 400/413/415/422 请求、图片或上下文错误 | 原样返回调用者，不刷新身份、不改请求内容、不换号 |
+| 529 过载 | 回避 10 分钟并换号 |
+| 5xx、Cloudflare 52x/530 | 仅本次请求回避并换号；HTML 页面不作为额度耗尽证据 |
+| 连接失败 | 回避 10 分钟并换号；超时仅本次请求回避；流在首个输出前结束同号重试 1 次 |
 
-错误处理保留官方重试指示，包括 `x-should-retry: false`，不会把该指示解释成账号不可用。Grok 的裸 HTTP 402 不套用 ChatGPT 的永久欠费状态；只有明确的 Grok 额度错误参与供应切换。供应隐私和任意诊断字段仍由公开响应的字段白名单过滤。
+错误处理保留官方重试指示，包括 `x-should-retry: false`，但调用者从不收到供应方的限流或授权错误：候选耗尽时收到 503 `no_available_supplier`。Grok 的裸 HTTP 402 按账单受限永久回避，与 ChatGPT 的分类彼此独立实现。供应隐私和任意诊断文本只进管理端账本。
 
-额度耗尽使用实际返回的 reset 时间、Retry-After 或重试秒数／毫秒数；没有明确时间时冷却 60 秒后允许下一次真实请求尝试。滚动 24 小时说明不是确切恢复时间，不直接生成“当前时间加 24 小时”的重置时间，也不将 `/billing` 的月度余额当成特定模型免费额度已经恢复的证据。状态写入 PostgreSQL 并使候选池缓存失效，现有管理端供应状态显示“配额耗尽”。管理端重置和重新授权沿用现有操作；迟到失败不得覆盖新授权。
+额度回避使用实际返回的 reset 时间、Retry-After、重试秒数／毫秒数或 “rolling N hour” 说明中的时长；没有明确时间时回避 60 秒后允许下一次真实请求尝试。不将 `/billing` 的月度余额当成特定模型免费额度已经恢复的证据。回避写入 `supplier_blocks` 并使候选池缓存失效，管理端供应状态显示“配额耗尽”“限流中”等状态。管理端重置和重新授权沿用现有操作；迟到失败不得覆盖新授权。
 
-仅在没有生成内容或计费用量时内部重试。Responses 输出、Chat 的文本／推理／工具调用、Messages 的内容或用量一旦出现，就不重放；HTTP 错误体中的部分输出和用量同样生效。流中途失败只更新账号可用性并结算该次实际用量，客户端停止后继续收集已报告用量，结算一次。每次请求最多尝试同池每个可用账号一次，401 的单账号刷新重试除外；供应池耗尽返回 `supplier_pool_exhausted`。
-
-远程沙箱、relay、工作区云同步及官方充值等服务没有被本地渠道伪造实现；未实现路由返回明确错误，不返回假空记录或假成功。真实上游推理是否可用取决于所选供应账户的官方权限与可用模型配置。
-
-Grok 普通对话使用会话粘连和统一评分号池。会话种子依次取会话请求头、`X-Grok-Conv-Id`、`prompt_cache_key`、有效 `previous_response_id` 或内容推导，并按模型隔离哈希。并发限制、Redis 运行态和候选评分见[架构](ARCHITECTURE.md#supplier-pools-and-runtime-state)。
+仅在没有生成内容或计费用量时换号。Responses 输出、Chat 的文本／推理／工具调用、Messages 的内容或用量一旦出现，就不重放；HTTP 错误体中的部分输出和用量同样生效。流中途失败只更新账号的回避状态，当前生成以结构化错误结束。

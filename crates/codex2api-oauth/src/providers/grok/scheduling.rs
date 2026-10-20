@@ -34,6 +34,5 @@ pub(crate) fn request(headers: &http::HeaderMap, body: &serde_json::Value) -> Sc
         previous_response: None,
         previous_can_move: false,
         admission: None,
-        allowed_providers: None,
     }
 }

@@ -14,6 +14,7 @@ use axum::body::{Body, Bytes};
 use codex2api_storage::{Storage, UsageRecord};
 use codex2api_upstream::{
     Endpoint, RequestMetadata, ResponseFailure, ResponseLifecycle, ResponseOutcome,
+    executor::AttemptLedger,
 };
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
@@ -84,7 +85,6 @@ pub(crate) struct RequestLog {
     lifecycle: ResponseLifecycle,
     auth_revision: Option<i64>,
     authoritative_model: bool,
-    supplier_failure: Option<codex2api_upstream::SupplierFailure>,
     response_owner: Option<(codex2api_storage::RoutingKey, String)>,
 }
 impl RequestLog {
@@ -98,19 +98,7 @@ impl RequestLog {
         self.supplier_permit = None;
     }
     fn report_runtime_result(&mut self, record: &UsageRecord) {
-        let client_backoff = self
-            .lifecycle
-            .outcome()
-            .and_then(ResponseOutcome::failure)
-            .is_some_and(|failure| {
-                matches!(
-                    failure.kind,
-                    codex2api_upstream::FailureKind::RateLimit
-                        | codex2api_upstream::FailureKind::LimitUnknown
-                )
-            });
-        // Ordinary throttling must not indirectly trigger a health-based pool escape.
-        if !self.attempt_reported && !client_backoff {
+        if !self.attempt_reported {
             self.storage.report_supplier_result(
                 &record.account_id,
                 self.lifecycle.outcome().map_or_else(
@@ -158,32 +146,11 @@ impl RequestLog {
         Ok(())
     }
 
-    pub(crate) fn supplier_attempt_failed(&mut self) {
-        if !self.attempt_reported
-            && let Some(record) = &self.record
-        {
-            self.storage.report_supplier_result(
-                &record.account_id,
-                false,
-                self.timing
-                    .as_ref()
-                    .and_then(|timing| timing.supplier_ttft_ms()),
-            );
-            self.attempt_reported = true;
-        }
-        // A rejected attempt is not the generation's terminal result. The final
-        // response or pool error must remain authoritative for the client ledger.
-        // The pool already persisted the classified observation using the exact
-        // attempt revision. Do not reinterpret a refresh throttle as revoked auth.
-        self.auth_revision = None;
-    }
-
     pub(crate) fn retry_generation(&mut self) {
         self.attempt_reported = false;
         self.timing = None;
         self.lifecycle = ResponseLifecycle::default();
         self.authoritative_model = false;
-        self.supplier_failure = None;
         if let Some(r) = &mut self.record {
             r.status = "in_progress".into();
             r.http_status = None;
@@ -232,7 +199,6 @@ impl RequestLog {
             lifecycle: ResponseLifecycle::default(),
             auth_revision,
             authoritative_model: false,
-            supplier_failure: None,
             response_owner: None,
         })
     }
@@ -433,11 +399,6 @@ impl RequestLog {
     }
     pub fn upstream_failure(&mut self, error: &codex2api_upstream::UpstreamError) {
         self.auth_revision = error.auth_revision().or(self.auth_revision);
-        if let Some(record) = &self.record {
-            self.supplier_failure = error
-                .supplier_failure_for(&record.provider_id, chrono::Utc::now().timestamp())
-                .or(self.supplier_failure.take());
-        }
         if let codex2api_upstream::UpstreamError::Status {
             status,
             headers,
@@ -509,17 +470,6 @@ impl RequestLog {
                 self.response_owner = Some((key, record.account_id.clone()));
             }
         }
-        self.supplier_failure = codex2api_upstream::classify_provider_failure(
-            &record.provider_id,
-            record
-                .http_status
-                .and_then(|v| u16::try_from(v).ok())
-                .filter(|v| *v >= 400),
-            value,
-            &http::HeaderMap::new(),
-            chrono::Utc::now().timestamp(),
-        )
-        .or(self.supplier_failure.take());
         let response = event.response.as_ref();
         if let Some(id) = response
             .and_then(|r| r.headers.as_ref())
@@ -652,13 +602,23 @@ impl RequestLog {
         if let Some(failure) = outcome.failure() {
             record.error_code = failure.code.as_deref().map(|v| error_text(v, 128));
             record.error_message = failure.message.as_deref().map(|v| error_text(v, 512));
-            // Supplier failures reach the client in their public view.
-            let public = codex2api_upstream::public_output::PublicFailure::new(failure);
-            record.public_error_code = Some(public.code);
-            record.public_error_message = Some(public.message);
+            // The client receives the supplier's own failure with its message redacted.
+            record.public_error_code = Some(
+                failure
+                    .code
+                    .clone()
+                    .unwrap_or_else(|| "upstream_error".into()),
+            );
+            record.public_error_message = Some(
+                failure
+                    .message
+                    .as_deref()
+                    .map(codex2api_upstream::convert::sanitize::text)
+                    .unwrap_or_default(),
+            );
         }
     }
-    /// Keep a failed supplier attempt the pool recovers from (`refresh` or `failover`);
+    /// Keep a failed supplier attempt the pool recovers from (`retry` or `failover`);
     /// administrators see it, the client only sees the final outcome.
     pub(crate) async fn recovered(
         &self,
@@ -673,42 +633,6 @@ impl RequestLog {
                     recovery,
                     record.requested_at_ms,
                 ))
-                .await?;
-        }
-        Ok(())
-    }
-    async fn persist_auth_rejection(&self) -> crate::Result<()> {
-        if let (Some(record), Some(revision), Some(failure)) =
-            (&self.record, self.auth_revision, &self.supplier_failure)
-        {
-            match failure {
-                codex2api_upstream::SupplierFailure::QuotaExhausted { until, code, .. } => {
-                    self.storage
-                        .exhaust_supplier_quota(&record.account_id, revision, *until, code)
-                        .await?;
-                }
-                codex2api_upstream::SupplierFailure::PaymentRequired { code } => {
-                    self.storage
-                        .mark_supplier_payment_required(
-                            &record.account_id,
-                            revision,
-                            code.as_deref(),
-                            None,
-                        )
-                        .await?;
-                }
-                codex2api_upstream::SupplierFailure::Authentication => {}
-            }
-        }
-        if let (Some(record), Some(revision)) = (&self.record, self.auth_revision)
-            && self
-                .lifecycle
-                .outcome()
-                .and_then(ResponseOutcome::failure)
-                .is_some_and(ResponseFailure::authentication_invalid)
-        {
-            self.storage
-                .reject_supplier_auth(&record.account_id, revision)
                 .await?;
         }
         Ok(())
@@ -744,60 +668,88 @@ impl RequestLog {
             self.observe(&event, &value);
         }
     }
-    pub fn finish(&mut self, status: &str) {
+    fn take_finished(&mut self, status: &str) -> Option<UsageRecord> {
         self.capture_timing();
-        let Some(mut record) = self.record.take() else {
-            return;
-        };
+        let mut record = self.record.take()?;
         if record.status == "in_progress" {
             record.status = status.into();
         }
         complete_failure_reason(&mut record);
         record.total_ms = Some(elapsed(self.start));
         self.report_runtime_result(&record);
+        Some(record)
+    }
+    pub fn finish(&mut self, status: &str) {
+        let Some(record) = self.take_finished(status) else {
+            return;
+        };
         let storage = self.storage.clone();
-        let rejected_revision = self.auth_revision.filter(|_| {
-            self.lifecycle
-                .outcome()
-                .and_then(ResponseOutcome::failure)
-                .is_some_and(ResponseFailure::authentication_invalid)
-        });
-        let cooldown = self.supplier_failure.clone().zip(self.auth_revision);
         tokio::spawn(async move {
-            if let Some((failure, revision)) = cooldown {
-                let result = match failure {
-                    codex2api_upstream::SupplierFailure::QuotaExhausted { until, code, .. } => {
-                        storage
-                            .exhaust_supplier_quota(&record.account_id, revision, until, &code)
-                            .await
-                    }
-                    codex2api_upstream::SupplierFailure::PaymentRequired { code } => {
-                        storage
-                            .mark_supplier_payment_required(
-                                &record.account_id,
-                                revision,
-                                code.as_deref(),
-                                None,
-                            )
-                            .await
-                    }
-                    codex2api_upstream::SupplierFailure::Authentication => Ok(()),
-                };
-                if let Err(error) = result {
-                    tracing::error!(%error,"failed to persist supplier availability");
-                }
-            }
-            if let Some(revision) = rejected_revision
-                && let Err(error) = storage
-                    .reject_supplier_auth(&record.account_id, revision)
-                    .await
-            {
-                tracing::error!(%error, "failed to persist supplier authentication rejection");
-            }
             if let Err(error) = storage.finish_usage(&record).await {
                 tracing::error!(%error,record_id=%record.id,"failed to finalize usage record");
             }
         });
+    }
+    pub(crate) async fn settle_failure(
+        &mut self,
+        error: &codex2api_upstream::executor::ExecutorError,
+    ) -> crate::Result<()> {
+        use codex2api_upstream::executor::ExecutorError as E;
+        let failure = match error {
+            E::Client { status, body, .. } | E::Stopped { status, body, .. } => {
+                ResponseFailure::from_error(Some(*status), body)
+            }
+            E::Convert(error) => {
+                ResponseFailure::from_error(Some(error.status.as_u16()), &error.body)
+            }
+            E::Upstream(error) => error.failure(),
+            E::ConsumerInvalid => ResponseFailure::new(
+                Some(401),
+                Some("invalid_token"),
+                Some("Consumer authorization was revoked"),
+            ),
+            E::ContextRequired => ResponseFailure::new(
+                Some(409),
+                Some("supplier_context_required"),
+                Some("The previous response cannot be continued"),
+            ),
+            E::NoSupplier {
+                model_not_found: true,
+            } => ResponseFailure::new(
+                Some(404),
+                Some("model_not_found"),
+                Some("No supplier is configured for this model"),
+            ),
+            E::NoSupplier { .. } | E::Busy => ResponseFailure::new(
+                Some(503),
+                Some("no_available_supplier"),
+                Some("No supplier is available"),
+            ),
+            E::Storage(_) => {
+                ResponseFailure::new(Some(500), Some("internal_error"), Some("Storage failed"))
+            }
+        };
+        if let Some(status) = failure.status
+            && self
+                .record
+                .as_ref()
+                .is_some_and(|r| r.http_status.is_none())
+        {
+            self.http_status(status);
+        }
+        self.lifecycle.fail(failure);
+        self.apply_outcome();
+        if matches!(error, E::Stopped { status, .. } if codex2api_upstream::supply::switch_status(*status))
+            && let Some(record) = &mut self.record
+        {
+            record.public_error_code = Some("no_available_supplier".into());
+            record.public_error_message =
+                Some("No supplier is available for this request. Please retry later.".into());
+        }
+        if let Some(record) = self.take_finished("failed") {
+            self.storage.finish_usage(&record).await?;
+        }
+        Ok(())
     }
     pub fn wrap(self, response: reqwest::Response) -> Body {
         self.wrap_with(response, |body| body)
@@ -875,6 +827,60 @@ impl RequestLog {
 impl Drop for RequestLog {
     fn drop(&mut self) {
         self.finish("interrupted");
+    }
+}
+
+/// Unbilled client endpoints run without a ledger; billed ones attribute every
+/// attempt and keep recovered failures for the administrator.
+pub(crate) struct Ledger<'a>(pub(crate) &'a mut Option<RequestLog>);
+impl AttemptLedger for Ledger<'_> {
+    async fn rebind(
+        &mut self,
+        account: &codex2api_storage::SupplierAccount,
+    ) -> std::result::Result<(), codex2api_upstream::UpstreamError> {
+        if let Some(log) = self.0 {
+            log.rebind_supplier(account)
+                .await
+                .map_err(|error| codex2api_upstream::UpstreamError::Internal(error.to_string()))?;
+        }
+        Ok(())
+    }
+    async fn attempt_failed(
+        &mut self,
+        error: &codex2api_upstream::UpstreamError,
+        recovery: &str,
+    ) -> std::result::Result<(), codex2api_upstream::UpstreamError> {
+        if let Some(log) = self.0 {
+            log.recovered(error, recovery)
+                .await
+                .map_err(|error| codex2api_upstream::UpstreamError::Internal(error.to_string()))?;
+            log.attempt_reported = true;
+            if recovery == "failover" {
+                log.release_supplier_permit();
+            }
+        }
+        Ok(())
+    }
+    fn measured_failure(
+        &mut self,
+        _: codex2api_upstream::supply::Wire,
+        failure: &codex2api_upstream::supply::UpstreamFailure,
+    ) {
+        if let Some(log) = self.0 {
+            if let Some(status) = failure.status {
+                log.http_status(status);
+            }
+            log.response_headers(&failure.headers);
+            let bytes = failure.body.to_string();
+            let mut parser = BodyParser::default();
+            parser.feed(bytes.as_bytes(), false, log);
+            parser.end(false, log);
+        }
+    }
+    fn retry_generation(&mut self) {
+        if let Some(log) = self.0 {
+            log.retry_generation();
+        }
     }
 }
 
@@ -1147,12 +1153,18 @@ impl WsLedger {
             log.timing = timing;
         }
     }
-    pub(crate) fn supplier_attempt_failed(&mut self) {
+    pub(crate) async fn recovered(
+        &mut self,
+        error: &codex2api_upstream::UpstreamError,
+        recovery: &str,
+    ) -> crate::Result<()> {
         for slot in &mut self.slots {
             if let Some(log) = &mut slot.log {
-                log.supplier_attempt_failed();
+                log.recovered(error, recovery).await?;
+                log.attempt_reported = true;
             }
         }
+        Ok(())
     }
 
     pub(crate) fn release_supplier_permits(&mut self) {
@@ -1283,17 +1295,6 @@ impl WsLedger {
                 && let Some(ResponseOutcome::Failed(failure)) =
                     ResponseOutcome::from_value(&value, None)
             {
-                if failure.authentication_invalid() {
-                    for slot in &self.slots {
-                        if let Some(log) = &slot.log
-                            && let (Some(record), Some(revision)) = (&log.record, log.auth_revision)
-                        {
-                            log.storage
-                                .reject_supplier_auth(&record.account_id, revision)
-                                .await?;
-                        }
-                    }
-                }
                 self.fail_pending(failure.clone()).await?;
                 return Ok(Some(ResponseOutcome::Failed(failure)));
             }
@@ -1306,7 +1307,6 @@ impl WsLedger {
         if let Some(log) = &mut slot.log {
             log.observe(&event, &value);
             log.persist_response_owner().await?;
-            log.persist_auth_rejection().await?;
         }
         let outcome = ResponseOutcome::from_value(&value, None);
         if outcome.is_some()

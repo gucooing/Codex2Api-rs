@@ -1,7 +1,14 @@
-//! Metadata-only usage observation and exactly-once API wallet settlement.
-use crate::{ApiError, Protocol, Result};
+//! Metadata-only usage observation and exactly-once API wallet settlement. The
+//! ledger reads every wire through the conversion matrix's observation, never a
+//! wire's events directly.
+use crate::{ApiError, Result};
 use codex2api_storage::{Storage, UsageRecord};
-use codex2api_upstream::{ResponseFailure, ResponseLifecycle, ResponseOutcome};
+use codex2api_upstream::{
+    ResponseFailure, ResponseLifecycle, ResponseOutcome,
+    convert::{Observation, Outcome},
+    executor::AttemptLedger,
+    supply::Operation,
+};
 use serde_json::{Value, json};
 use std::time::Instant;
 
@@ -16,6 +23,7 @@ pub(crate) struct ApiLog {
     public: Option<(String, String)>,
     started: Instant,
     settled: bool,
+    attempt_reported: bool,
     authoritative_model: bool,
     timing: Option<codex2api_upstream::ResponseTiming>,
 }
@@ -31,6 +39,7 @@ impl ApiLog {
             public: None,
             started,
             settled: false,
+            attempt_reported: false,
             authoritative_model: false,
             timing: None,
         }
@@ -44,22 +53,14 @@ impl ApiLog {
             .unwrap_or_else(|| account.email.clone().unwrap_or_default());
         self.record.account_provider_id = Some(account.provider_id.clone());
     }
-    /// Provider of the supplier serving the current attempt. It selects the adapter's
-    /// normalization and failure rules; `record.provider_id` stays the platform the
-    /// request is identified with.
-    pub(crate) fn supplier_provider(&self) -> &str {
-        self.record
-            .account_provider_id
-            .as_deref()
-            .unwrap_or_default()
-    }
     /// Start another upstream attempt on the current supplier.
     pub(crate) fn begin_attempt(&mut self) {
+        self.attempt_reported = false;
         self.record.http_status = None;
         self.attempt_started = chrono::Utc::now().timestamp_millis();
     }
-    /// Keep a failed supplier attempt that the gateway recovers from by refreshing its
-    /// credential (`refresh`) or by selecting another supplier (`failover`). The
+    /// Keep a failed supplier attempt that the gateway recovers from by retrying the
+    /// same supplier (`retry`) or by selecting another one (`failover`). The
     /// administrator sees it; the caller only sees the request's final outcome.
     pub(crate) async fn recovered(
         &self,
@@ -104,30 +105,47 @@ impl ApiLog {
                     .map(str::to_owned)
             });
     }
-    /// `upstream` is the supplier protocol whose events are being measured.
-    pub(crate) fn observe(&mut self, value: &Value, upstream: Protocol) -> bool {
+    /// Record what one wire event reports. Returns whether the generation ended.
+    pub(crate) fn observe(&mut self, observation: &Observation) -> bool {
         if self.lifecycle.outcome().is_some() {
             return false;
         }
-        self.measure(value, upstream);
-        if self.lifecycle.observe(value, None) {
-            // A supplier's own failure event reaches the caller in its public view.
-            if self.public.is_none()
-                && let Some(failure) = self.lifecycle.outcome().and_then(ResponseOutcome::failure)
-            {
-                self.public = Some(public_view(
-                    &codex2api_upstream::public_output::PublicFailure::new(failure),
-                ));
+        self.measure(observation);
+        let outcome = match &observation.outcome {
+            Some(Outcome::Completed) => ResponseOutcome::Completed,
+            Some(Outcome::Incomplete { reason }) => ResponseOutcome::Incomplete(ResponseFailure {
+                kind: codex2api_upstream::FailureKind::Incomplete,
+                status: None,
+                code: reason.clone(),
+                message: Some("上游生成未完成".into()),
+            }),
+            Some(Outcome::Failed { status, body }) => {
+                ResponseOutcome::Failed(ResponseFailure::from_error(*status, body))
             }
-            return true;
+            Some(Outcome::Cancelled) => ResponseOutcome::Cancelled,
+            None => return false,
+        };
+        self.lifecycle.fail_with(outcome);
+        true
+    }
+    /// A unary reply of a channel operation completed when it has its result.
+    pub(crate) fn observe_operation(&mut self, operation: Operation, value: &Value) -> bool {
+        if self.lifecycle.outcome().is_some() {
+            return false;
         }
-        let completed = match upstream {
-            Protocol::ImageGeneration | Protocol::ImageEdit => {
+        if operation.image() {
+            crate::images::observe_usage(&mut self.record, value);
+            if let Some(model) = value["model"].as_str().filter(|m| m.len() <= 256) {
+                self.record.actual_model = Some(model.into());
+            }
+        }
+        let completed = match operation {
+            Operation::ImageGeneration | Operation::ImageEdit => {
                 value["data"].is_array() && self.record.image_count.is_some_and(|count| count > 0)
             }
-            Protocol::Compact => value["output"].is_array(),
-            Protocol::InputTokens => value["input_tokens"].as_u64().is_some(),
-            Protocol::Search => {
+            Operation::Compact => value["output"].is_array(),
+            Operation::InputTokens => value["input_tokens"].as_u64().is_some(),
+            Operation::Search => {
                 value["output"].is_string()
                     && value
                         .get("encrypted_output")
@@ -136,61 +154,37 @@ impl ApiLog {
                         .get("results")
                         .is_none_or(|v| v.is_null() || v.is_array())
             }
-            Protocol::Responses | Protocol::ChatCompletions | Protocol::Messages => false,
+            Operation::Generate => false,
         };
         completed
             && self
                 .lifecycle
                 .observe(&json!({"type":"response.completed"}), None)
     }
-    /// Preserve measurements in physical HTTP failures without trusting a success-shaped body.
-    pub(crate) fn measure(&mut self, value: &Value, upstream: Protocol) {
-        self.record.generation_observed |=
-            codex2api_upstream::scheduler::generation_observed(value);
-        let response = value.get("response").unwrap_or(value);
-        if !self.authoritative_model {
-            if let Some(model) = response["model"]
-                .as_str()
-                .filter(|model| model.len() <= 256)
-            {
-                self.record.actual_model = Some(model.into());
+    /// Preserve measurements, including those in a physical HTTP failure.
+    pub(crate) fn measure(&mut self, observation: &Observation) {
+        self.record.generation_observed |= observation.observed;
+        if !self.authoritative_model
+            && let Some(model) = &observation.model
+        {
+            self.record.actual_model = Some(model.clone());
+        }
+        if let Some(usage) = &observation.usage {
+            if let Some(value) = usage.input {
+                self.record.input_tokens = Some(value);
             }
-        }
-        let usage = &response["usage"];
-        self.tokens(
-            &usage["input_tokens"],
-            &usage["output_tokens"],
-            &usage["input_tokens_details"],
-            &usage["output_tokens_details"],
-        );
-        if upstream.image() {
-            crate::images::observe_usage(&mut self.record, response);
-        }
-    }
-    fn tokens(
-        &mut self,
-        input: &Value,
-        output: &Value,
-        input_details: &Value,
-        output_details: &Value,
-    ) {
-        fn measurement(value: &Value) -> Option<i64> {
-            value.as_i64().filter(|value| *value >= 0)
-        }
-        if let Some(value) = measurement(input) {
-            self.record.input_tokens = Some(value);
-        }
-        if let Some(value) = measurement(output) {
-            self.record.output_tokens = Some(value);
-        }
-        if let Some(value) = measurement(&input_details["cached_tokens"]) {
-            self.record.cached_tokens = Some(value);
-        }
-        if let Some(value) = measurement(&input_details["cache_write_tokens"]) {
-            self.record.cache_write_tokens = Some(value);
-        }
-        if let Some(value) = measurement(&output_details["reasoning_tokens"]) {
-            self.record.reasoning_tokens = Some(value);
+            if let Some(value) = usage.output {
+                self.record.output_tokens = Some(value);
+            }
+            if let Some(value) = usage.cached {
+                self.record.cached_tokens = Some(value);
+            }
+            if let Some(value) = usage.cache_write {
+                self.record.cache_write_tokens = Some(value);
+            }
+            if let Some(value) = usage.reasoning {
+                self.record.reasoning_tokens = Some(value);
+            }
         }
     }
     pub(crate) fn fail(&mut self, error: &ApiError) {
@@ -235,14 +229,7 @@ impl ApiLog {
         let outcome = self.lifecycle.outcome().expect("terminal outcome");
         self.storage.finish_usage(&self.record).await?;
         self.settled = true;
-        let client_backoff = outcome.failure().is_some_and(|failure| {
-            matches!(
-                failure.kind,
-                codex2api_upstream::FailureKind::RateLimit
-                    | codex2api_upstream::FailureKind::LimitUnknown
-            )
-        });
-        if !self.record.account_id.is_empty() && !client_backoff {
+        if !self.record.account_id.is_empty() && !self.attempt_reported {
             self.storage.report_supplier_result(
                 &self.record.account_id,
                 matches!(outcome, ResponseOutcome::Completed),
@@ -272,9 +259,17 @@ impl ApiLog {
                 .as_deref()
                 .map(|message| codex2api_upstream::request_failure::diagnostic_text(message, 512));
             Some(self.public.clone().unwrap_or_else(|| {
-                public_view(&codex2api_upstream::public_output::PublicFailure::new(
-                    failure,
-                ))
+                (
+                    failure
+                        .code
+                        .clone()
+                        .unwrap_or_else(|| "upstream_error".into()),
+                    failure
+                        .message
+                        .as_deref()
+                        .map(codex2api_upstream::convert::sanitize::text)
+                        .unwrap_or_default(),
+                )
             }))
         } else if outcome.is_none() {
             self.record.error_code = Some("request_interrupted".into());
@@ -301,8 +296,55 @@ impl ApiLog {
         )
     }
 }
-fn public_view(public: &codex2api_upstream::public_output::PublicFailure) -> (String, String) {
-    (public.code.clone(), public.message.clone())
+
+impl AttemptLedger for ApiLog {
+    async fn rebind(
+        &mut self,
+        account: &codex2api_storage::SupplierAccount,
+    ) -> std::result::Result<(), codex2api_upstream::UpstreamError> {
+        self.supplier(account);
+        Ok(())
+    }
+    async fn attempt_failed(
+        &mut self,
+        error: &codex2api_upstream::UpstreamError,
+        recovery: &str,
+    ) -> std::result::Result<(), codex2api_upstream::UpstreamError> {
+        self.attempt_reported = true;
+        self.recovered(error, recovery)
+            .await
+            .map_err(|error| codex2api_upstream::UpstreamError::Internal(error.to_string()))
+    }
+    fn measured_failure(
+        &mut self,
+        wire: codex2api_upstream::supply::Wire,
+        failure: &codex2api_upstream::supply::UpstreamFailure,
+    ) {
+        if let Some(status) = failure
+            .status
+            .and_then(|s| http::StatusCode::from_u16(s).ok())
+        {
+            self.headers(status, &failure.headers);
+        }
+        self.measure(&codex2api_upstream::convert::observe(wire, &failure.body));
+    }
+    fn retry_generation(&mut self) {
+        self.lifecycle = ResponseLifecycle::default();
+        self.timing = None;
+        self.authoritative_model = false;
+        self.record.http_status = None;
+        self.record.actual_model = None;
+        self.record.upstream_request_id = None;
+        self.record.generation_observed = false;
+        self.record.input_tokens = None;
+        self.record.output_tokens = None;
+        self.record.cached_tokens = None;
+        self.record.cache_write_tokens = None;
+        self.record.reasoning_tokens = None;
+        self.record.image_count = None;
+        self.record.image_usage_json = None;
+        self.begin_attempt();
+    }
 }
 
 impl Drop for ApiLog {

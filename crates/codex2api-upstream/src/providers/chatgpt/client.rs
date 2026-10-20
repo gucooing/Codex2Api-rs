@@ -638,7 +638,7 @@ mod tests {
                     .supplier_health(&account.id)
                     .await
                     .unwrap()
-                    .authentication_invalid
+                    .authentication_invalid()
             );
         }
         server.abort();
@@ -662,7 +662,7 @@ mod tests {
                 .supplier_health(&account.id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
         let revision = storage
             .supplier_auth_revision(&account.id)
@@ -675,7 +675,7 @@ mod tests {
                 .supplier_health(&account.id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
         drop(client);
         storage.close().await;

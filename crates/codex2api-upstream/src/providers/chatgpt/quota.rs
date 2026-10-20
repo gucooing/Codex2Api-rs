@@ -544,7 +544,7 @@ mod tests {
                 .supplier_health(&account.id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
         storage.close().await;
         drop(accounts);

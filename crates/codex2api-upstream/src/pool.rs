@@ -18,6 +18,7 @@ pub struct UpstreamPool {
     auth: AuthService,
     grok: crate::grok::GrokUpstream,
     antigravity: crate::antigravity::AntigravityUpstream,
+    api: crate::api::ApiUpstream,
     clients: Arc<codex2api_suppliers::account_cache::AccountCache<Arc<UpstreamClient>>>,
     stream_idle_timeout: Option<Duration>,
     transport: Arc<dyn crate::HttpTransport>,
@@ -52,6 +53,9 @@ impl UpstreamPool {
                     .discover_supplier_models(&account.id)
                     .await?;
             }
+            codex2api_common::API => {
+                self.api.discover_supplier_models(&account.id).await?;
+            }
             _ => {
                 return Err(crate::UpstreamError::Internal(
                     "Unsupported provider".into(),
@@ -67,8 +71,11 @@ impl UpstreamPool {
                 storage.clone(),
             )),
             antigravity: crate::antigravity::AntigravityUpstream::new(
-                codex2api_suppliers::antigravity::AntigravityAuthService::new(storage),
+                codex2api_suppliers::antigravity::AntigravityAuthService::new(storage.clone()),
             ),
+            api: crate::api::ApiUpstream::new(codex2api_suppliers::api::ApiAuthService::new(
+                storage,
+            )),
             auth,
             clients: Arc::default(),
             stream_idle_timeout: None,
@@ -101,10 +108,18 @@ impl UpstreamPool {
         self.antigravity = antigravity.with_transport(self.transport.clone());
         self
     }
+    pub fn api(&self) -> &crate::api::ApiUpstream {
+        &self.api
+    }
+    pub fn with_api(mut self, api: crate::api::ApiUpstream) -> Self {
+        self.api = api.with_transport(self.transport.clone());
+        self
+    }
     /// Composition-time injection for an alternate transport, including in-memory load fixtures.
     pub fn with_transport(mut self, transport: Arc<dyn crate::HttpTransport>) -> Self {
         self.grok = self.grok.with_transport(transport.clone());
         self.antigravity = self.antigravity.with_transport(transport.clone());
+        self.api = self.api.with_transport(transport.clone());
         self.transport = transport;
         self.clients = Arc::default();
         self
@@ -132,6 +147,8 @@ impl UpstreamPool {
                     .refresh(&account.id, true, Some(rejected))
                     .await?;
             }
+            // A rejected key has no refresh; an administrator replaces it.
+            codex2api_common::API => return Err(crate::UpstreamError::Unauthorized),
             _ => {
                 return Err(crate::UpstreamError::Internal(
                     "Unsupported provider".into(),
@@ -182,6 +199,7 @@ impl UpstreamPool {
         self.auth.evict_account_http(account_id).await;
         self.grok.auth().evict_account_http(account_id).await;
         self.antigravity.auth().evict_account_http(account_id).await;
+        self.api.auth().evict_account_http(account_id).await;
     }
 
     pub async fn stream_responses(

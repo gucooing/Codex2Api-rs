@@ -69,16 +69,26 @@ fn export_sub2api(accounts: &[SupplierTransferAccount]) -> Result<Value, ApiErro
     let mut proxy_keys = std::collections::HashMap::<String, String>::new();
     let mut rows = Vec::new();
     for item in accounts {
-        let (platform, mut credentials) = match item.account.provider_id.as_str() {
+        let (platform, kind, mut credentials) = match item.account.provider_id.as_str() {
             codex2api_common::CHATGPT => (
                 "openai",
+                "oauth",
                 crate::providers::chatgpt::transfer::to_sub2api(item)?,
             ),
-            codex2api_common::GROK => ("grok", crate::providers::grok::transfer::to_sub2api(item)?),
+            codex2api_common::GROK => (
+                "grok",
+                "oauth",
+                crate::providers::grok::transfer::to_sub2api(item)?,
+            ),
             codex2api_common::ANTIGRAVITY => (
                 "antigravity",
+                "oauth",
                 crate::providers::antigravity::transfer::to_sub2api(item)?,
             ),
+            codex2api_common::API => {
+                let (platform, credentials) = crate::providers::api::transfer::to_sub2api(item)?;
+                (platform, "apikey", credentials)
+            }
             _ => return Err(ApiError::bad("该平台不支持 Sub2api 导出")),
         };
         credentials["model_mapping"] = json!(
@@ -130,7 +140,7 @@ fn export_sub2api(accounts: &[SupplierTransferAccount]) -> Result<Value, ApiErro
         .filter_map(|name| name.as_deref())
         .find(|name| !name.trim().is_empty())
         .unwrap_or("供应账户");
-        let mut row = json!({"name":name,"platform":platform,"type":"oauth",
+        let mut row = json!({"name":name,"platform":platform,"type":kind,
             "credentials":credentials,"concurrency":item.scheduling.concurrency,"priority":item.scheduling.priority});
         if let Some(key) = proxy_key {
             row["proxy_key"] = key.into();
@@ -266,15 +276,24 @@ fn parse_account(
         }
         Format::Sub2api => {
             let platform = row["platform"].as_str().unwrap_or_default();
-            if !["openai", "grok", "antigravity"].contains(&platform) || row["type"] != "oauth" {
+            let kind = row["type"].as_str().unwrap_or_default();
+            let supported = match kind {
+                "oauth" => ["openai", "grok", "antigravity"].contains(&platform),
+                "apikey" => ["openai", "anthropic"].contains(&platform),
+                _ => false,
+            };
+            if !supported {
                 return Ok(None);
             }
             let source: Sub2apiAccount = serde_json::from_value(row.clone())
                 .map_err(|_| ApiError::bad("Sub2api 账户数据格式无效"))?;
-            let mut item = match platform {
-                "openai" => crate::providers::chatgpt::transfer::from_sub2api(&source)?,
-                "grok" => crate::providers::grok::transfer::from_sub2api(&source)?,
-                "antigravity" => crate::providers::antigravity::transfer::from_sub2api(&source)?,
+            let mut item = match (kind, platform) {
+                ("apikey", _) => crate::providers::api::transfer::from_sub2api(&source, platform)?,
+                (_, "openai") => crate::providers::chatgpt::transfer::from_sub2api(&source)?,
+                (_, "grok") => crate::providers::grok::transfer::from_sub2api(&source)?,
+                (_, "antigravity") => {
+                    crate::providers::antigravity::transfer::from_sub2api(&source)?
+                }
                 _ => unreachable!(),
             };
             if include_proxies && let Some(key) = source.proxy_key.as_deref() {
@@ -293,7 +312,16 @@ fn parse_account(
             .is_some_and(|id| id.is_empty() || id.len() > 128)
         || [&a.os_type, &a.os_version, &a.arch]
             .iter()
-            .any(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control))
+            .any(|s| match s {
+                // Official-client channels carry frozen inputs; the API-key channel has none.
+                Some(s) => {
+                    a.provider_id == codex2api_common::API
+                        || s.is_empty()
+                        || s.len() > 128
+                        || s.chars().any(char::is_control)
+                }
+                None => a.provider_id != codex2api_common::API,
+            })
         || a.display_name.as_ref().is_some_and(|s| s.len() > 1024)
     {
         return Err(ApiError::bad("账户身份或指纹无效"));
@@ -304,6 +332,7 @@ fn parse_account(
         codex2api_common::ANTIGRAVITY => {
             crate::providers::antigravity::transfer::normalize(&mut item)?
         }
+        codex2api_common::API => crate::providers::api::transfer::normalize(&mut item)?,
         _ => return Ok(None),
     }
     Ok(Some(item))

@@ -121,9 +121,9 @@ pub async fn fingerprint(
     fp.arch = identity.arch.clone();
     fp.terminal = identity.terminal.clone();
     fp.timezone = identity.http_fingerprint.timezone;
-    a.os_type = fp.os_type.clone();
-    a.os_version = fp.os_version.clone();
-    a.arch = fp.arch.clone();
+    a.os_type = Some(fp.os_type.clone());
+    a.os_version = Some(fp.os_version.clone());
+    a.arch = Some(fp.arch.clone());
     a.http_fingerprint_json = fp.to_json().map_err(|_| ApiError::bad("指纹配置无效"))?;
     a.proxy_id = f.proxy_id.filter(|v| !v.is_empty());
     s.storage.save_account_fingerprint(&a).await?;
@@ -159,13 +159,12 @@ pub async fn official(
     if q.section == "details" {
         let refresh_error = if q.refresh {
             let revision = s.storage.supplier_auth_revision(&id).await?;
-            let observation = s.storage.supplier_health(&id).await?.cooldown_revision;
             let result =
                 async { s.upstream.get(&id).await?.refresh_workspace_details().await }.await;
             match result {
                 Ok(_) => None,
                 Err(error) => {
-                    services::observe_request_failure(&s, &id, revision, observation, &error)
+                    services::observe_request_failure(&s, &id, revision, &error)
                         .await
                         .map_err(ApiError::upstream)?;
                     Some(error.to_string())

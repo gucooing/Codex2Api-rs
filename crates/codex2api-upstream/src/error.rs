@@ -54,6 +54,8 @@ pub enum UpstreamError {
     #[error(transparent)]
     AntigravityAuth(#[from] codex2api_suppliers::antigravity::AntigravityAuthError),
     #[error(transparent)]
+    ApiAuth(#[from] codex2api_suppliers::api::ApiAuthError),
+    #[error(transparent)]
     SupplierAccount(#[from] AccountError),
     #[error(transparent)]
     Http(#[from] reqwest::Error),
@@ -106,6 +108,17 @@ impl UpstreamError {
             Self::AntigravityAuth(error) => {
                 return crate::antigravity::errors::auth_failure(error);
             }
+            Self::ApiAuth(error) => {
+                use codex2api_suppliers::api::ApiAuthError as E;
+                match error {
+                    E::Http(e) if e.is_timeout() => (504, "upstream_timeout", "上游请求超时"),
+                    E::Http(_) => (502, "upstream_transport_error", "上游连接失败"),
+                    E::TokensNotFound(_) => {
+                        (503, "upstream_auth_missing", "供应账户没有可用 API Key")
+                    }
+                    _ => (503, "upstream_auth_unavailable", "供应账户凭据无效"),
+                }
+            }
             Self::MissingAccessToken(_) => (503, "upstream_auth_missing", "供应账户没有可用授权"),
             Self::WorkspaceChanged => (
                 409,
@@ -115,41 +128,6 @@ impl UpstreamError {
             _ => (502, "upstream_error", "上游请求未能完成"),
         };
         F::new(Some(status), Some(code), Some(message))
-    }
-
-    /// The consumer's view of this error after the gateway's handling. Credential and
-    /// supplier state stay private whatever status a token endpoint reported.
-    pub fn public_failure(&self) -> crate::public_output::PublicFailure {
-        use crate::public_output::PublicFailure as P;
-        match self {
-            Self::Status { status, body, .. } => P::from_error(
-                Some(*status),
-                &serde_json::from_str(body).unwrap_or_default(),
-            ),
-            Self::InvalidRequest(message) => P::new(&crate::ResponseFailure::new(
-                Some(400),
-                Some("invalid_request_error"),
-                Some(message),
-            )),
-            Self::RequestTooLarge
-            | Self::UnsupportedEncoding
-            | Self::Stream(_)
-            | Self::StreamIdleTimeout
-            | Self::Http(_)
-            | Self::Json(_) => P::new(&self.failure()),
-            Self::Unauthorized
-            | Self::MissingAccessToken(_)
-            | Self::Refresh(_)
-            | Self::Auth(_)
-            | Self::GrokAuth(_)
-            | Self::AntigravityAuth(_)
-            | Self::WorkspaceRouting(_)
-            | Self::WorkspaceChanged
-            | Self::SupplierAccount(_) => P::unavailable(),
-            Self::Internal(_) | Self::Storage(_) | Self::Encoding(_) | Self::InvalidHeader(_) => {
-                P::internal()
-            }
-        }
     }
 
     pub fn status(status: reqwest::StatusCode, body: impl Into<String>) -> Self {

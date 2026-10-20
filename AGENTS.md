@@ -116,15 +116,30 @@ validation are complete.
   Use `CODEX2API_OAUTH_*` / `CODEX2API_PUBLIC_OAUTH_URL` for the client listener
   and `CODEX2API_API_*` / `CODEX2API_PUBLIC_API_URL` for the AI API listener;
   persisted public origins are `oauth_url` and `api_url` respectively.
-- Upstream requests must look like a logged-in official Codex CLI for the pinned commit.
-- Ordinary supplier request throttling (`rate_limit_exceeded`, `slow_down`, or an
-  unclassified HTTP 429) belongs to client backoff. Forward its structured error
-  and retry information; never persist a supplier throttled state or switch
-  suppliers for it. Pool failover is for unrecoverable authorization failure,
-  explicit quota exhaustion, or ChatGPT HTTP 402 billing rejection. A ChatGPT
-  402 persists as payment/subscription unavailable without deleting credentials,
-  refreshing tokens to recover it, or expiring it as a quota cooldown. Only a
-  successful explicit reauthorization or administrator reset clears that state.
+- Upstream requests on the ChatGPT channel must look like a logged-in official
+  Codex CLI for the pinned commit.
+- Supply, scheduling and downstream are separate layers. Downstream listeners
+  (the OAuth client interface and the API gateway's Responses, Chat Completions and
+  Messages endpoints) authenticate, admit, parse and settle; they never know the
+  channel. The executor selects a supplier from the tag pool, then converts the
+  downstream request directly into that supplier's official wire format. There is
+  no intermediate standard format and no passthrough: every (inbound format, wire)
+  pair is its own conversion, including `responses → codex`. A pair the matrix
+  does not support excludes the supplier at selection; nothing degrades silently.
+- Upstream errors are judged by the supplier channel (`Verdict`): a request error
+  returns to the caller unchanged in its format; a transient error retries the same
+  supplier; an availability error avoids the supplier for this request, until a
+  time, or permanently, for the account or for one model, and the executor switches
+  suppliers. The switch set is 401, 403, 429, 529, 5xx, transport faults and
+  channel-recognized compatibility 400s. An upstream 429 is never forwarded: it is a
+  timed avoidance plus a switch. Avoidance state lives in `supplier_blocks`; it ends
+  by expiry, successful reauthorization, administrator reset or a channel's own
+  recovery observation. A ChatGPT 402 is a permanent billing block that keeps
+  credentials and never refreshes tokens to recover.
+- HTTP 429 reaches a downstream caller only from this service's own limits (RPM,
+  concurrency, queue, budget). When every candidate supplier is unavailable the
+  caller receives 503 `no_available_supplier`; when no supplier in the pool is
+  configured for the model it receives 404 `model_not_found`.
 - Supplier enablement is administrator intent, independent of observed availability.
   Do not block enable/disable operations on authorization, billing or quota state.
   Successful reauthorization automatically clears old failure state and preserves
@@ -165,26 +180,38 @@ readers or repeat UA data migrations for future releases.
 ### Provider boundaries
 
 - Keep channel code in each relevant crate's `src/providers/chatgpt/`,
-  `src/providers/grok/` or `src/providers/antigravity/`. Frontend channel forms,
-  labels and protocol views belong in `frontend/src/components/providers/chatgpt/`,
-  `providers/grok/` or `providers/antigravity/`.
+  `src/providers/grok/`, `src/providers/antigravity/` or `src/providers/api/`.
+  Frontend channel forms, labels and protocol views belong in
+  `frontend/src/components/providers/chatgpt/`, `providers/grok/`,
+  `providers/antigravity/` or `providers/api/`.
 - A channel may not import another channel or add branches to the other channel's
   authentication, transport or handlers. Root modules may dispatch by provider;
   shared PostgreSQL, supplier pools, billing, sessions and UI layout stay protocol-neutral.
 - Common supplier error handling is common within a provider: ChatGPT quota
   probes and administrator refreshes reuse ChatGPT execution's credential refresh,
-  retry and error classification. Never apply ChatGPT error codes or recovery
-  rules to Grok or another provider; only classified availability reaches shared storage.
+  retry and verdict rules. Never apply ChatGPT error codes or recovery rules to
+  Grok or another provider; only a channel's verdict reaches shared storage, as
+  `supplier_blocks` rows. Wire conversions live in `codex2api-upstream/src/convert/`
+  keyed by (inbound format, wire); channel transports and verdicts live in each
+  channel's `providers/<channel>/`.
 - Grok supplier credentials, PKCE/device/RT flows, frozen identity, clients and
   version constants are independent of ChatGPT. Never interpret Grok tokens as
   Codex auth.json or send Codex headers to Grok.
 - Antigravity is a supplier channel of the standard AI API gateway only: Google
   OAuth code/callback and RT creation, the desktop client's `v1internal` envelope
-  and UA, Gemini wire conversion inside `providers/antigravity/`, per-model quota
-  cooldowns in `supplier_model_cooldowns`, and official model sync through
-  `fetchAvailableModels`. It has no OAuth client service root, plans or
-  subscriptions. sub2api is a reference for its wire protocol only, never a
-  dependency or a source of model mappings, quota fetchers or credit features.
+  and UA, Gemini wire conversion in `convert/gemini/`, per-model quota blocks in
+  `supplier_blocks`, and official model sync through `fetchAvailableModels`. It has
+  no OAuth client service root, plans or subscriptions. sub2api is a reference for
+  its wire protocol only, never a dependency or a source of model mappings, quota
+  fetchers or credit features.
+- The `api` channel is a supplier channel of the standard AI API gateway only: an
+  account is one key at one Base URL speaking one configured wire
+  (`openai_responses`, `chat_completions` or `messages`) with one authentication
+  header scheme and a fixed User-Agent; it has no device fingerprint (its identity
+  columns are NULL), no OAuth, no token refresh and no official quota read. Keys
+  are entered one per line; a rejected key is replaced by an administrator. Its
+  verdicts follow sub2api's OpenAI and Anthropic switching policy; sub2api
+  `apikey` rows import and export through the transfer adapter.
 - The administrator's enabled model catalog determines availability, subject to
   the consumer's plan. Official catalogs and price presets are references, never
   model allowlists. Custom models must remain addable and usable. Missing prices

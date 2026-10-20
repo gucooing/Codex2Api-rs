@@ -253,8 +253,8 @@ async fn refresh_token_login_uses_the_draft_identity_proxy_and_persists_only_the
         codex2api_storage::SupplierStatus::Active
     );
     assert_eq!(done.account.installation_id, identity.installation_id);
-    assert_eq!(done.account.os_type, "Ubuntu");
-    assert_eq!(done.account.arch, "aarch64");
+    assert_eq!(done.account.os_type.as_deref(), Some("Ubuntu"));
+    assert_eq!(done.account.arch.as_deref(), Some("aarch64"));
     assert_eq!(done.account.proxy_id.as_deref(), Some(proxy.id.as_str()));
     assert_eq!(done.account.email.as_deref(), Some("refresh@example.com"));
     assert_eq!(

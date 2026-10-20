@@ -134,7 +134,6 @@ impl crate::usage::ProtocolObserver for Observer {
         ]
     }
 }
-pub use codex2api_upstream::grok::prelude;
 
 #[cfg(test)]
 mod tests {

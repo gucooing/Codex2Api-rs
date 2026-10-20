@@ -76,6 +76,7 @@ const platformNames: Record<string, string> = {
   chatgpt: "ChatGPT",
   grok: "Grok",
   antigravity: "Antigravity",
+  api: "API",
 };
 export const apiPlatform = (provider: string) => platformNames[provider] ?? provider;
 export const apiLimit = (limit: number) => (limit === 0 ? "无限" : String(limit));

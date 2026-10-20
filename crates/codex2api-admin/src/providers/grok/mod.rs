@@ -86,9 +86,9 @@ pub async fn fingerprint(
         s.storage.require_outbound_proxy(proxy).await?;
     }
     let identity = f.identity(id.clone(), account.installation_id.clone(), false)?;
-    account.os_type = identity.os_type.clone();
-    account.os_version = identity.os_version.clone();
-    account.arch = identity.arch.clone();
+    account.os_type = Some(identity.os_type.clone());
+    account.os_version = Some(identity.os_version.clone());
+    account.arch = Some(identity.arch.clone());
     account.http_fingerprint_json = identity
         .fingerprint_json()
         .map_err(|_| ApiError::bad("指纹无效"))?;

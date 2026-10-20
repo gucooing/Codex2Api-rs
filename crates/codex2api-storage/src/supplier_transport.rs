@@ -7,9 +7,9 @@ pub struct SupplierTransportSnapshot {
     pub id: String,
     pub provider_id: String,
     pub installation_id: String,
-    pub os_type: String,
-    pub os_version: String,
-    pub arch: String,
+    pub os_type: Option<String>,
+    pub os_version: Option<String>,
+    pub arch: Option<String>,
     pub http_fingerprint_json: String,
     pub proxy_url: Option<String>,
     #[sqlx(skip)]

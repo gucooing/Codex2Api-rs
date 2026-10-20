@@ -124,7 +124,7 @@ export function UsageDetailDialog({ selected, setSelected }: Props) {
               <Field key={attempt.attempt}>
                 <FieldTitle>
                   第 {attempt.attempt} 次尝试 ·{" "}
-                  {attempt.recovery === "refresh" ? "刷新授权后重试" : "切换供应账户"}
+                  {attempt.recovery === "retry" ? "同一供应账户重试" : "切换供应账户"}
                 </FieldTitle>
                 <FieldDescription className="whitespace-pre-wrap break-words">
                   {`${attempt.account_name} · ${attempt.account_provider_id} · HTTP ${attempt.http_status ?? "-"} · ${attempt.error_code ?? "-"} · ${duration(attempt.total_ms)}`}

@@ -33,6 +33,10 @@ pub(super) fn router() -> Router<AdminState> {
             "/suppliers/antigravity/oauth",
             crate::providers::antigravity::oauth_routes(),
         )
+        .nest(
+            "/suppliers/api/accounts",
+            crate::providers::api::account_routes(),
+        )
         .route("/suppliers", get(list))
         .route("/suppliers/options", get(options))
         .route("/suppliers/selection", get(selection))
@@ -113,26 +117,26 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     value["enabled"] = json!(enabled);
     value["status"] = json!(health.display_status(enabled, authorized));
     value["authorized"] = json!(authorized);
-    value["error_message"] = json!(if health.authentication_invalid {
+    let block = health.account_block();
+    value["error_message"] = json!(if health.authentication_invalid() {
         health.error_message.as_deref()
-    } else if health.payment_required {
+    } else if health.payment_required() {
         Some("HTTP 402 Payment Required：供应账户付费/订阅不可用")
     } else if !authorized {
         Some("供应账户尚未完成授权")
     } else {
-        None
+        block.and_then(|block| block.message.as_deref())
     });
-    value["error_at"] = json!(if health.authentication_invalid {
-        &health.error_at
+    value["error_at"] = json!(if health.authentication_invalid() {
+        health.error_at.clone()
     } else {
-        &health.payment_required_at
+        block
+            .and_then(|block| chrono::DateTime::from_timestamp(block.observed_at, 0))
+            .map(|at| at.to_rfc3339())
     });
-    value["payment_required"] = json!(health.payment_required);
-    value["payment_required_code"] = json!(health.payment_required_code);
-    value["authentication_invalid"] = json!(health.authentication_invalid);
-    value["cooldown_until"] = json!(health.cooldown_until);
-    value["cooldown_code"] = json!(health.cooldown_code);
-    value["model_cooldowns"] = json!(s.storage.supplier_model_cooldowns(&a.id).await?);
+    value["authentication_invalid"] = json!(health.authentication_invalid());
+    value["block"] = json!(health.account_block());
+    value["model_blocks"] = json!(health.model_blocks().collect::<Vec<_>>());
     let tags = s.storage.supplier_tag_labels(&a.id).await?;
     value["tag_ids"] = json!(tags.iter().map(|(id, _)| id).collect::<Vec<_>>());
     value["tags"] = json!(
@@ -189,7 +193,7 @@ pub async fn options(
 pub async fn detail(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
     let a = s.storage.require_account(&id).await?;
     let mut v = display(&s, &a).await?;
-    v["fingerprint"] = crate::providers::fingerprint_view(&a)?;
+    v["fingerprint"] = crate::providers::fingerprint_view(&s, &a).await?;
     v["usage"] = json!(s.storage.account_usage_summary(&id).await?);
     Ok(Json(v))
 }
@@ -236,7 +240,11 @@ pub async fn quota(
 ) -> ApiResult {
     let account = s.storage.require_account(&id).await?;
     if account.status == SupplierStatus::Active
-        && s.storage.supplier_health(&id).await?.authentication_invalid == false
+        && !s
+            .storage
+            .supplier_health(&id)
+            .await?
+            .authentication_invalid()
     {
         crate::providers::quota(&s, &id, q.refresh)
             .await

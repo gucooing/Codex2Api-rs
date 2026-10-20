@@ -49,9 +49,9 @@ struct AccountRow {
     email: Option<String>,
     plan_type: Option<String>,
     installation_id: String,
-    os_type: String,
-    os_version: String,
-    arch: String,
+    os_type: Option<String>,
+    os_version: Option<String>,
+    arch: Option<String>,
     http_fingerprint_json: String,
     created_at: String,
     updated_at: String,
@@ -686,7 +686,7 @@ impl Storage {
         .bind(&now)
         .execute(&mut *tx)
         .await?;
-        crate::supplier_health::complete_authorization(&mut tx, &account.id, revision).await?;
+        crate::supplier_blocks::complete_authorization(&mut tx, &account.id, revision).await?;
         tx.commit().await?;
         self.runtime.snapshots.invalidate(&[
             crate::snapshots::Domain::Suppliers,
@@ -788,8 +788,11 @@ impl Storage {
             .get_account(id)
             .await?
             .ok_or_else(|| StorageError::AccountNotFound(id.to_string()))?;
-        if account.provider_id != codex2api_common::CHATGPT
-            && (update.chatgpt_account_id.is_some() || update.chatgpt_user_id.is_some())
+        // Only channels whose identity is assigned locally may rewrite it.
+        if !matches!(
+            account.provider_id.as_str(),
+            codex2api_common::CHATGPT | codex2api_common::API
+        ) && (update.chatgpt_account_id.is_some() || update.chatgpt_user_id.is_some())
         {
             return Err(StorageError::Constraint(
                 "ChatGPT supplier identity requires the ChatGPT provider".into(),
@@ -814,13 +817,13 @@ impl Storage {
             account.plan_type = empty_to_none(Some(plan_type));
         }
         if let Some(os_type) = update.os_type {
-            account.os_type = os_type;
+            account.os_type = Some(os_type);
         }
         if let Some(os_version) = update.os_version {
-            account.os_version = os_version;
+            account.os_version = Some(os_version);
         }
         if let Some(arch) = update.arch {
-            account.arch = arch;
+            account.arch = Some(arch);
         }
         if let Some(http_fingerprint_json) = update.http_fingerprint_json {
             account.http_fingerprint_json = http_fingerprint_json;
@@ -985,7 +988,7 @@ impl Storage {
         .bind(&updated_at)
         .fetch_one(&mut *tx)
         .await?;
-        crate::supplier_health::complete_authorization(&mut tx, &tokens.account_id, revision)
+        crate::supplier_blocks::complete_authorization(&mut tx, &tokens.account_id, revision)
             .await?;
         tx.commit().await?;
         self.runtime.snapshots.invalidate(&[

@@ -14,6 +14,7 @@
 //! Protocol construction lives in request/headers; transport lives in client/websocket/stream.
 
 pub use providers::antigravity;
+pub use providers::api;
 pub(crate) use providers::chatgpt::backend;
 pub use providers::grok;
 pub mod providers;
@@ -32,19 +33,18 @@ pub fn supported_models() -> Vec<codex2api_common::SupportedModel> {
     models
 }
 
-mod availability;
 pub(crate) use providers::chatgpt::endpoint;
 pub(crate) use providers::chatgpt::operations;
 mod body;
 mod error;
 mod outcome;
-pub mod public_output;
 pub mod request_debug;
 pub mod request_failure;
-pub use availability::{
-    SupplierFailure, classify_provider_failure, classify_supplier_failure, quota_available,
-    quota_unavailable_until,
-};
+pub use providers::chatgpt::verdict::{quota_available, quota_unavailable_until};
+pub mod convert;
+pub mod executor;
+pub mod inbound;
+pub mod supply;
 pub use request_failure::RequestFailureLog;
 #[derive(Clone, Copy, Debug)]
 pub struct SupplierAuthRevision(pub i64);
@@ -96,6 +96,3 @@ mod response;
 pub use response::ResponseFormat;
 
 pub mod scheduler;
-
-/// Public protocol adapters; chosen only after supplier selection.
-pub mod protocol;

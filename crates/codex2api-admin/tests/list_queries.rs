@@ -72,7 +72,7 @@ async fn supplier_filters_pages_and_bulk_selection_share_database_membership() {
         .unwrap()
         .unwrap();
     f.storage
-        .mark_supplier_payment_required(&ids[1], revision, None, None)
+        .block_supplier_fenced(&ids[1], revision, &billing_block(None), None)
         .await
         .unwrap();
     let revision = f
@@ -82,11 +82,10 @@ async fn supplier_filters_pages_and_bulk_selection_share_database_membership() {
         .unwrap()
         .unwrap();
     f.storage
-        .exhaust_supplier_quota(
+        .block_supplier(
             &ids[2],
             revision,
-            chrono::Utc::now().timestamp() + 3600,
-            "usage_limit_reached",
+            &quota_block(chrono::Utc::now().timestamp() + 3600, "usage_limit_reached"),
         )
         .await
         .unwrap();
@@ -484,4 +483,23 @@ async fn supplier_models_read_only_their_own_snapshot() {
             .unwrap()
             .is_none()
     );
+}
+
+fn quota_block(until: i64, code: &str) -> codex2api_storage::BlockRequest {
+    codex2api_storage::BlockRequest {
+        model: None,
+        kind: codex2api_storage::BlockKind::Quota,
+        until_at: Some(until),
+        code: Some(code.into()),
+        message: None,
+    }
+}
+fn billing_block(code: Option<&str>) -> codex2api_storage::BlockRequest {
+    codex2api_storage::BlockRequest {
+        model: None,
+        kind: codex2api_storage::BlockKind::Billing,
+        until_at: None,
+        code: code.map(str::to_owned),
+        message: None,
+    }
 }

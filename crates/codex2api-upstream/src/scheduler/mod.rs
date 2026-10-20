@@ -1,13 +1,10 @@
 //! Supplier selection and failure recovery, independent of consumer credentials and billing.
 //! Callers supply a validated route and keep their own authorization and request ledger.
 mod selection;
-mod transport;
 
+pub use crate::executor::{generation_observed, prelude_event};
 pub use selection::{
     ScheduleRequest, body_seed, context_required, hash, header_seed, previous_key, select, text,
-};
-pub use transport::{
-    generation_observed, inspect_response, observe_failure, prelude_event, recover_auth,
 };
 
 pub type Result<T> = std::result::Result<T, SchedulerError>;

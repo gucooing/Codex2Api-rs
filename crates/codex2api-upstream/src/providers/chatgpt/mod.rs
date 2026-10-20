@@ -1,5 +1,4 @@
 //! ChatGPT upstream wire protocol only.
-pub(crate) mod availability;
 pub(crate) mod backend;
 pub(crate) mod catalog;
 pub(crate) mod client;
@@ -17,3 +16,4 @@ mod model_discovery;
 
 pub(crate) mod api;
 pub(crate) mod api_images;
+pub(crate) mod verdict;

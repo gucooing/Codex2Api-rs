@@ -99,9 +99,9 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
         a.id.clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         a.installation_id.clone(),
-        a.os_type.clone(),
-        a.os_version.clone(),
-        a.arch.clone(),
+        a.os_type.clone().unwrap_or_default(),
+        a.os_version.clone().unwrap_or_default(),
+        a.arch.clone().unwrap_or_default(),
         previous.timezone,
     );
     a.id = Some(identity.account_id.clone());

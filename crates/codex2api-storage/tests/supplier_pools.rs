@@ -207,7 +207,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             Some("http://127.0.0.1:12346/")
         );
         let mut account = storage.require_account(provider).await.unwrap();
-        account.os_version = "1.2.3".into();
+        account.os_version = Some("1.2.3".into());
         storage.save_account_fingerprint(&account).await.unwrap();
         assert_eq!(
             storage
@@ -215,7 +215,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
                 .await
                 .unwrap()
                 .os_version,
-            "1.2.3"
+            Some("1.2.3".into())
         );
         storage
             .delete_outbound_proxy(&proxy.id, true)
@@ -237,7 +237,7 @@ async fn shared_snapshots_refresh_models_transport_and_availability_for_each_pro
             .unwrap();
         let reset = chrono::Utc::now().timestamp() + 1;
         storage
-            .exhaust_supplier_quota(provider, revision, reset, "fixture")
+            .block_supplier(provider, revision, &quota_block(reset, "fixture"))
             .await
             .unwrap();
         assert!(
@@ -414,21 +414,25 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     let tokens = storage.load_supplier_tokens("s").await.unwrap().unwrap();
     storage
-        .exhaust_supplier_quota(
+        .block_supplier(
             "s",
             auth,
-            chrono::Utc::now().timestamp() + 600,
-            "usage_limit_reached",
+            &quota_block(chrono::Utc::now().timestamp() + 600, "usage_limit_reached"),
         )
         .await
         .unwrap();
     storage
-        .mark_supplier_payment_required("s", auth, Some("deactivated_workspace"), None)
+        .block_supplier_fenced(
+            "s",
+            auth,
+            &billing_block(Some("deactivated_workspace")),
+            None,
+        )
         .await
         .unwrap();
     let health = storage.supplier_health("s").await.unwrap();
-    assert!(health.payment_required);
-    assert!(!health.authentication_invalid);
+    assert!(health.payment_required());
+    assert!(!health.authentication_invalid());
     assert_eq!(health.display_status(true, true), "payment_required");
     assert_eq!(
         storage
@@ -455,10 +459,21 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
         Some("other")
     );
     storage
-        .recover_supplier_quota("s", auth, health.cooldown_revision)
+        .unblock_supplier(
+            "s",
+            auth,
+            health.observation_revision,
+            &[codex2api_storage::BlockKind::Quota],
+        )
         .await
         .unwrap();
-    assert!(storage.supplier_health("s").await.unwrap().payment_required);
+    assert!(
+        storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .payment_required()
+    );
     let mut refreshed = tokens.clone();
     refreshed.access_token = Some("refreshed".into());
     assert!(
@@ -467,7 +482,13 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
             .await
             .unwrap()
     );
-    assert!(storage.supplier_health("s").await.unwrap().payment_required);
+    assert!(
+        storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .payment_required()
+    );
     let current = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     storage.reject_supplier_auth("s", current).await.unwrap();
     storage
@@ -479,12 +500,12 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
     assert!(storage.supplier_auth_revision("s").await.unwrap().unwrap() > current);
     storage.reject_supplier_auth("s", current).await.unwrap();
     storage
-        .mark_supplier_payment_required("s", current, None, None)
+        .block_supplier_fenced("s", current, &billing_block(None), None)
         .await
         .unwrap();
     let health = storage.supplier_health("s").await.unwrap();
-    assert!(!health.payment_required);
-    assert!(!health.authentication_invalid);
+    assert!(!health.payment_required());
+    assert!(!health.authentication_invalid());
     assert_eq!(
         storage.require_account("s").await.unwrap().status,
         SupplierStatus::Disabled
@@ -500,7 +521,7 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
         .unwrap();
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     storage
-        .mark_supplier_payment_required("s", auth, None, None)
+        .block_supplier_fenced("s", auth, &billing_block(None), None)
         .await
         .unwrap();
     // The login path which finds an existing supplier must preserve the same intent.
@@ -509,7 +530,13 @@ async fn billing_rejection_survives_refresh_and_quota_recovery_but_not_reauthori
         storage.require_account("s").await.unwrap().status,
         SupplierStatus::Disabled
     );
-    assert!(!storage.supplier_health("s").await.unwrap().payment_required);
+    assert!(
+        !storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .payment_required()
+    );
 }
 
 #[tokio::test]
@@ -521,20 +548,26 @@ async fn billing_reset_preserves_credentials_and_rejects_stale_probe_observation
     supplier(&storage, "s").await;
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     storage
-        .mark_supplier_payment_required("s", auth, None, None)
+        .block_supplier_fenced("s", auth, &billing_block(None), None)
         .await
         .unwrap();
     let observation = storage
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     storage.reset_supplier_availability("s").await.unwrap();
     storage
-        .mark_supplier_payment_required("s", auth, None, Some(observation))
+        .block_supplier_fenced("s", auth, &billing_block(None), Some(observation))
         .await
         .unwrap();
-    assert!(!storage.supplier_health("s").await.unwrap().payment_required);
+    assert!(
+        !storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .payment_required()
+    );
     assert_eq!(
         storage.supplier_auth_revision("s").await.unwrap(),
         Some(auth)
@@ -550,10 +583,16 @@ async fn billing_reset_preserves_credentials_and_rejects_stale_probe_observation
         Some("fixture")
     );
     storage
-        .mark_supplier_payment_required("s", auth, None, None)
+        .block_supplier_fenced("s", auth, &billing_block(None), None)
         .await
         .unwrap();
-    assert!(storage.supplier_health("s").await.unwrap().payment_required);
+    assert!(
+        storage
+            .supplier_health("s")
+            .await
+            .unwrap()
+            .payment_required()
+    );
 }
 
 #[tokio::test]
@@ -754,7 +793,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
     let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     let now = chrono::Utc::now().timestamp();
     storage
-        .exhaust_supplier_quota("s", rev, now + 600, "usage_limit_reached")
+        .block_supplier("s", rev, &quota_block(now + 600, "usage_limit_reached"))
         .await
         .unwrap();
     assert_eq!(
@@ -762,7 +801,8 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
             .supplier_health("s")
             .await
             .unwrap()
-            .cooldown_kind
+            .quota_exhausted()
+            .then_some("quota_exhausted")
             .as_deref(),
         Some("quota_exhausted")
     );
@@ -773,7 +813,7 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
             .unwrap()
             .is_none()
     );
-    sqlx::query("UPDATE supplier_health SET cooldown_until=$1 WHERE account_id='s'")
+    sqlx::query("UPDATE supplier_blocks SET until_at=$1 WHERE account_id='s' AND scope='account'")
         .bind(now - 1)
         .execute(storage.pool())
         .await
@@ -792,11 +832,12 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
             .supplier_health("s")
             .await
             .unwrap()
-            .cooldown_kind
+            .quota_exhausted()
+            .then_some("quota_exhausted")
             .is_none()
     );
     storage
-        .exhaust_supplier_quota("s", rev - 1, now + 600, "usage_limit_reached")
+        .block_supplier("s", rev - 1, &quota_block(now + 600, "usage_limit_reached"))
         .await
         .unwrap();
     assert!(
@@ -804,7 +845,8 @@ async fn cooldown_recovers_by_time_and_membership_removal_clears_bindings() {
             .supplier_health("s")
             .await
             .unwrap()
-            .cooldown_kind
+            .quota_exhausted()
+            .then_some("quota_exhausted")
             .is_none()
     );
     storage
@@ -850,14 +892,14 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
     let auth = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     let until = chrono::Utc::now().timestamp() + 86400;
     storage
-        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .block_supplier("s", auth, &quota_block(until, "usage_limit_reached"))
         .await
         .unwrap();
     let observed = storage
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     assert!(
         storage
             .select_pool_supplier("v", "chatgpt", &[])
@@ -867,12 +909,12 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
     );
     // Identical exhaustion in the same second must still supersede the check.
     storage
-        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .block_supplier("s", auth, &quota_block(until, "usage_limit_reached"))
         .await
         .unwrap();
     assert!(
         !storage
-            .recover_supplier_quota("s", auth, observed)
+            .unblock_supplier("s", auth, observed, &[codex2api_storage::BlockKind::Quota])
             .await
             .unwrap()
     );
@@ -880,17 +922,27 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     assert!(
         storage
-            .recover_supplier_quota("s", auth, current)
+            .unblock_supplier("s", auth, current, &[codex2api_storage::BlockKind::Quota])
             .await
             .unwrap()
     );
     let health = storage.supplier_health("s").await.unwrap();
-    assert!(health.cooldown_kind.is_none());
-    assert!(health.cooldown_until.is_none());
-    assert!(health.cooldown_code.is_none());
+    assert!(health.quota_exhausted() == false);
+    assert!(
+        health
+            .account_block()
+            .and_then(|block| block.until_at)
+            .is_none()
+    );
+    assert!(
+        health
+            .account_block()
+            .and_then(|block| block.code.clone())
+            .is_none()
+    );
     assert_eq!(
         storage
             .select_pool_supplier("v", "chatgpt", &[])
@@ -901,17 +953,22 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
     );
 
     storage
-        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .block_supplier("s", auth, &quota_block(until, "usage_limit_reached"))
         .await
         .unwrap();
     let before_reset = storage
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     storage.reset_supplier_availability("s").await.unwrap();
     storage
-        .exhaust_supplier_quota_if_unchanged("s", auth, until, "usage_limit_reached", before_reset)
+        .block_supplier_fenced(
+            "s",
+            auth,
+            &quota_block(until, "usage_limit_reached"),
+            Some(before_reset),
+        )
         .await
         .unwrap();
     assert!(
@@ -919,7 +976,8 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
             .supplier_health("s")
             .await
             .unwrap()
-            .cooldown_kind
+            .quota_exhausted()
+            .then_some("quota_exhausted")
             .is_none()
     );
     assert_eq!(
@@ -932,7 +990,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
     );
     // A subsequent real generation can still report exhaustion.
     storage
-        .exhaust_supplier_quota("s", auth, until, "usage_limit_reached")
+        .block_supplier("s", auth, &quota_block(until, "usage_limit_reached"))
         .await
         .unwrap();
     storage.reject_supplier_auth("s", auth).await.unwrap();
@@ -946,7 +1004,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
             .supplier_health("s")
             .await
             .unwrap()
-            .authentication_invalid
+            .authentication_invalid()
     );
     assert_eq!(
         storage.require_account("s").await.unwrap().status,
@@ -964,7 +1022,7 @@ async fn fresh_quota_recovery_and_manual_reset_repair_routes_without_erasing_new
             .supplier_health("other")
             .await
             .unwrap()
-            .cooldown_revision,
+            .observation_revision,
         0
     );
 }
@@ -991,15 +1049,17 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
         }
         let auth = storage.supplier_auth_revision(id).await.unwrap().unwrap();
         storage
-            .exhaust_supplier_quota(
+            .block_supplier(
                 id,
                 auth,
-                if id == "expired" {
-                    now - 1
-                } else {
-                    now + 86400
-                },
-                "usage_limit_reached",
+                &quota_block(
+                    if id == "expired" {
+                        now - 1
+                    } else {
+                        now + 86400
+                    },
+                    "usage_limit_reached",
+                ),
             )
             .await
             .unwrap();
@@ -1021,8 +1081,17 @@ async fn background_candidates_are_only_currently_exhausted_authorized_enabled_s
                     .await
                     .unwrap();
                 assert!(storage.supplier_auth_revision(id).await.unwrap().unwrap() > auth);
-                let old = storage.supplier_health(id).await.unwrap().cooldown_revision;
-                assert!(!storage.recover_supplier_quota(id, auth, old).await.unwrap());
+                let old = storage
+                    .supplier_health(id)
+                    .await
+                    .unwrap()
+                    .observation_revision;
+                assert!(
+                    !storage
+                        .unblock_supplier(id, auth, old, &[codex2api_storage::BlockKind::Quota])
+                        .await
+                        .unwrap()
+                );
             }
             "no-token" => {
                 sqlx::query("DELETE FROM supplier_tokens WHERE account_id=$1")
@@ -1211,39 +1280,53 @@ async fn model_cooldowns_exclude_one_model_until_reset_recovery_or_a_new_login()
     let rev = storage.supplier_auth_revision("s").await.unwrap().unwrap();
     let now = chrono::Utc::now().timestamp();
     storage
-        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 600, "quota_exhausted")
+        .block_supplier(
+            "s",
+            rev,
+            &model_quota_block("alpha-model", now + 600, "quota_exhausted"),
+        )
         .await
         .unwrap();
     assert!(model_candidates(&storage, "alpha-model").await.is_empty());
     assert_eq!(model_candidates(&storage, "beta-model").await, vec!["s"]);
     let health = storage.supplier_health("s").await.unwrap();
-    assert!(health.cooldown_kind.is_none());
-    assert!(health.cooldown_until.is_none());
-    let cooldowns = storage.supplier_model_cooldowns("s").await.unwrap();
+    assert!(health.quota_exhausted() == false);
+    assert!(
+        health
+            .account_block()
+            .and_then(|block| block.until_at)
+            .is_none()
+    );
+    let cooldowns = storage.supplier_model_blocks("s").await.unwrap();
     assert_eq!(cooldowns.len(), 1);
     assert_eq!(cooldowns[0].model, "alpha-model");
-    assert_eq!(cooldowns[0].cooldown_until, now + 600);
+    assert_eq!(cooldowns[0].until_at, Some(now + 600));
     assert_eq!(
-        cooldowns[0].cooldown_code.as_deref(),
+        cooldowns[0].code.clone().as_deref(),
         Some("quota_exhausted")
     );
     // An observation made with stale credentials is not recorded.
     storage
-        .exhaust_supplier_model_quota("s", rev - 1, "beta-model", now + 600, "quota_exhausted")
+        .block_supplier(
+            "s",
+            rev - 1,
+            &model_quota_block("beta-model", now + 600, "quota_exhausted"),
+        )
         .await
         .unwrap();
     assert_eq!(model_candidates(&storage, "beta-model").await, vec!["s"]);
-    assert_eq!(
-        storage.supplier_model_cooldowns("s").await.unwrap().len(),
-        1
-    );
+    assert_eq!(storage.supplier_model_blocks("s").await.unwrap().len(), 1);
     // Older reads cannot erase a later failure, even under the same credentials.
     storage
-        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 700, "quota_exhausted")
+        .block_supplier(
+            "s",
+            rev,
+            &model_quota_block("alpha-model", now + 700, "quota_exhausted"),
+        )
         .await
         .unwrap();
     storage
-        .recover_supplier_model_quota("s", rev, "alpha-model", health.cooldown_revision)
+        .unblock_supplier_model("s", rev, "alpha-model", health.observation_revision)
         .await
         .unwrap();
     assert!(model_candidates(&storage, "alpha-model").await.is_empty());
@@ -1251,51 +1334,47 @@ async fn model_cooldowns_exclude_one_model_until_reset_recovery_or_a_new_login()
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     storage
-        .recover_supplier_model_quota("s", rev - 1, "alpha-model", observation)
+        .unblock_supplier_model("s", rev - 1, "alpha-model", observation)
         .await
         .unwrap();
     assert!(model_candidates(&storage, "alpha-model").await.is_empty());
     // A fresh official read reporting the model available recovers it before the reset.
     storage
-        .recover_supplier_model_quota("s", rev, "alpha-model", observation)
+        .unblock_supplier_model("s", rev, "alpha-model", observation)
         .await
         .unwrap();
     assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
     // The reset time expires the cooldown by itself.
     storage
-        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 600, "quota_exhausted")
+        .block_supplier(
+            "s",
+            rev,
+            &model_quota_block("alpha-model", now + 600, "quota_exhausted"),
+        )
         .await
         .unwrap();
     assert!(model_candidates(&storage, "alpha-model").await.is_empty());
-    sqlx::query("UPDATE supplier_model_cooldowns SET cooldown_until=$1 WHERE account_id='s'")
+    sqlx::query("UPDATE supplier_blocks SET until_at=$1 WHERE account_id='s' AND scope='model'")
         .bind(now - 1)
         .execute(storage.pool())
         .await
         .unwrap();
     storage.invalidate_cached_snapshots();
     assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
-    assert!(
-        storage
-            .supplier_model_cooldowns("s")
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(storage.supplier_model_blocks("s").await.unwrap().is_empty());
     // A new login discards cooldowns observed with the previous credentials.
     storage
-        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 600, "quota_exhausted")
+        .block_supplier(
+            "s",
+            rev,
+            &model_quota_block("alpha-model", now + 600, "quota_exhausted"),
+        )
         .await
         .unwrap();
     supplier(&storage, "s").await;
-    assert!(
-        storage
-            .supplier_model_cooldowns("s")
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(storage.supplier_model_blocks("s").await.unwrap().is_empty());
     assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
 }
 
@@ -1342,16 +1421,18 @@ async fn shared_model_quota_survives_manual_model_edits_and_recovers_as_one_pool
         );
     }
     storage
-        .exhaust_supplier_model_quota(
+        .block_supplier(
             "s",
             revision,
-            "alpha",
-            chrono::Utc::now().timestamp() + 600,
-            "quota_exhausted",
+            &model_quota_block(
+                "alpha",
+                chrono::Utc::now().timestamp() + 600,
+                "quota_exhausted",
+            ),
         )
         .await
         .unwrap();
-    let cooldowns = storage.supplier_model_cooldowns("s").await.unwrap();
+    let cooldowns = storage.supplier_model_blocks("s").await.unwrap();
     assert_eq!(
         cooldowns
             .iter()
@@ -1363,18 +1444,12 @@ async fn shared_model_quota_survives_manual_model_edits_and_recovers_as_one_pool
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     storage
-        .recover_supplier_model_quota("s", revision, "beta", observation)
+        .unblock_supplier_model("s", revision, "beta", observation)
         .await
         .unwrap();
-    assert!(
-        storage
-            .supplier_model_cooldowns("s")
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(storage.supplier_model_blocks("s").await.unwrap().is_empty());
 
     // Reauthorization fences both late discovery and late availability observations.
     supplier_for(&storage, "s", "antigravity").await;
@@ -1387,12 +1462,14 @@ async fn shared_model_quota_survives_manual_model_edits_and_recovers_as_one_pool
             .unwrap()
     );
     storage
-        .exhaust_supplier_model_quota(
+        .block_supplier(
             "s",
             current,
-            "alpha",
-            chrono::Utc::now().timestamp() + 600,
-            "quota_exhausted",
+            &model_quota_block(
+                "alpha",
+                chrono::Utc::now().timestamp() + 600,
+                "quota_exhausted",
+            ),
         )
         .await
         .unwrap();
@@ -1400,14 +1477,39 @@ async fn shared_model_quota_survives_manual_model_edits_and_recovers_as_one_pool
         .supplier_health("s")
         .await
         .unwrap()
-        .cooldown_revision;
+        .observation_revision;
     storage
-        .recover_supplier_model_quota("s", revision, "alpha", observation)
+        .unblock_supplier_model("s", revision, "alpha", observation)
         .await
         .unwrap();
-    assert_eq!(
-        storage.supplier_model_cooldowns("s").await.unwrap().len(),
-        2
-    );
+    assert_eq!(storage.supplier_model_blocks("s").await.unwrap().len(), 2);
     assert!(!storage.supplier_supports_model("s", "stale").await.unwrap());
+}
+
+fn quota_block(until: i64, code: &str) -> codex2api_storage::BlockRequest {
+    codex2api_storage::BlockRequest {
+        model: None,
+        kind: codex2api_storage::BlockKind::Quota,
+        until_at: Some(until),
+        code: Some(code.into()),
+        message: None,
+    }
+}
+fn model_quota_block(model: &str, until: i64, code: &str) -> codex2api_storage::BlockRequest {
+    codex2api_storage::BlockRequest {
+        model: Some(model.into()),
+        kind: codex2api_storage::BlockKind::Quota,
+        until_at: Some(until),
+        code: Some(code.into()),
+        message: None,
+    }
+}
+fn billing_block(code: Option<&str>) -> codex2api_storage::BlockRequest {
+    codex2api_storage::BlockRequest {
+        model: None,
+        kind: codex2api_storage::BlockKind::Billing,
+        until_at: None,
+        code: code.map(str::to_owned),
+        message: None,
+    }
 }

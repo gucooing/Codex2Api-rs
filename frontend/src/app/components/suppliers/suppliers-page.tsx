@@ -218,6 +218,9 @@ export default function SuppliersPage() {
                       { value: "error", label: "授权失效" },
                       { value: "payment_required", label: "账单受限" },
                       { value: "quota_exhausted", label: "配额耗尽" },
+                      { value: "rate_limited", label: "限流中" },
+                      { value: "overloaded", label: "过载中" },
+                      { value: "blocked", label: "临时回避" },
                     ].map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}

@@ -8,6 +8,8 @@ export const grokChannel = {
     ["details", "官方资料"],
     ["credits", "官方余额"],
   ],
+  setupLabel: "指纹配置",
+  tokenLabel: "Refresh Token",
   callbackLabel: "代码／回调授权",
   callbackDescription: "打开 Grok 官方页面，粘贴返回的授权代码或回调链接",
   callbackInputLabel: "授权代码或完整回调链接",

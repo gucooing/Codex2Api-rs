@@ -1,142 +1,36 @@
-//! Public API requests in the pinned Codex subscription request shape.
-use crate::protocol::request::{declared_tools, normalize_tools};
-use crate::protocol::{
-    Error as ApiError, InboundRequest, PreparedRequest, Protocol, Result, convert,
-};
+//! ChatGPT channel operations beyond generation, in the pinned Codex request shapes,
+//! and the request-scoped context every Codex request carries.
+use crate::inbound::request::normalize_tools;
+use crate::inbound::{Error as ApiError, InboundRequest, Result};
+use crate::supply::{Operation, Wire, WireRequest};
 use http::HeaderMap;
 use serde_json::{Map, Value, json};
 
-/// Public SDK fields the subscription Responses endpoint does not accept.
-const UNSUPPORTED: [&str; 18] = [
-    "max_output_tokens",
-    "max_completion_tokens",
-    "max_tokens",
-    "temperature",
-    "top_p",
-    "frequency_penalty",
-    "presence_penalty",
-    "chat_template_kwargs",
-    "user",
-    "metadata",
-    "prompt_cache_retention",
-    "safety_identifier",
-    "stream_options",
-    "truncation",
-    "stop",
-    "stop_sequences",
-    "seed",
-    "logit_bias",
-];
-
-pub(crate) fn prepare(input: &InboundRequest) -> Result<PreparedRequest> {
-    let upstream = if input.protocol.generation() {
-        Protocol::Responses
-    } else {
-        input.protocol
-    };
-    if upstream.image() {
-        let mut prepared = super::api_images::prepare(
-            input.body.clone(),
-            upstream == Protocol::ImageEdit,
-            &input.headers,
-        )?;
-        prepared.metadata = input.metadata.clone();
-        return Ok(prepared);
-    }
-    let mut body = if upstream == Protocol::Responses {
-        convert(input.protocol, &input.body)?
-    } else {
-        input.body.clone()
-    };
+/// Compaction, input counting and search keep their own official bodies.
+pub(crate) fn operation(input: &InboundRequest) -> Result<WireRequest> {
+    let mut body = input.body.clone();
     let headers = request_context(&mut body, &input.headers)?;
     let object = body.as_object_mut().expect("validated body");
-    match upstream {
-        Protocol::Responses => codex(object)?,
-        Protocol::Search => {
+    match input.operation {
+        Operation::Search => {
             object.remove("client_metadata");
             search(object)?;
         }
-        Protocol::Compact | Protocol::InputTokens => {
+        Operation::Compact | Operation::InputTokens => {
             // Unary protocols keep their own instructions field.
             object.remove("client_metadata");
             normalize_tools(object)?;
         }
         _ => return Err(ApiError::bad_request("Unsupported ChatGPT operation")),
     }
-    let mut prepared = PreparedRequest::new(input, upstream, body);
-    prepared.headers = headers;
-    Ok(prepared)
-}
-
-/// Codex 0.163 sends system-level input with the developer role, always streams,
-/// never stores, and replays reasoning only through encrypted content.
-fn codex(object: &mut Map<String, Value>) -> Result<()> {
-    for name in UNSUPPORTED {
-        object.remove(name);
-    }
-    for item in object
-        .get_mut("input")
-        .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        if item["role"] == "system" {
-            item["role"] = "developer".into();
-        }
-        if item["type"] == "reasoning" {
-            // Stateless replay never looks up rs_* IDs.
-            let item = item.as_object_mut().expect("validated input item");
-            item.remove("id");
-            item.remove("call_id");
-        }
-    }
-    tool_choice(object);
-    object.insert("stream".into(), true.into());
-    object.insert("store".into(), false.into());
-    object.entry("tool_choice").or_insert_with(|| "auto".into());
-    object
-        .entry("parallel_tool_calls")
-        .or_insert_with(|| true.into());
-    object.entry("reasoning").or_insert(Value::Null);
-    let include = object
-        .entry("include")
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| ApiError::bad_request("include must be an array"))?;
-    if !include.iter().any(|v| v == "reasoning.encrypted_content") {
-        include.push("reasoning.encrypted_content".into());
-    }
-    Ok(())
-}
-
-/// A named choice must reference a declared tool; otherwise the model chooses.
-fn tool_choice(object: &mut Map<String, Value>) {
-    let Some(choice) = object.get("tool_choice").filter(|c| c.is_object()) else {
-        return;
-    };
-    let kind = choice["type"].as_str().unwrap_or_default().to_owned();
-    if kind == "allowed_tools" {
-        return;
-    }
-    let name = choice["name"].as_str().map(str::to_owned);
-    let mut declared = Vec::new();
-    declared_tools(object.get("tools").unwrap_or(&Value::Null), &mut declared);
-    for item in object["input"].as_array().into_iter().flatten() {
-        if item["type"] == "additional_tools" {
-            declared_tools(&item["tools"], &mut declared);
-        }
-    }
-    let choice = if kind == "function" {
-        match name.filter(|name| declared.iter().any(|(k, n)| k == "function" && n == name)) {
-            Some(name) => json!({"type":"function","name":name}),
-            None => "auto".into(),
-        }
-    } else if declared.iter().any(|(k, _)| *k == kind) {
-        return;
-    } else {
-        "auto".into()
-    };
-    object.insert("tool_choice".into(), choice);
+    Ok(WireRequest {
+        wire: Wire::Codex,
+        operation: input.operation,
+        model: body["model"].as_str().map(str::to_owned),
+        body,
+        headers,
+        stream: false,
+    })
 }
 
 fn search(object: &mut Map<String, Value>) -> Result<()> {
@@ -186,7 +80,6 @@ fn search(object: &mut Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-/// Preserve caller-scoped protocol context; account identity is supplied by the upstream transport.
 pub(crate) fn request_context(body: &mut Value, inbound: &HeaderMap) -> Result<HeaderMap> {
     let supplied = body
         .as_object_mut()
@@ -279,35 +172,49 @@ pub(crate) fn scheduling(headers: &HeaderMap, body: &Value) -> crate::scheduler:
     }
 }
 
+/// Send a wire request on the account's official transport. A native client's
+/// Responses subpath is forwarded under the Responses endpoint.
 pub(crate) async fn send(
     pool: &crate::UpstreamPool,
     account: &str,
-    headers: &HeaderMap,
-    upstream: Protocol,
-    body: Value,
+    request: WireRequest,
+    path: Option<&str>,
 ) -> crate::Result<reqwest::Response> {
-    let endpoint = match upstream {
-        Protocol::Responses => crate::Endpoint::Responses,
-        Protocol::Compact => crate::Endpoint::Compact,
-        Protocol::InputTokens => crate::Endpoint::InputTokens,
-        Protocol::Search => crate::Endpoint::Search,
-        Protocol::ImageGeneration => crate::Endpoint::ImageGeneration,
-        Protocol::ImageEdit => crate::Endpoint::ImageEdit,
-        _ => {
-            return Err(crate::UpstreamError::Internal(
-                "Unsupported ChatGPT API operation".into(),
-            ));
-        }
+    let (endpoint, subpath) = match path {
+        Some(path) => match crate::Endpoint::from_codex_path(path) {
+            Some(endpoint) => (endpoint, None),
+            None => match path.strip_prefix("responses/") {
+                Some(subpath) => (crate::Endpoint::Responses, Some(subpath)),
+                None => {
+                    return Err(crate::UpstreamError::InvalidRequest(
+                        "Unknown Codex endpoint".into(),
+                    ));
+                }
+            },
+        },
+        None => (
+            match request.operation {
+                Operation::Generate => crate::Endpoint::Responses,
+                Operation::Compact => crate::Endpoint::Compact,
+                Operation::InputTokens => crate::Endpoint::InputTokens,
+                Operation::Search => crate::Endpoint::Search,
+                Operation::ImageGeneration => crate::Endpoint::ImageGeneration,
+                Operation::ImageEdit => crate::Endpoint::ImageEdit,
+            },
+            None,
+        ),
     };
     pool.get(account)
         .await?
-        .forward_decoded_endpoint(endpoint, None, body, headers.clone())
+        .forward_decoded_endpoint(endpoint, subpath, request.body, request.headers)
         .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::convert::responses::{Dialect, build};
+    use crate::inbound::Protocol;
     fn inbound(protocol: Protocol, body: Value, headers: HeaderMap) -> InboundRequest {
         InboundRequest::new(protocol, body, headers).unwrap()
     }
@@ -317,7 +224,9 @@ mod tests {
             "session-id".parse().unwrap(),
             "client-session".parse().unwrap(),
         )]);
-        let prepared = prepare(&inbound(Protocol::Responses, json!({"model":"custom-model","input":[
+        let input = inbound(
+            Protocol::Responses,
+            json!({"model":"custom-model","input":[
             {"role":"system","content":"system"},
             {"type":"reasoning","id":"rs_old","encrypted_content":"ciphertext"},
             {"type":"custom_tool_call","call_id":"ctc_original","name":"code","namespace":"tools","input":"print(1)"},
@@ -325,8 +234,10 @@ mod tests {
             "instructions":"base","tools":[{"type":"namespace","name":"tools","tools":[{"type":"custom","custom":{"name":"code","format":{"type":"text"}}}]},{"type":"web_search"},{"type":"image_generation"}],
             "include":["web_search_call.action.sources"],"prompt_cache_key":" caller key ",
             "client_metadata":{"thread_id":"client-thread","turn_id":"client-turn","session_id":"body-session","x-codex-installation-id":"attacker","access_programs":"attacker"},
-            "metadata":{"order":"local"},"access_programs":{"cyber":true},"temperature":0.5,"truncation":"auto","future_field":1}), headers)).unwrap();
-        let body = &prepared.body;
+            "metadata":{"order":"local"},"access_programs":{"cyber":true},"temperature":0.5,"truncation":"auto","future_field":1}),
+            headers,
+        );
+        let (body, headers) = build(&input, Dialect::Codex).unwrap();
         assert_eq!(body["input"][0]["role"], "developer");
         assert_eq!(body["input"][1]["role"], "developer");
         assert_eq!(body["input"][2]["encrypted_content"], "ciphertext");
@@ -346,8 +257,8 @@ mod tests {
             (body["stream"].clone(), body["store"].clone()),
             (json!(true), json!(false))
         );
-        assert_eq!(prepared.headers["session-id"], "client-session");
-        assert_eq!(prepared.headers["thread-id"], "client-thread");
+        assert_eq!(headers["session-id"], "client-session");
+        assert_eq!(headers["thread-id"], "client-thread");
         assert_eq!(body["client_metadata"]["turn_id"], "client-turn");
         assert!(
             body["client_metadata"]
@@ -362,8 +273,7 @@ mod tests {
         ] {
             assert!(body.get(field).is_none(), "{field}");
         }
-        assert_eq!(prepared.metadata, Some(json!({"order":"local"})));
-        assert_eq!(prepared.upstream, Protocol::Responses);
+        assert_eq!(input.metadata, Some(json!({"order":"local"})));
     }
 
     #[test]
@@ -378,16 +288,16 @@ mod tests {
             (json!({"type":"image_generation"}), json!("auto")),
             (json!("required"), json!("required")),
         ] {
-            let prepared = prepare(&inbound(Protocol::Responses, json!({"model":"m","input":"hi",
-                "tools":[{"type":"function","name":"lookup"},{"type":"web_search"}],"tool_choice":choice}), HeaderMap::new())).unwrap();
-            assert_eq!(prepared.body["tool_choice"], expected);
+            let (body, _) = build(&inbound(Protocol::Responses, json!({"model":"m","input":"hi",
+                "tools":[{"type":"function","name":"lookup"},{"type":"web_search"}],"tool_choice":choice}), HeaderMap::new()), Dialect::Codex).unwrap();
+            assert_eq!(body["tool_choice"], expected);
         }
     }
 
     #[test]
     fn unary_protocols_keep_their_own_wire_contract_and_client_ids_are_not_invented() {
-        let search = prepare(&inbound(Protocol::Search, json!({"model":"custom-model","id":"search-session","commands":{"search_query":[{"q":"query","recency":7}],"image_query":[{"q":"image"}],"open":[{"ref_id":"turn0search0"}],"response_length":"long"},"settings":{"external_web_access":"live"},"max_output_tokens":123}), HeaderMap::new())).unwrap();
-        assert_eq!(search.upstream.upstream_path(), "alpha/search");
+        let search = operation(&inbound(Protocol::Search, json!({"model":"custom-model","id":"search-session","commands":{"search_query":[{"q":"query","recency":7}],"image_query":[{"q":"image"}],"open":[{"ref_id":"turn0search0"}],"response_length":"long"},"settings":{"external_web_access":"live"},"max_output_tokens":123}), HeaderMap::new())).unwrap();
+        assert_eq!(search.operation, Operation::Search);
         assert_eq!(search.body["id"], "search-session");
         assert_eq!(search.body["max_output_tokens"], 123);
         for field in [
@@ -402,7 +312,7 @@ mod tests {
         }
         assert!(!search.headers.contains_key("session-id"));
         for protocol in [Protocol::Compact, Protocol::InputTokens] {
-            let request = prepare(&inbound(
+            let request = operation(&inbound(
                 protocol,
                 json!({"model":"custom","input":"hello","instructions":"count this"}),
                 HeaderMap::new(),

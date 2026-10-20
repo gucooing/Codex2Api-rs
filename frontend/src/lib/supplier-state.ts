@@ -15,6 +15,9 @@ export const supplierStatusLabel = (status: Supplier["status"]) =>
     error: "授权失效",
     payment_required: "账单受限",
     quota_exhausted: "配额耗尽",
+    rate_limited: "限流中",
+    overloaded: "过载中",
+    blocked: "临时回避",
   })[status];
 
 export function quotaWindowLabel(window: SupplierQuotaWindow): string {

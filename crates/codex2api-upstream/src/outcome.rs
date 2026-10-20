@@ -251,6 +251,12 @@ impl ResponseLifecycle {
         self.outcome = ResponseOutcome::from_value(value, http_status);
         self.outcome.is_some()
     }
+    /// Record a wire's reported terminal outcome; the first one wins.
+    pub fn fail_with(&mut self, outcome: ResponseOutcome) {
+        if self.outcome.is_none() {
+            self.outcome = Some(outcome);
+        }
+    }
     pub fn fail(&mut self, failure: ResponseFailure) {
         if self.outcome.is_none() {
             self.outcome = Some(ResponseOutcome::Failed(failure));

@@ -5,8 +5,8 @@ use crate::{
 };
 use sqlx::{Postgres, QueryBuilder};
 
-const SUPPLIERS: &str = "supplier_accounts a LEFT JOIN supplier_tokens k ON k.account_id=a.id LEFT JOIN supplier_health h ON h.account_id=a.id";
-const SUPPLIER_STATUS: &str = "CASE WHEN a.status!='active' THEN 'disabled' WHEN COALESCE(k.access_token,'')='' OR h.rejected_auth_revision=a.auth_revision THEN 'error' WHEN h.payment_required_at IS NOT NULL THEN 'payment_required' WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision AND h.cooldown_until>floor(extract(epoch FROM clock_timestamp()))::bigint THEN 'quota_exhausted' ELSE 'active' END";
+const SUPPLIERS: &str = "supplier_accounts a LEFT JOIN supplier_tokens k ON k.account_id=a.id";
+const SUPPLIER_STATUS: &str = "CASE WHEN a.status!='active' THEN 'disabled' WHEN COALESCE(k.access_token,'')='' THEN 'error' ELSE COALESCE((SELECT CASE b.kind WHEN 'auth' THEN 'error' WHEN 'billing' THEN 'payment_required' WHEN 'rate_limit' THEN 'rate_limited' WHEN 'quota' THEN 'quota_exhausted' WHEN 'overload' THEN 'overloaded' ELSE 'blocked' END FROM supplier_blocks b WHERE b.account_id=a.id AND b.scope='account' AND (b.until_at IS NULL OR b.until_at>floor(extract(epoch FROM clock_timestamp()))::bigint)),'active') END";
 
 pub(crate) fn supplier_predicate(q: &mut QueryBuilder<'static, Postgres>, filter: &ListQuery) {
     search(

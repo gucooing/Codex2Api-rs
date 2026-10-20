@@ -32,7 +32,7 @@ for manifest in (root / "crates").glob("*/Cargo.toml"):
                 dependency = options.get("package", alias) if isinstance(options, dict) else alias
                 if dependency.startswith("codex2api-") and dependency.removeprefix("codex2api-") not in allowed[business]:
                     violations.append(f"{manifest.relative_to(root)}: {name} cannot depend on {dependency}")
-providers = ("chatgpt", "grok", "antigravity")
+providers = ("chatgpt", "grok", "antigravity", "api")
 for source in [root / "crates", root / "frontend/src", root / "frontend-user/src"]:
     for provider in providers:
         others = "|".join(other for other in providers if other != provider)

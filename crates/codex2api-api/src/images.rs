@@ -252,17 +252,20 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(body["n"], 2);
-        let chatgpt = codex2api_upstream::protocol::prepare_for(
-            codex2api_common::CHATGPT,
+        let chatgpt = codex2api_upstream::convert::request(
             &crate::InboundRequest::new(
                 crate::Protocol::ImageEdit,
                 body.clone(),
                 http::HeaderMap::new(),
             )
             .unwrap(),
+            codex2api_upstream::supply::Wire::Codex,
         )
         .unwrap();
-        assert_eq!(chatgpt.upstream.upstream_path(), "images/edits");
+        assert_eq!(
+            chatgpt.operation,
+            codex2api_upstream::supply::Operation::ImageEdit
+        );
         assert!(
             chatgpt.body["images"][0]["image_url"]
                 .as_str()
@@ -270,10 +273,10 @@ mod tests {
                 .starts_with("data:image/png;base64,")
         );
         assert!(chatgpt.body.get("stream").is_none());
-        let grok = codex2api_upstream::protocol::prepare_for(
-            codex2api_common::GROK,
+        let grok = codex2api_upstream::convert::request(
             &crate::InboundRequest::new(crate::Protocol::ImageEdit, body, http::HeaderMap::new())
                 .unwrap(),
+            codex2api_upstream::supply::Wire::Xai,
         )
         .unwrap();
         assert_eq!(grok.body["image"]["type"], "image_url");
@@ -299,7 +302,7 @@ mod tests {
     fn null_image_alias_does_not_hide_the_supplied_image() {
         let mut body = json!({"images":null,"image":"https://example.test/input.png"});
         assert_eq!(
-            codex2api_upstream::protocol::images::references(&mut body, true, 5).unwrap(),
+            codex2api_upstream::inbound::images::references(&mut body, true, 5).unwrap(),
             vec![json!({"image_url":"https://example.test/input.png"})]
         );
     }

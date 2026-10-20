@@ -17,6 +17,9 @@ use tower::ServiceExt;
 
 #[path = "grok/scheduling.rs"]
 mod grok_scheduling;
+#[path = "execution/wires.rs"]
+mod wire_execution;
+
 #[path = "messages/mod.rs"]
 mod messages;
 
@@ -877,9 +880,14 @@ async fn supplier_throttle_is_forwarded_without_failover_or_persistent_ban() {
         assert!(!value.to_string().contains("private-supplier"));
         assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
         let health = fixture.storage.supplier_health("supplier").await.unwrap();
-        assert!(!health.authentication_invalid);
-        assert!(!health.payment_required);
-        assert!(health.cooldown_until.is_none());
+        assert!(!health.authentication_invalid());
+        assert!(!health.payment_required());
+        assert!(
+            health
+                .account_block()
+                .and_then(|block| block.until_at)
+                .is_none()
+        );
         assert_eq!(
             fixture
                 .storage
@@ -1035,21 +1043,10 @@ async fn physical_http_failure_preserves_reported_usage_and_does_not_replay() {
                     .oneshot(request(path, &fixture.token, body))
                     .await
                     .unwrap();
-                assert_eq!(
-                    response.status().as_u16(),
-                    match status {
-                        402 => 503,
-                        429 => 429,
-                        _ => 502,
-                    }
-                );
-                if status == 429 {
-                    assert_eq!(response.headers()["retry-after"], "7");
-                } else {
-                    assert!(!response.headers().contains_key("retry-after"));
-                }
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert!(!response.headers().contains_key("retry-after"));
                 let value = json_body(response).await;
-                assert!(value.get("error").is_some());
+                assert_eq!(value["error"]["code"], "no_available_supplier");
                 assert!(!value.to_string().contains("private-supplier"));
                 let record:(String,Option<i64>,Option<i64>,Option<i64>,Option<i64>)=sqlx::query_as("SELECT status,input_tokens,output_tokens,http_status,cost_nano_usd FROM usage_records").fetch_one(fixture.storage.pool()).await.unwrap();
                 assert_eq!(
@@ -1094,7 +1091,7 @@ async fn physical_rejection_with_partial_output_preserves_unknown_cost() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let (status, cost, billing): (String, Option<i64>, String) =
         sqlx::query_as("SELECT status,cost_nano_usd,billing_status FROM usage_records")
             .fetch_one(fixture.storage.pool())
@@ -1657,13 +1654,13 @@ async fn antigravity_long_throttles_preserve_retry_advice_and_partial_usage_with
         assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
         assert!(
             f.storage
-                .supplier_model_cooldowns("supplier")
+                .supplier_model_blocks("supplier")
                 .await
                 .unwrap()
                 .is_empty()
         );
         let health = f.storage.supplier_health("supplier").await.unwrap();
-        assert!(health.cooldown_kind.is_none() && !health.authentication_invalid);
+        assert!(health.quota_exhausted() == false && !health.authentication_invalid());
         let usage: (String, Option<i64>, Option<i64>) =
             sqlx::query_as("SELECT status,input_tokens,output_tokens FROM usage_records")
                 .fetch_one(f.storage.pool())
@@ -1835,27 +1832,32 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     assert!(!value.to_string().contains("private-supplier"));
     let cooldowns = fixture
         .storage
-        .supplier_model_cooldowns("supplier")
+        .supplier_model_blocks("supplier")
         .await
         .unwrap();
     assert_eq!(cooldowns.len(), 1);
     assert_eq!(cooldowns[0].model, "custom-model");
     assert_eq!(
-        cooldowns[0].cooldown_code.as_deref(),
+        cooldowns[0].code.clone().as_deref(),
         Some("quota_exhausted")
     );
-    assert!(cooldowns[0].cooldown_until > chrono::Utc::now().timestamp() + 1700);
+    assert!(cooldowns[0].until_at.unwrap() > chrono::Utc::now().timestamp() + 1700);
     let health = fixture.storage.supplier_health("supplier").await.unwrap();
-    assert!(health.cooldown_until.is_none());
-    assert!(!health.authentication_invalid);
-    assert!(!health.payment_required);
+    assert!(
+        health
+            .account_block()
+            .and_then(|block| block.until_at)
+            .is_none()
+    );
+    assert!(!health.authentication_invalid());
+    assert!(!health.payment_required());
     assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
     let response = fixture.router.clone().oneshot(generate()).await.unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
     fixture
         .storage
-        .recover_supplier_model_quota(
+        .unblock_supplier_model(
             "supplier",
             fixture
                 .storage
@@ -1864,7 +1866,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
                 .unwrap()
                 .unwrap(),
             "custom-model",
-            health.cooldown_revision,
+            health.observation_revision,
         )
         .await
         .unwrap();
@@ -1877,7 +1879,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     assert!(
         fixture
             .storage
-            .supplier_model_cooldowns("supplier")
+            .supplier_model_blocks("supplier")
             .await
             .unwrap()
             .is_empty()

@@ -100,7 +100,8 @@ async fn messages_errors_reject_credentials_without_fallback_and_keep_retry_head
             .supplier_health("supplier")
             .await
             .unwrap()
-            .cooldown_until
+            .account_block()
+            .and_then(|block| block.until_at)
             .is_none()
     );
 }

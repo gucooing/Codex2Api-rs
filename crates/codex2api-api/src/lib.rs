@@ -51,7 +51,22 @@ pub(crate) struct ApiCredential {
     pub(crate) token: String,
 }
 
-pub(crate) use codex2api_upstream::protocol::{InboundRequest, PreparedRequest, Protocol};
+pub(crate) use codex2api_upstream::inbound::{InboundRequest, Protocol};
+
+/// The public endpoint a request arrived on, for the ledger.
+pub(crate) fn endpoint_of(input: &InboundRequest) -> &'static str {
+    use codex2api_upstream::{inbound::Inbound, supply::Operation};
+    match (input.operation, input.format) {
+        (Operation::Generate, Inbound::Chat) => Protocol::ChatCompletions.endpoint(),
+        (Operation::Generate, Inbound::Messages) => Protocol::Messages.endpoint(),
+        (Operation::Generate, _) => Protocol::Responses.endpoint(),
+        (Operation::Compact, _) => Protocol::Compact.endpoint(),
+        (Operation::InputTokens, _) => Protocol::InputTokens.endpoint(),
+        (Operation::Search, _) => Protocol::Search.endpoint(),
+        (Operation::ImageGeneration, _) => Protocol::ImageGeneration.endpoint(),
+        (Operation::ImageEdit, _) => Protocol::ImageEdit.endpoint(),
+    }
+}
 
 pub fn router(state: ApiState) -> Router {
     let mut router = Router::new()
@@ -263,7 +278,7 @@ async fn messages_errors(request: Request, next: Next) -> Response {
             )
             .body
         });
-    let value = codex2api_upstream::protocol::messages::error(parts.status, &value);
+    let value = codex2api_upstream::inbound::messages::error(parts.status, &value);
     let mut response = Response::from_parts(parts, axum::body::Body::from(value.to_string()));
     response.headers_mut().remove(http::header::CONTENT_LENGTH);
     response.headers_mut().insert(

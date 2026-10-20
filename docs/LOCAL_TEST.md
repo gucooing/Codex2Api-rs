@@ -33,7 +33,7 @@ Invoke-RestMethod http://127.0.0.1:8080/version
 
 ccodex 内置正式服务根 `https://oauth-ai.alsl.xyz/v1/chatgpt`，需经该域名的反向代理接入测试实例，再检查浏览器/设备码登录、模型和额度读取、连续两轮生成、
 取消及客户端重连。使用实际反向代理入口时配置 CODEX2API_PUBLIC_OAUTH_URL 并启用 WebSocket；
-该环境变量只声明地址，不自动提供 TLS。检查号池内授权失效和配额耗尽时输出前自动换号，号池耗尽的结构化错误，以及已输出后不重放的边界。
+该环境变量只声明地址，不自动提供 TLS。检查号池内授权失效、配额耗尽、限流与 5xx 时输出前自动换号，号池耗尽返回 503 `no_available_supplier`，以及已输出后不重放的边界。
 
 检查用量记录中的实际模型、错误、上游 request ID 和费用快照。未知价格、未报告用量及
 [未实现能力](ARCHITECTURE.md#client-routes-and-capability-boundaries)不能用假成功代替。

@@ -15,6 +15,7 @@
 //! Admin HTTP routes are registered in codex2api-admin, not here.
 
 pub use providers::antigravity;
+pub use providers::api;
 use providers::chatgpt::draft;
 pub use providers::grok;
 pub mod account_cache;

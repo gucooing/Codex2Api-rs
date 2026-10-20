@@ -1,4 +1,5 @@
 import { antigravityChannel } from "./antigravity/channel";
+import { apiChannel } from "./api/channel";
 import { chatgptChannel } from "./chatgpt/channel";
 import { grokChannel } from "./grok/channel";
 export function supplierChannel(provider = "chatgpt") {
@@ -6,5 +7,7 @@ export function supplierChannel(provider = "chatgpt") {
     ? grokChannel
     : provider === "antigravity"
       ? antigravityChannel
-      : chatgptChannel;
+      : provider === "api"
+        ? apiChannel
+        : chatgptChannel;
 }

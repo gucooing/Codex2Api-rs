@@ -89,9 +89,9 @@ pub(crate) fn normalize(item: &mut SupplierTransferAccount) -> Result<(), ApiErr
     let a = &mut item.account;
     let mut fingerprint = HttpFingerprint::from_json(&a.http_fingerprint_json)
         .map_err(|_| ApiError::bad("ChatGPT 指纹无效"))?;
-    fingerprint.os_type = a.os_type.clone();
-    fingerprint.os_version = a.os_version.clone();
-    fingerprint.arch = a.arch.clone();
+    fingerprint.os_type = a.os_type.clone().unwrap_or_default();
+    fingerprint.os_version = a.os_version.clone().unwrap_or_default();
+    fingerprint.arch = a.arch.clone().unwrap_or_default();
     fingerprint.installation_id = a.installation_id.clone();
     a.http_fingerprint_json = fingerprint
         .to_json()

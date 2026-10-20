@@ -4,7 +4,7 @@ Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 An
 
 ## 目录与账户隔离
 
-各 crate 的 `src/providers/antigravity/` 保存 Antigravity 身份、认证、请求、响应、错误与管理实现；前端渠道表单与官方数据视图位于 `frontend/src/components/providers/antigravity/` 与 `frontend/src/lib/providers/antigravity/`。入口模块仅负责渠道分发，`scripts/check-module-boundaries.py` 检查三个渠道之间的跨渠道导入。
+各 crate 的 `src/providers/antigravity/` 保存 Antigravity 身份、认证、请求、响应、错误与管理实现；前端渠道表单与官方数据视图位于 `frontend/src/components/providers/antigravity/` 与 `frontend/src/lib/providers/antigravity/`。入口模块仅负责渠道分发，`scripts/check-module-boundaries.py` 检查各渠道之间的跨渠道导入。
 
 供应凭据使用独立的 `AntigravityCredentials`（Google access token、refresh token、到期时间、Cloud Code Assist 项目、档位和用户资料），`auth_mode` 为 `antigravity`，不会被解释为 Codex `auth.json` 或 Grok 凭据。每个供应账户在 PostgreSQL 内保存独立的安装 UUID、冻结的操作系统／架构／系统版本、可选时区、凭据版本和代理；HTTP 连接与刷新锁按账户隔离。供应身份由 `google:<邮箱>` 标识，不跨提供商合并。
 
@@ -20,9 +20,9 @@ Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 An
 
 ## 协议转换
 
-公共层只处理规范 Responses 请求与事件。`providers/antigravity/request.rs` 把规范 Responses 请求转换为 Gemini 请求：消息映射为 `contents` 的 user／model 角色，包含文本、带 `thoughtSignature` 的思考、`inlineData`、`functionCall` 与 `functionResponse`；system／developer 文本进入 `systemInstruction`，排在客户端身份提示与边界提示之后；`generationConfig` 携带 `maxOutputTokens`（缺省 64000）、temperature、topP、按推理强度映射的 `thinkingConfig`，以及结构化输出的 `responseMimeType`／`responseSchema`；函数工具转换为清理后的 `functionDeclarations`（内联 `$ref`、合并 allOf／anyOf／oneOf、常量转枚举、约束写入描述，只保留 Gemini 接受的字段），`tool_choice` 映射为 `toolConfig.functionCallingConfig`；没有函数工具时才声明 `googleSearch`。`sessionId` 由会话亲和种子派生。
+Antigravity 的线格式是 Cloud Code Assist 的 Gemini 请求；转换矩阵 `codex2api-upstream/src/convert/gemini/` 直接从 Responses、Chat 或 Messages 的原始请求构造它，不经过中间格式。`request.rs` 分别为三种入站格式把消息映射为 `contents` 的 user／model 角色，包含文本、带 `thoughtSignature` 的思考、`inlineData`、`functionCall` 与 `functionResponse`；system／developer 文本进入 `systemInstruction`，排在客户端身份提示与边界提示之后；`generationConfig` 携带 `maxOutputTokens`（缺省 64000）、temperature、topP、按推理强度映射的 `thinkingConfig`，以及结构化输出的 `responseMimeType`／`responseSchema`；函数工具转换为清理后的 `functionDeclarations`（`schema.rs` 内联 `$ref`、合并 allOf／anyOf／oneOf、常量转枚举、约束写入描述，只保留 Gemini 接受的字段），`tool_choice` 映射为 `toolConfig.functionCallingConfig`；没有函数工具时才声明 `googleSearch`。`sessionId` 由调度亲和种子派生。渠道传输 `providers/antigravity/` 再加上账户绑定的 v1internal 信封并解析所选账户对应推理强度的上游标识。
 
-`providers/antigravity/events.rs` 把 Gemini SSE 转换回 Responses 事件：候选项的思考、文本和函数调用依次成为 reasoning、message、function_call 输出项，思考签名随项保留；`finishReason` 的 `STOP` 为 completed，`MAX_TOKENS` 为 incomplete（`max_output_tokens`），安全类原因为 incomplete（`content_filter`），`MALFORMED_FUNCTION_CALL` 为 failed；用量取 `promptTokenCount`（含缓存）、`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`，推理 Token 为 `thoughtsTokenCount`。终态事件在流结束时发出，缺少终态按未完成失败处理。续接 `previous_response_id`、Codex 搜索、压缩、计数、图像和原生 Responses WebSocket 不属于该渠道，明确拒绝。
+`events.rs` 把 Gemini SSE 分块直接转换为调用方协议：Responses 调用方得到 reasoning、message、function_call 输出项与 completed／incomplete／failed 终态；Chat 调用方得到带 `reasoning_content`、`tool_calls` 与 finish_reason 的分块，签名随 `reasoning` 扩展回放；Messages 调用方得到按顺序写出的 thinking、text 与 tool_use 块。`finishReason` 的 `STOP` 为完成，`MAX_TOKENS` 为 `max_output_tokens`，安全类原因为 `content_filter`，`MALFORMED_FUNCTION_CALL` 为失败；用量取 `promptTokenCount`（含缓存）、`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`，推理 Token 为 `thoughtsTokenCount`。终态事件在流结束时发出，缺少终态按未完成失败处理。续接 `previous_response_id`、Codex 搜索、压缩、计数、图像和原生 Responses WebSocket 不属于该渠道，明确拒绝。
 
 ## 模型、额度与计价
 
@@ -36,16 +36,25 @@ Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 An
 
 ## 错误处理与调度
 
+裁决位于 `codex2api-upstream/src/providers/antigravity/verdict.rs`，依据 sub2api 的 Antigravity 重试与切换策略：
+
 | 上游情况 | 处理 |
 | --- | --- |
-| HTTP 401 | 记录授权失效并切号；成功的重新授权清除失效状态 |
-| 429 明确返回 `QUOTA_EXHAUSTED`／`QUOTA_EXCEEDED`，或明确说明模型额度耗尽 | 记录本次请求的模型及其额度池全部模型的冷却直到重置时间并切号，不采用 Google 报告的上游或厂商模型名 |
-| `rate_limit_exceeded`、`slow_down` 或未分类的 429 | 保留结构化错误与 `Retry-After`，由客户端退避，不改供应状态；等待时长不能作为额度耗尽的依据 |
-| 403 权限拒绝 | 不刷新身份、不切号；调用方收到 `503 service_unavailable`，管理记录保留原始错误 |
-| 可由调用方修正的 400 类请求错误 | 保留错误码和脱敏原因，不刷新身份、不切号 |
-| 5xx、503 容量不足、连接失败或超时 | 不改供应状态；调用方收到脱敏后的服务不可用、上游错误或超时，管理记录保留原始错误 |
+| HTTP 401 | 永久回避（授权失效）并换号；成功的重新授权清除 |
+| 403 | 回避 10 分钟并换号 |
+| 404 | 回避请求的模型 1 小时并换号 |
+| 429 或流内 `RESOURCE_EXHAUSTED` 明确说明额度耗尽（`QUOTA_EXHAUSTED`／`QUOTA_EXCEEDED` 或 “exhausted your capacity”） | 回避本次请求的模型及其额度池全部模型到 Google 的 RetryInfo 时间（缺省 60 秒）并换号，不采用 Google 报告的上游或厂商模型名 |
+| 其他 429 | 按 RetryInfo 延迟（1 到 8 秒）同号重试最多 3 次，然后限流回避到该时间并换号 |
+| 400 “invalid project resource name” | 同号重试 2 次，然后回避 10 分钟并换号 |
+| 可由调用方修正的 400 类请求错误 | 原样返回调用者，不改账户状态 |
+| 503 `MODEL_CAPACITY_EXHAUSTED` | 回避该模型到 RetryInfo 时间（缺省 60 秒）并换号 |
+| 500 `INTERNAL` | 同号重试 2 次，然后回避 30 分钟并换号 |
+| 529 | 过载回避 10 分钟并换号 |
+| 其他 5xx | 同号重试 2 次，然后仅本次请求回避并换号 |
+| 连接失败 | 回避 10 分钟并换号 |
+| 流在首个输出前结束 | 同号重试 1 次，然后回避 5 分钟并换号 |
 
-模型冷却保存在 `supplier_model_cooldowns`，以账户、模型和凭据版本为键；模型描述声明同一 `quota_pool` 的模型一起冷却、一起恢复。号池索引取账户冷却与模型冷却中较晚者，因此同一账户的其他模型继续参与调度；冷却到期自动结束，官方读取报告仍有余量或重新授权立即清除，管理端“重置状态”同样清除。普通限流不写入冷却，也不切换供应账户。供应详情“账户资料”显示当前有效的模型冷却。
+模型回避保存在 `supplier_blocks`（`scope='model'`），以账户、模型和凭据版本为键；模型描述声明同一 `quota_pool` 的模型一起回避、一起恢复。号池索引取账户回避与请求模型回避中较晚者，因此同一账户的其他模型继续参与调度；回避到期自动结束，官方读取报告仍有余量、重新授权或管理端“重置状态”立即清除。候选耗尽时调用者收到 503 `no_available_supplier`，上游 429 从不转发。供应详情“账户资料”显示当前有效的模型回避。
 
 ## 导入导出
 

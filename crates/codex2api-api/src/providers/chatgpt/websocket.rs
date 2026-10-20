@@ -1,8 +1,8 @@
 //! Native Codex Responses WebSocket sessions. Each generation uses the same
 //! API admission, supplier scheduler and usage ledger as the HTTP transport.
 use crate::{
-    ApiCredential, ApiError, ApiState, InboundRequest, PreparedRequest, Protocol, Result, dispatch,
-    execution, response, runtime::ApiPermit, usage::ApiLog,
+    ApiCredential, ApiError, ApiState, InboundRequest, Protocol, Result, dispatch, execution,
+    response, runtime::ApiPermit, usage::ApiLog,
 };
 use axum::{
     extract::{
@@ -11,15 +11,16 @@ use axum::{
     },
     response::Response,
 };
-use codex2api_upstream::protocol::responses::Output as ResponsesOutput;
+use codex2api_upstream::convert::{self, responses::output::Output as ResponsesOutput};
+use codex2api_upstream::executor::{AttemptLedger, Attempts, Recovery};
+use codex2api_upstream::inbound::Inbound;
 use codex2api_upstream::scheduler::{ScheduleRequest, SupplierContext, SupplierRoute};
-use codex2api_upstream::{
-    Endpoint, ResponseOutcome, SupplierFailure, UpstreamError, UpstreamWebSocket,
-};
+use codex2api_upstream::supply::Wire;
+use codex2api_upstream::{Endpoint, ResponseOutcome, UpstreamError, UpstreamWebSocket};
 use futures::{SinkExt, StreamExt};
 use http::{HeaderMap, StatusCode};
 use serde_json::Value;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 struct Session {
@@ -45,7 +46,7 @@ impl Session {
         &self,
         headers: &HeaderMap,
         request: &ScheduleRequest,
-        excluded: &mut Vec<String>,
+        attempts: &mut Attempts,
         mut selected: Option<SupplierContext>,
     ) -> Result<Connection> {
         loop {
@@ -62,7 +63,7 @@ impl Session {
                         &self.state.storage,
                         &self.route,
                         request,
-                        excluded,
+                        attempts.excluded(),
                         || {
                             dispatch::validate(
                                 &self.state,
@@ -114,21 +115,28 @@ impl Session {
                     });
                 }
                 Err(error) => {
-                    let Some(failure) = error.supplier_failure(chrono::Utc::now().timestamp())
-                    else {
-                        return Err(error.into());
-                    };
-                    // The native connector already refreshes an expired credential
-                    // once. Only unrecoverable authorization, quota or billing
-                    // rejection can select another account.
-                    codex2api_upstream::scheduler::observe_failure(
-                        &self.state.storage,
-                        &context.account.id,
-                        error.auth_revision().or(revision),
-                        &failure,
-                    )
-                    .await?;
-                    excluded.push(context.account.id.clone());
+                    let failure = codex2api_upstream::executor::send_failure_of(
+                        &error,
+                        request.model.as_deref(),
+                    );
+                    match attempts
+                        .failed(
+                            &self.state.upstream,
+                            &self.state.storage,
+                            &context.account,
+                            error.auth_revision().or(revision),
+                            Wire::Codex,
+                            &failure,
+                        )
+                        .await
+                        .map_err(|e| ApiError::executor(e, Inbound::Responses))?
+                    {
+                        Recovery::Retry(delay) => {
+                            tokio::time::sleep(delay).await;
+                            selected = Some(context);
+                        }
+                        Recovery::Switch => {}
+                    }
                 }
             }
         }
@@ -136,17 +144,17 @@ impl Session {
 }
 
 impl Connection {
-    async fn create(&mut self, prepared: &PreparedRequest) -> Result<()> {
+    async fn create(&mut self, body: &Value, headers: &HeaderMap) -> Result<()> {
         if let Some(workspace) = &self.workspace {
             workspace.check_current().await?;
         }
-        let mut value = prepared.body.clone();
+        let mut value = body.clone();
         value["type"] = "response.create".into();
         codex2api_upstream::apply_response_timezone(&mut value, self.timezone.as_deref())?;
         codex2api_upstream::normalize_response_identity(
             &mut value,
             &self.context.account.installation_id,
-            &prepared.headers,
+            headers,
         )?;
         let text = codex2api_upstream::serialize_responses_request(&value)?;
         tokio::time::timeout(
@@ -167,8 +175,7 @@ pub(crate) async fn connect(
 ) -> Result<Response> {
     dispatch::validate(&state, &credential.principal, &credential.token).await?;
     let user_agent = codex2api_upstream::request_user_agent(&headers);
-    let headers =
-        codex2api_upstream::protocol::chatgpt_context(&mut serde_json::json!({}), &headers)?;
+    let headers = convert::codex_context(&mut serde_json::json!({}), &headers)?;
     let session = Session {
         route: dispatch::route(&credential.principal, Some(codex2api_common::CHATGPT)),
         state,
@@ -177,13 +184,13 @@ pub(crate) async fn connect(
         user_agent,
         client: codex2api_upstream::RequestClock::current().and_then(|clock| clock.client),
     };
-    let request = codex2api_upstream::protocol::scheduling(
-        Some(codex2api_common::CHATGPT),
+    let request = codex2api_upstream::executor::schedule(
+        Some(Wire::Codex),
         &session.headers,
         &serde_json::json!({}),
-    )?;
+    );
     let mut connection = session
-        .open(&session.headers, &request, &mut Vec::new(), None)
+        .open(&session.headers, &request, &mut Attempts::default(), None)
         .await?;
     let mut response_headers = response::public_headers(&connection.headers, false);
     response_headers.remove("content-type");
@@ -198,7 +205,10 @@ pub(crate) async fn connect(
 }
 
 struct Turn {
-    prepared: PreparedRequest,
+    input: InboundRequest,
+    /// The Codex wire request and its request-scoped headers.
+    body: Value,
+    headers: HeaderMap,
     log: Option<ApiLog>,
     _permit: Option<ApiPermit>,
     output: ResponsesOutput,
@@ -206,8 +216,7 @@ struct Turn {
     prelude: Vec<Value>,
     prelude_bytes: usize,
     committed: bool,
-    excluded: Vec<String>,
-    refreshed: HashSet<String>,
+    attempts: Attempts,
     deadline: tokio::time::Instant,
 }
 
@@ -249,14 +258,14 @@ impl Turn {
             self.response_id = Some(id.to_owned());
         }
         if let Some(log) = &mut self.log {
-            log.observe(&value, Protocol::Responses);
+            log.observe(&convert::observe(Wire::Codex, &value));
             if outcome.is_some() {
                 log.settle().await?;
             }
         }
         // Ordinary payload is kept intact; only supplier envelopes are scrubbed.
-        codex2api_upstream::public_output::metadata(&mut value);
-        if let Some(metadata) = &self.prepared.metadata
+        convert::sanitize::metadata(&mut value);
+        if let Some(metadata) = &self.input.metadata
             && let Some(response) = value.get_mut("response").filter(|v| v.is_object())
         {
             response["metadata"] = metadata.clone();
@@ -279,7 +288,13 @@ impl Turn {
 
 async fn bridge(session: Session, mut connection: Connection, mut client: WebSocket) {
     let trace = codex2api_upstream::request_debug::RequestTrace::new("websocket", "/v1/responses");
-    let mut queue = VecDeque::<(PreparedRequest, usize, codex2api_upstream::RequestClock)>::new();
+    let mut queue = VecDeque::<(
+        InboundRequest,
+        Value,
+        HeaderMap,
+        usize,
+        codex2api_upstream::RequestClock,
+    )>::new();
     let mut queued_bytes = 0usize;
     let mut pending: Option<Turn> = None;
     let mut connected = true;
@@ -292,12 +307,12 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                 queued_bytes = 0;
                 if pending.is_none() { return Ok(()); }
             }
-            if pending.is_none() && let Some((prepared, bytes, clock)) = queue.pop_front() {
+            if pending.is_none() && let Some((input, body, headers, bytes, clock)) = queue.pop_front() {
                 queued_bytes -= bytes;
                 dispatch::validate(&session.state, &session.credential.principal, &session.credential.token).await?;
-                let warmup = prepared.body["generate"] == false;
+                let warmup = body["generate"] == false;
                 let (log, permit) = if warmup {
-                    let model = prepared.body["model"].as_str().unwrap_or("");
+                    let model = body["model"].as_str().unwrap_or("");
                     let models = session.state.storage.api_group_models(&session.credential.principal.group.id).await?;
                     if !models.iter().any(|item| item.model == model) {
                         return Err(ApiError::new(StatusCode::FORBIDDEN, "api_model_unavailable",
@@ -305,29 +320,29 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                     }
                     (None, None)
                 } else {
-                    let (log, permit) = clock.scope(execution::admit(&session.state, &session.credential.principal, &prepared.body, prepared.inbound.endpoint(), true, "websocket", session.user_agent.as_deref())).await?;
+                    let (log, permit) = clock.scope(execution::admit(&session.state, &session.credential.principal, &input.body, Protocol::Responses.endpoint(), true, "websocket", session.user_agent.as_deref())).await?;
                     (Some(log), Some(permit))
                 };
                 // Store admission before fallible scheduling/connection work so
                 // any rejection still settles the shared request row.
-                pending = Some(Turn { prepared, log, _permit: permit, output: Default::default(),
+                pending = Some(Turn { input, body, headers, log, _permit: permit, output: Default::default(),
                     response_id: None, prelude: Vec::new(), prelude_bytes: 0, committed: false,
-                    excluded: Vec::new(), refreshed: HashSet::new(),
+                    attempts: Attempts::default(),
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(3600) });
                 let turn = pending.as_mut().unwrap();
-                let schedule = codex2api_upstream::protocol::scheduling(Some(codex2api_common::CHATGPT), &session.headers, &turn.prepared.body)?;
+                let schedule = codex2api_upstream::executor::schedule(Some(Wire::Codex), &session.headers, &turn.body);
                 let selected = codex2api_upstream::scheduler::select(&session.state.storage, &session.route, &schedule, &[],
                     || dispatch::validate(&session.state, &session.credential.principal, &session.credential.token)).await?;
                 let revision = session.state.storage.supplier_auth_revision(&selected.account.id).await?;
                 if selected.account.id != connection.context.account.id || revision != connection.revision {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
-                    connection = session.open(&turn.prepared.headers, &schedule, &mut turn.excluded, Some(selected)).await?;
+                    connection = session.open(&turn.headers, &schedule, &mut turn.attempts, Some(selected)).await?;
                 } else {
                     connection.context = selected;
                 }
                 turn.supplier(&connection);
                 if let Some(log)=&turn.log {session.state.storage.set_usage_upstream_endpoint(&log.record.id,Protocol::Responses.endpoint()).await?;}
-                connection.create(&turn.prepared).await?;
+                connection.create(&turn.body, &turn.headers).await?;
                 last_upstream = tokio::time::Instant::now();
             }
             let idle = last_upstream + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT;
@@ -361,9 +376,9 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                                 value.as_object_mut().unwrap().remove("type");
                                 value["stream"] = true.into();
                                 let input = InboundRequest::new(Protocol::Responses, value, session.headers.clone())?;
-                                let prepared = codex2api_upstream::protocol::prepare_for(codex2api_common::CHATGPT, &input)?;
+                                let (body, headers) = convert::responses::build(&input, convert::responses::Dialect::Codex)?;
                                 queued_bytes += text.len();
-                                queue.push_back((prepared, text.len(), clock));
+                                queue.push_back((input, body, headers, text.len(), clock));
                             }
                             Some("response.interrupt") => {
                                 let id = value["response_id"].as_str().filter(|id| !id.is_empty());
@@ -427,40 +442,44 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                         }
                         continue;
                     };
-                    if let Some(mut failure) = codex2api_upstream::classify_supplier_failure(
-                        None, &value, &connection.headers, chrono::Utc::now().timestamp())
-                    {
-                        let replay_safe = !turn.committed && !codex2api_upstream::scheduler::generation_observed(&value);
-                        let recovered = if replay_safe && failure == SupplierFailure::Authentication
-                            && turn.refreshed.insert(connection.context.account.id.clone())
-                        {
-                            match codex2api_upstream::scheduler::recover_auth(&session.state.storage, &session.state.upstream,
-                                &connection.context, connection.revision).await?
-                            {
-                                None => true,
-                                Some(rejection) => { failure = rejection; false }
-                            }
-                        } else { false };
-                        if !recovered {
-                            codex2api_upstream::scheduler::observe_failure(&session.state.storage, &connection.context.account.id,
-                                connection.revision, &failure).await?;
+                    let failed = matches!(ResponseOutcome::from_value(&value, None), Some(ResponseOutcome::Failed(_)));
+                    let replay_safe = !turn.committed && !codex2api_upstream::executor::generation_observed(&value);
+                    if failed && replay_safe {
+                        let failure = codex2api_upstream::supply::UpstreamFailure {
+                            status: codex2api_upstream::ResponseFailure::from_error(None, &value).status,
+                            headers: connection.headers.clone(),
+                            body: value.clone(),
+                            transport: None,
+                            model: turn.body["model"].as_str().map(str::to_owned),
+                            output_committed: false,
+                            now: chrono::Utc::now().timestamp(),
+                        };
+                        let recovery = turn.attempts.failed(&session.state.upstream, &session.state.storage,
+                            &connection.context.account, connection.revision, Wire::Codex, &failure).await
+                            .map_err(|e| ApiError::executor(e, Inbound::Responses))?;
+                        let error = UpstreamError::status_with_headers(
+                            StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY),
+                            value.to_string(), connection.headers.clone());
+                        if let Some(log) = &mut turn.log {
+                            log.attempt_failed(&error, match recovery { Recovery::Retry(_) => "retry", Recovery::Switch => "failover" }).await?;
                         }
-                        if replay_safe {
-                            if !recovered { turn.excluded.push(connection.context.account.id.clone()); }
-                            connection.context.permit.take();
-                            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
-                            let schedule = codex2api_upstream::protocol::scheduling(Some(codex2api_common::CHATGPT), &session.headers, &turn.prepared.body)?;
-                            connection = session.open(&turn.prepared.headers, &schedule, &mut turn.excluded, None).await?;
-                            turn.prelude.clear();
-                            turn.prelude_bytes = 0;
-                            turn.response_id = None;
-                            turn.supplier(&connection);
-                if let Some(log)=&turn.log {session.state.storage.set_usage_upstream_endpoint(&log.record.id,Protocol::Responses.endpoint()).await?;}
-                            connection.create(&turn.prepared).await?;
-                            continue;
-                        }
+                        let selected = match recovery {
+                            Recovery::Retry(delay) => { tokio::time::sleep(delay).await; Some(connection.context.clone()) }
+                            Recovery::Switch => { connection.context.permit.take(); None }
+                        };
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
+                        let schedule = codex2api_upstream::executor::schedule(Some(Wire::Codex), &session.headers, &turn.body);
+                        connection = session.open(&turn.headers, &schedule, &mut turn.attempts, selected).await?;
+                        turn.prelude.clear();
+                        turn.prelude_bytes = 0;
+                        turn.response_id = None;
+                        if let Some(log) = &mut turn.log { log.retry_generation(); }
+                        turn.supplier(&connection);
+                        connection.create(&turn.body, &turn.headers).await?;
+                        continue;
                     }
-                    if !turn.committed && codex2api_upstream::scheduler::prelude_event(&value)
+
+                    if !turn.committed && codex2api_upstream::executor::prelude_event(&value)
                         && turn.prelude_bytes.saturating_add(text.len()) <= 256 * 1024
                     {
                         // The client may interrupt after response.created. The
@@ -668,7 +687,7 @@ mod tests {
             inbound.insert("openai-project", "untrusted-project".parse().unwrap());
             inbound.insert("openai-organization", "untrusted-organization".parse().unwrap());
             inbound.insert("chatgpt-account-id", "untrusted-account".parse().unwrap());
-            let headers = codex2api_upstream::protocol::chatgpt_context(&mut json!({}), &inbound).unwrap();
+            let headers = convert::codex_context(&mut json!({}), &inbound).unwrap();
             assert_eq!(headers.len(), 1);
             assert_eq!(headers["session-id"], "caller-session");
             let session = Session {

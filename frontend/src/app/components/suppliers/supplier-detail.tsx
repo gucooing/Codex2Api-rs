@@ -15,6 +15,7 @@ import { Field, FieldDescription, FieldGroup, FieldTitle } from "@/components/ui
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { date } from "@/lib/format";
+import { apiWireLabel } from "@/lib/providers/api/channel";
 import { supplierSubscriptionLabel as subscriptionLabel } from "@/lib/subscriptions";
 import { supplierStatusLabel } from "@/lib/supplier-state";
 import Link from "next/link";
@@ -135,10 +136,22 @@ export function SupplierDetail() {
                       ),
                     },
                     {
-                      label: "模型冷却",
-                      value: account?.model_cooldowns?.length
-                        ? account.model_cooldowns
-                            .map((item) => `${item.model} · ${date(item.cooldown_until)}`)
+                      label: "账户回避至",
+                      value: account?.block
+                        ? account.block.until_at === null
+                          ? "永久"
+                          : date(account.block.until_at)
+                        : undefined,
+                    },
+                    { label: "回避原因", value: account?.block?.code ?? account?.block?.message },
+                    {
+                      label: "模型回避",
+                      value: account?.model_blocks?.length
+                        ? account.model_blocks
+                            .map(
+                              (item) =>
+                                `${item.model} · ${item.until_at === null ? "永久" : date(item.until_at)}`,
+                            )
                             .join("；")
                         : undefined,
                     },
@@ -147,8 +160,15 @@ export function SupplierDetail() {
                       value: subscriptionLabel(account?.plan_type, account?.provider_id),
                     },
                     { label: "套餐到期", value: date(account?.subscription_expires_at) },
-                    { label: "上游空间编号", value: account?.chatgpt_account_id },
-                    { label: "上游用户编号", value: account?.chatgpt_user_id },
+                    ...(account?.provider_id === "api"
+                      ? [
+                          { label: "Base URL", value: account?.chatgpt_account_id },
+                          { label: "线格式", value: apiWireLabel(account?.fingerprint?.wire) },
+                        ]
+                      : [
+                          { label: "上游空间编号", value: account?.chatgpt_account_id },
+                          { label: "上游用户编号", value: account?.chatgpt_user_id },
+                        ]),
                     { label: "创建时间", value: date(account?.created_at) },
                     { label: "最近使用", value: date(account?.last_used_at) },
                   ].map(({ label, value }) => (

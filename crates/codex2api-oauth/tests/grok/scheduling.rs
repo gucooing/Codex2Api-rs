@@ -241,10 +241,13 @@ async fn oauth_grok_exhaustion_switches_http_and_sse_once_without_charging_rejec
         );
         let health = f.storage.supplier_health("first").await.unwrap();
         assert_eq!(
-            health.cooldown_code.as_deref(),
+            health
+                .account_block()
+                .and_then(|block| block.code.clone())
+                .as_deref(),
             Some("subscription:free-usage-exhausted")
         );
-        assert!(!health.authentication_invalid);
+        assert!(!health.authentication_invalid());
         assert_eq!(health.display_status(true, true), "quota_exhausted");
         // An existing session must not return to its exhausted owner.
         let response = send(&f, "responses").await;
@@ -285,7 +288,8 @@ async fn oauth_grok_http_failures_with_usage_are_settled_without_replay() {
                 .supplier_health("first")
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .as_deref(),
             Some("quota_exhausted")
         );
@@ -322,7 +326,8 @@ async fn oauth_grok_permission_throttling_and_server_errors_do_not_switch() {
                 .supplier_health("first")
                 .await
                 .unwrap()
-                .cooldown_until
+                .account_block()
+                .and_then(|block| block.until_at)
                 .is_none()
         );
     }
@@ -337,8 +342,13 @@ async fn oauth_grok_unrefreshable_auth_switches_without_reusing_rejected_identit
     let _ = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     assert_eq!(*f.mock.calls.lock().unwrap(), ["first", "second"]);
     let health = f.storage.supplier_health("first").await.unwrap();
-    assert!(health.authentication_invalid);
-    assert!(health.cooldown_until.is_none());
+    assert!(health.authentication_invalid());
+    assert!(
+        health
+            .account_block()
+            .and_then(|block| block.until_at)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -389,7 +399,7 @@ async fn oauth_grok_refreshes_once_and_only_permanent_refresh_failures_evict() {
                 .supplier_health("first")
                 .await
                 .unwrap()
-                .authentication_invalid,
+                .authentication_invalid(),
             invalid
         );
         assert!(
@@ -397,7 +407,8 @@ async fn oauth_grok_refreshes_once_and_only_permanent_refresh_failures_evict() {
                 .supplier_health("first")
                 .await
                 .unwrap()
-                .cooldown_until
+                .account_block()
+                .and_then(|block| block.until_at)
                 .is_none()
         );
         server.abort();

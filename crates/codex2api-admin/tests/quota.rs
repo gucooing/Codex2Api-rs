@@ -88,7 +88,7 @@ async fn administrator_can_reset_quota_offline_without_bypassing_auth_or_manual_
         .unwrap();
     let until = chrono::Utc::now().timestamp() + 86400;
     f.storage
-        .exhaust_supplier_quota(&id, auth, until, "usage_limit_reached")
+        .block_supplier(&id, auth, &quota_block(until, "usage_limit_reached"))
         .await
         .unwrap();
     let path = format!("/admin/api/suppliers/{id}/reset-state");
@@ -112,7 +112,7 @@ async fn administrator_can_reset_quota_offline_without_bypassing_auth_or_manual_
     assert_eq!(response.status(), StatusCode::OK);
     let reset = body(response).await;
     assert_eq!(reset["status"], "active");
-    assert!(reset["cooldown_until"].is_null());
+    assert!(reset["block"].is_null());
     f.storage.reject_supplier_auth(&id, auth).await.unwrap();
     f.storage
         .set_account_status(&id, SupplierStatus::Disabled)
@@ -226,7 +226,7 @@ async fn supplier_list_keeps_official_windows_and_persisted_errors_independent()
             .supplier_health(&first.id)
             .await
             .unwrap()
-            .authentication_invalid
+            .authentication_invalid()
     );
     assert_eq!(
         f.get(&format!("/admin/api/suppliers/{}", first.id)).await["enabled"],
@@ -339,4 +339,14 @@ async fn quota_reads_persisted_official_data_and_keeps_it_after_refresh_failure(
         f.storage.get_account_quota(&a.id).await.unwrap(),
         Some(snapshot)
     );
+}
+
+fn quota_block(until: i64, code: &str) -> codex2api_storage::BlockRequest {
+    codex2api_storage::BlockRequest {
+        model: None,
+        kind: codex2api_storage::BlockKind::Quota,
+        until_at: Some(until),
+        code: Some(code.into()),
+        message: None,
+    }
 }

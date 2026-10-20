@@ -15,6 +15,8 @@ export function modelVendor(platform: string) {
       return { name: "Google", Icon: GeminiIcon };
     case "claude":
       return { name: "Anthropic", Icon: ClaudeIcon };
+    case "other":
+      return { name: "Other", Icon: Box };
     default:
       return { name: platform, Icon: Box };
   }

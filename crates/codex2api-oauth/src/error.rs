@@ -6,23 +6,55 @@ use serde_json::{Value, json};
 
 use codex2api_storage::StorageError;
 use codex2api_suppliers::AccountError;
-use codex2api_upstream::UpstreamError;
+use codex2api_upstream::executor::ExecutorError;
+use codex2api_upstream::inbound::Inbound;
+use codex2api_upstream::{UpstreamError, convert};
 
 pub type Result<T> = std::result::Result<T, OAuthError>;
 
 impl From<codex2api_upstream::scheduler::SchedulerError> for OAuthError {
     fn from(error: codex2api_upstream::scheduler::SchedulerError) -> Self {
-        use codex2api_upstream::scheduler::SchedulerError as E;
+        Self::executor(ExecutorError::from(error))
+    }
+}
+
+impl OAuthError {
+    /// No supplier in the pool can serve the request now.
+    pub(crate) fn no_supplier(model_not_found: bool) -> Self {
+        if model_not_found {
+            Self::openai(
+                StatusCode::NOT_FOUND,
+                "invalid_request_error",
+                "No supplier in the pool is configured for this model.",
+                Some("model_not_found"),
+            )
+        } else {
+            crate::pool_execution::exhausted()
+        }
+    }
+    /// The supplier's own reply, in the client's format.
+    pub(crate) fn wire(status: u16, body: Value) -> Self {
+        Self::Wire { status, body }
+    }
+    pub(crate) fn executor(error: ExecutorError) -> Self {
         match error {
-            E::Storage(error) => Self::Storage(error),
-            E::Upstream(error) => Self::Upstream(error),
-            E::ConsumerInvalid => Self::invalid_token(),
-            E::Rejected {
-                status,
-                error_type,
-                message,
-                code,
-            } => Self::openai(status, error_type, message, code),
+            ExecutorError::NoSupplier { model_not_found } => Self::no_supplier(model_not_found),
+            ExecutorError::Busy => Self::openai(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                "Every eligible supplier is busy. Please retry later.",
+                Some("no_available_supplier"),
+            ),
+            ExecutorError::ContextRequired => crate::pool_scheduler::context_required(),
+            ExecutorError::ConsumerInvalid => Self::invalid_token(),
+            ExecutorError::Client { status, body, .. } => Self::wire(status, body),
+            ExecutorError::Stopped { status, body, .. } => {
+                let (status, body) = convert::escaped_reply(Inbound::CodexClient, status, &body);
+                Self::wire(status.as_u16(), body)
+            }
+            ExecutorError::Convert(error) => Self::Caller(error),
+            ExecutorError::Upstream(error) => Self::Upstream(error),
+            ExecutorError::Storage(error) => Self::Storage(error),
         }
     }
 }
@@ -41,6 +73,12 @@ pub enum OAuthError {
     },
     #[error(transparent)]
     Upstream(#[from] UpstreamError),
+    /// A supplier's reply the client receives as it is, in its own format.
+    #[error("the supplier rejected the request with HTTP {status}")]
+    Wire { status: u16, body: Value },
+    /// A request the conversion matrix rejected before any supplier saw it.
+    #[error(transparent)]
+    Caller(#[from] convert::Error),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error(transparent)]
@@ -175,6 +213,16 @@ impl IntoResponse for OAuthError {
                 response
             }
             Self::Upstream(err) => upstream_error_response(err),
+            Self::Wire { status, body } => {
+                let (status, body) = convert::client_error(Inbound::CodexClient, status, &body);
+                let mut response = (status, Json(body)).into_response();
+                response.headers_mut().insert(
+                    "cache-control",
+                    axum::http::HeaderValue::from_static("no-store"),
+                );
+                response
+            }
+            Self::Caller(error) => (error.status, Json(error.body)).into_response(),
             Self::Storage(StorageError::AccountNotFound(_)) => {
                 OAuthError::invalid_token().into_response()
             }
@@ -237,47 +285,73 @@ pub fn upstream_error_response(err: UpstreamError) -> Response {
     } = err
     {
         let value = serde_json::from_str::<Value>(&body).unwrap_or_default();
-        let (public, error) = codex2api_upstream::public_output::failure(Some(status), &value);
-        let mut response = (public.status_code(), Json(json!({ "error": error }))).into_response();
+        let (status, error) = convert::escaped_reply(Inbound::CodexClient, status, &value);
+        let mut response = (status, Json(error)).into_response();
         codex2api_upstream::strip_hop_by_hop_headers(&mut headers);
-        let retry: &[&str] = if public.throttled() {
-            &["retry-after", "retry-after-ms", "x-should-retry"]
-        } else {
-            &[]
-        };
         for name in [
             "x-request-id",
             "x-oai-request-id",
             "cf-ray",
             "openai-model",
             "x-openai-model",
-        ]
-        .iter()
-        .chain(retry)
-        {
-            for value in headers.get_all(*name) {
-                response.headers_mut().append(*name, value.clone());
+        ] {
+            for value in headers.get_all(name) {
+                response.headers_mut().append(name, value.clone());
             }
         }
         return response;
     }
-    // Supplier credentials and state stay private; the client sees the public view.
-    let public = err.public_failure();
-    let mut response = (
-        public.status_code(),
-        Json(json!({ "error": public.error() })),
-    )
-        .into_response();
-    if public.throttled()
-        && let Some(headers) = err.retry_headers()
-    {
-        for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
-            if let Some(value) = headers.get(name) {
-                response.headers_mut().insert(name, value.clone());
-            }
-        }
+    // Channel errors that are not a reply: this service's view of them. Supplier
+    // credentials and their refresh are never the caller's concern.
+    if matches!(
+        err,
+        UpstreamError::Refresh(_)
+            | UpstreamError::Auth(_)
+            | UpstreamError::GrokAuth(_)
+            | UpstreamError::AntigravityAuth(_)
+            | UpstreamError::ApiAuth(_)
+            | UpstreamError::Unauthorized
+            | UpstreamError::MissingAccessToken(_)
+    ) {
+        return crate::pool_execution::exhausted().into_response();
     }
-    response
+    let failure = err.failure();
+    let (status, kind, code, message) = match failure.kind {
+        codex2api_upstream::FailureKind::InvalidRequest => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            failure
+                .code
+                .clone()
+                .unwrap_or_else(|| "invalid_request_error".into()),
+            failure
+                .message
+                .as_deref()
+                .map(convert::sanitize::text)
+                .unwrap_or_else(|| "The request is invalid.".into()),
+        ),
+        codex2api_upstream::FailureKind::Timeout => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "server_error",
+            "upstream_timeout".into(),
+            "The upstream service timed out. Please try again later.".into(),
+        ),
+        codex2api_upstream::FailureKind::Authentication
+        | codex2api_upstream::FailureKind::PaymentRequired
+        | codex2api_upstream::FailureKind::Permission
+        | codex2api_upstream::FailureKind::QuotaExhausted
+        | codex2api_upstream::FailureKind::RateLimit
+        | codex2api_upstream::FailureKind::LimitUnknown => {
+            return crate::pool_execution::exhausted().into_response();
+        }
+        _ => (
+            StatusCode::BAD_GATEWAY,
+            "server_error",
+            "upstream_error".into(),
+            "The upstream service could not complete this request.".into(),
+        ),
+    };
+    openai_response(status, kind, message, Some(&code))
 }
 
 fn service_error_response(error: crate::admission::ServiceError) -> Response {
@@ -393,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_upstream_error_object() {
+    fn server_errors_become_no_available_supplier() {
         let body = r#"{"error":{"message":"overloaded","type":"server_error"}}"#;
         let response =
             upstream_error_response(UpstreamError::status(StatusCode::SERVICE_UNAVAILABLE, body));
@@ -412,7 +486,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
             let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
             let value: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(value["error"]["code"], "service_unavailable");
+            assert_eq!(value["error"]["code"], "no_available_supplier");
             let text = String::from_utf8_lossy(&bytes);
             assert!(!text.contains("private supplier") && !text.contains("deactivated_workspace"));
         }
@@ -444,8 +518,18 @@ mod tests {
                 body.to_string(),
                 headers,
             ));
-            // A caller error never carries a status the client treats as auth or backoff.
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{status}");
+            // Only a caller fault keeps its reason; a supplier's authorization,
+            // throttling or server state is this service's exhaustion.
+            let caller = !codex2api_upstream::supply::switch_status(status);
+            assert_eq!(
+                response.status(),
+                if caller {
+                    StatusCode::from_u16(status).unwrap()
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                },
+                "{status}"
+            );
             assert_eq!(response.headers()["x-request-id"], "request-fixture");
             for key in [
                 "retry-after",
@@ -461,8 +545,13 @@ mod tests {
             }
             let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let value = serde_json::from_slice::<Value>(&bytes).unwrap();
-            assert_eq!(value["error"]["code"], "invalid_prompt");
-            assert!(value["error"]["message"].as_str().unwrap().chars().count() <= 512);
+            if caller {
+                assert_eq!(value["error"]["code"], "invalid_prompt");
+                assert!(value["error"]["message"].as_str().unwrap().chars().count() <= 512);
+            } else {
+                assert_eq!(value["error"]["code"], "no_available_supplier");
+                assert!(!String::from_utf8_lossy(&bytes).contains("invalid_prompt"));
+            }
         }
     }
 }

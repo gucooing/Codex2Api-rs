@@ -40,6 +40,25 @@ impl Endpoint {
         }
     }
 
+    /// The endpoint a native client's Codex path names.
+    pub fn from_codex_path(path: &str) -> Option<Self> {
+        [
+            Self::Responses,
+            Self::Compact,
+            Self::InputTokens,
+            Self::Guardian,
+            Self::GuardianClassifier,
+            Self::Models,
+            Self::Usage,
+            Self::MemorySummary,
+            Self::Search,
+            Self::ImageGeneration,
+            Self::ImageEdit,
+        ]
+        .into_iter()
+        .find(|endpoint| endpoint.codex_path() == path)
+    }
+
     pub fn url(self) -> String {
         match self {
             Self::Guardian | Self::GuardianClassifier => {

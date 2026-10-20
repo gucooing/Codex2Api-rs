@@ -259,7 +259,7 @@ async fn broken_http_stream_only_fails_pending_generation_and_keeps_supplier_ava
                 .supplier_health(&supplier.id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
     }
     storage.close().await;
@@ -334,7 +334,7 @@ async fn stale_rejection_cannot_disable_new_credentials_and_network_faults_do_no
         .bind(&supplier.id).execute(storage.pool()).await.unwrap();
     let health = storage.supplier_health(&supplier.id).await.unwrap();
     assert!(health.error_message.is_some());
-    assert!(!health.authentication_invalid);
+    assert!(!health.authentication_invalid());
     let revision = storage
         .supplier_auth_revision(&supplier.id)
         .await
@@ -349,7 +349,7 @@ async fn stale_rejection_cannot_disable_new_credentials_and_network_faults_do_no
             .supplier_health(&supplier.id)
             .await
             .unwrap()
-            .authentication_invalid
+            .authentication_invalid()
     );
     storage
         .upsert_supplier_tokens(codex2api_storage::SupplierTokens {
@@ -368,7 +368,7 @@ async fn stale_rejection_cannot_disable_new_credentials_and_network_faults_do_no
             .supplier_health(&supplier.id)
             .await
             .unwrap()
-            .authentication_invalid
+            .authentication_invalid()
     );
     storage.close().await;
 }

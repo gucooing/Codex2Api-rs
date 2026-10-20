@@ -36,7 +36,7 @@ async fn fingerprint_validation_persistence_and_transport_are_account_isolated()
         detail["originator"],
         codex2api_common::version::DEFAULT_ORIGINATOR
     );
-    assert_eq!(saved.os_type, "Windows");
+    assert_eq!(saved.os_type.as_deref(), Some("Windows"));
     assert!(
         detail["user_agent"]
             .as_str()

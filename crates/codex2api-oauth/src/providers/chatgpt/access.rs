@@ -69,10 +69,10 @@ impl AccessCheck {
             return Err(OAuthError::account_disabled());
         }
         let health = storage.supplier_health(&self.account_id).await?;
-        if health.authentication_invalid {
+        if health.authentication_invalid() {
             return Err(codex2api_upstream::UpstreamError::Unauthorized.into());
         }
-        if health.payment_required {
+        if health.payment_required() {
             return Err(crate::pool_execution::exhausted());
         }
         if storage

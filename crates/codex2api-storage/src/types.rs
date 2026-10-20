@@ -77,9 +77,10 @@ pub struct SupplierAccount {
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub installation_id: String,
-    pub os_type: String,
-    pub os_version: String,
-    pub arch: String,
+    /// Frozen identity inputs of the official-client channels; absent for API-key accounts.
+    pub os_type: Option<String>,
+    pub os_version: Option<String>,
+    pub arch: Option<String>,
     /// Official Codex CLI application-layer HTTP fingerprint, frozen per account.
     pub http_fingerprint_json: String,
     pub created_at: String,
@@ -100,13 +101,31 @@ pub struct NewSupplierAccount {
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub installation_id: String,
-    pub os_type: String,
-    pub os_version: String,
-    pub arch: String,
+    pub os_type: Option<String>,
+    pub os_version: Option<String>,
+    pub arch: Option<String>,
     pub http_fingerprint_json: String,
 }
 
 impl NewSupplierAccount {
+    /// An account of a channel without a device fingerprint (API keys).
+    pub fn without_identity(provider_id: &str, installation_id: impl Into<String>) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            id: None,
+            status: SupplierStatus::Pending,
+            display_name: None,
+            chatgpt_account_id: None,
+            chatgpt_user_id: None,
+            email: None,
+            plan_type: None,
+            installation_id: installation_id.into(),
+            os_type: None,
+            os_version: None,
+            arch: None,
+            http_fingerprint_json: "{}".into(),
+        }
+    }
     // The frozen supplier identity is persisted as these independent fields.
     pub fn pending_identity(
         installation_id: impl Into<String>,
@@ -125,9 +144,9 @@ impl NewSupplierAccount {
             email: None,
             plan_type: None,
             installation_id: installation_id.into(),
-            os_type: os_type.into(),
-            os_version: os_version.into(),
-            arch: arch.into(),
+            os_type: Some(os_type.into()),
+            os_version: Some(os_version.into()),
+            arch: Some(arch.into()),
             http_fingerprint_json: http_fingerprint_json.into(),
         }
     }

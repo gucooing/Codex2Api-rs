@@ -41,11 +41,7 @@ async fn probe(state: &AdminState, id: &str) -> Result<(), String> {
         .supplier_health(id)
         .await
         .map_err(|e| e.to_string())?;
-    if account.status != codex2api_storage::SupplierStatus::Active
-        || health.authentication_invalid
-        || health.payment_required
-        || health.cooldown_kind.as_deref() != Some("quota_exhausted")
-    {
+    if account.status != codex2api_storage::SupplierStatus::Active || !health.quota_exhausted() {
         return Ok(());
     }
     crate::providers::quota(state, id, true).await?;

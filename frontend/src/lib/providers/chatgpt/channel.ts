@@ -9,6 +9,8 @@ export const chatgptChannel = {
     ["details", "官方资料"],
     ["credits", "重置额度"],
   ],
+  setupLabel: "指纹配置",
+  tokenLabel: "Refresh Token",
   callbackLabel: "回调链接",
   callbackDescription: "打开授权页面后提交完整回调链接",
   callbackInputLabel: "完整回调链接",

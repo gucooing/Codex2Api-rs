@@ -15,7 +15,7 @@ import { mergeOAuth } from "@/lib/domain";
 import { useQueryId, useResource } from "@/lib/hooks";
 import { useListResource } from "@/lib/pagination";
 import { usePreference, useSavedFilters, validView } from "@/lib/preferences";
-import { providerOptions, supplierChannel } from "@/lib/providers";
+import { channelFingerprint, providerOptions, supplierChannel } from "@/lib/providers";
 import { parseRefreshTokenLines } from "@/lib/refresh-tokens";
 import type { SupplierSelection } from "@/lib/supplier-selection";
 import { commonSupplierTags, selectedSupplierProvider } from "@/lib/supplier-selection";
@@ -170,7 +170,7 @@ export function useFingerprintEditor({
         if (disabled || !account) throw new Error("请先加载供应账户资料");
         await request(`/suppliers/${account.id}/fingerprint`, {
           method: "PUT",
-          body: value,
+          body: channelFingerprint(account.provider_id, value),
         });
         onSaved();
       },
@@ -203,7 +203,9 @@ export function useOAuthWizard({
   useErrorToast(proxies.error);
   const [step, setStep] = useState(supplierId ? 1 : 0);
   const [fingerprint, setFingerprint] = useState<Fingerprint>();
-  const [method, setMethod] = useState<"callback" | "device" | "refresh_token">("callback");
+  const [method, setMethod] = useState<"callback" | "device" | "refresh_token" | "api_key">(
+    channel.methods[0] as "callback" | "device" | "refresh_token" | "api_key",
+  );
   const [refreshToken, setRefreshToken] = useState("");
   const [batchResults, setBatchResults] = useState<
     {
@@ -223,10 +225,11 @@ export function useOAuthWizard({
     callback: { label: channel.callbackLabel, description: channel.callbackDescription },
     device: { label: "设备码", description: "在设备授权页面输入一次性代码" },
     refresh_token: { label: "RT 授权", description: "使用 Refresh Token 完成授权" },
+    api_key: { label: "API Key 录入", description: "每行一个 Key，每个 Key 成为一个供应账户" },
   };
   const methods = channel.methods.map((value) => ({ value, ...methodOptions[value] }));
   const steps = [
-    ...(!supplierId ? [{ value: 0, label: "指纹配置" }] : []),
+    ...(!supplierId ? [{ value: 0, label: channel.setupLabel }] : []),
     { value: 1, label: "授权方式" },
     { value: 2, label: "开始授权" },
   ];
@@ -273,8 +276,9 @@ export function useOAuthWizard({
   };
   const start = async () => {
     if (!ready) throw new Error("请先加载授权资料");
-    if (method === "refresh_token" && !supplierId) {
-      const rows = parseRefreshTokenLines(refreshToken);
+    const batch = method === "refresh_token" || method === "api_key";
+    if (batch && !supplierId) {
+      const rows = parseRefreshTokenLines(refreshToken, channel.tokenLabel);
       const previous = new Map(batchResults.map((row) => [row.line, row]));
       setBatchResults(
         rows.map((row) =>
@@ -302,14 +306,22 @@ export function useOAuthWizard({
           );
         updateResult("running", "正在授权");
         try {
+          const base = fingerprint ?? setup.data?.fingerprint;
           const result = await request<OAuth>(`${channel.oauthPrefix}/start`, {
             method: "POST",
-            body: {
-              method,
-              fingerprint: fingerprint ?? setup.data?.fingerprint,
-              independent_fingerprint: rows.length > 1,
-              refresh_token: row.token,
-            },
+            body:
+              method === "api_key"
+                ? {
+                    method,
+                    fingerprint: base && channelFingerprint(provider, base),
+                    api_key: row.token,
+                  }
+                : {
+                    method,
+                    fingerprint: base,
+                    independent_fingerprint: rows.length > 1,
+                    refresh_token: row.token,
+                  },
           });
           if (result.status !== "complete") throw new Error("授权未完成");
           updateResult(
@@ -322,8 +334,8 @@ export function useOAuthWizard({
           updateResult("failed", "授权失败，请检查 RT 或网络后重试");
         }
       }
-      if (failures) toast.error(`${failures} 条 RT 授权失败，可检查后重试`);
-      else toast.success("RT 导入完成");
+      if (failures) toast.error(`${failures} 条${channel.tokenLabel}授权失败，可检查后重试`);
+      else toast.success(`${channel.tokenLabel}导入完成`);
       return;
     }
     accept(
@@ -332,7 +344,9 @@ export function useOAuthWizard({
         {
           method: "POST",
           body: supplierId
-            ? { method, refresh_token: method === "refresh_token" ? refreshToken : undefined }
+            ? method === "api_key"
+              ? { method, api_key: refreshToken }
+              : { method, refresh_token: method === "refresh_token" ? refreshToken : undefined }
             : {
                 method,
                 fingerprint: fingerprint ?? setup.data?.fingerprint,
@@ -371,7 +385,7 @@ export function useOAuthWizard({
     }
     if (step === 1) {
       setStep(2);
-      if (method !== "refresh_token")
+      if (method !== "refresh_token" && method !== "api_key")
         void actions.run("supplier-oauth-start", start, { success: "" });
       return;
     }
@@ -475,9 +489,18 @@ export function useSupplierTagsBatchDialog() {
 }
 
 export const validSupplierFilters = (value: { status: string; provider_id: string }) =>
-  ["", "active", "disabled", "error", "payment_required", "quota_exhausted"].includes(
-    value.status,
-  ) && ["", ...providerOptions.map((option) => option.value)].includes(value.provider_id);
+  [
+    "",
+    "active",
+    "disabled",
+    "error",
+    "payment_required",
+    "quota_exhausted",
+    "rate_limited",
+    "overloaded",
+    "blocked",
+  ].includes(value.status) &&
+  ["", ...providerOptions.map((option) => option.value)].includes(value.provider_id);
 
 export function useSuppliersPage() {
   const tableColumns0 = useColumnVisibility(

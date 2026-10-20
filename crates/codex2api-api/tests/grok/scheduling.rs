@@ -72,14 +72,29 @@ async fn grok_quota_failover_cools_supply_and_settles_only_the_successful_attemp
         assert_eq!(json_body(response).await["status"], "completed");
         assert_eq!(attempted(&f), ["supplier", "supplier-two"]);
         let health = f.storage.supplier_health("supplier").await.unwrap();
-        assert_eq!(health.cooldown_kind.as_deref(), Some("quota_exhausted"));
         assert_eq!(
-            health.cooldown_code.as_deref(),
+            health
+                .quota_exhausted()
+                .then_some("quota_exhausted")
+                .as_deref(),
+            Some("quota_exhausted")
+        );
+        assert_eq!(
+            health
+                .account_block()
+                .and_then(|block| block.code.clone())
+                .as_deref(),
             Some("subscription:free-usage-exhausted")
         );
-        assert!(health.cooldown_until.unwrap() > chrono::Utc::now().timestamp() + 100);
-        assert!(!health.authentication_invalid);
-        assert!(!health.payment_required);
+        assert!(
+            health
+                .account_block()
+                .and_then(|block| block.until_at)
+                .unwrap()
+                > chrono::Utc::now().timestamp() + 100
+        );
+        assert!(!health.authentication_invalid());
+        assert!(!health.payment_required());
         let rows: Vec<(String, String, Option<i64>)> =
             sqlx::query_as("SELECT account_id,status,input_tokens FROM usage_records")
                 .fetch_all(f.storage.pool())
@@ -141,8 +156,13 @@ async fn grok_non_quota_errors_keep_supply_and_retry_instructions() {
         assert_eq!(json_body(response).await["error"]["code"], public_code);
         assert_eq!(attempted(&f), ["supplier"]);
         let health = f.storage.supplier_health("supplier").await.unwrap();
-        assert!(!health.authentication_invalid);
-        assert!(health.cooldown_until.is_none());
+        assert!(!health.authentication_invalid());
+        assert!(
+            health
+                .account_block()
+                .and_then(|block| block.until_at)
+                .is_none()
+        );
     }
 }
 
@@ -182,7 +202,8 @@ async fn grok_measured_failures_never_retry_or_lose_reported_usage() {
             .supplier_health("supplier")
             .await
             .unwrap()
-            .cooldown_kind
+            .quota_exhausted()
+            .then_some("quota_exhausted")
             .as_deref(),
         Some("quota_exhausted")
     );

@@ -60,6 +60,7 @@ pub enum TokenProtocol {
     Responses,
     ChatCompletions,
     Messages,
+    Gemini,
 }
 
 #[derive(Clone, Debug)]
@@ -205,6 +206,25 @@ fn has_tokens(protocol: TokenProtocol, value: &Value) -> bool {
                 .any(|key| nonempty(&value["content_block"][*key])),
             _ => false,
         },
+        TokenProtocol::Gemini => {
+            let body = value
+                .get("response")
+                .filter(|v| v.is_object())
+                .unwrap_or(value);
+            body["candidates"].as_array().is_some_and(|candidates| {
+                candidates.iter().any(|candidate| {
+                    candidate["content"]["parts"]
+                        .as_array()
+                        .is_some_and(|parts| {
+                            parts.iter().any(|part| {
+                                nonempty(&part["text"])
+                                    || part.get("functionCall").is_some_and(|c| c.is_object())
+                                    || part.get("inlineData").is_some_and(|c| c.is_object())
+                            })
+                        })
+                })
+            })
+        }
     }
 }
 

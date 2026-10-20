@@ -64,7 +64,7 @@ pub(super) fn normalize_reply(value: &Value, http_status: Option<u16>) -> Value 
     {
         error["status"] = status.into();
     }
-    if let Some(code) = super::scheduling::quota_code(status(&error), &error).map(str::to_owned) {
+    if let Some(code) = super::verdict::quota_code(status(&error), &error).map(str::to_owned) {
         if error["code"].is_null() {
             error["code"] = code.into();
         }

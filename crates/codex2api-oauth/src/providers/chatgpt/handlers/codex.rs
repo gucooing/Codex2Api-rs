@@ -40,7 +40,7 @@ pub async fn forward(
         let path = subpath
             .map(|s| format!("responses/{s}"))
             .unwrap_or_else(|| endpoint.codex_path().into());
-        let bytes = body.clone();
+        let bytes = body;
         let inbound = headers.clone();
         let (mut schedule, metadata, decoded) = tokio::task::spawn_blocking(move || {
             let value = codex2api_upstream::decode_body(&bytes, &inbound)?;
@@ -109,18 +109,27 @@ pub async fn forward(
         } else {
             None
         };
-        let mut response = crate::providers::chatgpt::execution::forward(
+        let executed = crate::providers::chatgpt::execution::forward(
             &state,
             &oauth,
             ctx,
             endpoint,
             subpath.map(String::as_str),
-            body,
             decoded,
             headers,
             &mut log,
         )
         .await?;
+        let mut context = executed.context;
+        let mut response = executed.response;
+        // A replacement supplier's reservation lives as long as the reply.
+        match (&mut log, context.permit.take()) {
+            (Some(log), Some(permit)) => log.set_supplier_permit(permit),
+            (None, Some(permit)) => {
+                response.extensions_mut().insert(permit);
+            }
+            _ => {}
+        }
         let status = response.status();
         let mut headers = response.headers().clone();
         crate::providers::chatgpt::identity::quota_headers(

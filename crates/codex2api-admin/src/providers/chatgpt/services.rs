@@ -17,14 +17,8 @@ pub(crate) async fn sync_models(state: &AdminState, id: &str) -> Result<(), Stri
         .supplier_auth_revision(id)
         .await
         .map_err(|e| e.to_string())?;
-    let cooldown_revision = state
-        .storage
-        .supplier_health(id)
-        .await
-        .map_err(|e| e.to_string())?
-        .cooldown_revision;
     if let Err(error) = state.upstream.sync_supplier_models(&account).await {
-        observe_request_failure(state, id, auth_revision, cooldown_revision, &error).await?;
+        observe_request_failure(state, id, auth_revision, &error).await?;
         return Err(error.to_string());
     }
     Ok(())
@@ -77,12 +71,17 @@ where
                 {
                     state
                         .storage
-                        .exhaust_supplier_quota_if_unchanged(
+                        .block_supplier_fenced(
                             id,
                             revision,
-                            until,
-                            "usage_limit_reached",
-                            health.cooldown_revision,
+                            &codex2api_storage::BlockRequest {
+                                model: None,
+                                kind: codex2api_storage::BlockKind::Quota,
+                                until_at: Some(until),
+                                code: Some("usage_limit_reached".into()),
+                                message: None,
+                            },
+                            Some(health.observation_revision),
                         )
                         .await
                         .map_err(|e| e.to_string())?;
@@ -91,7 +90,12 @@ where
                 {
                     state
                         .storage
-                        .recover_supplier_quota(id, revision, health.cooldown_revision)
+                        .unblock_supplier(
+                            id,
+                            revision,
+                            health.observation_revision,
+                            &[codex2api_storage::BlockKind::Quota],
+                        )
                         .await
                         .map_err(|e| e.to_string())?;
                 }
@@ -136,12 +140,6 @@ async fn request_with_revision(
             .supplier_auth_revision(id)
             .await
             .map_err(|e| e.to_string())?;
-        let cooldown_revision = state
-            .storage
-            .supplier_health(id)
-            .await
-            .map_err(|e| e.to_string())?
-            .cooldown_revision;
         let body = value
             .map(|v| serde_json::to_vec(&v))
             .transpose()
@@ -159,8 +157,7 @@ async fn request_with_revision(
         let response = match result {
             Ok(response) => response,
             Err(error) => {
-                observe_request_failure(state, id, auth_revision, cooldown_revision, &error)
-                    .await?;
+                observe_request_failure(state, id, auth_revision, &error).await?;
                 return Err(error.to_string());
             }
         };
@@ -182,7 +179,7 @@ async fn request_with_revision(
                 String::from_utf8_lossy(&bytes).into_owned(),
                 headers,
             );
-            observe_request_failure(state, id, revision, cooldown_revision, &error).await?;
+            observe_request_failure(state, id, revision, &error).await?;
         }
         let value: Value = match serde_json::from_slice(&bytes) {
             Ok(value) => value,
@@ -214,52 +211,43 @@ async fn request_with_revision(
     }
 }
 
+/// A probe or administrator read failed: the ChatGPT channel judges it by the same
+/// rules as execution, and the verdict is persisted as a block.
 pub(super) async fn observe_request_failure(
     state: &AdminState,
     id: &str,
     auth_revision: Option<i64>,
-    cooldown_revision: i64,
     error: &codex2api_upstream::UpstreamError,
 ) -> Result<(), String> {
-    let Some(revision) = error.auth_revision().or(auth_revision) else {
-        return Ok(());
-    };
-    // Share ChatGPT execution's classification; a probe has no separate failure counter
-    // or blanket "keep state" rule. Transient failures are not auth rejection.
-    match error.supplier_failure_for(codex2api_common::CHATGPT, chrono::Utc::now().timestamp()) {
-        Some(codex2api_upstream::SupplierFailure::Authentication) => {
-            state
-                .storage
-                .reject_supplier_auth(id, revision)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        Some(codex2api_upstream::SupplierFailure::PaymentRequired { code }) => {
-            state
-                .storage
-                .mark_supplier_payment_required(
-                    id,
-                    revision,
-                    code.as_deref(),
-                    Some(cooldown_revision),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        Some(codex2api_upstream::SupplierFailure::QuotaExhausted { until, code, .. }) => {
-            state
-                .storage
-                .exhaust_supplier_quota_if_unchanged(id, revision, until, &code, cooldown_revision)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        None => {}
-    }
+    let account = state
+        .storage
+        .require_account(id)
+        .await
+        .map_err(|e| e.to_string())?;
+    codex2api_upstream::supply::observe_error(
+        &state.upstream,
+        &state.storage,
+        &account,
+        auth_revision,
+        error,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+
+    fn quota_block(until: i64, code: &str) -> codex2api_storage::BlockRequest {
+        codex2api_storage::BlockRequest {
+            model: None,
+            kind: codex2api_storage::BlockKind::Quota,
+            until_at: Some(until),
+            code: Some(code.into()),
+            message: None,
+        }
+    }
     use super::*;
     use codex2api_storage::{SupplierStatus, SupplierTokens};
     use serde_json::json;
@@ -285,23 +273,21 @@ mod tests {
             .await
             .unwrap();
         let auth = storage.supplier_auth_revision(&id).await.unwrap().unwrap();
-        let observation = storage
-            .supplier_health(&id)
-            .await
-            .unwrap()
-            .cooldown_revision;
         let error = codex2api_upstream::UpstreamError::status(
             reqwest::StatusCode::PAYMENT_REQUIRED,
             r#"{"detail":{"code":"deactivated_workspace"}}"#,
         );
-        observe_request_failure(&state, &id, Some(auth), observation, &error)
+        observe_request_failure(&state, &id, Some(auth), &error)
             .await
             .unwrap();
         let health = storage.supplier_health(&id).await.unwrap();
-        assert!(health.payment_required);
-        assert!(!health.authentication_invalid);
+        assert!(health.payment_required());
+        assert!(!health.authentication_invalid());
         assert_eq!(
-            health.payment_required_code.as_deref(),
+            health
+                .account_block()
+                .and_then(|block| block.code.clone())
+                .as_deref(),
             Some("deactivated_workspace")
         );
         quota_with_fetch(&state, &id, true, || async {
@@ -309,7 +295,13 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(storage.supplier_health(&id).await.unwrap().payment_required);
+        assert!(
+            storage
+                .supplier_health(&id)
+                .await
+                .unwrap()
+                .payment_required()
+        );
         assert!(
             storage
                 .supplier_quota_probe_candidates("chatgpt")
@@ -343,14 +335,14 @@ mod tests {
         let auth = storage.supplier_auth_revision(&id).await.unwrap().unwrap();
         let until = chrono::Utc::now().timestamp() + 86400;
         storage
-            .exhaust_supplier_quota(&id, auth, until, "usage_limit_reached")
+            .block_supplier(&id, auth, &quota_block(until, "usage_limit_reached"))
             .await
             .unwrap();
         let generation = storage
             .supplier_health(&id)
             .await
             .unwrap()
-            .cooldown_revision;
+            .observation_revision;
         for error in [
             UpstreamError::status(reqwest::StatusCode::FORBIDDEN, "{}"),
             UpstreamError::status(
@@ -365,12 +357,12 @@ mod tests {
                 message: "temporary outage".into(),
             }),
         ] {
-            observe_request_failure(&state, &id, Some(auth), generation, &error)
+            observe_request_failure(&state, &id, Some(auth), &error)
                 .await
                 .unwrap();
             let health = storage.supplier_health(&id).await.unwrap();
-            assert!(!health.authentication_invalid);
-            assert_eq!(health.cooldown_revision, generation);
+            assert!(!health.authentication_invalid());
+            assert_eq!(health.observation_revision, generation);
         }
         let revoked = UpstreamError::Refresh(codex2api_suppliers::AuthError::RefreshRejected {
             status: 400,
@@ -379,7 +371,7 @@ mod tests {
         });
         assert!(
             quota_with_fetch(&state, &id, true, || async {
-                observe_request_failure(&state, &id, Some(auth), generation, &revoked).await?;
+                observe_request_failure(&state, &id, Some(auth), &revoked).await?;
                 Err(revoked.to_string())
             })
             .await
@@ -390,7 +382,7 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
         assert!(
             storage
@@ -408,7 +400,7 @@ mod tests {
             .await
             .unwrap();
         let rejected = UpstreamError::status(reqwest::StatusCode::UNAUTHORIZED, "{}");
-        observe_request_failure(&state, &id, Some(auth), generation, &rejected)
+        observe_request_failure(&state, &id, Some(auth), &rejected)
             .await
             .unwrap();
         assert!(
@@ -416,37 +408,28 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
         let auth = storage.supplier_auth_revision(&id).await.unwrap().unwrap();
         let exhausted = UpstreamError::status(
             reqwest::StatusCode::TOO_MANY_REQUESTS,
             json!({"error":{"type":"usage_limit_reached","resets_at":until}}).to_string(),
         );
-        let generation = storage
-            .supplier_health(&id)
-            .await
-            .unwrap()
-            .cooldown_revision;
-        observe_request_failure(&state, &id, Some(auth), generation, &exhausted)
+        observe_request_failure(&state, &id, Some(auth), &exhausted)
             .await
             .unwrap();
-        let generation = storage
-            .supplier_health(&id)
-            .await
-            .unwrap()
-            .cooldown_revision;
         assert_eq!(
             storage
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .as_deref(),
             Some("quota_exhausted")
         );
         storage.reset_supplier_availability(&id).await.unwrap();
-        observe_request_failure(&state, &id, Some(auth), generation, &exhausted)
+        observe_request_failure(&state, &id, Some(auth), &exhausted)
             .await
             .unwrap();
         assert!(
@@ -454,10 +437,11 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .is_none()
         );
-        observe_request_failure(&state, &id, Some(auth), generation, &rejected)
+        observe_request_failure(&state, &id, Some(auth), &rejected)
             .await
             .unwrap();
         assert!(
@@ -465,7 +449,7 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .authentication_invalid
+                .authentication_invalid()
         );
     }
 
@@ -499,7 +483,7 @@ mod tests {
         .await
         .unwrap();
         storage
-            .exhaust_supplier_quota(&id, auth, until, "usage_limit_reached")
+            .block_supplier(&id, auth, &quota_block(until, "usage_limit_reached"))
             .await
             .unwrap();
         quota_with_fetch(&state, &id, false, || async {
@@ -512,7 +496,8 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .is_some()
         );
         for value in [json!({"plan_type":"plus"}), exhausted.clone()] {
@@ -524,7 +509,8 @@ mod tests {
                     .supplier_health(&id)
                     .await
                     .unwrap()
-                    .cooldown_kind
+                    .quota_exhausted()
+                    .then_some("quota_exhausted")
                     .is_some()
             );
         }
@@ -543,12 +529,13 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .is_some()
         );
         quota_with_fetch(&state, &id, true, || async {
             storage
-                .exhaust_supplier_quota(&id, auth, until, "usage_limit_reached")
+                .block_supplier(&id, auth, &quota_block(until, "usage_limit_reached"))
                 .await
                 .unwrap();
             Ok((available.clone(), Some(auth)))
@@ -560,7 +547,8 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .is_some()
         );
         let recovered = quota_with_fetch(&state, &id, true, || async {
@@ -573,7 +561,8 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .is_none()
         );
         assert_eq!(
@@ -591,7 +580,8 @@ mod tests {
                 .supplier_health(&id)
                 .await
                 .unwrap()
-                .cooldown_kind
+                .quota_exhausted()
+                .then_some("quota_exhausted")
                 .is_none()
         );
         assert!(

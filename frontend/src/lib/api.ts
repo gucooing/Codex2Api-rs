@@ -16,19 +16,49 @@ export type Fingerprint = {
   terminal: string;
   proxy_id: string | null;
   timezone: string;
+  /** API-key channel endpoint configuration; absent on official-client channels. */
+  base_url?: string;
+  wire?: string;
+  auth_scheme?: string;
+  retry_statuses?: number[];
+  key_suffix?: string;
+};
+export type SupplierBlock = {
+  scope: "account" | "model";
+  model: string;
+  kind:
+    | "auth"
+    | "billing"
+    | "rate_limit"
+    | "quota"
+    | "overload"
+    | "transport"
+    | "model_missing"
+    | "penalty";
+  until_at: number | null;
+  code: string | null;
+  message: string | null;
+  observed_at: number;
 };
 export type Supplier = {
   id: string;
   provider_id: string;
   enabled: boolean;
-  status: "active" | "disabled" | "error" | "payment_required" | "quota_exhausted";
+  status:
+    | "active"
+    | "disabled"
+    | "error"
+    | "payment_required"
+    | "quota_exhausted"
+    | "rate_limited"
+    | "overloaded"
+    | "blocked";
   tag_ids: string[];
   tags: { id: string; name: string }[];
   concurrency: number;
   active_requests: number;
-  cooldown_until: number | null;
-  cooldown_code: string | null;
-  model_cooldowns: { model: string; cooldown_until: number; cooldown_code: string | null }[];
+  block: SupplierBlock | null;
+  model_blocks: SupplierBlock[];
   authorized: boolean;
   authentication_invalid: boolean;
   error_message: string | null;
@@ -281,7 +311,7 @@ export type UsageAttempt = {
   http_status: number | null;
   error_code: string | null;
   error_message: string | null;
-  recovery: "refresh" | "failover";
+  recovery: "retry" | "failover";
   started_at_ms: number;
   total_ms: number;
 };

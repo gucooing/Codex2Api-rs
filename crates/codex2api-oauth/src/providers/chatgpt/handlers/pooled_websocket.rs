@@ -11,6 +11,8 @@ use axum::{
     response::Response,
 };
 use codex2api_storage::VirtualAccess;
+use codex2api_upstream::executor::{Attempts, Recovery};
+use codex2api_upstream::supply::Wire;
 use codex2api_upstream::{Endpoint, ResponseOutcome, UpstreamWebSocket};
 use futures::{SinkExt, StreamExt};
 use http::HeaderMap;
@@ -58,14 +60,21 @@ async fn open(
     oauth: &VirtualAccess,
     endpoint: Endpoint,
     headers: &HeaderMap,
-    excluded: &mut Vec<String>,
+    attempts: &mut Attempts,
     request: &crate::pool_scheduler::ScheduleRequest,
     mut selected: Option<SupplierContext>,
 ) -> Result<Connection> {
     loop {
+        if !state
+            .storage
+            .virtual_access_valid(&oauth.token_hash)
+            .await?
+        {
+            return Err(OAuthError::invalid_token());
+        }
         let ctx = match selected.take() {
             Some(ctx) => ctx,
-            None => pool::select_for(state, oauth, request, excluded).await?,
+            None => pool::select_for(state, oauth, request, attempts.excluded()).await?,
         };
         let revision = state
             .storage
@@ -100,17 +109,26 @@ async fn open(
                 });
             }
             Err(error) => {
-                let Some(failure) = error.supplier_failure(chrono::Utc::now().timestamp()) else {
-                    return Err(error.into());
-                };
-                pool::observe(
-                    state,
-                    &ctx.account.id,
-                    error.auth_revision().or(revision),
-                    &failure,
-                )
-                .await?;
-                excluded.push(ctx.account.id.clone());
+                let failure =
+                    codex2api_upstream::executor::send_failure_of(&error, request.model.as_deref());
+                match attempts
+                    .failed(
+                        &state.upstream,
+                        &state.storage,
+                        &ctx.account,
+                        error.auth_revision().or(revision),
+                        Wire::Codex,
+                        &failure,
+                    )
+                    .await
+                    .map_err(OAuthError::executor)?
+                {
+                    Recovery::Retry(delay) => {
+                        tokio::time::sleep(delay).await;
+                        selected = Some(ctx);
+                    }
+                    Recovery::Switch => {}
+                }
             }
         }
     }
@@ -141,7 +159,7 @@ pub(super) async fn connect(
         &oauth,
         endpoint,
         &headers,
-        &mut Vec::new(),
+        &mut Attempts::default(),
         &crate::pool_scheduler::ScheduleRequest::default(),
         None,
     )
@@ -181,8 +199,7 @@ struct Pending {
     prelude: Vec<(String, Value)>,
     prelude_bytes: usize,
     committed: bool,
-    excluded: Vec<String>,
-    refreshed: std::collections::HashSet<String>,
+    attempts: Attempts,
 }
 
 async fn send(conn: &mut Connection, value: &Value, reviewer: bool) -> Result<()> {
@@ -296,7 +313,7 @@ async fn bridge(
                         &oauth,
                         endpoint,
                         &headers,
-                        &mut Vec::new(),
+                        &mut Attempts::default(),
                         &schedule,
                         Some(selected),
                     )
@@ -341,8 +358,7 @@ async fn bridge(
                     prelude: Vec::new(),
                     prelude_bytes: 0,
                     committed: false,
-                    excluded: Vec::new(),
-                    refreshed: Default::default(),
+                    attempts: Attempts::default(),
                 });
             }
             tokio::select! {
@@ -424,114 +440,56 @@ async fn bridge(
                     }
                     let mut value: Value = serde_json::from_str(&text)
                         .map_err(|_| super::websocket::relay_error("Invalid upstream Responses event"))?;
-                    if let Some(mut failure) = codex2api_upstream::classify_supplier_failure(
-                        None,
-                        &value,
-                        &conn.headers,
-                        chrono::Utc::now().timestamp(),
-                    ) {
-                        let recovered = if failure == codex2api_upstream::SupplierFailure::Authentication
-                            && pending
-                                .as_ref()
-                                .is_some_and(|p| !p.committed && !p.refreshed.contains(&conn.ctx.account.id))
-                        {
-                            pending
-                                .as_mut()
-                                .unwrap()
-                                .refreshed
-                                .insert(conn.ctx.account.id.clone());
-                            match pool::recover_stream_auth(&state, &conn.ctx, conn.revision).await? {
-                                None => true,
-                                Some(rejection) => {
-                                    failure = rejection;
-                                    false
-                                }
-                            }
-                        } else {
-                            false
+                    let failed = matches!(ResponseOutcome::from_value(&value, None), Some(ResponseOutcome::Failed(_)));
+                    let replay_safe = pending.as_ref().is_none_or(|p| !p.committed)
+                        && !codex2api_upstream::executor::generation_observed(&value);
+                    if failed && replay_safe {
+                        let failure = codex2api_upstream::supply::UpstreamFailure {
+                            status: codex2api_upstream::ResponseFailure::from_error(None, &value).status,
+                            headers: conn.headers.clone(), body: value.clone(), transport: None,
+                            model: pending.as_ref().and_then(|p| p.original["model"].as_str().map(str::to_owned)),
+                            output_committed: false, now: chrono::Utc::now().timestamp(),
                         };
-                        if !recovered {
-                            pool::observe(&state, &conn.ctx.account.id, conn.revision, &failure).await?;
-                        }
-                        if let Some(p) = &mut pending
-                            && !p.committed
-                        {
-                            if !recovered {
-                                p.excluded.push(conn.ctx.account.id.clone());
-                            }
-                            let _ = conn.socket.close(None).await;
-                            {
-                                let mut ledger = ledger.lock().await;
-                                ledger.supplier_attempt_failed();
-                                ledger.release_supplier_permits();
-                            }
+                        let mut idle_attempts = Attempts::default();
+                        let attempts = pending.as_mut().map(|p| &mut p.attempts).unwrap_or(&mut idle_attempts);
+                        let recovery = attempts.failed(&state.upstream, &state.storage, &conn.ctx.account,
+                            conn.revision, Wire::Codex, &failure).await.map_err(OAuthError::executor)?;
+                        let error = codex2api_upstream::UpstreamError::status_with_headers(
+                            http::StatusCode::from_u16(failure.status.unwrap_or(502)).unwrap_or(http::StatusCode::BAD_GATEWAY),
+                            value.to_string(), conn.headers.clone());
+                        ledger.lock().await.recovered(&error, match recovery { Recovery::Retry(_) => "retry", Recovery::Switch => "failover" }).await?;
+                        let selected = match recovery {
+                            Recovery::Retry(delay) => { tokio::time::sleep(delay).await; Some(conn.ctx.clone()) }
+                            Recovery::Switch => { ledger.lock().await.release_supplier_permits(); None }
+                        };
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.socket.close(None)).await;
+                        if let Some(p) = &mut pending {
                             let mut schedule = super::super::scheduling::request(&headers, &p.original);
                             schedule.previous_can_move = p.full_input.is_some();
-                            conn = open(
-                                &state,
-                                &oauth,
-                                endpoint,
-                                &headers,
-                                &mut p.excluded,
-                                &schedule,
-                                None,
-                            )
-                            .await?;
+                            conn = open(&state, &oauth, endpoint, &headers, &mut p.attempts, &schedule, selected).await?;
                             let mut retry = p.original.clone();
-                            if !conn.ctx.previous_response_matches
-                                && retry
-                                    .get("previous_response_id")
-                                    .is_some_and(|v| !v.is_null())
-                            {
-                                let input = p.full_input.as_ref().ok_or_else(|| {
-                                    OAuthError::openai(
-                                        http::StatusCode::CONFLICT,
-                                        "configuration_error",
-                                        "Reconnect with the full conversation input after a supplier change.",
-                                        Some("supplier_context_required"),
-                                    )
-                                })?;
-                                retry
-                                    .as_object_mut()
-                                    .unwrap()
-                                    .remove("previous_response_id");
+                            if !conn.ctx.previous_response_matches && retry.get("previous_response_id").is_some_and(|v| !v.is_null()) {
+                                let input = p.full_input.as_ref().ok_or_else(|| OAuthError::openai(
+                                    http::StatusCode::CONFLICT, "configuration_error",
+                                    "Reconnect with the full conversation input after a supplier change.", Some("supplier_context_required")))?;
+                                retry.as_object_mut().unwrap().remove("previous_response_id");
                                 retry["input"] = serde_json::json!(input);
                             }
-                            p.prelude.clear();
-                            p.prelude_bytes = 0;
+                            p.prelude.clear(); p.prelude_bytes = 0;
                             let account = conn.ctx.account.clone();
-                            ledger
-                                .lock()
-                                .await
-                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account)
-                                .await?;
+                            ledger.lock().await.retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account).await?;
                             ledger.lock().await.response_headers(&conn.headers);
                             send(&mut conn, &retry, reviewer).await?;
-                            continue;
-                        }
-                        if pending.is_none() {
-                            let mut excluded = vec![conn.ctx.account.id.clone()];
-                            conn = open(
-                                &state,
-                                &oauth,
-                                endpoint,
-                                &headers,
-                                &mut excluded,
-                                &crate::pool_scheduler::ScheduleRequest::default(),
-                                None,
-                            )
-                            .await?;
+                        } else {
+                            conn = open(&state, &oauth, endpoint, &headers, &mut idle_attempts,
+                                &crate::pool_scheduler::ScheduleRequest::default(), selected).await?;
                             let account = conn.ctx.account.clone();
-                            ledger
-                                .lock()
-                                .await
-                                .retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account)
-                                .await?;
-                            continue;
+                            ledger.lock().await.retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account).await?;
                         }
+                        continue;
                     }
                     if let Some(p) = &mut pending {
-                        if !p.committed && pool::prelude_event(&value) && p.prelude_bytes + text.len() <= 256 * 1024
+                        if !p.committed && codex2api_upstream::executor::prelude_event(&value) && p.prelude_bytes + text.len() <= 256 * 1024
                         {
                             p.prelude_bytes += text.len();
                             p.prelude.push((text, value));
@@ -1017,9 +975,14 @@ mod tests {
         let value: Value = serde_json::from_slice(&event.into_data()).unwrap();
         if payment {
             let health = state.storage.supplier_health(&ids[0]).await.unwrap();
-            assert!(health.payment_required);
-            assert!(!health.authentication_invalid);
-            assert!(health.cooldown_until.is_none());
+            assert!(health.payment_required());
+            assert!(!health.authentication_invalid());
+            assert!(
+                health
+                    .account_block()
+                    .and_then(|block| block.until_at)
+                    .is_none()
+            );
         }
         if throttle {
             assert_eq!(value["type"], "response.created");
@@ -1038,8 +1001,8 @@ mod tests {
                 UpstreamMessage::Close(Some(_))
             ));
             let health = state.storage.supplier_health(&ids[0]).await.unwrap();
-            assert!(!health.authentication_invalid);
-            assert!(health.cooldown_kind.is_none());
+            assert!(!health.authentication_invalid());
+            assert!(health.quota_exhausted() == false);
             assert_eq!(
                 state
                     .storage
@@ -1069,7 +1032,7 @@ mod tests {
             client.close(None).await.unwrap();
         } else {
             assert_eq!(value["status"], 503);
-            assert_eq!(value["error"]["code"], "supplier_pool_exhausted");
+            assert_eq!(value["error"]["code"], "no_available_supplier");
             assert!(!value.to_string().contains("rejected-attempt"));
             let close = client.next().await.unwrap().unwrap();
             assert!(
@@ -1082,7 +1045,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 rows,
-                vec![("failed".into(), "supplier_pool_exhausted".into())]
+                vec![("failed".into(), "no_available_supplier".into())]
             );
         }
         assert_eq!(state.storage.consumer_active(&oauth.virtual_account_id), 0);

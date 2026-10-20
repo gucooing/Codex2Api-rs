@@ -12,8 +12,7 @@ pub struct GrokUpstream {
 
 pub mod errors;
 pub mod models;
-mod scheduling;
-pub use scheduling::{classify_failure, prelude};
+pub(crate) mod verdict;
 
 #[derive(Clone)]
 pub struct PreparedBody {
@@ -292,23 +291,15 @@ impl GrokUpstream {
                 UpstreamError::status_with_headers(status, response.text().await?, headers);
             if let Some(revision) = revision {
                 error = error.with_auth_revision(revision.0);
-                if let Some(failure) = error
-                    .supplier_failure_for(codex2api_common::GROK, chrono::Utc::now().timestamp())
-                {
-                    if failure == crate::SupplierFailure::Authentication {
-                        self.auth()
-                            .storage()?
-                            .reject_supplier_auth(id, revision.0)
-                            .await?;
-                    } else if let crate::SupplierFailure::QuotaExhausted { until, code, .. } =
-                        failure
-                    {
-                        self.auth()
-                            .storage()?
-                            .exhaust_supplier_quota(id, revision.0, until, &code)
-                            .await?;
-                    }
-                }
+                let failure = crate::executor::send_failure_of(&error, None);
+                let verdict = self::verdict::verdict(&failure);
+                crate::supply::apply_verdict(
+                    self.auth().storage()?,
+                    id,
+                    Some(revision.0),
+                    &verdict,
+                )
+                .await?;
             }
             return Err(error);
         }

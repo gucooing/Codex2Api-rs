@@ -12,12 +12,8 @@ use http::HeaderValue;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
-pub(crate) mod api;
 pub mod errors;
-mod events;
-mod request;
-mod schema;
-pub use errors::classify_failure;
+pub(crate) mod verdict;
 
 #[derive(Clone)]
 pub struct AntigravityUpstream {
@@ -186,9 +182,9 @@ impl AntigravityUpstream {
             rebuilt.extensions_mut().insert(revision);
             return Ok(reqwest::Response::from(rebuilt));
         }
-        let mut converted = events::responses_stream(response, model);
-        converted.extensions_mut().insert(revision);
-        Ok(timing.wrap(converted, crate::TokenProtocol::Responses))
+        let mut response = timing.wrap(response, crate::TokenProtocol::Gemini);
+        response.extensions_mut().insert(revision);
+        Ok(response)
     }
 
     /// The account's official model catalog with per-model quota, as returned.
@@ -268,7 +264,7 @@ impl AntigravityUpstream {
     /// left recovers.
     pub async fn quota(&self, id: &str) -> Result<Value> {
         let storage = self.auth.storage()?;
-        let observation = storage.supplier_health(id).await?.cooldown_revision;
+        let observation = storage.supplier_health(id).await?.observation_revision;
         let (authorized, raw) = self.fetch_models(id).await?;
         let now = chrono::Utc::now().timestamp();
         let quotas = model_quotas(&raw);
@@ -281,7 +277,7 @@ impl AntigravityUpstream {
             {
                 for model in &quota.models {
                     storage
-                        .recover_supplier_model_quota(id, authorized.revision, model, observation)
+                        .unblock_supplier_model(id, authorized.revision, model, observation)
                         .await?;
                 }
             }
@@ -291,14 +287,18 @@ impl AntigravityUpstream {
                 match (quota.remaining_fraction, quota.reset_at) {
                     (Some(remaining), Some(until)) if remaining <= 0.0 && until > now => {
                         storage
-                            .exhaust_supplier_model_quota(
+                            .block_supplier(
                                 id,
                                 authorized.revision,
-                                model,
-                                until,
-                                "quota",
+                                &codex2api_storage::BlockRequest {
+                                    model: Some(model.clone()),
+                                    kind: codex2api_storage::BlockKind::Quota,
+                                    until_at: Some(until),
+                                    code: Some("quota".into()),
+                                    message: None,
+                                },
                             )
-                            .await?
+                            .await?;
                     }
                     _ => {}
                 }

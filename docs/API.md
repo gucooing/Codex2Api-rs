@@ -33,51 +33,49 @@ API 组手动授权模型：组的模型列表与管理员目录中已启用、�
 
 ## 请求转换
 
-API 模块负责 HTTP 入站、API Key 鉴权、准入、调度调用、下游交付和钱包结算。
-协议转换位于 codex2api-upstream/src/protocol/，渠道请求构造位于 upstream 的
-providers/chatgpt/api.rs、providers/grok/api.rs 与 providers/antigravity/api.rs。先按 API 组号池与模型权限选中
-供应账户，再按该账户的渠道构造请求；每次尝试都重新构造，所有尝试保持同一个请求标识。
+API 模块负责 HTTP 入站、API Key 鉴权、准入、调用执行器、下游交付和钱包结算。执行器位于
+`codex2api-upstream/src/executor/`，转换矩阵位于 `codex2api-upstream/src/convert/`，各渠道的传输与裁决位于
+upstream 的 `providers/<channel>/`。先按 API 组号池与模型权限选中供应账户，再把入站请求直接转换为该账户线格式的官方请求；每次尝试都重新转换，所有尝试保持同一个请求标识。
 
-三个渠道都是官方订阅供应，上游协议固定，不按模型描述或模型名推断。ChatGPT 使用
-固定 Codex Responses。Grok 使用 xAI Responses：固定参考提交的 Grok Build 在内置
-官方模型表 `xai-grok-models/default_models.json` 中为官方模型声明
-`api_backend: responses`，其 Chat Completions 缺省只适用于未声明协议的自定义模型。Antigravity 使用 Cloud Code Assist 的
-`v1internal:streamGenerateContent` Gemini 线协议，由 upstream 的 `providers/antigravity/` 在传输内部
-完成规范 Responses 与 Gemini 之间的双向转换；公共层只处理 Responses 事件。
+每个供应账户只说一种线格式，按渠道固定，不按模型描述或模型名推断：ChatGPT 为固定 Codex 的 Responses 方言；Grok 为 Grok Build 的 xAI Responses 方言（固定参考提交的内置官方模型表 `xai-grok-models/default_models.json` 为官方模型声明 `api_backend: responses`）；Antigravity 为 Cloud Code Assist 的 `v1internal:streamGenerateContent` Gemini 线协议；API 渠道账户为所配置的 OpenAI Responses、Chat Completions 或 Anthropic Messages。
 
-### 单次转换
+### 转换矩阵
 
-请求只做一次转换：入站协议直接转为规范的上游 Responses 请求，不经过第三种中间格式。
-`protocol/responses.rs`、`protocol/chat/responses.rs` 与 `protocol/messages/responses.rs`
-分别服务 Responses、Chat 与 Messages 调用方：各含请求转换，以及上游 Responses 事件
-到入站事件的转换。Responses 调用方也经过同一转换，因为标准接口的各类客户端请求形态
-不一致；渠道层只施加各自官方客户端的差异。Responses 事件只清理供应信封后转发。
+没有中间标准格式，也没有直通：每个（入站格式，线格式）组合是一对函数——把下游原始请求转为该线格式的官方请求，把该线格式的事件转为下游协议事件。`convert::supports` 声明矩阵，选号时直接排除没有对应转换的供应账户。
 
-各渠道与官方客户端一致，始终以流式方式请求上游（Antigravity 使用 `alt=sse`）。客户端选择同步时，
-网关把转换后的同协议事件聚合为该协议的完整 JSON，因此同步与流式输出一致。
-用量账本始终按上游 Responses 的真实事件计量，不以转换结果计费。转换后的终态事件在
-结算完成后才交付客户端；没有终态事件就结束的上游流按未完成失败处理。
+| 入站 | 线格式 | 模块 |
+| --- | --- | --- |
+| Responses、Chat、Messages | `codex`、`xai`、`openai_responses` | `convert/responses/`：请求按三种方言各自的字段策略重建，事件按入站协议转换 |
+| Responses、Chat、Messages | `gemini` | `convert/gemini/`：请求构造为 `contents`、`systemInstruction`、`generationConfig` 与函数声明，Gemini SSE 分别转为 Responses 事件、Chat 分块或 Messages 事件 |
+| Responses、Chat、Messages | `chat_completions` | `convert/chat_completions/`：请求构造为 messages、tools、`max_completion_tokens`、`reasoning_effort`、`response_format`，分块分别转为三种下游事件 |
+| Responses、Chat、Messages | `messages` | `convert/messages/`：请求构造为交替的 user／assistant 内容块、`input_schema` 工具、`max_tokens` 与 thinking 预算，Messages 事件分别转为三种下游事件 |
+| `codex_client` | `codex` | 官方客户端请求只去往其线格式，渠道重绑供应身份 |
+| `grok_client` | `xai` | 同上 |
 
-| 入站 → 上游 | 主要映射 |
+同名协议也要转换：Responses 调用方打到 ChatGPT 账户时按固定 Codex 的请求形态重建，打到 OpenAI Key 时按 OpenAI API 的字段范围重建。各渠道与官方客户端一致，始终以流式方式请求上游（Antigravity 使用 `alt=sse`，Chat Completions 带 `stream_options.include_usage`）。客户端选择同步时，网关把转换后的同协议事件聚合为该协议的完整 JSON，因此同步与流式输出一致。用量账本按上游线格式的真实事件计量（`convert::observe`），不以转换结果计费。转换后的终态事件在结算完成后才交付客户端；没有终态事件就结束的上游流按未完成失败处理。
+
+| 入站 → 线格式 | 主要映射 |
 | --- | --- |
-| Responses → Responses | 字符串 input 与内容别名、Chat 风格嵌套工具与 tool_choice、`instructions` 转为首个 system 消息、reasoning 项去除仅输出字段、结构化工具输出内容与发现的工具 |
-| Chat → Responses | system/developer/user/assistant、tool 输出、function/custom 调用、`reasoning`/`reasoning_content`、response_format、verbosity、web_search_options、logprobs |
-| Messages → Responses | system（去除 Claude Code 的 `x-anthropic-billing-header`）、文本、图片、文档、tool_use/tool_result；带签名的 thinking 以 `encrypted_content` 回放，无签名的 thinking 不回放 |
+| Responses → Responses 方言 | 字符串 input 与内容别名、Chat 风格嵌套工具与 tool_choice、`instructions` 转为首个系统级消息（Codex 为 developer 角色，xAI 为 system 角色）、reasoning 项去除仅输出字段、结构化工具输出内容与发现的工具 |
+| Chat → Responses 方言 | system/developer/user/assistant、tool 输出、function/custom 调用、`reasoning`/`reasoning_content`、response_format、verbosity、web_search_options、logprobs |
+| Messages → Responses 方言 | system（去除 Claude Code 的 `x-anthropic-billing-header`）、文本、图片、文档、tool_use/tool_result；带签名的 thinking 以 `encrypted_content` 回放，无签名的 thinking 不回放 |
+| Responses／Chat → Chat Completions | input 项或 messages 转为 messages，function_call 并入 assistant 的 `tool_calls`，function_call_output 成为 tool 消息，reasoning 文本成为 `reasoning_content`，`max_output_tokens` → `max_completion_tokens`，`reasoning.effort` → `reasoning_effort`，`text.format` → `response_format` |
+| Messages → Chat Completions | system、文本／图片／文档块、tool_use → `tool_calls`、tool_result → tool 消息、thinking → `reasoning_content`、`max_tokens`、`stop_sequences` → `stop`、思考预算按大小映射推理强度 |
+| Responses／Chat → Messages | 系统文本合并为 `system`，内容转为交替的 user／assistant 块，function_call → `tool_use`，输出 → `tool_result`，带签名的 reasoning → `thinking`，推理强度 → `thinking.budget_tokens`（`max_tokens` 缺省 8192 并保证大于预算），`parallel_tool_calls=false` → `disable_parallel_tool_use` |
+| Messages → Messages | 去除本地字段与客户端归属块，其余按原样发送 |
 
 Messages 工具选择映射为 `auto`、`required`、`none` 或具名函数；
 `disable_parallel_tool_use` 不改变 Responses 的并行调用。Messages 推理关闭时为
 effort `none`，否则取 `output_config.effort`（缺省 medium）并请求自动摘要。
 空工具结果以 `(empty)` 发送。`stop_sequences`、`top_k` 与 `metadata` 不发往
-Responses 上游。
+Responses 方言。
 
 Messages SSE 同一时刻只开放一个内容块；交错的上游项目在前一块完成后依次发送。
 `message_start` 中的计数按流式惯例为 0，实际输入、缓存读写和输出用量在
 `message_delta` 中给出。thinking 块的签名在 `content_block_stop` 之前发送。
 终态快照只补发增量未送达的后缀，不重复发送文本或参数。
 
-顶层 `instructions` 转为 `input` 首个系统级消息；ChatGPT 按 Codex 使用 developer
-角色，Grok 按 Grok Build 使用 system 角色。函数参数、结构化工具输出、多模态内容和
-工具调用 ID 保留。
+函数参数、结构化工具输出、多模态内容和工具调用 ID 保留。
 reasoning 回放保留 encrypted_content、summary/content，并处理 store=false 下
 无法检索的 reasoning ID；已有 include 数组也补齐加密推理内容。
 
@@ -103,22 +101,16 @@ Grok 按 Grok Build 的 Responses 构造器发送：`store=false`、`stream=true
 处理规则；没有工具或具名工具未声明时不发送工具选择。
 
 Antigravity 按官方桌面客户端的 v1internal 信封发送：`project`、`agent-` 前缀的 `requestId`、
-`userAgent: antigravity`、`requestType: agent`、`model` 与 Gemini `request`。规范 Responses 请求
-转换为 `contents`（user／model 角色、文本、thought 与 thoughtSignature、inlineData、
-functionCall／functionResponse）、`systemInstruction`（客户端身份提示、边界提示与调用方 system
-文本）、`generationConfig`（`maxOutputTokens` 缺省 64000、temperature、topP、按推理强度映射的
-`thinkingConfig`、结构化输出的 `responseMimeType`／`responseSchema`）、清理后的
-`functionDeclarations`、`toolConfig` 以及由会话种子派生的 `sessionId`。响应事件按 Gemini 候选项
-转换为 Responses 的 reasoning、message 与 function_call 项；`finishReason` 映射为 completed、
-incomplete（`max_output_tokens` 或 `content_filter`）或 failed，用量取 `promptTokenCount`（含缓存）、
-`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`。模型按官方显示名称分组，
-客户端模型名由显示名称转换；有推理强度变体的模型，信封 `model` 为所选账户对应强度标签的上游标识，
-没有该强度时返回 400 并列出支持的推理强度。细节见 [Antigravity 渠道](ANTIGRAVITY.md)。
+`userAgent: antigravity`、`requestType: agent`、`model` 与 Gemini `request`；请求与事件转换细节见 [Antigravity 渠道](ANTIGRAVITY.md)。API 渠道账户的端点、认证头与转换见 [API 渠道](API_ACCOUNTS.md)。
+
+### 错误与换号
+
+上游错误由选中账户的渠道裁决：请求本身的错误按下游格式原样返回；临时错误同号重试；授权、账单、额度、权限、过载、5xx 与传输错误回避该账户（仅本次请求、限时或永久，账户级或某个模型）并换号。上游 429 从不转发。候选耗尽返回 503 `no_available_supplier`，号池内没有任何账户配置该模型返回 404 `model_not_found`；调用者只在本服务自身限制（RPM、并发、排队、预算）时收到 429。供应凭据、账单、额度与权限细节只进管理端账本。
 
 后台持久化作业、生成 `n>1`、查询/删除已存储响应不是 Codex 订阅协议提供的能力。
 固定 Images 协议不提供 mask、流式输出或托管图片 URL；对应请求明确返回不支持，
-不会伪造异步任务、下载地址或成功结果。Grok 与 Antigravity 目前没有该渠道可用的 Codex 搜索、
-压缩、计数和原生 Responses WebSocket 传输，Antigravity 也不提供图像生成和 `previous_response_id` 续接，这些路径明确拒绝。
+不会伪造异步任务、下载地址或成功结果。Grok、Antigravity 与 API 渠道没有 Codex 搜索、
+压缩、计数和原生 Responses WebSocket 传输；Antigravity、Chat Completions 与 Messages 账户不提供 `previous_response_id` 续接，Antigravity 与 API 渠道不提供图像生成，这些路径明确拒绝。
 
 ## 搜索与计数
 

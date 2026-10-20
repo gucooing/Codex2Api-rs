@@ -1,12 +1,14 @@
 //! The pinned Codex ImagesClient sends JSON image references and receives base64 data.
-use crate::protocol::{Error as ApiError, PreparedRequest, Result, images};
+use crate::inbound::images;
+use crate::inbound::{Error as ApiError, Result};
+use crate::supply::WireRequest;
 use serde_json::Value;
 
 pub(crate) fn prepare(
     mut body: Value,
     edit: bool,
     inbound: &http::HeaderMap,
-) -> Result<PreparedRequest> {
+) -> Result<WireRequest> {
     images::validate(
         &body,
         &[
@@ -60,7 +62,7 @@ mod tests {
         );
         assert!(request.body.get("image").is_none());
         assert!(request.body.get("response_format").is_none());
-        assert_eq!(request.upstream.upstream_path(), "images/edits");
+        assert_eq!(request.operation, crate::supply::Operation::ImageEdit);
         assert!(prepare(json!({"model":"custom-image","prompt":"edit","image":"https://example.test/image.png","mask":"https://example.test/mask.png"}),true, &http::HeaderMap::new()).is_err());
         assert!(
             prepare(

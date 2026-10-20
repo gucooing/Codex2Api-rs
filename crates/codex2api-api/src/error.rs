@@ -2,6 +2,7 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
+use codex2api_upstream::{convert, executor::ExecutorError, inbound::Inbound};
 use http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
@@ -42,32 +43,6 @@ impl ApiError {
             cause: None,
         }
     }
-    /// A supplier failure as the caller sees it after the gateway's handling. Retry
-    /// advice is forwarded only when the public view is throttling.
-    fn supplier(
-        cause: codex2api_upstream::ResponseFailure,
-        public: codex2api_upstream::public_output::PublicFailure,
-        error: Value,
-        retry: Option<&HeaderMap>,
-    ) -> Self {
-        let mut headers = HeaderMap::new();
-        if public.throttled()
-            && let Some(retry) = retry
-        {
-            for name in ["retry-after", "retry-after-ms", "x-should-retry"] {
-                if let Some(value) = retry.get(name) {
-                    headers.insert(name, value.clone());
-                }
-            }
-        }
-        Self {
-            status: public.status_code(),
-            body: json!({ "error": error }),
-            headers,
-            diagnostic: None,
-            cause: Some(cause),
-        }
-    }
     pub(crate) fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid_request_error", message)
     }
@@ -98,60 +73,71 @@ impl ApiError {
             "The upstream stream ended without a complete response.",
         )
     }
+    /// No supplier in the pool can serve the request now.
+    pub(crate) fn no_supplier(model_not_found: bool) -> Self {
+        if model_not_found {
+            return Self::new(
+                StatusCode::NOT_FOUND,
+                "model_not_found",
+                "No supplier in the pool is configured for this model.",
+            );
+        }
+        let mut error = Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no_available_supplier",
+            "No supplier is available for this request. Please retry later.",
+        );
+        error
+            .headers
+            .insert("retry-after", http::HeaderValue::from_static("5"));
+        error
+    }
+    /// A supplier's reply or event that the caller receives in its own format, with
+    /// the supplier's own status; `cause` keeps the real failure for the ledger.
+    pub(crate) fn wire_failure(inbound: Inbound, status: Option<u16>, value: &Value) -> Self {
+        let cause = codex2api_upstream::ResponseFailure::from_error(status, value);
+        let status = status.or(cause.status).unwrap_or(502);
+        let (status, body) = convert::escaped_reply(inbound, status, value);
+        Self {
+            status,
+            body,
+            headers: HeaderMap::new(),
+            diagnostic: None,
+            cause: Some(cause),
+        }
+    }
     /// A supplier failure event or reply body as the caller sees it.
     pub(crate) fn upstream_value(value: &Value) -> Self {
-        Self::upstream_reply(None, value, &HeaderMap::new())
+        Self::wire_failure(Inbound::Responses, None, value)
     }
-    /// `http_status` and `headers` belong to the supplier's HTTP reply, when there was one.
-    pub(crate) fn upstream_reply(
-        http_status: Option<u16>,
-        value: &Value,
-        headers: &HeaderMap,
-    ) -> Self {
-        let (public, error) = codex2api_upstream::public_output::failure(http_status, value);
-        let raw = value
-            .pointer("/response/error")
-            .filter(|v| !v.is_null())
-            .or_else(|| value.get("error").filter(|v| !v.is_null()))
-            .unwrap_or(value);
-        let mut retry = headers.clone();
-        for source in [
-            value.get("headers"),
-            value.pointer("/response/headers"),
-            raw.get("headers"),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(values) = source.as_object() {
-                for (name, value) in values {
-                    let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) else {
-                        continue;
-                    };
-                    if !matches!(
-                        name.as_str(),
-                        "retry-after" | "retry-after-ms" | "x-should-retry"
-                    ) || retry.contains_key(&name)
-                    {
-                        continue;
-                    }
-                    let text = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        _ => continue,
-                    };
-                    if let Ok(value) = http::HeaderValue::from_str(&text) {
-                        retry.insert(name, value);
-                    }
-                }
+    pub(crate) fn executor(error: ExecutorError, inbound: Inbound) -> Self {
+        match error {
+            ExecutorError::NoSupplier { model_not_found } => Self::no_supplier(model_not_found),
+            ExecutorError::Busy => {
+                let mut error = Self::no_supplier(false);
+                error
+                    .headers
+                    .insert("retry-after", http::HeaderValue::from_static("1"));
+                error
             }
+            ExecutorError::ContextRequired => Self::new(
+                StatusCode::BAD_REQUEST,
+                "previous_response_not_found",
+                "The previous response is no longer available. Send the full conversation without previous_response_id.",
+            ),
+            ExecutorError::ConsumerInvalid => Self::invalid_key(),
+            ExecutorError::Client { status, body, .. } => {
+                let mut error = Self::wire_failure(inbound, Some(status), &body);
+                (error.status, error.body) = convert::client_error(inbound, status, &body);
+                error
+            }
+            ExecutorError::Stopped { status, body, .. } => {
+                Self::wire_failure(inbound, Some(status), &body)
+            }
+            ExecutorError::Convert(error) => error.into(),
+            ExecutorError::Upstream(error) => error.into(),
+            ExecutorError::Storage(error) => error.into(),
         }
-        Self::supplier(
-            codex2api_upstream::ResponseFailure::from_error(http_status, value),
-            public,
-            error,
-            Some(&retry),
-        )
     }
 }
 impl IntoResponse for ApiError {
@@ -187,31 +173,7 @@ impl From<crate::runtime::LimitError> for ApiError {
 }
 impl From<codex2api_upstream::scheduler::SchedulerError> for ApiError {
     fn from(value: codex2api_upstream::scheduler::SchedulerError) -> Self {
-        use codex2api_upstream::scheduler::SchedulerError as E;
-        match value {
-            E::Storage(error) => error.into(),
-            E::Upstream(error) => error.into(),
-            E::ConsumerInvalid => Self::invalid_key(),
-            // Pool state is the service's own; the caller sees its public view.
-            E::Rejected {
-                status,
-                code,
-                message,
-                ..
-            } => {
-                let cause = codex2api_upstream::ResponseFailure::new(
-                    Some(status.as_u16()),
-                    code,
-                    Some(&message),
-                );
-                let public = codex2api_upstream::public_output::PublicFailure::new(&cause);
-                let retry = public.throttled().then(|| {
-                    HeaderMap::from_iter([(http::header::RETRY_AFTER, "1".parse().unwrap())])
-                });
-                let error = public.error();
-                Self::supplier(cause, public, error, retry.as_ref())
-            }
-        }
+        Self::executor(ExecutorError::from(value), Inbound::Responses)
     }
 }
 impl From<codex2api_storage::StorageError> for ApiError {
@@ -249,6 +211,8 @@ impl From<codex2api_storage::StorageError> for ApiError {
         error.with_diagnostic(&diagnostic)
     }
 }
+/// Channel errors that escape the executor: the caller's own request faults, this
+/// service's faults, and transport faults after a reply was accepted.
 impl From<codex2api_upstream::UpstreamError> for ApiError {
     fn from(value: codex2api_upstream::UpstreamError) -> Self {
         use codex2api_upstream::UpstreamError as E;
@@ -270,23 +234,59 @@ impl From<codex2api_upstream::UpstreamError> for ApiError {
                 tracing::error!(%message, "API gateway internal failure");
                 Self::internal().with_diagnostic(&format!("internal error: {message}"))
             }
-            E::Status {
-                status,
-                body,
-                headers,
-                ..
-            } => Self::upstream_reply(
-                Some(status),
-                &serde_json::from_str(&body).unwrap_or_default(),
-                &headers,
-            ),
+            E::Status { status, body, .. } => {
+                let value: Value = serde_json::from_str(&body).unwrap_or_default();
+                let cause = codex2api_upstream::ResponseFailure::from_error(Some(status), &value);
+                let (status, body) = convert::escaped_reply(Inbound::Responses, status, &value);
+                Self {
+                    status,
+                    body,
+                    headers: HeaderMap::new(),
+                    diagnostic: None,
+                    cause: Some(cause),
+                }
+            }
             other => {
                 let diagnostic = codex2api_upstream::request_failure::error_diagnostic(&other);
-                let public = other.public_failure();
-                let error = public.error();
-                Self::supplier(other.failure(), public, error, other.retry_headers())
-                    .with_diagnostic(&diagnostic)
+                let failure = other.failure();
+                let (status, code, message) = match failure.kind {
+                    codex2api_upstream::FailureKind::Timeout => (
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "upstream_timeout",
+                        "The upstream service timed out. Please try again later.",
+                    ),
+                    codex2api_upstream::FailureKind::Authentication
+                    | codex2api_upstream::FailureKind::PaymentRequired
+                    | codex2api_upstream::FailureKind::Permission
+                    | codex2api_upstream::FailureKind::QuotaExhausted
+                    | codex2api_upstream::FailureKind::RateLimit
+                    | codex2api_upstream::FailureKind::LimitUnknown => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "no_available_supplier",
+                        "No supplier is available for this request. Please retry later.",
+                    ),
+                    _ => (
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_error",
+                        "The upstream service could not complete this request.",
+                    ),
+                };
+                let mut error = Self::new(status, code, message).with_diagnostic(&diagnostic);
+                error.cause = Some(failure);
+                error
             }
+        }
+    }
+}
+
+impl From<convert::Error> for ApiError {
+    fn from(error: convert::Error) -> Self {
+        Self {
+            status: error.status,
+            body: error.body,
+            headers: HeaderMap::new(),
+            diagnostic: None,
+            cause: None,
         }
     }
 }
@@ -295,30 +295,23 @@ impl From<codex2api_upstream::UpstreamError> for ApiError {
 mod tests {
     use super::*;
     #[test]
-    fn api_rewrite_errors_keep_status_and_retry_headers() {
-        let value = json!({"type":"error","status":429,"headers":{"Retry-After":"7","Authorization":"private"},"error":{"code":"rate_limit_exceeded","message":"private supplier"}});
-        let error = ApiError::from(codex2api_upstream::UpstreamError::Status {
-            status: 200,
-            body: value.to_string(),
-            headers: HeaderMap::new(),
-            auth_revision: None,
-        });
-        assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(error.headers["retry-after"], "7");
-        assert!(!error.headers.contains_key("authorization"));
-        assert_eq!(error.body["error"]["code"], "rate_limit_exceeded");
-        assert!(!error.body.to_string().contains("private"));
-    }
-}
-
-impl From<codex2api_upstream::protocol::Error> for ApiError {
-    fn from(error: codex2api_upstream::protocol::Error) -> Self {
-        Self {
-            status: error.status,
-            body: error.body,
-            headers: HeaderMap::new(),
-            diagnostic: None,
-            cause: None,
-        }
+    fn wire_failures_keep_their_status_and_identity_but_not_supplier_details() {
+        let value = json!({"type":"error","status":400,"error":{"type":"invalid_request_error","code":"invalid_prompt","message":"bad prompt from org-123 secret@example.test"}});
+        let error = ApiError::wire_failure(Inbound::Responses, Some(400), &value);
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.body["error"]["code"], "invalid_prompt");
+        assert!(!error.body.to_string().contains("org-123"));
+        assert!(!error.body.to_string().contains("secret@"));
+        let messages = ApiError::wire_failure(Inbound::Messages, Some(400), &value);
+        assert_eq!(messages.body["type"], "error");
+        assert_eq!(messages.body["error"]["type"], "invalid_request_error");
+        let exhausted = ApiError::executor(
+            ExecutorError::NoSupplier {
+                model_not_found: false,
+            },
+            Inbound::Chat,
+        );
+        assert_eq!(exhausted.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(exhausted.body["error"]["code"], "no_available_supplier");
     }
 }

@@ -129,6 +129,26 @@ impl Storage {
         Ok(candidates)
     }
 
+    /// Configuration is independent of temporary availability and administrator enablement.
+    pub async fn pool_model_configured(
+        &self,
+        tags: &[String],
+        provider: Option<&str>,
+        model: &str,
+    ) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM supplier_tag_members t
+             JOIN supplier_accounts a ON a.id=t.account_id
+             JOIN supplier_models m ON m.account_id=a.id
+             WHERE t.tag_id=ANY($1) AND ($2::text IS NULL OR a.provider_id=$2) AND m.model=$3)",
+        )
+        .bind(tags)
+        .bind(provider)
+        .bind(model)
+        .fetch_one(self.pool())
+        .await?)
+    }
+
     pub async fn pool_candidate_for_tags(
         &self,
         tags: &[String],
@@ -159,23 +179,18 @@ impl Storage {
         let rows = sqlx::query_as::<_, CandidateRow>(
             "SELECT a.id,a.provider_id,COALESCE(s.concurrency,5) AS concurrency,
              COALESCE(s.priority,0) AS priority,s.load_factor,sm.model,
-             GREATEST(CASE WHEN h.cooldown_kind='quota_exhausted' AND h.cooldown_auth_revision=a.auth_revision
-                  THEN h.cooldown_until END,
-                  CASE WHEN c.cooldown_auth_revision=a.auth_revision THEN c.cooldown_until END) AS ready_at
+             GREATEST(ab.until_at,mb.until_at) AS ready_at
              FROM supplier_tag_members m
              JOIN supplier_accounts a ON a.id=m.account_id
              JOIN supplier_tokens k ON k.account_id=a.id
-             LEFT JOIN supplier_health h ON h.account_id=a.id
              LEFT JOIN supplier_scheduling s ON s.account_id=a.id
              LEFT JOIN supplier_models sm ON sm.account_id=a.id
-             LEFT JOIN supplier_model_cooldowns c ON c.account_id=a.id AND c.model=sm.model
+             LEFT JOIN supplier_blocks ab ON ab.account_id=a.id AND ab.scope='account'
+             LEFT JOIN supplier_blocks mb ON mb.account_id=a.id AND mb.scope='model' AND mb.model=sm.model
              WHERE m.tag_id=$1 AND ($2='' OR a.provider_id=$2) AND a.status='active'
              AND COALESCE(k.access_token,'')!=''
-             AND (h.rejected_auth_revision IS NULL OR h.rejected_auth_revision!=a.auth_revision)
-             AND h.payment_required_at IS NULL
-             AND (COALESCE(h.cooldown_kind,'')!='quota_exhausted'
-                  OR h.cooldown_auth_revision IS NULL OR h.cooldown_auth_revision!=a.auth_revision
-                  OR h.cooldown_until IS NOT NULL)
+             AND (ab.account_id IS NULL OR ab.until_at IS NOT NULL)
+             AND (mb.account_id IS NULL OR mb.until_at IS NOT NULL)
              ORDER BY a.id,sm.model"
         ).bind(tag).bind(provider).fetch_all(self.pool()).await?;
         Ok((rows, Duration::from_secs(30)))
