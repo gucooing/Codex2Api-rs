@@ -18,6 +18,7 @@ import { percentLabel, quotaResetLabel } from "@/lib/supplier-state";
 export function AntigravityOfficialData({
   id,
   section,
+  onUpdated,
 }: {
   id: string;
   section: string;
@@ -27,6 +28,7 @@ export function AntigravityOfficialData({
   const { setRefresh, now, resource, fields, models } = useAntigravityOfficialData({
     id,
     section,
+    onUpdated,
   });
   return (
     <Card>

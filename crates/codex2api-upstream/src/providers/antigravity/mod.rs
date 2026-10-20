@@ -52,15 +52,17 @@ impl AntigravityUpstream {
         {
             return Err(UpstreamError::Internal("Supplier provider mismatch".into()));
         }
-        let credentials = self.auth.refresh(id, false, None).await?;
-        let revision = storage
-            .supplier_auth_revision(id)
+        self.auth.refresh(id, false, None).await?;
+        let snapshot = storage
+            .supplier_auth_snapshot(id)
             .await?
             .ok_or_else(|| UpstreamError::MissingAccessToken(id.into()))?;
+        let credentials =
+            snapshot.decode(|| AntigravityCredentials::from_supplier_tokens(&snapshot.tokens))?;
         Ok(Authorized {
             http: self.auth.account_http(id).await?,
             credentials,
-            revision,
+            revision: snapshot.auth_revision,
         })
     }
 
@@ -152,6 +154,7 @@ impl AntigravityUpstream {
         let revision = SupplierAuthRevision(authorized.revision);
         if !response.status().is_success() {
             let status = response.status();
+            let original_headers = response.headers().clone();
             let mut normalized = errors::normalize(status.as_u16(), &response.bytes().await?);
             // Quota cools the routed model, whichever variant or vendor name Google reports.
             normalized["error"]["model"] = model.as_str().into();
@@ -160,13 +163,25 @@ impl AntigravityUpstream {
                 .header(http::header::CONTENT_TYPE, "application/json")
                 .body(reqwest::Body::from(normalized.to_string()))
                 .expect("response");
+            for name in [
+                "retry-after",
+                "retry-after-ms",
+                "x-should-retry",
+                "x-request-id",
+                "x-oai-request-id",
+            ] {
+                if let Some(value) = original_headers.get(name) {
+                    rebuilt.headers_mut().insert(name, value.clone());
+                }
+            }
             if let Some(retry) = normalized["headers"]["retry-after"]
                 .as_str()
                 .and_then(|v| HeaderValue::from_str(v).ok())
             {
                 rebuilt
                     .headers_mut()
-                    .insert(http::header::RETRY_AFTER, retry);
+                    .entry(http::header::RETRY_AFTER)
+                    .or_insert(retry);
             }
             rebuilt.extensions_mut().insert(revision);
             return Ok(reqwest::Response::from(rebuilt));
@@ -252,16 +267,29 @@ impl AntigravityUpstream {
     /// spent quota cools down until its reset, and every model of a quota with some
     /// left recovers.
     pub async fn quota(&self, id: &str) -> Result<Value> {
-        let (authorized, raw) = self.fetch_models(id).await?;
         let storage = self.auth.storage()?;
+        let observation = storage.supplier_health(id).await?.cooldown_revision;
+        let (authorized, raw) = self.fetch_models(id).await?;
         let now = chrono::Utc::now().timestamp();
-        for quota in model_quotas(&raw) {
+        let quotas = model_quotas(&raw);
+        // Apply recoveries before this response's new exhaustions advance the
+        // observation revision. Concurrent failures invalidate every recovery.
+        for quota in &quotas {
+            if quota
+                .remaining_fraction
+                .is_some_and(|remaining| remaining > 0.0)
+            {
+                for model in &quota.models {
+                    storage
+                        .recover_supplier_model_quota(id, authorized.revision, model, observation)
+                        .await?;
+                }
+            }
+        }
+        for quota in quotas {
             for model in &quota.models {
                 match (quota.remaining_fraction, quota.reset_at) {
-                    (Some(remaining), _) if remaining > 0.0 => {
-                        storage.recover_supplier_model_quota(id, model).await?
-                    }
-                    (Some(_), Some(until)) if until > now => {
+                    (Some(remaining), Some(until)) if remaining <= 0.0 && until > now => {
                         storage
                             .exhaust_supplier_model_quota(
                                 id,

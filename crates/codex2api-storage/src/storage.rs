@@ -595,6 +595,18 @@ impl Storage {
         tokens: SupplierTokens,
         proxy_id: Option<&str>,
     ) -> Result<SupplierAccount> {
+        self.save_authorized_account_with_revision(new, tokens, proxy_id)
+            .await
+            .map(|(account, _)| account)
+    }
+
+    /// Return this login's revision atomically for its subsequent profile observations.
+    pub async fn save_authorized_account_with_revision(
+        &self,
+        new: NewSupplierAccount,
+        tokens: SupplierTokens,
+        proxy_id: Option<&str>,
+    ) -> Result<(SupplierAccount, i64)> {
         if !codex2api_common::supported_provider(&new.provider_id) {
             return Err(StorageError::Constraint("Unknown supplier provider".into()));
         }
@@ -680,7 +692,7 @@ impl Storage {
             crate::snapshots::Domain::Suppliers,
             crate::snapshots::Domain::Pools,
         ]);
-        Ok(account)
+        Ok((account, revision + 1))
     }
 
     pub async fn get_account(&self, id: &str) -> Result<Option<SupplierAccount>> {

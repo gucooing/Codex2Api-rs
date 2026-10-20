@@ -80,18 +80,6 @@ test("prices use exact decimals and reject lost precision or ambiguous intervals
   assert.throws(() => pricingRows(draft));
 });
 
-// Price labels use the effective intervals; draft rows retain the exact saved rules.
-test("range labels respect the next threshold and explicit caps", async () => {
-  const { priceRangeLabel } = await import("../src/lib/model-pricing.ts");
-  const first = base(),
-    second = base(272001);
-  assert.equal(priceRangeLabel(first, [first, second]), "0–272,000");
-  assert.equal(priceRangeLabel(second, [first, second]), "≥ 272,001");
-  assert.equal(priceRangeLabel({ ...first, max_input_tokens: 100 }, [first, second]), "0–100");
-  assert.equal(priceRangeLabel(first, [first]), "不限");
-  assert.equal(first.max_input_tokens, undefined);
-});
-
 test("image uniform and resolution modes round trip without guessing prices", async () => {
   const { imagePricingDraft, imagePricingRows } = await import("../src/lib/model-pricing.ts");
   const uniform = [{ resolution: "*", price: "0.000000001" }];

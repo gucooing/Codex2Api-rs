@@ -18,8 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { ModelOption } from "@/lib/api";
-import type { ModelRuleDraft } from "@/lib/model-rules";
+import type { ModelRuleDraft, ModelRuleRow } from "@/lib/model-rules";
 import { platformLabel, platformOptions } from "@/lib/providers";
 
 /** Manual model grants with per-model multiplier and per-user limits. Rows keep the
@@ -28,7 +27,7 @@ import { platformLabel, platformOptions } from "@/lib/providers";
  * after them while it matches the search and no platform is chosen. */
 export function ModelRulesTable({
   id,
-  options,
+  rows,
   ready,
   rules,
   baseMultiplier,
@@ -42,7 +41,7 @@ export function ModelRulesTable({
   disabled,
 }: {
   id: string;
-  options: ModelOption[] | undefined;
+  rows: ModelRuleRow[];
   ready: boolean;
   rules: ModelRuleDraft[];
   baseMultiplier: string;
@@ -55,23 +54,6 @@ export function ModelRulesTable({
   onRule: (model: string, field: keyof Omit<ModelRuleDraft, "model">, value: string) => void;
   disabled: boolean;
 }) {
-  const visible = options ?? [];
-  const term = search.trim().toLowerCase();
-  const rows = [
-    ...visible.map((option) => ({
-      model: option.model,
-      platform: option.platform,
-      enabled: option.enabled,
-    })),
-    ...rules
-      .filter(
-        (rule) =>
-          !platform &&
-          rule.model.toLowerCase().includes(term) &&
-          !visible.some((option) => option.model === rule.model),
-      )
-      .map((rule) => ({ model: rule.model, platform: null, enabled: true })),
-  ];
   return (
     <FieldSet disabled={disabled} className="gap-3">
       <div className="flex flex-wrap items-end gap-3">

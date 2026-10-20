@@ -103,7 +103,11 @@ impl ApiError {
         Self::upstream_reply(None, value, &HeaderMap::new())
     }
     /// `http_status` and `headers` belong to the supplier's HTTP reply, when there was one.
-    fn upstream_reply(http_status: Option<u16>, value: &Value, headers: &HeaderMap) -> Self {
+    pub(crate) fn upstream_reply(
+        http_status: Option<u16>,
+        value: &Value,
+        headers: &HeaderMap,
+    ) -> Self {
         let (public, error) = codex2api_upstream::public_output::failure(http_status, value);
         let raw = value
             .pointer("/response/error")

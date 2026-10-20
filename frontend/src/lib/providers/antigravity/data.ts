@@ -3,7 +3,7 @@ import { useQuotaClock } from "@/hooks/use-supplier-quotas";
 import { useActions, useErrorToast } from "@/lib/actions";
 import { request, type Fingerprint, type Json } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 const text = (value: Json | undefined) =>
   typeof value === "string" || typeof value === "number" ? String(value) : undefined;
@@ -50,6 +50,7 @@ type ModelQuota = {
 export function useAntigravityOfficialData({
   id,
   section,
+  onUpdated,
 }: {
   id: string;
   section: string;
@@ -66,6 +67,9 @@ export function useAntigravityOfficialData({
   }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
   useErrorToast(resource.error);
   useErrorToast(resource.data?.refresh_error);
+  useEffect(() => {
+    if (resource.data) onUpdated?.();
+  }, [resource.data, onUpdated]);
   const value = record(resource.data?.value);
   const allowed = value?.allowedTiers;
   const fields: [string, string | undefined][] = [

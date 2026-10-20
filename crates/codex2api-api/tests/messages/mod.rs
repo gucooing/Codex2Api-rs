@@ -229,7 +229,7 @@ async fn messages_failure_usage_is_charged_once_without_replay() {
         .oneshot(request("/v1/messages", &f.token, body(false)))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let _ = json_body(response).await;
     assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
     let row: (String, Option<i64>, Option<i64>, Option<i64>) =

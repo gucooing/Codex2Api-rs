@@ -936,7 +936,7 @@ async fn model_policy_covers_token_inspection_realtime_and_native_preparation_be
         ),
     ] {
         let response = client
-            .get(format!("http://{addr}/v1/realtime?{query}"))
+            .get(format!("http://{addr}{ROOT}/v1/realtime?{query}"))
             .bearer_auth(token)
             .header("connection", "upgrade")
             .header("upgrade", "websocket")

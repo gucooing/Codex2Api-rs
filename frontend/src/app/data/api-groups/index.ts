@@ -6,6 +6,7 @@ import type { ApiGroup } from "@/lib/api-access";
 import { useColumnVisibility } from "@/lib/columns";
 import { useResource } from "@/lib/hooks";
 import {
+  modelRuleRows,
   multiplierText,
   ruleDraft,
   rulesFromDrafts,
@@ -120,7 +121,7 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
     setRules((current) => setRuleField(current, model, field, next));
   const selectVisible = (checked: boolean) =>
     setRules((current) =>
-      (models.data?.items ?? []).reduce(
+      modelRuleRows(models.data?.items, current, modelSearch, modelPlatform).reduce(
         (rules, option) => toggleRule(rules, option.model, checked),
         current,
       ),
@@ -179,6 +180,7 @@ export function useApiGroupEditor(group: ApiGroup, ready: boolean, onSaved: () =
     setModelPlatform,
     tags,
     models,
+    modelRows: modelRuleRows(models.data?.items, rules, modelSearch, modelPlatform),
     busy,
     disabled: !ready || busy || !tags.ready || !models.ready,
     toggleTag,

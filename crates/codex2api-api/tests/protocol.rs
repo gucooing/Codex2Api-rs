@@ -51,6 +51,7 @@ struct Mock {
     partial_output: AtomicBool,
     response_content_type: Mutex<Option<Option<String>>>,
     grok_rejections: Mutex<std::collections::HashMap<String, (u16, String)>>,
+    antigravity_reply: Mutex<Option<(u16, String)>>,
 }
 fn response_value() -> Value {
     json!({"object":"response","id":"resp_fixture","created_at":100,"model":"custom-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":10000,"output_tokens":5000,"input_tokens_details":{"cached_tokens":2000},"output_tokens_details":{"reasoning_tokens":1000}},"supplier_account_id":"private-supplier"})
@@ -65,6 +66,7 @@ impl codex2api_upstream::HttpTransport for Mock {
         let failed_usage = self.failed_usage.load(Ordering::Relaxed);
         let partial_output = self.partial_output.load(Ordering::Relaxed);
         let response_content_type = self.response_content_type.lock().unwrap().clone();
+        let antigravity_reply = self.antigravity_reply.lock().unwrap().clone();
         let grok_rejection = built
             .as_ref()
             .ok()
@@ -126,6 +128,23 @@ impl codex2api_upstream::HttpTransport for Mock {
                 return Ok(http::Response::builder().header("content-type","application/json").body(reqwest::Body::from(json!({"accounts":[{"id":id,"workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}).to_string())).unwrap().into());
             }
             if request.url().path().starts_with("/v1internal:") {
+                if let Some((status, body)) = antigravity_reply {
+                    return Ok(http::Response::builder()
+                        .status(status)
+                        .header(
+                            "content-type",
+                            if body.starts_with("data:") {
+                                "text/event-stream"
+                            } else {
+                                "application/json"
+                            },
+                        )
+                        .header("retry-after", "120")
+                        .header("x-should-retry", "true")
+                        .body(reqwest::Body::from(body))
+                        .unwrap()
+                        .into());
+                }
                 assert!(
                     request
                         .url()
@@ -174,10 +193,10 @@ impl codex2api_upstream::HttpTransport for Mock {
                     .into());
             }
             if let Some(status) = status {
-                let code = if status == 402 {
-                    "payment_required"
-                } else {
-                    "rate_limit_exceeded"
+                let code = match status {
+                    402 => "payment_required",
+                    429 => "rate_limit_exceeded",
+                    _ => "server_error",
                 };
                 let mut value = json!({"error":{"code":code,"message":"private-supplier","retry_after_seconds":7}});
                 if let Some(ai_status) = ai_status {
@@ -602,7 +621,7 @@ async fn early_rejections_keep_key_ownership_and_do_not_charge_or_duplicate_usag
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     json_body(response).await;
     assert_eq!(
         f.storage
@@ -935,7 +954,7 @@ async fn failed_response_with_reported_usage_is_charged_without_replay() {
                     if stream {
                         StatusCode::OK
                     } else {
-                        StatusCode::from_u16(ai_status.unwrap_or(502)).unwrap()
+                        StatusCode::SERVICE_UNAVAILABLE
                     }
                 );
                 let text = String::from_utf8(
@@ -945,7 +964,8 @@ async fn failed_response_with_reported_usage_is_charged_without_replay() {
                         .to_vec(),
                 )
                 .unwrap();
-                assert!(text.contains("usage_limit_reached"));
+                assert!(text.contains("service_unavailable"));
+                assert!(!text.contains("usage_limit_reached"));
                 assert!(!text.contains("private-supplier"));
                 assert!(!text.contains("[DONE]"));
                 assert!(!text.contains("\"finish_reason\":\"stop\""));
@@ -1015,8 +1035,19 @@ async fn physical_http_failure_preserves_reported_usage_and_does_not_replay() {
                     .oneshot(request(path, &fixture.token, body))
                     .await
                     .unwrap();
-                assert_eq!(response.status().as_u16(), status);
-                assert_eq!(response.headers()["retry-after"], "7");
+                assert_eq!(
+                    response.status().as_u16(),
+                    match status {
+                        402 => 503,
+                        429 => 429,
+                        _ => 502,
+                    }
+                );
+                if status == 429 {
+                    assert_eq!(response.headers()["retry-after"], "7");
+                } else {
+                    assert!(!response.headers().contains_key("retry-after"));
+                }
                 let value = json_body(response).await;
                 assert!(value.get("error").is_some());
                 assert!(!value.to_string().contains("private-supplier"));
@@ -1287,10 +1318,10 @@ async fn previous_responses_keep_supplier_and_consumer_ownership_for_native_grok
         .oneshot(request("/v1/responses", &other_key.secret, follow.clone()))
         .await
         .unwrap();
-    assert_eq!(denied.status(), StatusCode::CONFLICT);
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(denied).await["error"]["code"],
-        "supplier_context_required"
+        "previous_response_not_found"
     );
     fixture
         .storage
@@ -1303,7 +1334,7 @@ async fn previous_responses_keep_supplier_and_consumer_ownership_for_native_grok
         .oneshot(request("/v1/responses", &fixture.token, follow))
         .await
         .unwrap();
-    assert_eq!(unavailable.status(), StatusCode::CONFLICT);
+    assert_eq!(unavailable.status(), StatusCode::BAD_REQUEST);
     assert_eq!(fixture.mock.requests.lock().unwrap().len(), 2);
 }
 
@@ -1488,6 +1519,163 @@ async fn api_rewrite_public_contracts() {
 }
 
 #[tokio::test]
+async fn mixed_pools_skip_unsupported_protocols_even_with_existing_affinity() {
+    let f = fixture("antigravity").await;
+    add_supplier(&f.storage, "chatgpt", "chatgpt").await;
+    f.storage
+        .save_supplier_tag("chatgpt", "chatgpt", "ChatGPT")
+        .await
+        .unwrap();
+    f.storage
+        .edit_supplier_tags(&["chatgpt".into()], &["chatgpt".into()], false)
+        .await
+        .unwrap();
+    f.storage
+        .save_supplier_scheduling(
+            "chatgpt",
+            &codex2api_storage::SupplierScheduling {
+                priority: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut group = f.storage.api_group("group").await.unwrap().unwrap();
+    group.tag_ids.push("chatgpt".into());
+    f.storage
+        .save_api_group(&group, Some(group.revision))
+        .await
+        .unwrap();
+    let mut settings = f.storage.gateway_settings().await.unwrap();
+    settings.scheduler_mode = "traditional".into();
+    f.storage.save_gateway_settings(&settings).await.unwrap();
+    let make = |path| {
+        let mut request = request(
+            path,
+            &f.token,
+            json!({"model":"custom-model","input":"hello"}),
+        );
+        request
+            .headers_mut()
+            .insert("session-id", "shared-session".parse().unwrap());
+        request
+    };
+    let generated = f
+        .router
+        .clone()
+        .oneshot(make("/v1/responses"))
+        .await
+        .unwrap();
+    assert_eq!(generated.status(), StatusCode::OK);
+    json_body(generated).await;
+    let compacted = f
+        .router
+        .clone()
+        .oneshot(make("/v1/responses/compact"))
+        .await
+        .unwrap();
+    let status = compacted.status();
+    let body = json_body(compacted).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let paths: Vec<_> = f
+        .mock
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(path, _, _)| path.clone())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/v1internal:streamGenerateContent",
+            "/backend-api/codex/responses/compact"
+        ]
+    );
+    f.storage
+        .edit_supplier_tags(&["chatgpt".into()], &["chatgpt".into()], true)
+        .await
+        .unwrap();
+    let rejected = f
+        .router
+        .clone()
+        .oneshot(make("/v1/responses/compact"))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        json_body(rejected).await["error"]["code"],
+        "service_unavailable"
+    );
+    assert_eq!(f.mock.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn antigravity_long_throttles_preserve_retry_advice_and_partial_usage_without_eviction() {
+    for (sse, streaming) in [(false, false), (true, false), (true, true)] {
+        let f = fixture("antigravity").await;
+        let error = json!({"code":429,"status":"RESOURCE_EXHAUSTED","message":"Rate limited",
+            "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"},
+                {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"90s"}]});
+        let body = if sse {
+            format!(
+                "data: {}\n\n",
+                json!({"response":{"error":error,"usageMetadata":{"promptTokenCount":10000,"candidatesTokenCount":5000}}})
+            )
+        } else {
+            json!({"error":error}).to_string()
+        };
+        *f.mock.antigravity_reply.lock().unwrap() = Some((if sse { 200 } else { 429 }, body));
+        let response = f
+            .router
+            .clone()
+            .oneshot(request(
+                "/v1/responses",
+                &f.token,
+                json!({"model":"custom-model","input":"hello","stream":streaming}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if streaming {
+                StatusCode::OK
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            }
+        );
+        assert_eq!(response.headers()["retry-after"], "120");
+        assert_eq!(response.headers()["x-should-retry"], "true");
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("rate_limit_exceeded"), "{body}");
+        assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
+        assert!(
+            f.storage
+                .supplier_model_cooldowns("supplier")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let health = f.storage.supplier_health("supplier").await.unwrap();
+        assert!(health.cooldown_kind.is_none() && !health.authentication_invalid);
+        let usage: (String, Option<i64>, Option<i64>) =
+            sqlx::query_as("SELECT status,input_tokens,output_tokens FROM usage_records")
+                .fetch_one(f.storage.pool())
+                .await
+                .unwrap();
+        assert_eq!(usage.0, "failed");
+        assert_eq!(usage.1, sse.then_some(10000));
+        assert_eq!(usage.2, sse.then_some(5000));
+    }
+}
+
+#[tokio::test]
 async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_one_model() {
     for (path, stream) in [
         ("/v1/responses", false),
@@ -1566,10 +1754,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
             .usage("user", &codex2api_storage::UserUsageFilter::default())
             .await
             .unwrap();
-        assert_eq!(
-            public["items"][0]["upstream_endpoint"],
-            "/v1/responses"
-        );
+        assert_eq!(public["items"][0]["upstream_endpoint"], "/v1/responses");
         let calls = fixture.mock.requests.lock().unwrap();
         assert_eq!(calls.len(), 1);
         let (upstream_path, headers, envelope) = &calls[0];
@@ -1646,7 +1831,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     let status = response.status();
     let value = json_body(response).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
-    assert_eq!(value["error"]["code"], "supplier_pool_exhausted");
+    assert_eq!(value["error"]["code"], "service_unavailable");
     assert!(!value.to_string().contains("private-supplier"));
     let cooldowns = fixture
         .storage
@@ -1670,7 +1855,17 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     assert_eq!(fixture.mock.requests.lock().unwrap().len(), 1);
     fixture
         .storage
-        .recover_supplier_model_quota("supplier", "custom-model")
+        .recover_supplier_model_quota(
+            "supplier",
+            fixture
+                .storage
+                .supplier_auth_revision("supplier")
+                .await
+                .unwrap()
+                .unwrap(),
+            "custom-model",
+            health.cooldown_revision,
+        )
         .await
         .unwrap();
     *fixture.mock.status.lock().unwrap() = Some(503);
@@ -1678,7 +1873,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
     let status = response.status();
     let value = json_body(response).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
-    assert_eq!(value["error"]["code"], "unavailable", "{value}");
+    assert_eq!(value["error"]["code"], "service_unavailable", "{value}");
     assert!(
         fixture
             .storage

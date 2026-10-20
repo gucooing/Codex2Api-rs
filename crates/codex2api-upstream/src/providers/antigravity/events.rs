@@ -67,13 +67,31 @@ fn item_id(prefix: &str) -> String {
 /// Gemini counts cached prompt tokens inside the prompt total and thoughts outside the
 /// candidate total; Responses includes both in its totals and details them separately.
 fn usage(meta: &Value) -> Value {
-    let count = |key: &str| meta[key].as_u64().unwrap_or(0);
-    let input = count("promptTokenCount");
-    let thoughts = count("thoughtsTokenCount");
-    let output = count("candidatesTokenCount") + thoughts;
-    json!({"input_tokens":input,"input_tokens_details":{"cached_tokens":count("cachedContentTokenCount")},
-        "output_tokens":output,"output_tokens_details":{"reasoning_tokens":thoughts},
-        "total_tokens":meta["totalTokenCount"].as_u64().unwrap_or(input+output)})
+    let input = meta["promptTokenCount"].as_u64();
+    let thoughts = meta["thoughtsTokenCount"].as_u64();
+    let output = meta["candidatesTokenCount"]
+        .as_u64()
+        .and_then(|count| count.checked_add(thoughts.unwrap_or(0)));
+    let total = meta["totalTokenCount"]
+        .as_u64()
+        .or_else(|| input?.checked_add(output?));
+    let mut value = json!({});
+    for (key, count) in [
+        ("input_tokens", input),
+        ("output_tokens", output),
+        ("total_tokens", total),
+    ] {
+        if let Some(count) = count {
+            value[key] = count.into();
+        }
+    }
+    if let Some(cached) = meta["cachedContentTokenCount"].as_u64() {
+        value["input_tokens_details"] = json!({"cached_tokens":cached});
+    }
+    if let Some(thoughts) = thoughts {
+        value["output_tokens_details"] = json!({"reasoning_tokens":thoughts});
+    }
+    value
 }
 
 pub(crate) struct Converter {
@@ -84,7 +102,7 @@ pub(crate) struct Converter {
     pub(crate) finished: bool,
     items: Vec<Item>,
     open: bool,
-    usage: Option<Value>,
+    usage_metadata: Option<Value>,
     finish: Option<String>,
     block: Option<String>,
     pending_annotations: Vec<Value>,
@@ -100,7 +118,7 @@ impl Converter {
             finished: false,
             items: Vec::new(),
             open: false,
-            usage: None,
+            usage_metadata: None,
             finish: None,
             block: None,
             pending_annotations: Vec::new(),
@@ -153,6 +171,8 @@ impl Converter {
         } else {
             if added["type"] == "function_call" {
                 added["status"] = "in_progress".into();
+                // The following arguments delta carries the payload once.
+                added["arguments"] = "".into();
             }
             out.push(
                 json!({"type":"response.output_item.added","output_index":index,"item":added}),
@@ -361,8 +381,11 @@ impl Converter {
         let mut response = self.response("failed");
         response["error"] = error;
         response["output"] = self.items.iter().map(Item::value).collect();
-        if let Some(usage) = &self.usage {
-            response["usage"] = usage.clone();
+        if let Some(meta) = &self.usage_metadata {
+            let counts = usage(meta);
+            if counts.as_object().is_some_and(|counts| !counts.is_empty()) {
+                response["usage"] = counts;
+            }
         }
         out.push(json!({"type":"response.failed","response":response}));
         self.finished = true;
@@ -380,6 +403,15 @@ impl Converter {
             .filter(|v| v.is_object())
             .unwrap_or(&chunk);
         self.start(&chunk, body, &mut out);
+        if let Some(meta) = body.get("usageMetadata").and_then(Value::as_object) {
+            // Counters may arrive in separate chunks. Merge the raw cumulative
+            // measurements before adding candidate and reasoning output tokens.
+            self.usage_metadata
+                .get_or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("usage object")
+                .extend(meta.clone());
+        }
         if let Some(error) = chunk
             .get("error")
             .or_else(|| body.get("error"))
@@ -390,12 +422,13 @@ impl Converter {
                 .and_then(|code| u16::try_from(code).ok())
                 .filter(|code| (400..=599).contains(code))
                 .unwrap_or(502);
-            let normalized =
+            let mut normalized =
                 errors::normalize(status, json!({"error":error}).to_string().as_bytes());
+            normalized["error"]["model"] = self.model.as_str().into();
+            if let Some(headers) = normalized.get("headers").cloned() {
+                normalized["error"]["headers"] = headers;
+            }
             return self.fail(normalized["error"].clone(), out);
-        }
-        if let Some(meta) = body.get("usageMetadata").filter(|u| u.is_object()) {
-            self.usage = Some(usage(meta));
         }
         if let Some(reason) = body["promptFeedback"]["blockReason"].as_str() {
             self.block = Some(reason.to_owned());
@@ -416,8 +449,7 @@ impl Converter {
         out
     }
 
-    /// The terminal event once the upstream stream ends. A stream that never
-    /// reported a finish reason yields none, which the caller treats as incomplete.
+    /// Finish once, retaining reported usage even when the stream is incomplete.
     pub(crate) fn finish(&mut self) -> Vec<Value> {
         let mut out = Vec::new();
         if !self.started || self.finished {
@@ -431,9 +463,13 @@ impl Converter {
             );
         }
         let Some(reason) = self.finish.clone() else {
-            return out;
+            return self.fail(
+                json!({"code":"upstream_protocol_error","type":"server_error","message":"The upstream stream ended without a finish reason."}),
+                out,
+            );
         };
         let (kind, status, incomplete) = match reason.as_str() {
+            "STOP" => ("response.completed", "completed", None),
             "MAX_TOKENS" => (
                 "response.incomplete",
                 "incomplete",
@@ -449,15 +485,23 @@ impl Converter {
                     out,
                 );
             }
-            _ => ("response.completed", "completed", None),
+            _ => {
+                return self.fail(
+                    json!({"code":"upstream_protocol_error","type":"server_error","message":format!("The model stopped with an unsupported finish reason: {reason}")}),
+                    out,
+                );
+            }
         };
         let mut response = self.response(status);
         response["output"] = self.items.iter().map(Item::value).collect();
         if let Some(reason) = incomplete {
             response["incomplete_details"] = json!({"reason":reason});
         }
-        if let Some(usage) = &self.usage {
-            response["usage"] = usage.clone();
+        if let Some(meta) = &self.usage_metadata {
+            let counts = usage(meta);
+            if counts.as_object().is_some_and(|counts| !counts.is_empty()) {
+                response["usage"] = counts;
+            }
         }
         out.push(json!({"type":kind,"response":response}));
         self.finished = true;
@@ -475,6 +519,7 @@ fn frame(value: &Value) -> Bytes {
 
 /// The upstream SSE body re-emitted as a Responses event stream.
 pub(crate) fn responses_stream(upstream: reqwest::Response, model: String) -> reqwest::Response {
+    let headers = upstream.headers().clone();
     let stream = async_stream::stream! {
         let mut events = Box::pin(crate::buffered_sse_lines(upstream.bytes_stream()).eventsource());
         let mut converter = Converter::new(model);
@@ -482,7 +527,9 @@ pub(crate) fn responses_stream(upstream: reqwest::Response, model: String) -> re
             let event = match event {
                 Ok(event) => event,
                 Err(error) => {
-                    yield Err(std::io::Error::other(error.to_string()));
+                    for event in converter.fail(json!({"code":"upstream_transport_error","type":"server_error","message":error.to_string()}), Vec::new()) {
+                        yield Ok::<_, std::io::Error>(frame(&event));
+                    }
                     return;
                 }
             };
@@ -490,7 +537,9 @@ pub(crate) fn responses_stream(upstream: reqwest::Response, model: String) -> re
                 continue;
             }
             let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
-                yield Err(std::io::Error::other("Antigravity stream chunk was not JSON"));
+                for event in converter.fail(json!({"code":"upstream_protocol_error","type":"server_error","message":"Antigravity stream chunk was not JSON"}), Vec::new()) {
+                    yield Ok(frame(&event));
+                }
                 return;
             };
             for event in converter.push(value) {
@@ -509,6 +558,17 @@ pub(crate) fn responses_stream(upstream: reqwest::Response, model: String) -> re
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("text/event-stream"),
     );
+    for name in [
+        "x-request-id",
+        "x-oai-request-id",
+        "retry-after",
+        "retry-after-ms",
+        "x-should-retry",
+    ] {
+        if let Some(value) = headers.get(name) {
+            response.headers_mut().insert(name, value.clone());
+        }
+    }
     response.into()
 }
 
@@ -565,6 +625,22 @@ mod tests {
         assert_eq!(done[1]["item"]["type"], "function_call");
         assert_eq!(done[1]["item"]["call_id"], "toolu_1");
         assert_eq!(done[1]["item"]["arguments"], "{\"city\":\"Taipei\"}");
+        let mut chat = crate::protocol::chat::responses::Stream::new(true);
+        let mut arguments = String::new();
+        for event in &events {
+            for chunk in chat.event(event).unwrap() {
+                if let Some(delta) = chunk
+                    .pointer("/choices/0/delta/tool_calls/0/function/arguments")
+                    .and_then(Value::as_str)
+                {
+                    arguments.push_str(delta);
+                }
+            }
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(&arguments).unwrap(),
+            json!({"city":"Taipei"})
+        );
         assert_eq!(done[2]["item"]["content"][0]["text"], "Hello");
         let terminal = events.last().unwrap();
         assert_eq!(terminal["type"], "response.completed");
@@ -580,6 +656,89 @@ mod tests {
                 .push(chunk(json!([{"text":"late"}]), None, None))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn terminal_failures_keep_usage_and_routed_model_without_inventing_measurements() {
+        let mut converter = Converter::new("public-model".into());
+        converter.push(chunk(
+            json!([{"text":"partial"}]),
+            None,
+            Some(json!({"promptTokenCount":10,"candidatesTokenCount":2})),
+        ));
+        let events = converter.push(json!({"response":{"usageMetadata":{"thoughtsTokenCount":1},"error":{
+            "code":429,"status":"RESOURCE_EXHAUSTED","message":"slow down",
+            "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{"model":"variant"}},
+                {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"90s"}]
+        }}}));
+        let response = &events.last().unwrap()["response"];
+        assert_eq!(response["status"], "failed");
+        assert_eq!(response["usage"]["input_tokens"], 10);
+        assert_eq!(response["usage"]["output_tokens"], 3);
+        assert_eq!(response["usage"]["total_tokens"], 13);
+        assert_eq!(response["error"]["model"], "public-model");
+        assert_eq!(response["error"]["headers"]["retry-after"], "90");
+        assert!(converter.finish().is_empty());
+        assert_eq!(usage(&json!({})), json!({}));
+        assert!(
+            usage(&json!({"promptTokenCount":10}))
+                .get("output_tokens")
+                .is_none()
+        );
+        assert!(
+            usage(&json!({"candidatesTokenCount":u64::MAX,"thoughtsTokenCount":1}))
+                .get("output_tokens")
+                .is_none()
+        );
+        for reason in [None, Some("OTHER"), Some("MALFORMED_FUNCTION_CALL")] {
+            let mut converter = Converter::new("public-model".into());
+            converter.push(chunk(
+                json!([{"text":"partial"}]),
+                reason,
+                Some(json!({"promptTokenCount":10,"candidatesTokenCount":2})),
+            ));
+            let events = converter.finish();
+            let terminal = events.last().unwrap();
+            assert_eq!(terminal["type"], "response.failed");
+            assert_eq!(terminal["response"]["usage"]["output_tokens"], 2);
+            assert!(converter.finish().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_streams_preserve_measured_usage_before_the_failure() {
+        let first = chunk(
+            json!([{"text":"partial"}]),
+            None,
+            Some(json!({"promptTokenCount":10,"candidatesTokenCount":2})),
+        );
+        let source = http::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(reqwest::Body::from(format!(
+                "data: {first}\n\ndata: invalid-json\n\n"
+            )))
+            .unwrap();
+        let converted = responses_stream(source.into(), "public-model".into());
+        let body = converted.text().await.unwrap();
+        let events: Vec<Value> = body
+            .split("\n\n")
+            .filter_map(|frame| frame.strip_prefix("data: "))
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e["type"] == "response.failed")
+                .count(),
+            1
+        );
+        let terminal = events.last().unwrap();
+        assert_eq!(
+            terminal["response"]["error"]["code"],
+            "upstream_protocol_error"
+        );
+        assert_eq!(terminal["response"]["usage"]["input_tokens"], 10);
+        assert_eq!(terminal["response"]["usage"]["output_tokens"], 2);
     }
 
     #[test]

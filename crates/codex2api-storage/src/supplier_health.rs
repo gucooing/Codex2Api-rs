@@ -189,7 +189,7 @@ impl Storage {
     ) -> Result<()> {
         let mut tx = self.pool().begin().await?;
         crate::storage::lock_supplier(&mut tx, id).await?;
-        sqlx::query(&format!(
+        let changed = sqlx::query(&format!(
             "INSERT INTO supplier_model_cooldowns(account_id,model,cooldown_until,cooldown_auth_revision,cooldown_code,cooldown_observed_at)
              SELECT a.id,p.model,$2,a.auth_revision,$3,floor(extract(epoch FROM clock_timestamp()))::bigint
              FROM supplier_accounts a CROSS JOIN ({}) p WHERE a.id=$4 AND a.auth_revision=$5
@@ -204,7 +204,18 @@ impl Storage {
         .bind(id)
         .bind(auth_revision)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+        if changed > 0 {
+            sqlx::query(
+                "INSERT INTO supplier_health(account_id,cooldown_revision) VALUES($1,1)
+                 ON CONFLICT(account_id) DO UPDATE
+                 SET cooldown_revision=supplier_health.cooldown_revision+1",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         self.runtime
             .snapshots
@@ -213,17 +224,32 @@ impl Storage {
     }
 
     /// An official read reported the model available again before its recorded reset;
-    /// the models sharing its quota pool recover with it.
-    pub async fn recover_supplier_model_quota(&self, id: &str, model: &str) -> Result<()> {
+    /// the models sharing its quota pool recover with it. A read begun before a
+    /// later failure or reauthorization cannot clear that newer state.
+    pub async fn recover_supplier_model_quota(
+        &self,
+        id: &str,
+        auth_revision: i64,
+        model: &str,
+        cooldown_revision: i64,
+    ) -> Result<()> {
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_supplier(&mut tx, id).await?;
         let changed = sqlx::query(&format!(
-            "DELETE FROM supplier_model_cooldowns WHERE account_id=$1 AND model IN ({})",
+            "DELETE FROM supplier_model_cooldowns WHERE account_id=$1 AND model IN ({})
+             AND cooldown_auth_revision=$3 AND EXISTS(
+                 SELECT 1 FROM supplier_accounts a JOIN supplier_health h ON h.account_id=a.id
+                 WHERE a.id=$1 AND a.auth_revision=$3 AND h.cooldown_revision=$4)",
             pool_models("$2", "$1")
         ))
         .bind(id)
         .bind(model)
-        .execute(self.pool())
+        .bind(auth_revision)
+        .bind(cooldown_revision)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
+        tx.commit().await?;
         if changed > 0 {
             self.runtime
                 .snapshots

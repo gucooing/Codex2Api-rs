@@ -6,9 +6,6 @@ use serde_json::{Value, json};
 
 const RETRY_INFO: &str = "type.googleapis.com/google.rpc.RetryInfo";
 const ERROR_INFO: &str = "type.googleapis.com/google.rpc.ErrorInfo";
-/// Google asks for a wait on every 429. A short wait is ordinary throttling for the
-/// caller to retry; a longer one is this account's quota for the model until the reset.
-const QUOTA_COOLDOWN_SECONDS: f64 = 7.0;
 
 pub(crate) fn auth_failure(
     error: &codex2api_suppliers::antigravity::AntigravityAuthError,
@@ -106,7 +103,8 @@ fn parse(value: &Value) -> Parsed<'_> {
             .or_else(|| error["status"].as_str()),
         reason: error["reason"]
             .as_str()
-            .or_else(|| info.and_then(|d| d["reason"].as_str())),
+            .or_else(|| info.and_then(|d| d["reason"].as_str()))
+            .or_else(|| error["code"].as_str()),
         model: error["model"]
             .as_str()
             .or_else(|| info.and_then(|d| d["metadata"]["model"].as_str()))
@@ -169,26 +167,28 @@ pub fn normalize(status: u16, raw: &[u8]) -> Value {
 }
 
 /// Credential rejection and explicit model quota exhaustion remove supply; the
-/// exhausted model alone cools down. Brief waits, 403 policy denials and shared
-/// capacity shortages (503) are forwarded for the caller's own retry.
+/// exhausted model alone cools down. A retry delay never proves quota exhaustion;
+/// ordinary throttling, 403 denials and shared capacity shortages stay with the caller.
 pub fn classify_failure(
     status: Option<u16>,
     value: &Value,
     _headers: &HeaderMap,
     now: i64,
 ) -> Option<SupplierFailure> {
+    let parsed = parse(value);
+    let status = status.or(parsed.status);
     if status == Some(401) {
         return Some(SupplierFailure::Authentication);
     }
-    let parsed = parse(value);
-    let status = status.or(parsed.status);
     if status != Some(429) && parsed.rpc_status != Some("RESOURCE_EXHAUSTED") {
         return None;
     }
     let message = parsed.message.unwrap_or("").to_ascii_lowercase();
-    let exhausted = parsed
-        .retry_after
-        .is_some_and(|seconds| seconds >= QUOTA_COOLDOWN_SECONDS)
+    let reason = parsed.reason.unwrap_or_default().to_ascii_lowercase();
+    if matches!(reason.as_str(), "rate_limit_exceeded" | "slow_down") {
+        return None;
+    }
+    let exhausted = matches!(reason.as_str(), "quota_exhausted" | "quota_exceeded")
         || message.contains("exhausted your capacity")
         || message.contains("quota exceeded");
     if !exhausted {
@@ -245,15 +245,15 @@ mod tests {
     }
 
     #[test]
-    fn long_model_waits_cool_the_model_and_short_waits_stay_with_the_caller() {
+    fn only_explicit_model_quota_exhaustion_cools_the_model() {
         let raw = google(
             "RESOURCE_EXHAUSTED",
-            Some("RATE_LIMIT_EXCEEDED"),
+            Some("QUOTA_EXHAUSTED"),
             Some("4m50s"),
             Some("publishers/anthropic/models/claude-sonnet-4-6"),
         );
         let normalized = normalize(429, raw.to_string().as_bytes());
-        assert_eq!(normalized["error"]["code"], "rate_limit_exceeded");
+        assert_eq!(normalized["error"]["code"], "quota_exhausted");
         assert_eq!(normalized["error"]["type"], "rate_limit_error");
         assert_eq!(normalized["headers"]["retry-after"], "290");
         // A mid-stream failure arrives as a response.failed event without an HTTP status.
@@ -263,7 +263,7 @@ mod tests {
                 classify_failure(status, value, &HeaderMap::new(), 100),
                 Some(SupplierFailure::QuotaExhausted {
                     until: 390,
-                    code: "rate_limit_exceeded".into(),
+                    code: "quota_exhausted".into(),
                     model: Some("claude-sonnet-4-6".into()),
                 })
             );
@@ -274,6 +274,21 @@ mod tests {
             classify_failure(Some(429), &brief, &HeaderMap::new(), 100),
             None
         );
+        for reason in [None, Some("RATE_LIMIT_EXCEEDED"), Some("slow_down")] {
+            let mut throttled = google("RESOURCE_EXHAUSTED", reason, Some("4m50s"), Some("m"));
+            if reason.is_none() {
+                throttled["error"]["message"] = "Resource exhausted; retry later.".into();
+            }
+            for value in [
+                &throttled,
+                &normalize(429, throttled.to_string().as_bytes()),
+            ] {
+                assert_eq!(
+                    classify_failure(Some(429), value, &HeaderMap::new(), 100),
+                    None
+                );
+            }
+        }
         let capacity = json!({"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE",
             "details":[{"@type":ERROR_INFO,"reason":"MODEL_CAPACITY_EXHAUSTED","metadata":{"model":"gemini-3-pro-high"}}]}});
         assert_eq!(
@@ -291,6 +306,11 @@ mod tests {
         );
         assert_eq!(
             classify_failure(Some(401), &Value::Null, &HeaderMap::new(), 100),
+            Some(SupplierFailure::Authentication)
+        );
+        let auth = json!({"type":"response.failed","response":{"error":{"status":401,"code":"unauthenticated"}}});
+        assert_eq!(
+            classify_failure(None, &auth, &HeaderMap::new(), 100),
             Some(SupplierFailure::Authentication)
         );
     }

@@ -54,7 +54,24 @@ pub(crate) fn status(value: &Value) -> Option<u16> {
 }
 
 pub fn normalize(value: &Value) -> Value {
-    normalize_at(value, 0)
+    normalize_reply(value, None)
+}
+
+pub(super) fn normalize_reply(value: &Value, http_status: Option<u16>) -> Value {
+    let mut error = normalize_at(value, 0);
+    if status(&error).is_none()
+        && let Some(status) = http_status
+    {
+        error["status"] = status.into();
+    }
+    if let Some(code) = super::scheduling::quota_code(status(&error), &error).map(str::to_owned) {
+        if error["code"].is_null() {
+            error["code"] = code.into();
+        }
+        // Keep Grok's diagnostic code while sharing only a protocol-neutral category.
+        error["type"] = "quota_exhausted".into();
+    }
+    error
 }
 
 fn normalize_at(value: &Value, depth: usize) -> Value {

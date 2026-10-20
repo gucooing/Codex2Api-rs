@@ -542,7 +542,8 @@ mod isolation_tests {
         let events = [
             json!({"type":"response.output_item.done","item":{"id":"msg_partial","type":"message","role":"assistant","phase":"partial_answer","content":[{"type":"output_text","text":"Partial fixture"}]}}),
             json!({"type":"response.completed","response":{"id":"resp_partial","end_turn":false}}),
-            json!({"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"supplier-secret","headers":{"Retry-After":"Wed, 21 Oct 2026 07:28:00 GMT","X-Account":"supplier-secret"}}}}),
+            json!({"type":"response.failed","response":{"error":{"code":"slow_down","message":"supplier-secret","headers":{"Retry-After":"Wed, 21 Oct 2026 07:28:00 GMT","X-Account":"supplier-secret"}}}}),
+            json!({"type":"response.failed","response":{"error":{"code":"server_is_overloaded","status":503,"message":"supplier-secret","headers":{"Retry-After":"120","X-Account":"supplier-secret"}}}}),
         ];
         let input = events
             .iter()
@@ -575,6 +576,11 @@ mod isolation_tests {
             actual[2]["response"]["error"]["headers"],
             json!({"retry-after":"Wed, 21 Oct 2026 07:28:00 GMT"})
         );
+        assert_eq!(
+            actual[3]["response"]["error"]["code"],
+            "service_unavailable"
+        );
+        assert!(actual[3]["response"]["error"].get("headers").is_none());
         assert!(!text.contains("supplier-secret"));
         for (event, expected) in events.iter().zip(actual) {
             let websocket = websocket_message(&storage, "fixture", &event.to_string())

@@ -1,4 +1,4 @@
-import type { ModelRule } from "./api";
+import type { ModelOption, ModelRule } from "./api";
 
 /** Editable text form of a granted model rule shared by plans and API groups. */
 export type ModelRuleDraft = {
@@ -7,6 +7,30 @@ export type ModelRuleDraft = {
   concurrency_limit: string;
   rpm_limit: string;
 };
+
+export type ModelRuleRow = { model: string; platform: string | null; enabled: boolean };
+
+/** The table and bulk actions must use the same filtered set, including removed catalog entries. */
+export function modelRuleRows(
+  options: ModelOption[] | undefined,
+  rules: ModelRuleDraft[],
+  search: string,
+  platform: string,
+): ModelRuleRow[] {
+  const visible = options ?? [];
+  const term = search.trim().toLowerCase();
+  return [
+    ...visible.map(({ model, platform, enabled }) => ({ model, platform, enabled })),
+    ...rules
+      .filter(
+        (rule) =>
+          !platform &&
+          rule.model.toLowerCase().includes(term) &&
+          !visible.some((option) => option.model === rule.model),
+      )
+      .map((rule) => ({ model: rule.model, platform: null, enabled: true })),
+  ];
+}
 
 export function ruleDraft(rule: ModelRule): ModelRuleDraft {
   return {

@@ -201,7 +201,8 @@ impl GrokUpstream {
             let status = response.status();
             let headers = response.headers().clone();
             let raw = errors::decode(&response.bytes().await?);
-            let mut normalized = json!({"error":errors::normalize(&raw)});
+            let mut normalized =
+                json!({"error":errors::normalize_reply(&raw, Some(status.as_u16()))});
             let measured = raw.get("response").unwrap_or(&raw);
             // Keep generation evidence for request settlement and replay protection.
             // Consumer error responses still expose only the public error allowlist.

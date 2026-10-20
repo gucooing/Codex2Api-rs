@@ -91,6 +91,9 @@ enum Disposition {
 impl PublicFailure {
     pub fn new(failure: &crate::ResponseFailure) -> Self {
         use crate::FailureKind as K;
+        if failure.kind == K::QuotaExhausted {
+            return Self::unavailable();
+        }
         let code = failure.code.as_deref();
         match code {
             // The gateway's own continuation contract, in the official client's vocabulary.
@@ -188,13 +191,14 @@ impl PublicFailure {
     /// The consumer's view of a supplier error object or envelope; `http_status` is
     /// the supplier response status when the error arrived as an HTTP reply.
     pub fn from_error(http_status: Option<u16>, value: &Value) -> Self {
-        let mut public = Self::new(&crate::ResponseFailure::from_error(http_status, value));
+        let failure = crate::ResponseFailure::from_error(http_status, value);
+        let error = value
+            .pointer("/response/error")
+            .or_else(|| value.get("error"))
+            .filter(|error| error.is_object())
+            .unwrap_or(value);
+        let mut public = Self::new(&failure);
         if public.disposition == Disposition::Caller {
-            let error = value
-                .pointer("/response/error")
-                .or_else(|| value.get("error"))
-                .filter(|error| error.is_object())
-                .unwrap_or(value);
             public.error_type = identifier(&error["type"])
                 .filter(|kind| *kind != "error")
                 .map(str::to_owned);

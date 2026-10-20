@@ -27,6 +27,7 @@ pub(crate) fn public_headers(original: &HeaderMap, stream: bool) -> HeaderMap {
         "x-oai-request-id",
         "retry-after",
         "retry-after-ms",
+        "x-should-retry",
         "x-codex-turn-state",
     ] {
         if let Some(value) = original.get(name) {
@@ -93,7 +94,11 @@ pub(crate) async fn response_body(
             Err(mut error) => {
                 log.fail(&error);
                 log.settle().await?;
-                error.headers.extend(headers);
+                for name in ["x-request-id", "x-oai-request-id"] {
+                    if let Some(value) = headers.get(name) {
+                        error.headers.insert(name, value.clone());
+                    }
+                }
                 Err(error)
             }
         };
@@ -148,6 +153,7 @@ async fn unary(
     response: reqwest::Response,
     prepared: &PreparedRequest,
 ) -> Result<Value> {
+    let headers = response.headers().clone();
     let mut value = read_json(response).await?;
     codex2api_upstream::providers::normalize_event(log.supplier_provider(), &mut value);
     log.measure(&value, prepared.upstream);
@@ -160,7 +166,7 @@ async fn unary(
         observe_terminal_failure(state, log, &value).await?;
         if failed {
             log.settle().await?;
-            return Err(ApiError::upstream_value(&value));
+            return Err(ApiError::upstream_reply(None, &value, &headers));
         }
         return Err(ApiError::new(
             StatusCode::BAD_GATEWAY,
@@ -175,7 +181,7 @@ async fn unary(
     }
     if !log.successful() {
         log.settle().await?;
-        return Err(ApiError::upstream_value(&value));
+        return Err(ApiError::upstream_reply(None, &value, &headers));
     }
     codex2api_upstream::public_output::metadata(&mut value);
     if let Some(metadata) = &prepared.metadata {
@@ -309,6 +315,7 @@ async fn consume_stream(
     log: &mut ApiLog,
     sender: Option<&tokio::sync::mpsc::Sender<std::io::Result<Bytes>>>,
 ) -> Result<Value> {
+    let headers = response.headers().clone();
     let events = codex2api_upstream::buffered_sse_lines(response.bytes_stream()).eventsource();
     futures::pin_mut!(events);
     // Every adapter delivers Responses events; Responses callers receive them as they are.
@@ -381,7 +388,7 @@ async fn consume_stream(
             log.lifecycle.outcome(),
             Some(ResponseOutcome::Failed(_) | ResponseOutcome::Cancelled)
         )
-        .then(|| ApiError::upstream_value(&value));
+        .then(|| ApiError::upstream_reply(None, &value, &headers));
         codex2api_upstream::public_output::metadata(&mut value);
         let mut chunks = match &failure {
             // Native Responses callers receive the supplier's own failure event.

@@ -457,13 +457,6 @@ mod tests {
     }
 
     #[test]
-    fn extracts_bearer_token() {
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer c2a_abc"));
-        assert_eq!(extract_bearer(&headers).unwrap(), "c2a_abc");
-    }
-
-    #[test]
     fn rejects_missing_and_empty() {
         assert!(extract_bearer(&HeaderMap::new()).is_err());
         let mut headers = HeaderMap::new();

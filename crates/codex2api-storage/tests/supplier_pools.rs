@@ -1237,9 +1237,29 @@ async fn model_cooldowns_exclude_one_model_until_reset_recovery_or_a_new_login()
         storage.supplier_model_cooldowns("s").await.unwrap().len(),
         1
     );
+    // Older reads cannot erase a later failure, even under the same credentials.
+    storage
+        .exhaust_supplier_model_quota("s", rev, "alpha-model", now + 700, "quota_exhausted")
+        .await
+        .unwrap();
+    storage
+        .recover_supplier_model_quota("s", rev, "alpha-model", health.cooldown_revision)
+        .await
+        .unwrap();
+    assert!(model_candidates(&storage, "alpha-model").await.is_empty());
+    let observation = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    storage
+        .recover_supplier_model_quota("s", rev - 1, "alpha-model", observation)
+        .await
+        .unwrap();
+    assert!(model_candidates(&storage, "alpha-model").await.is_empty());
     // A fresh official read reporting the model available recovers it before the reset.
     storage
-        .recover_supplier_model_quota("s", "alpha-model")
+        .recover_supplier_model_quota("s", rev, "alpha-model", observation)
         .await
         .unwrap();
     assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
@@ -1277,4 +1297,117 @@ async fn model_cooldowns_exclude_one_model_until_reset_recovery_or_a_new_login()
             .is_empty()
     );
     assert_eq!(model_candidates(&storage, "alpha-model").await, vec!["s"]);
+}
+
+#[tokio::test]
+async fn shared_model_quota_survives_manual_model_edits_and_recovers_as_one_pool() {
+    use serde_json::json;
+    let dir = codex2api_storage::test_support::tempdir().unwrap();
+    let storage = codex2api_storage::test_support::open(dir.path().join("shared-model-quota"))
+        .await
+        .unwrap();
+    supplier_for(&storage, "s", "antigravity").await;
+    let revision = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    let descriptors = [
+        json!({"model":"alpha","quota_pool":"shared","efforts":{"high":"alpha-high"}}),
+        json!({"model":"beta","quota_pool":"shared","upstream_model":"beta-variant"}),
+        json!({"model":"gamma"}),
+    ];
+    assert!(
+        storage
+            .sync_supplier_models("s", revision, &descriptors)
+            .await
+            .unwrap()
+    );
+    // Populate the derived cache before the administrator edits the availability list.
+    assert_eq!(
+        storage
+            .supplier_model_descriptor("s", "alpha")
+            .await
+            .unwrap(),
+        Some(descriptors[0].clone())
+    );
+    storage
+        .replace_supplier_models(
+            &["s".into()],
+            &["alpha".into(), "beta".into(), "gamma".into()],
+        )
+        .await
+        .unwrap();
+    for descriptor in &descriptors {
+        let model = descriptor["model"].as_str().unwrap();
+        assert_eq!(
+            storage.supplier_model_descriptor("s", model).await.unwrap(),
+            Some(descriptor.clone())
+        );
+    }
+    storage
+        .exhaust_supplier_model_quota(
+            "s",
+            revision,
+            "alpha",
+            chrono::Utc::now().timestamp() + 600,
+            "quota_exhausted",
+        )
+        .await
+        .unwrap();
+    let cooldowns = storage.supplier_model_cooldowns("s").await.unwrap();
+    assert_eq!(
+        cooldowns
+            .iter()
+            .map(|c| c.model.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "beta"]
+    );
+    let observation = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    storage
+        .recover_supplier_model_quota("s", revision, "beta", observation)
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .supplier_model_cooldowns("s")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Reauthorization fences both late discovery and late availability observations.
+    supplier_for(&storage, "s", "antigravity").await;
+    let current = storage.supplier_auth_revision("s").await.unwrap().unwrap();
+    assert!(current > revision);
+    assert!(
+        !storage
+            .sync_supplier_models("s", revision, &[json!({"model":"stale"})])
+            .await
+            .unwrap()
+    );
+    storage
+        .exhaust_supplier_model_quota(
+            "s",
+            current,
+            "alpha",
+            chrono::Utc::now().timestamp() + 600,
+            "quota_exhausted",
+        )
+        .await
+        .unwrap();
+    let observation = storage
+        .supplier_health("s")
+        .await
+        .unwrap()
+        .cooldown_revision;
+    storage
+        .recover_supplier_model_quota("s", revision, "alpha", observation)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage.supplier_model_cooldowns("s").await.unwrap().len(),
+        2
+    );
+    assert!(!storage.supplier_supports_model("s", "stale").await.unwrap());
 }

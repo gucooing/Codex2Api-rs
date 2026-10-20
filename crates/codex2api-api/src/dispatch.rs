@@ -110,11 +110,12 @@ pub(crate) async fn forward(
         codex2api_storage::chatgpt_only_endpoint(input.protocol.endpoint())
             .then_some(codex2api_common::CHATGPT),
     );
-    let schedule = codex2api_upstream::protocol::scheduling(
+    let mut schedule = codex2api_upstream::protocol::scheduling(
         route.provider_id.as_deref(),
         &input.headers,
         &input.body,
     )?;
+    schedule.allowed_providers = Some(input.protocol.supplier_platforms());
     let mut excluded = vec![];
     let mut refreshed = std::collections::HashSet::new();
     loop {

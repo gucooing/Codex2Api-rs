@@ -12,6 +12,8 @@ pub enum AntigravityAuthError {
     MissingRefreshToken,
     #[error("Antigravity supplier credentials are unavailable: {0}")]
     TokensNotFound(String),
+    #[error("Antigravity authorization changed while the request was in progress")]
+    AuthorizationChanged,
     #[error("Antigravity account has no Cloud Code Assist project")]
     MissingProject,
     #[error("Google authorization returned HTTP {status}: {message}")]

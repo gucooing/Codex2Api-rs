@@ -463,15 +463,20 @@ impl AntigravityAuthService {
             .as_deref()
             .map(|tier| wire::tier_display(tier).to_owned());
         let auth = Self::credentials(tokens, previous_refresh, &assist, profile);
-        let account = self
+        let (account, revision) = self
             .storage()?
-            .save_authorized_account(new, auth.to_supplier_tokens(&identity.account_id), proxy)
+            .save_authorized_account_with_revision(
+                new,
+                auth.to_supplier_tokens(&identity.account_id),
+                proxy,
+            )
             .await?;
         if !assist.raw.is_null() {
             self.storage()?
-                .store_supplier_info(
+                .store_supplier_info_for_auth(
                     &account.id,
                     codex2api_storage::SupplierInfoSection::Details,
+                    revision,
                     &codex2api_storage::QuotaSnapshot::new(assist.raw, Utc::now()),
                 )
                 .await?;
@@ -710,13 +715,18 @@ impl AntigravityAuthService {
 
     /// Explicit onboarding refresh: project, tier and the official details snapshot.
     pub async fn refresh_profile(&self, id: &str) -> Result<Value> {
-        let current = self.refresh(id, false, None).await?;
+        self.refresh(id, false, None).await?;
         let http = self.account_http(id).await?;
+        // Profile updates also replace credentials. Hold the refresh lock and read
+        // credentials and their authorization revision from the same snapshot.
+        let _guard = http.refresh_lock.lock().await;
         let snapshot = self
             .storage()?
             .supplier_auth_snapshot(id)
             .await?
             .ok_or_else(|| AuthError::TokensNotFound(id.into()))?;
+        let current =
+            snapshot.decode(|| AntigravityCredentials::from_supplier_tokens(&snapshot.tokens))?;
         let assist = self
             .code_assist(
                 &http.client,
@@ -733,9 +743,13 @@ impl AntigravityAuthService {
             tier: assist.tier.clone().or_else(|| current.tier.clone()),
             ..(*current).clone()
         };
-        self.storage()?
+        if !self
+            .storage()?
             .replace_supplier_tokens(id, snapshot.auth_revision, auth.to_supplier_tokens(id))
-            .await?;
+            .await?
+        {
+            return Err(AuthError::AuthorizationChanged);
+        }
         self.storage()?
             .update_supplier_profile(
                 id,
@@ -744,13 +758,17 @@ impl AntigravityAuthService {
                 auth.tier.as_deref().map(wire::tier_display),
             )
             .await?;
-        self.storage()?
-            .store_supplier_info(
+        if !self
+            .storage()?
+            .store_supplier_routing_snapshot(
                 id,
-                codex2api_storage::SupplierInfoSection::Details,
+                snapshot.auth_revision,
                 &codex2api_storage::QuotaSnapshot::new(assist.raw.clone(), Utc::now()),
             )
-            .await?;
+            .await?
+        {
+            return Err(AuthError::AuthorizationChanged);
+        }
         Ok(assist.raw)
     }
 }

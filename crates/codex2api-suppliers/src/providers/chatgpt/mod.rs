@@ -13,5 +13,3 @@ pub mod store;
 pub use auth_json::*;
 pub use identity::*;
 pub use store::*;
-#[cfg(test)]
-mod identity_tests;

@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Debug, Default)]
 pub struct ScheduleRequest {
     pub model: Option<String>,
+    pub allowed_providers: Option<&'static [&'static str]>,
     pub session_hash: Option<String>,
     pub previous_response: Option<String>,
     pub previous_can_move: bool,
@@ -124,6 +125,11 @@ where
     };
     let settings = storage.gateway_settings().await?;
     let provider = route.provider_id.as_deref();
+    let supported = |candidate: &codex2api_storage::PoolCandidate| {
+        request
+            .allowed_providers
+            .is_none_or(|providers| providers.contains(&candidate.provider_id.as_str()))
+    };
     let sticky_key = request.session_hash.as_ref().map(|hash| {
         codex2api_storage::RoutingKey::session(&route.owner_id, &route.scope, &tag, hash)
     });
@@ -138,11 +144,10 @@ where
         .as_deref()
         .filter(|id| !excluded.iter().any(|v| v == id))
     {
-        Some(id) => {
-            storage
-                .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
-                .await?
-        }
+        Some(id) => storage
+            .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
+            .await?
+            .filter(|candidate| supported(candidate)),
         None => None,
     };
     let sticky_candidate = if sticky == previous {
@@ -152,11 +157,10 @@ where
             .as_deref()
             .filter(|id| !excluded.iter().any(|v| v == id))
         {
-            Some(id) => {
-                storage
-                    .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
-                    .await?
-            }
+            Some(id) => storage
+                .pool_candidate_for_tags(&tags, provider, request.model.as_deref(), id)
+                .await?
+                .filter(|candidate| supported(candidate)),
             None => None,
         }
     };
@@ -291,7 +295,12 @@ where
         rng.0 = (rng.0 ^ rand::random::<u64>()).max(1);
     }
     let mut attempted: std::collections::HashSet<String> = excluded.iter().cloned().collect();
-    if !excluded.is_empty() && pool.iter().all(|account| attempted.contains(&account.id)) {
+    attempted.extend(
+        pool.iter()
+            .filter(|candidate| !supported(candidate))
+            .map(|candidate| candidate.id.clone()),
+    );
+    if pool.iter().all(|account| attempted.contains(&account.id)) {
         return Err(super::exhausted());
     }
     while let Some((candidate, mut permit)) = storage

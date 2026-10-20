@@ -101,16 +101,16 @@ async fn grok_quota_failover_cools_supply_and_settles_only_the_successful_attemp
 #[tokio::test]
 async fn grok_non_quota_errors_keep_supply_and_retry_instructions() {
     let f = pool().await;
-    for (status, code) in [
-        (400, "invalid_image"),
-        (403, "permission_denied"),
-        (404, "model_not_found"),
-        (413, "payload_too_large"),
-        (429, "rate_limit_exceeded"),
-        (429, "unknown"),
-        (500, "server_error"),
-        (503, "service_unavailable_error"),
-        (529, "overloaded_error"),
+    for (status, code, public_status, public_code) in [
+        (400, "invalid_image", 400, "invalid_image"),
+        (403, "permission_denied", 503, "service_unavailable"),
+        (404, "model_not_found", 404, "model_not_found"),
+        (413, "payload_too_large", 413, "payload_too_large"),
+        (429, "rate_limit_exceeded", 429, "rate_limit_exceeded"),
+        (429, "unknown", 429, "rate_limit_exceeded"),
+        (500, "server_error", 502, "upstream_error"),
+        (503, "service_unavailable_error", 503, "service_unavailable"),
+        (529, "overloaded_error", 502, "upstream_error"),
     ] {
         f.mock.requests.lock().unwrap().clear();
         f.mock.grok_rejections.lock().unwrap().insert(
@@ -130,10 +130,15 @@ async fn grok_non_quota_errors_keep_supply_and_retry_instructions() {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status().as_u16(), status);
-        assert_eq!(response.headers()["retry-after"], "120");
-        assert_eq!(response.headers()["x-should-retry"], "false");
-        assert_eq!(json_body(response).await["error"]["code"], code);
+        assert_eq!(response.status().as_u16(), public_status);
+        if status == 429 {
+            assert_eq!(response.headers()["retry-after"], "120");
+            assert_eq!(response.headers()["x-should-retry"], "false");
+        } else {
+            assert!(!response.headers().contains_key("retry-after"));
+            assert!(!response.headers().contains_key("x-should-retry"));
+        }
+        assert_eq!(json_body(response).await["error"]["code"], public_code);
         assert_eq!(attempted(&f), ["supplier"]);
         let health = f.storage.supplier_health("supplier").await.unwrap();
         assert!(!health.authentication_invalid);
@@ -160,7 +165,7 @@ async fn grok_measured_failures_never_retry_or_lose_reported_usage() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let _ = json_body(response).await;
     assert_eq!(attempted(&f), ["supplier"]);
     let rows: Vec<(String, String, Option<i64>, Option<i64>)> =
@@ -208,7 +213,7 @@ async fn grok_pool_exhaustion_tries_each_supplier_once_and_releases_slots() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         json_body(response).await["error"]["code"],
-        "supplier_pool_exhausted"
+        "service_unavailable"
     );
     assert_eq!(attempted(&f), ["supplier", "supplier-two"]);
     f.mock.grok_rejections.lock().unwrap().clear();

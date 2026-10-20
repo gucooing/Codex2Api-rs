@@ -30,10 +30,20 @@ pub fn classify_failure(
     if status == Some(401) {
         return Some(SupplierFailure::Authentication);
     }
+    let code = quota_code(status, &error)?;
+    Some(SupplierFailure::QuotaExhausted {
+        until: retry_at(&error, headers, now),
+        code: code.into(),
+        model: None,
+    })
+}
+
+/// The same provider evidence drives failover and the consumer-facing error category.
+pub(super) fn quota_code(status: Option<u16>, error: &Value) -> Option<&str> {
     if status.is_some_and(|status| !matches!(status, 402 | 403 | 429)) {
         return None;
     }
-    let code = ["code", "type"]
+    ["code", "type"]
         .into_iter()
         .filter_map(|key| error[key].as_str().map(str::trim))
         .find(|code| {
@@ -60,7 +70,11 @@ pub fn classify_failure(
                 || matches!(
                     error["type"].as_str(),
                     Some(
-                        "error" | "rate_limit_error" | "rate_limit_exceeded" | "resource-exhausted"
+                        "error"
+                            | "rate_limit_error"
+                            | "rate_limit_exceeded"
+                            | "resource-exhausted"
+                            | "quota_exhausted"
                     )
                 );
             (status == Some(429)
@@ -75,12 +89,7 @@ pub fn classify_failure(
                 && message.contains(" for now.")
                 && message.contains("Usage resets over a rolling "))
             .then_some(errors::FREE_USAGE_EXHAUSTED)
-        })?;
-    Some(SupplierFailure::QuotaExhausted {
-        until: retry_at(&error, headers, now),
-        code: code.into(),
-        model: None,
-    })
+        })
 }
 
 fn retry_at(error: &Value, headers: &HeaderMap, now: i64) -> i64 {

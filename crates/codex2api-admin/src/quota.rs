@@ -121,11 +121,35 @@ impl SupplierCache {
                 return Ok(snapshot);
             }
         }
+        let revision = self
+            .storage
+            .supplier_auth_revision(account_id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "供应账户不存在".to_owned())?;
         let snapshot = QuotaSnapshot::new(fetch().await?, Utc::now());
-        self.storage
-            .store_supplier_info(account_id, section, &snapshot)
+        let stored = self
+            .storage
+            .store_supplier_info_for_auth(account_id, section, revision, &snapshot)
             .await
             .map_err(|error| error.to_string())?;
+        if !stored {
+            if self
+                .storage
+                .supplier_auth_revision(account_id)
+                .await
+                .map_err(|error| error.to_string())?
+                == Some(revision)
+                && let Some(current) = self
+                    .storage
+                    .get_supplier_info(account_id, section)
+                    .await
+                    .map_err(|error| error.to_string())?
+            {
+                return Ok(current);
+            }
+            return Err("供应账户授权或资料已更新，请重新读取".into());
+        }
         Ok(snapshot)
     }
 
@@ -174,6 +198,51 @@ mod tests {
         let b = accounts.create_pending().await.unwrap().account.id;
         let cache = SupplierCache::new(storage.clone());
         (dir, storage, cache, a, b)
+    }
+
+    #[tokio::test]
+    async fn reauthorization_during_a_fetch_preserves_the_new_login_snapshot() {
+        let (_dir, storage, cache, a, _) = setup().await;
+        for section in [SupplierInfoSection::Quota, SupplierInfoSection::Details] {
+            let old_revision = storage.supplier_auth_revision(&a).await.unwrap().unwrap();
+            let result = cache
+                .get_or_fetch(&a, section, true, || async {
+                    storage
+                        .upsert_supplier_tokens(codex2api_storage::SupplierTokens {
+                            account_id: a.clone(),
+                            access_token: Some("fresh-login".into()),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
+                    let revision = storage.supplier_auth_revision(&a).await.unwrap().unwrap();
+                    assert!(revision > old_revision);
+                    assert!(
+                        storage
+                            .store_supplier_info_for_auth(
+                                &a,
+                                section,
+                                revision,
+                                &QuotaSnapshot::new(json!({"login":"fresh"}), Utc::now())
+                            )
+                            .await
+                            .unwrap()
+                    );
+                    Ok(json!({"login":"stale"}))
+                })
+                .await;
+            assert!(result.is_err());
+            assert_eq!(
+                storage
+                    .get_supplier_info(&a, section)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                json!({"login":"fresh"})
+            );
+        }
+        storage.close().await;
     }
 
     #[tokio::test]

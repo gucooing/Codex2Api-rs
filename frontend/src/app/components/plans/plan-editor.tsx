@@ -58,6 +58,7 @@ export function PlanEditor({
     modelPlatform,
     setModelPlatform,
     models,
+    modelRows,
     tags,
     rules,
     toggleTag,
@@ -340,7 +341,7 @@ export function PlanEditor({
               <TabsContent value="models" className="pr-3">
                 <ModelRulesTable
                   id={id}
-                  options={models.data?.items}
+                  rows={modelRows}
                   ready={models.ready}
                   rules={rules}
                   baseMultiplier="1"

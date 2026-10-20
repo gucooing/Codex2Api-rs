@@ -13,6 +13,7 @@ import { useColumnVisibility } from "@/lib/columns";
 import { planWrite } from "@/lib/domain";
 import { useResource } from "@/lib/hooks";
 import {
+  modelRuleRows,
   ruleDraft,
   rulesFromDrafts,
   setRuleField,
@@ -104,7 +105,7 @@ export function usePlanEditor({
     setRules((current) => toggleRule(current, model, checked));
   const selectVisible = (checked: boolean) =>
     setRules((current) =>
-      (models.data?.items ?? []).reduce(
+      modelRuleRows(models.data?.items, current, search, modelPlatform).reduce(
         (rules, option) => toggleRule(rules, option.model, checked),
         current,
       ),
@@ -145,6 +146,7 @@ export function usePlanEditor({
     modelPlatform,
     setModelPlatform,
     models,
+    modelRows: modelRuleRows(models.data?.items, rules, search, modelPlatform),
     tags,
     rules,
     toggleTag,

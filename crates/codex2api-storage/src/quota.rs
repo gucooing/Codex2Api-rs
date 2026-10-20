@@ -74,6 +74,39 @@ impl Storage {
         Ok(())
     }
 
+    /// A late observation cannot replace data from a newer login or observation.
+    pub async fn store_supplier_info_for_auth(
+        &self,
+        account_id: &str,
+        section: SupplierInfoSection,
+        auth_revision: i64,
+        snapshot: &QuotaSnapshot,
+    ) -> Result<bool> {
+        if section == SupplierInfoSection::Quota {
+            let value = snapshot.value.clone();
+            return self
+                .update_account_quota(account_id, auth_revision, snapshot.observed_at, move |_| {
+                    value
+                })
+                .await;
+        }
+        let mut tx = self.pool().begin().await?;
+        crate::storage::lock_supplier(&mut tx, account_id).await?;
+        let changed = sqlx::query("INSERT INTO supplier_info_cache(account_id,section,response_json,observed_at,auth_revision)
+            SELECT id,$1,$2,$3,auth_revision FROM supplier_accounts WHERE id=$4 AND auth_revision=$5
+            ON CONFLICT(account_id,section) DO UPDATE SET response_json=excluded.response_json,observed_at=excluded.observed_at,auth_revision=excluded.auth_revision
+            WHERE supplier_info_cache.auth_revision IS DISTINCT FROM excluded.auth_revision OR excluded.observed_at>=supplier_info_cache.observed_at")
+            .bind(section.as_str()).bind(serde_json::to_string(&snapshot.value)?).bind(snapshot.observed_at)
+            .bind(account_id).bind(auth_revision).execute(&mut *tx).await?.rows_affected() > 0;
+        tx.commit().await?;
+        if changed && section == SupplierInfoSection::Details {
+            self.runtime
+                .snapshots
+                .invalidate_key(&format!("supplier-routing:{account_id}"));
+        }
+        Ok(changed)
+    }
+
     pub async fn delete_supplier_info(
         &self,
         account_id: &str,

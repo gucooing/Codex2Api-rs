@@ -21,6 +21,18 @@ fn free_usage_exhaustion_is_recognized_across_grok_wire_envelopes() {
         errors::decode(FREE.as_bytes()),
         json!({"type":"response.failed","response":{"error":{"status_code":429,"message":FREE}}}),
     ] {
+        let normalized = errors::normalize_reply(&value, Some(429));
+        assert_eq!(
+            errors::normalize(&normalized),
+            normalized,
+            "normalization must be idempotent"
+        );
+        let failure = crate::ResponseFailure::from_error(Some(429), &json!({"error":normalized}));
+        assert_eq!(failure.kind, crate::FailureKind::QuotaExhausted, "{value}");
+        assert_eq!(
+            crate::public_output::PublicFailure::new(&failure).status,
+            503
+        );
         for value in [value.clone(), json!({"error":errors::normalize(&value)})] {
             assert_eq!(
                 classify_failure(Some(429), &value, &HeaderMap::new(), 100),

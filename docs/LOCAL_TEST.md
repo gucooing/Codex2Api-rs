@@ -93,3 +93,5 @@ $env:CODEX2API_DB_MAX_CONNECTIONS = '4'
 ```
 
 按改动选择 `cargo test -p <crate> <关键用例过滤条件>`；不默认执行全工作区测试。
+
+实际 Desktop app-server 的 SSE 错误与搜索计费联调用例默认忽略。设置 `CODEX2API_TEST_CLI` 为已安装客户端的原生可执行文件后，使用 `cargo test -p codex2api-oauth --lib installed_desktop_ -- --ignored` 单独运行；未配置客户端不能视为通过联调。

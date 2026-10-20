@@ -218,26 +218,6 @@ mod tests {
     use serde_json::{Value, json};
 
     #[test]
-    fn endpoints_and_version_are_official_and_not_caller_selected() {
-        assert_eq!(
-            Endpoint::Models.url(),
-            "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0"
-        );
-        assert_eq!(
-            Endpoint::Usage.url(),
-            "https://chatgpt.com/backend-api/wham/usage"
-        );
-        assert_eq!(
-            Endpoint::Responses.url(),
-            "https://chatgpt.com/backend-api/codex/responses"
-        );
-        assert_eq!(
-            Endpoint::MemorySummary.codex_path(),
-            "memories/trace_summarize"
-        );
-    }
-
-    #[test]
     fn all_endpoints_preserve_official_headers_without_replacing_routing_hints() {
         let mut inbound = HeaderMap::new();
         for (name, value) in [

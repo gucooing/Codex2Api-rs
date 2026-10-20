@@ -157,7 +157,16 @@ pub fn request(body: &Value) -> Result<Value> {
         };
         out.insert("tool_choice".into(), choice);
     }
-    out.insert("parallel_tool_calls".into(), true.into());
+    let disable_parallel = match body.pointer("/tool_choice/disable_parallel_tool_use") {
+        None => false,
+        Some(Value::Bool(disabled)) => *disabled,
+        Some(_) => {
+            return Err(Error::bad_request(
+                "disable_parallel_tool_use must be a boolean",
+            ));
+        }
+    };
+    out.insert("parallel_tool_calls".into(), (!disable_parallel).into());
     let effort = if body.pointer("/thinking/type") == Some(&json!("disabled")) {
         json!({"effort":"none"})
     } else {
@@ -384,7 +393,12 @@ mod tests {
             body["tool_choice"],
             json!({"type":"function","name":"lookup"})
         );
-        assert_eq!(body["parallel_tool_calls"], true);
+        assert_eq!(body["parallel_tool_calls"], false);
+        let mut parallel = messages();
+        parallel["tool_choice"]["disable_parallel_tool_use"] = false.into();
+        assert_eq!(request(&parallel).unwrap()["parallel_tool_calls"], true);
+        parallel["tool_choice"]["disable_parallel_tool_use"] = "false".into();
+        assert!(request(&parallel).is_err());
         assert_eq!(
             body["reasoning"],
             json!({"effort":"medium","summary":"auto"})

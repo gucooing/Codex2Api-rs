@@ -83,6 +83,17 @@ impl Protocol {
     pub fn image(self) -> bool {
         matches!(self, Self::ImageGeneration | Self::ImageEdit)
     }
+    /// Filter protocol capabilities before reserving a supplier or applying affinity.
+    pub fn supplier_platforms(self) -> &'static [&'static str] {
+        use codex2api_common::{ANTIGRAVITY, CHATGPT, GROK};
+        match self {
+            Self::Responses | Self::ChatCompletions | Self::Messages => {
+                &[CHATGPT, GROK, ANTIGRAVITY]
+            }
+            Self::ImageGeneration | Self::ImageEdit => &[CHATGPT, GROK],
+            Self::Compact | Self::InputTokens | Self::Search => &[CHATGPT],
+        }
+    }
 }
 
 /// A validated public request. Supplier selection decides its upstream protocol.

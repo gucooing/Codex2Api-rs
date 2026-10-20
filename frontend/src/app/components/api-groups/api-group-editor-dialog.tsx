@@ -54,6 +54,7 @@ export function ApiGroupEditorDialog({
     setModelPlatform,
     tags,
     models,
+    modelRows,
     toggleTag,
     toggleModel,
     selectVisible,
@@ -190,7 +191,7 @@ export function ApiGroupEditorDialog({
               <TabsContent value="models" className="pr-3">
                 <ModelRulesTable
                   id={id}
-                  options={models.data?.items}
+                  rows={modelRows}
                   ready={models.ready}
                   rules={rules}
                   baseMultiplier={value.multiplier}

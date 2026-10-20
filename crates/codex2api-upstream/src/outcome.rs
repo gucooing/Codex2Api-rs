@@ -51,6 +51,8 @@ impl ResponseFailure {
             Some("rate_limit_exceeded" | "slow_down" | "rate_limit_error") => Some(K::RateLimit),
             Some(
                 "insufficient_quota"
+                | "quota_exhausted"
+                | "quota_exceeded"
                 | "usage_limit_reached"
                 | "credit_balance_exhausted"
                 | "organization_spend_limit_exceeded"
@@ -150,7 +152,15 @@ impl ResponseFailure {
             .get("message")
             .and_then(Value::as_str)
             .or_else(|| error.as_str());
-        Self::new(status, code, message)
+        let mut failure = Self::new(status, code, message);
+        // Provider adapters retain their diagnostic code and identify confirmed
+        // quota exhaustion through this shared category.
+        if error["type"] == "quota_exhausted"
+            && status.is_none_or(|status| matches!(status, 402 | 403 | 429))
+        {
+            failure.kind = FailureKind::QuotaExhausted;
+        }
+        failure
     }
 
     pub fn authentication_invalid(&self) -> bool {

@@ -273,7 +273,7 @@ async fn oauth_grok_http_failures_with_usage_are_settled_without_replay() {
         let f = fixture().await;
         *f.mock.rejection.lock().unwrap() = Some((429, json!({"model":"grok-4.7","error":{"code":"subscription:free-usage-exhausted","message":FREE},"usage":usage}).to_string()));
         let response = send(&f, endpoint).await;
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let _ = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert_eq!(*f.mock.calls.lock().unwrap(), ["first"]);
         assert_eq!(
@@ -295,11 +295,11 @@ async fn oauth_grok_http_failures_with_usage_are_settled_without_replay() {
 #[tokio::test]
 async fn oauth_grok_permission_throttling_and_server_errors_do_not_switch() {
     let f = fixture().await;
-    for (status, code) in [
-        (403, "permission_denied"),
-        (429, "slow_down"),
-        (503, "overloaded_error"),
-        (429, "new_unknown_error"),
+    for (status, code, public_status) in [
+        (403, "permission_denied", 503),
+        (429, "slow_down", 429),
+        (503, "overloaded_error", 503),
+        (429, "new_unknown_error", 429),
     ] {
         f.mock.calls.lock().unwrap().clear();
         *f.mock.rejection.lock().unwrap() = Some((
@@ -307,9 +307,14 @@ async fn oauth_grok_permission_throttling_and_server_errors_do_not_switch() {
             json!({"error":{"code":code,"message":"rejected"}}).to_string(),
         ));
         let response = send(&f, "responses").await;
-        assert_eq!(response.status().as_u16(), status);
-        assert_eq!(response.headers()["retry-after"], "120");
-        assert_eq!(response.headers()["x-should-retry"], "false");
+        assert_eq!(response.status().as_u16(), public_status);
+        if status == 429 {
+            assert_eq!(response.headers()["retry-after"], "120");
+            assert_eq!(response.headers()["x-should-retry"], "false");
+        } else {
+            assert!(!response.headers().contains_key("retry-after"));
+            assert!(!response.headers().contains_key("x-should-retry"));
+        }
         let _ = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert_eq!(*f.mock.calls.lock().unwrap(), ["first"]);
         assert!(
@@ -366,11 +371,11 @@ async fn oauth_grok_refreshes_once_and_only_permanent_refresh_failures_evict() {
         let response = send(&f, "responses").await;
         assert_eq!(
             response.status().as_u16(),
-            if invalid || accept { 200 } else { token_status }
+            if invalid || accept { 200 } else { 503 }
         );
         if !invalid && !accept {
-            assert_eq!(response.headers()["retry-after"], "19");
-            assert_eq!(response.headers()["x-should-retry"], "true");
+            assert!(!response.headers().contains_key("retry-after"));
+            assert!(!response.headers().contains_key("x-should-retry"));
         }
         let _ = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         assert_eq!(

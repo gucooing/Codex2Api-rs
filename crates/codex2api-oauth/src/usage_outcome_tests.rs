@@ -374,10 +374,12 @@ async fn stale_rejection_cannot_disable_new_credentials_and_network_faults_do_no
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an installed Desktop app-server in CODEX2API_TEST_CLI"]
 async fn installed_desktop_reads_actual_sse_failure_events() {
-    if std::env::var_os("CODEX2API_TEST_CLI").is_none() {
-        return;
-    }
+    assert!(
+        std::env::var_os("CODEX2API_TEST_CLI").is_some(),
+        "CODEX2API_TEST_CLI is required"
+    );
     use axum::{Router, extract::Path, routing::post};
     use std::sync::{
         Arc,
@@ -445,10 +447,12 @@ async fn installed_desktop_reads_actual_sse_failure_events() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an installed Desktop app-server in CODEX2API_TEST_CLI"]
 async fn installed_desktop_search_completes_with_one_snapshotted_charge() {
-    if std::env::var_os("CODEX2API_TEST_CLI").is_none() {
-        return;
-    }
+    assert!(
+        std::env::var_os("CODEX2API_TEST_CLI").is_some(),
+        "CODEX2API_TEST_CLI is required"
+    );
     use axum::{Json, Router, routing::post};
     use std::sync::{
         Arc,

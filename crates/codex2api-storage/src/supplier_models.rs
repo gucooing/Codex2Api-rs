@@ -157,7 +157,8 @@ impl Storage {
         }
         let mut tx = self.pool().begin().await?;
         let mut provider = None;
-        for id in ids {
+        for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
+            crate::storage::lock_supplier(&mut tx, id).await?;
             let current: String =
                 sqlx::query_scalar("SELECT provider_id FROM supplier_accounts WHERE id=$1")
                     .bind(id)
@@ -170,13 +171,15 @@ impl Storage {
             provider = Some(current);
         }
         for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
-            sqlx::query("DELETE FROM supplier_models WHERE account_id=$1")
+            sqlx::query("DELETE FROM supplier_models WHERE account_id=$1 AND NOT (model=ANY($2))")
                 .bind(id)
+                .bind(models)
                 .execute(&mut *tx)
                 .await?;
             for model in models.iter().collect::<std::collections::BTreeSet<_>>() {
                 sqlx::query(
-                    "INSERT INTO supplier_models(account_id,model,source) VALUES($1,$2,'custom')",
+                    "INSERT INTO supplier_models(account_id,model,source) VALUES($1,$2,'custom')
+                     ON CONFLICT(account_id,model) DO UPDATE SET source='custom'",
                 )
                 .bind(id)
                 .bind(model)
@@ -214,6 +217,8 @@ impl Storage {
             return Err(StorageError::Constraint("上游模型列表过大".into()));
         }
         let mut tx = self.pool().begin().await?;
+        // Serialize the revision check and replacement with explicit reauthorization.
+        crate::storage::lock_supplier(&mut tx, id).await?;
         let valid: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM supplier_accounts WHERE id=$1 AND auth_revision=$2)",
         )
