@@ -501,13 +501,18 @@ pub fn from_responses(body: &Value, headers: &HeaderMap) -> Result<Value> {
         },
     };
     let seed = crate::scheduler::text(&body, "prompt_cache_key").or_else(|| {
-        body["input"]
+        let content = &input
             .as_array()?
             .iter()
-            .find(|item| item["role"] == "user")?["content"]
-            .as_array()?
-            .iter()
-            .find_map(|part| part["text"].as_str())
+            .find(|item| item["role"] == "user")?["content"];
+        content
+            .as_str()
+            .or_else(|| {
+                content
+                    .as_array()?
+                    .iter()
+                    .find_map(|part| part["text"].as_str())
+            })
             .map(str::to_owned)
     });
     Draft {
@@ -836,6 +841,37 @@ pub fn from_messages(body: &Value, headers: &HeaderMap) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn responses_session_is_stable_for_all_text_input_forms_and_continuations() {
+        let first = json!({"model":"gemini-4-argon","input":"hello"});
+        let expected =
+            from_responses(&first, &HeaderMap::new()).unwrap()["request"]["sessionId"].clone();
+        for input in [
+            json!("hello"),
+            json!([{"role":"user","content":"hello"}]),
+            json!([{"role":"user","content":[{"type":"input_text","text":"hello"}]}]),
+            json!([{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},
+                {"role":"user","content":"continue"}]),
+        ] {
+            let body = json!({"model":"gemini-4-argon","input":input});
+            assert_eq!(
+                from_responses(&body, &HeaderMap::new()).unwrap()["request"]["sessionId"],
+                expected
+            );
+        }
+        let cached =
+            json!({"model":"gemini-4-argon","input":"hello","prompt_cache_key":"explicit"});
+        let explicit =
+            from_responses(&cached, &HeaderMap::new()).unwrap()["request"]["sessionId"].clone();
+        assert_ne!(explicit, expected);
+        let mut headers = HeaderMap::new();
+        headers.insert("session-id", "conversation".parse().unwrap());
+        assert_ne!(
+            from_responses(&cached, &headers).unwrap()["request"]["sessionId"],
+            explicit
+        );
+    }
 
     #[test]
     fn messages_round_trip_keeps_thinking_signatures_tools_and_images() {

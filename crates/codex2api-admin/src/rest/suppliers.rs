@@ -147,6 +147,9 @@ pub(crate) async fn display(s: &AdminState, a: &SupplierAccount) -> Result<Value
     value["concurrency"] = json!(s.storage.supplier_scheduling(&a.id).await?.concurrency);
     value["active_requests"] = json!(s.storage.supplier_metrics(&a.id).active);
     value["quota"] = match s.storage.get_account_quota(&a.id).await? {
+        Some(snapshot) if a.provider_id == codex2api_common::ANTIGRAVITY => {
+            crate::providers::antigravity::quota_summary(&snapshot)
+        }
         Some(snapshot) => crate::quota::summary(&s.storage, &a.id, &snapshot).await?,
         None => Value::Null,
     };

@@ -1,4 +1,5 @@
 "use client";
+import { AntigravityQuotaGroups } from "@/components/providers/antigravity/quota";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CardDescription } from "@/components/ui/card";
@@ -108,6 +109,9 @@ export function SupplierRecordDialog({ item, now }: Props) {
                 aria-label="官方额度"
                 title={item.quota ? "缓存于 " + date(item.quota.observed_at) : "暂无额度缓存"}
               >
+                {item.provider_id === "antigravity" && (
+                  <AntigravityQuotaGroups groups={item.quota?.groups} now={now} />
+                )}
                 {item.quota?.windows?.map((window) => (
                   <div key={window.id} className="min-w-0 flex-1 basis-64 space-y-1 text-xs">
                     <div className="flex items-center justify-between gap-2">
@@ -136,7 +140,7 @@ export function SupplierRecordDialog({ item, now }: Props) {
                     </div>
                   </div>
                 ))}
-                {!item.quota?.windows?.length && (
+                {!item.quota?.windows?.length && !item.quota?.groups?.length && (
                   <span className="text-xs text-muted-foreground">
                     {item.quota?.windows
                       ? "官方未提供额度窗口"

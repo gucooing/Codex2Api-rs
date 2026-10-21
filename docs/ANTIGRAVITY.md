@@ -1,6 +1,6 @@
 # Antigravity 渠道
 
-Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 Antigravity 桌面客户端协议。它只通过标准 AI API 网关提供 Responses、Chat Completions 和 Messages 三种调用，不提供 `/v1/antigravity` OAuth 客户端服务根，也没有套餐、订阅或客户端状态协议。官方常量位于 `crates/codex2api-common/src/providers/antigravity/version.rs`，当前伪装的客户端版本为 `2.9.1`。sub2api 仅作为官方交互与协议转换的参考，不是依赖，也不引入其模型映射、额度抓取或积分功能。
+Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 Antigravity 桌面客户端协议。它通过标准 AI API 网关提供 Responses、Chat Completions、Messages 和 Images 调用，不提供 `/v1/antigravity` OAuth 客户端服务根，也没有套餐、订阅或客户端状态协议。官方常量位于 `crates/codex2api-common/src/providers/antigravity/version.rs`，当前对齐 Antigravity Desktop `2.24.0`（原生构建 `1000335682`）。请求格式依据该版本 `language_server` 的 `UserAgent`、`fetchAvailableModels`、`fetchRetrieveUserQuotaSummary` 与 `GetImageGeneration` 实现，额度字段与展示顺序对照其 renderer 和本机已登录客户端的实际返回。sub2api 仅作为官方交互与协议转换的参考，不是依赖，也不引入其模型映射、额度抓取或积分功能。
 
 ## 目录与账户隔离
 
@@ -16,15 +16,29 @@ Antigravity 是独立的供应渠道，上游为 Google Cloud Code Assist 的 An
 
 ## 伪装与上游请求
 
-每个请求都像官方桌面客户端：`User-Agent` 为 `antigravity/{版本} {os}/{arch}`，操作系统取 `windows`、`darwin`、`linux`，架构取 `amd64`、`arm64`，由账户冻结输入与公共版本常量在运行时生成，不保存派生 UA，也不使用代理主机信息。生成请求发送到 `v1internal:streamGenerateContent?alt=sse`，信封包含 `project`、`agent-` 前缀的 `requestId`、`userAgent: antigravity`、`requestType: agent`、`model` 与 Gemini `request`。服务根为 `https://cloudcode-pa.googleapis.com` 与 `https://daily-cloudcode-pa.googleapis.com`。
+每个请求都像官方桌面客户端：`User-Agent` 为 `antigravity/hub/2.24.0 (aidev_client; os_type={os}; arch={arch}; cl=1000335682)`，操作系统取 `windows`、`darwin`、`linux`，架构取 `amd64`、`arm64`，由账户冻结输入与公共版本常量在运行时生成，不保存派生 UA，也不使用代理主机信息。生成请求发送到 `v1internal:streamGenerateContent?alt=sse`，信封包含 `project`、`agent-` 前缀的 `requestId`、`userAgent: antigravity`、`requestType: agent`、`model` 与 Gemini `request`。服务根为 `https://cloudcode-pa.googleapis.com` 与 `https://daily-cloudcode-pa.googleapis.com`。
 
 ## 协议转换
 
-Antigravity 的线格式是 Cloud Code Assist 的 Gemini 请求；转换矩阵 `codex2api-upstream/src/convert/gemini/` 直接从 Responses、Chat 或 Messages 的原始请求构造它，不经过中间格式。`request.rs` 分别为三种入站格式把消息映射为 `contents` 的 user／model 角色，包含文本、带 `thoughtSignature` 的思考、`inlineData`、`functionCall` 与 `functionResponse`；system／developer 文本进入 `systemInstruction`，排在客户端身份提示与边界提示之后；`generationConfig` 携带 `maxOutputTokens`（缺省 64000）、temperature、topP、按推理强度映射的 `thinkingConfig`，以及结构化输出的 `responseMimeType`／`responseSchema`；函数工具转换为清理后的 `functionDeclarations`（`schema.rs` 内联 `$ref`、合并 allOf／anyOf／oneOf、常量转枚举、约束写入描述，只保留 Gemini 接受的字段），`tool_choice` 映射为 `toolConfig.functionCallingConfig`；没有函数工具时才声明 `googleSearch`。`sessionId` 由调度亲和种子派生。渠道传输 `providers/antigravity/` 再加上账户绑定的 v1internal 信封并解析所选账户对应推理强度的上游标识。
+Antigravity 的线格式是 Cloud Code Assist 的 Gemini 请求；转换矩阵 `codex2api-upstream/src/convert/gemini/` 直接从 Responses、Chat 或 Messages 的原始请求构造它，不经过中间格式。`request.rs` 分别为三种入站格式把消息映射为 `contents` 的 user／model 角色，包含文本、带 `thoughtSignature` 的思考、`inlineData`、`functionCall` 与 `functionResponse`；system／developer 文本进入 `systemInstruction`，排在客户端身份提示与边界提示之后；`generationConfig` 携带 `maxOutputTokens`（缺省 64000）、temperature、topP、按推理强度映射的 `thinkingConfig`，以及结构化输出的 `responseMimeType`／`responseSchema`；函数工具转换为清理后的 `functionDeclarations`（`schema.rs` 内联 `$ref`、合并 allOf／anyOf／oneOf、常量转枚举、约束写入描述，只保留 Gemini 接受的字段），`tool_choice` 映射为 `toolConfig.functionCallingConfig`；没有函数工具时才声明 `googleSearch`。`sessionId` 优先取会话头或 `prompt_cache_key`，否则从首条用户消息派生；Responses 的字符串输入、字符串 content 和文本块输入保持同一会话标识，后续轮次不会重建。渠道传输 `providers/antigravity/` 再加上账户绑定的 v1internal 信封并解析所选账户对应推理强度的上游标识。
 
-`events.rs` 把 Gemini SSE 分块直接转换为调用方协议：Responses 调用方得到 reasoning、message、function_call 输出项与 completed／incomplete／failed 终态；Chat 调用方得到带 `reasoning_content`、`tool_calls` 与 finish_reason 的分块，思考签名随 `reasoning` 扩展回放，工具签名使用 Google 的 `tool_calls[].extra_content.google.thought_signature`；Messages 调用方得到按顺序写出的 thinking、text 与 tool_use 块。`finishReason` 的 `STOP` 为完成，`MAX_TOKENS` 为 `max_output_tokens`，安全类原因为 `content_filter`，`MALFORMED_FUNCTION_CALL` 为失败；用量取 `promptTokenCount`（含缓存）、`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`，推理 Token 为 `thoughtsTokenCount`。内容增量随收到随发送，终态事件在流结束时发出，缺少终态按未完成失败处理。续接 `previous_response_id`、Codex 搜索、压缩、计数、图像和原生 Responses WebSocket 不属于该渠道，明确拒绝。
+`events.rs` 把 Gemini SSE 分块直接转换为调用方协议：Responses 调用方得到 reasoning、message、function_call 输出项与 completed／incomplete／failed 终态；Chat 调用方得到带 `reasoning_content`、`tool_calls` 与 finish_reason 的分块，思考签名随 `reasoning` 扩展回放，工具签名使用 Google 的 `tool_calls[].extra_content.google.thought_signature`；Messages 调用方得到按顺序写出的 thinking、text 与 tool_use 块。`finishReason` 的 `STOP` 为完成，`MAX_TOKENS` 为 `max_output_tokens`，安全类原因为 `content_filter`，`MALFORMED_FUNCTION_CALL` 为失败；用量取 `promptTokenCount`（含缓存）、`cachedContentTokenCount`、`candidatesTokenCount` 加 `thoughtsTokenCount`，推理 Token 为 `thoughtsTokenCount`。内容增量随收到随发送，终态事件在流结束时发出，缺少终态按未完成失败处理。续接 `previous_response_id`、Codex 搜索、压缩、计数和原生 Responses WebSocket 不属于该渠道，明确拒绝。
 
 签名必须随其原始思考块或工具调用回传，不能合并到相邻的思考文本。Responses 和 Messages 用独立的空 reasoning／thinking 块携带后续工具的签名；Chat 把签名绑定在具体工具上。客户端续接时须保留相应签名字段和工具调用 ID，网关无法恢复被客户端丢弃的签名。规则依据 [Google thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures)。
+
+缓存读取计数来自上游 `usageMetadata.cachedContentTokenCount`，总输入包含缓存，思考计入输出一次。分散在多个分块中的计数合并后交付，下游三种格式和本地账本保留官方报告值；缺失字段不证明未命中缓存，缓存写入没有官方测量时保持未知。会话稳定性有助于复用，但不保证上游命中。
+
+## 图像接口
+
+`POST /v1/images/generations` 与 `POST /v1/images/edits` 通过 `convert/gemini/images.rs` 直接构造 Gemini 请求，发送到非流式 `v1internal:generateContent`。信封使用 `requestType: image_gen` 与请求级 `image_gen/<UUID>` 标识，`contents` 包含提示词和参考图的 `inlineData`；`generationConfig` 使用 `candidateCount: 1` 与 `imageConfig.aspectRatio`，缺省比例 `1:1`。不加入聊天系统提示或工具。图像模型取供应账户同步结果，例如官方 `imageGenerationModelIds` 返回的 `gemini-3.1-flash-image`；不会把聊天选择器的模型列表当作完整目录，也不硬编码模型白名单。
+
+每次请求一张图，`n` 只能为 1；输出为 `b64_json`。编辑接受最多 14 张 PNG、JPEG 或 WebP 的 base64 data URL，或现有 multipart 上传。可指定 `aspect_ratio`；`size` 仅接受 `auto`，其他尺寸、quality、mask、远程图片 URL、file_id、流式和异步任务均明确拒绝。返回只包含完成的图片及实际尺寸，排除 `thought` 中间图；无图、截断或非法图像返回失败，不构造成功结果。真实 Token 用量写入账本，按请求开始时管理员配置的图像价格及实际返回张数结算一次，缺失价格保持未知。使用前在模型管理中将对应模型设为图像、配置价格并授权给 API 组。
+
+示例：
+
+```json
+{"model":"gemini-3.1-flash-image","prompt":"画一棵树","n":1,"response_format":"b64_json","aspect_ratio":"1:1"}
+```
 
 ## 模型、额度与计价
 
@@ -34,7 +48,9 @@ Antigravity 的线格式是 Cloud Code Assist 的 Gemini 请求；转换矩阵 `
 
 统一内置模型表的 Gemini 与 Claude 价格来自 Google 与 Anthropic 的官方公开价格并按长上下文档位分段；GPT-OSS 等没有官方价格的模型保持未定价，不会被当作免费。价格快照在请求开始时冻结，输入、缓存读取、缓存写入、输出各结算一次。
 
-额度属于模型或额度池，不属于上游标识或推理强度：`fetchAvailableModels` 在每个上游标识下重复报告所属额度的 `quotaInfo.remainingFraction` 与 `resetTime`。`modelProvider` 为 `MODEL_PROVIDER_ANTHROPIC` 或 `MODEL_PROVIDER_OPENAI` 的模型（Claude 与 GPT-OSS）共用额度池 `anthropic-openai`，Gemini 等 Google 模型各自计算。官方 JSON 省略为 0 的 `remainingFraction`，因此有 `resetTime` 或 `isExhausted` 而没有比例表示额度已用完；两者都没有表示官方未报告额度。供应账户详情的“官方额度”每个额度一行（额度池一行列出其全部模型），显示其上游标识中最低的剩余比例与最早的重置时间，读取既有 PostgreSQL 快照，“从官方刷新”才请求官方。刷新结果写入模型冷却：额度已用完且重置时间在未来时，该额度的全部模型进入冷却直到重置；仍有余量时全部恢复。列表与定时任务不请求官方。Pro/Ultra 的基础额度每 5 小时刷新，另有按模型家族的周上限；周上限由 `retrieveUserQuotaSummary` 提供，本服务不读取。
+官方额度展示使用 `v1internal:retrieveUserQuotaSummary` 的 `groups`，保留官方顺序、`displayName`、各 `buckets` 的 `bucketId`、`window`、`remainingFraction`、`resetTime` 与 `disabled`。界面按官方剩余比例显示：Gemini Models 和 Claude and GPT models 各自显示实际返回的周窗口及 5 小时窗口；Gemini 4 Argon 是否单独成组由官方账户结果决定，不按模型名称或套餐推断。没有返回的窗口不占位，缺少比例保持未知；该接口的比例为 protobuf oneof，缺失不能解释为零。列表、卡片和详情读取同一份 PostgreSQL 快照，本地倒计时与页面读取不请求上游；详情“从官方刷新”同时读取模型目录及额度汇总，全部成功后更新快照，失败保留此前数据。
+
+调度仍使用 `fetchAvailableModels` 对每个上游标识报告的有效 `quotaInfo`，不把展示窗口反推为模型用量。显示名称与推理强度变体归并后的模型按其有效比例和重置时间冷却或恢复；Claude 与 GPT-OSS 的已声明额度池一起处理。目录的 `quotaInfo` 不是 oneof，官方省略零值比例且提供重置时间时表示已耗尽；完全没有额度信息保持未知。读取汇总失败时，不应用这次目录中的恢复结果。
 
 ## 错误处理与调度
 

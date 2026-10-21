@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
 pub mod errors;
+mod quota;
 pub(crate) mod verdict;
+pub use quota::{QuotaGroup, quota_groups};
 
 #[derive(Clone)]
 pub struct AntigravityUpstream {
@@ -114,11 +116,28 @@ impl AntigravityUpstream {
             .storage()?
             .supplier_model_descriptor(id, model)
             .await?;
-        resolve_model(model, effort, descriptor.as_ref()).map_err(UpstreamError::InvalidRequest)
+        resolve_model(model, effort, descriptor.as_ref()).map_err(|message| {
+            UpstreamError::status(http::StatusCode::BAD_REQUEST,
+                json!({"error":{"type":"invalid_request_error","code":"invalid_request_error","message":message}}).to_string())
+        })
     }
 
     /// A streamed generation; the reply is a Gemini event stream or a normalized error.
     pub async fn generate(&self, id: &str, body: Value) -> Result<reqwest::Response> {
+        self.generate_content(id, body, false).await
+    }
+
+    /// The desktop's image tool uses the unary generateContent endpoint.
+    pub async fn image(&self, id: &str, body: Value) -> Result<reqwest::Response> {
+        self.generate_content(id, body, true).await
+    }
+
+    async fn generate_content(
+        &self,
+        id: &str,
+        body: Value,
+        image: bool,
+    ) -> Result<reqwest::Response> {
         let model = body["model"]
             .as_str()
             .ok_or_else(|| UpstreamError::InvalidRequest("model is required".into()))?
@@ -139,13 +158,26 @@ impl AntigravityUpstream {
                 .ok_or(UpstreamError::AntigravityAuth(
                     AntigravityAuthError::MissingProject,
                 ))?;
-        let envelope = json!({"project":project,"requestId":format!("{}{}", wire::REQUEST_ID_PREFIX, uuid::Uuid::new_v4()),
-            "userAgent":wire::ENVELOPE_USER_AGENT,"requestType":wire::REQUEST_TYPE_AGENT,"model":upstream,"request":body["request"]});
+        let (path, request_type, request_id) = if image {
+            (
+                wire::PATH_GENERATE.to_owned(),
+                wire::REQUEST_TYPE_IMAGE,
+                format!("{}/{}", wire::REQUEST_TYPE_IMAGE, uuid::Uuid::new_v4()),
+            )
+        } else {
+            (
+                format!("{}?alt=sse", wire::PATH_STREAM_GENERATE),
+                wire::REQUEST_TYPE_AGENT,
+                format!("{}{}", wire::REQUEST_ID_PREFIX, uuid::Uuid::new_v4()),
+            )
+        };
+        let envelope = json!({"project":project,"requestId":request_id,
+            "userAgent":wire::ENVELOPE_USER_AGENT,"requestType":request_type,"model":upstream,"request":body["request"]});
         let timing = crate::ResponseTiming::default();
         let response = self
             .post(
                 &authorized,
-                &format!("{}?alt=sse", wire::PATH_STREAM_GENERATE),
+                &path,
                 Bytes::from(serde_json::to_vec(&envelope)?),
             )
             .await?;
@@ -189,21 +221,19 @@ impl AntigravityUpstream {
         Ok(response)
     }
 
-    /// The account's official model catalog with per-model quota, as returned.
-    async fn fetch_models(&self, id: &str) -> Result<(Authorized, Value)> {
-        let authorized = self.authorized(id).await?;
+    async fn project_call(&self, authorized: &Authorized, path: &str) -> Result<Value> {
         let project =
             authorized
                 .credentials
                 .project_id
-                .clone()
+                .as_deref()
                 .ok_or(UpstreamError::AntigravityAuth(
                     AntigravityAuthError::MissingProject,
                 ))?;
         let response = self
             .post(
-                &authorized,
-                wire::PATH_FETCH_MODELS,
+                authorized,
+                path,
                 Bytes::from(json!({"project":project}).to_string()),
             )
             .await?;
@@ -213,7 +243,19 @@ impl AntigravityUpstream {
             return Err(UpstreamError::status(status, normalized.to_string())
                 .with_auth_revision(authorized.revision));
         }
-        let raw: Value = response.json().await?;
+        Ok(response.json().await?)
+    }
+
+    /// The account's official model catalog with effective per-model quota.
+    async fn fetch_models(&self, id: &str) -> Result<(Authorized, Value)> {
+        let mut authorized = self.authorized(id).await?;
+        if authorized.credentials.project_id.is_none() {
+            self.auth.refresh_profile(id).await?;
+            authorized = self.authorized(id).await?;
+        }
+        let raw = self
+            .project_call(&authorized, wire::PATH_FETCH_MODELS)
+            .await?;
         if raw["models"].as_object().is_none_or(|m| m.len() > 2048) {
             return Err(UpstreamError::InvalidRequest(
                 "Antigravity returned an invalid model catalog".into(),
@@ -267,7 +309,14 @@ impl AntigravityUpstream {
     pub async fn quota(&self, id: &str) -> Result<Value> {
         let storage = self.auth.storage()?;
         let observation = storage.supplier_health(id).await?.observation_revision;
-        let (authorized, raw) = self.fetch_models(id).await?;
+        let (authorized, mut raw) = self.fetch_models(id).await?;
+        let summary = self
+            .project_call(&authorized, wire::PATH_QUOTA_SUMMARY)
+            .await?;
+        // Read the official groups before applying availability changes. A failed
+        // summary read must not replace the last complete persisted observation.
+        quota::validate_summary(&summary)?;
+        raw["quota_summary"] = summary;
         let now = chrono::Utc::now().timestamp();
         let quotas = model_quotas(&raw);
         // Apply recoveries before this response's new exhaustions advance the
@@ -310,10 +359,10 @@ impl AntigravityUpstream {
     }
 }
 
-/// One quota of an official catalog read: a model with its own quota, or the models
-/// sharing a quota pool.
+/// Effective availability reported by the catalog, used only for scheduling.
+/// The displayed windows come from retrieveUserQuotaSummary instead.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct ModelQuota {
+struct ModelQuota {
     /// The quota pool, or the model that has its own quota.
     pub key: String,
     /// Display names of the models drawing from the quota.
@@ -330,7 +379,7 @@ pub struct ModelQuota {
 /// Antigravity reports quota under every upstream ID, while the quota belongs to the
 /// model or to its pool: each quota takes the lowest fraction and earliest reset any of
 /// its upstream IDs report.
-pub fn model_quotas(raw: &Value) -> Vec<ModelQuota> {
+fn model_quotas(raw: &Value) -> Vec<ModelQuota> {
     let Some(catalog) = raw["models"].as_object() else {
         return Vec::new();
     };

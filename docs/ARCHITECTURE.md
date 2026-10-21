@@ -461,7 +461,7 @@ pinned release version from `codex2api-common/src/providers/chatgpt/version.rs`.
 Each provider owns its official endpoint and header constants in common; consumers
 reference those definitions. ChatGPT UA combines the current version with stored
 OS, architecture and terminal inputs. Grok and Antigravity use their independent
-versions and formulas; Antigravity sends `antigravity/{version} {os}/{arch}` from the
+versions and formulas; Antigravity sends `antigravity/hub/{version} (aidev_client; os_type={os}; arch={arch}; cl={build})` from the
 account's frozen Go-style OS and architecture tokens.
 Version upgrades rebuild account-bound clients on process restart without rewriting
 supplier identity. Schema initialization uses the current schema; existing databases

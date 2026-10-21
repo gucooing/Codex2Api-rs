@@ -94,6 +94,18 @@ export type SupplierQuota = {
   observed_at: string;
   stale: boolean;
   windows: SupplierQuotaWindow[];
+  groups?: SupplierQuotaGroup[];
+};
+export type SupplierQuotaGroup = {
+  name: string;
+  windows: {
+    id: string;
+    name: string;
+    window: string;
+    remaining_fraction: number | null;
+    reset_at: number | null;
+    disabled: boolean;
+  }[];
 };
 export type SupplierQuotaWindow = {
   id: "primary_window" | "secondary_window";

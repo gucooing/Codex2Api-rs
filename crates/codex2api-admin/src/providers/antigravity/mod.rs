@@ -277,6 +277,20 @@ pub async fn official(
     Path(id): Path<String>,
     Query(q): Query<OfficialQuery>,
 ) -> ApiResult {
+    let section = match q.section.as_str() {
+        "quota" => SupplierInfoSection::Quota,
+        "details" => SupplierInfoSection::Details,
+        _ => return Err(ApiError::bad("Antigravity 不提供该数据类别")),
+    };
+    if !q.refresh {
+        let snapshot = s.storage.get_supplier_info(&id, section).await?;
+        return Ok(Json(match snapshot {
+            Some(snapshot) => official_snapshot(snapshot, section, None),
+            None => {
+                json!({"value":null,"observed_at":null,"refresh_error":null,"quota":null,"groups":[]})
+            }
+        }));
+    }
     let result = match q.section.as_str() {
         "quota" => quota(&s, &id, q.refresh).await,
         "details" => {
@@ -293,11 +307,6 @@ pub async fn official(
         }
         _ => return Err(ApiError::bad("Antigravity 不提供该数据类别")),
     };
-    let section = if q.section == "quota" {
-        SupplierInfoSection::Quota
-    } else {
-        SupplierInfoSection::Details
-    };
     let (snapshot, error) = match result {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (
@@ -308,12 +317,23 @@ pub async fn official(
             Some(error),
         ),
     };
-    // Antigravity reports quota under every upstream ID; the view lists each model once.
-    let models = (section == SupplierInfoSection::Quota)
-        .then(|| codex2api_upstream::antigravity::model_quotas(&snapshot.value));
-    Ok(Json(
-        json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":error,"quota":Value::Null,"models":models}),
-    ))
+    Ok(Json(official_snapshot(snapshot, section, error)))
+}
+
+fn official_snapshot(
+    snapshot: QuotaSnapshot,
+    section: SupplierInfoSection,
+    error: Option<String>,
+) -> Value {
+    let groups = (section == SupplierInfoSection::Quota)
+        .then(|| codex2api_upstream::antigravity::quota_groups(&snapshot.value));
+    json!({"value":snapshot.value,"observed_at":snapshot.observed_at,"refresh_error":error,"quota":Value::Null,"groups":groups})
+}
+
+pub(crate) fn quota_summary(snapshot: &QuotaSnapshot) -> Value {
+    json!({"observed_at":snapshot.observed_at,
+        "stale":chrono::Utc::now()-snapshot.observed_at>=crate::quota::CACHE_TTL,
+        "windows":[],"groups":codex2api_upstream::antigravity::quota_groups(&snapshot.value)})
 }
 
 pub(crate) fn request_identity(

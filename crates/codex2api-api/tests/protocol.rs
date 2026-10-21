@@ -20,6 +20,7 @@ mod grok_scheduling;
 #[path = "execution/wires.rs"]
 mod wire_execution;
 
+mod antigravity;
 #[path = "messages/mod.rs"]
 mod messages;
 
@@ -1616,7 +1617,7 @@ async fn mixed_pools_skip_unsupported_protocols_even_with_existing_affinity() {
 }
 
 #[tokio::test]
-async fn antigravity_long_throttles_preserve_retry_advice_and_partial_usage_without_eviction() {
+async fn antigravity_throttles_switch_before_output_and_preserve_partial_usage() {
     for (sse, streaming) in [(false, false), (true, false), (true, true)] {
         let f = fixture("antigravity").await;
         let error = json!({"code":429,"status":"RESOURCE_EXHAUSTED","message":"Rate limited",
@@ -1646,11 +1647,9 @@ async fn antigravity_long_throttles_preserve_retry_advice_and_partial_usage_with
             if streaming {
                 StatusCode::OK
             } else {
-                StatusCode::TOO_MANY_REQUESTS
+                StatusCode::SERVICE_UNAVAILABLE
             }
         );
-        assert_eq!(response.headers()["retry-after"], "120");
-        assert_eq!(response.headers()["x-should-retry"], "true");
         let body = String::from_utf8(
             to_bytes(response.into_body(), 1024 * 1024)
                 .await
@@ -1658,8 +1657,11 @@ async fn antigravity_long_throttles_preserve_retry_advice_and_partial_usage_with
                 .to_vec(),
         )
         .unwrap();
-        assert!(body.contains("rate_limit_exceeded"), "{body}");
-        assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
+        assert!(body.contains("no_available_supplier"), "{body}");
+        assert_eq!(
+            f.mock.requests.lock().unwrap().len(),
+            if sse { 1 } else { 4 }
+        );
         assert!(
             f.storage
                 .supplier_model_blocks("supplier")
@@ -1779,7 +1781,7 @@ async fn antigravity_serves_every_protocol_as_the_desktop_client_and_cools_down_
                 .to_str()
                 .unwrap()
                 .starts_with(&format!(
-                    "antigravity/{} ",
+                    "antigravity/hub/{} (",
                     codex2api_common::version::antigravity::VERSION
                 ))
         );

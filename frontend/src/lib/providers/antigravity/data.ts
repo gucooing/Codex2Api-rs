@@ -1,9 +1,9 @@
 "use client";
 import { useQuotaClock } from "@/hooks/use-supplier-quotas";
 import { useActions, useErrorToast } from "@/lib/actions";
-import { request, type Fingerprint, type Json } from "@/lib/api";
+import { request, type Fingerprint, type Json, type SupplierQuotaGroup } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId } from "react";
 
 const text = (value: Json | undefined) =>
   typeof value === "string" || typeof value === "number" ? String(value) : undefined;
@@ -36,17 +36,27 @@ export function useAntigravityFingerprintFields({
   return { id, busy, applyProxyTimezone } as const;
 }
 
-/** One quota: a model with its own, or the models sharing a pool (server grouped). */
-type ModelQuota = {
-  key: string;
-  name: string;
-  models: string[];
-  upstream_models: string[];
-  remaining_fraction: number | null;
-  reset_at: number | null;
+type OfficialData = {
+  value: Json;
+  observed_at?: string;
+  refresh_error?: string;
+  groups?: SupplierQuotaGroup[] | null;
 };
 
-/** Official details (loadCodeAssist) and the per-model quota read (fetchAvailableModels). */
+export const antigravityQuotaGroups = (groups: SupplierQuotaGroup[]) =>
+  groups.map((group) => ({
+    name: group.name,
+    windows: group.windows.map((window) => ({
+      id: window.id,
+      name: window.name || window.window,
+      remainingPercent:
+        window.remaining_fraction == null ? null : Math.round(window.remaining_fraction * 100),
+      resetAt: window.reset_at,
+      disabled: window.disabled,
+    })),
+  }));
+
+/** Official details and grouped quota windows, read from persisted snapshots. */
 export function useAntigravityOfficialData({
   id,
   section,
@@ -57,14 +67,18 @@ export function useAntigravityOfficialData({
   onUsername?: (username: string | undefined) => void;
   onUpdated?: () => void;
 }) {
-  const [refresh, setRefresh] = useState(0);
+  const actions = useActions();
   const now = useQuotaClock();
-  const resource = useResource<{
-    value: Json;
-    observed_at?: string;
-    refresh_error?: string;
-    models?: ModelQuota[] | null;
-  }>(`/suppliers/${id}/official?section=${section}${refresh ? `&refresh=true&r=${refresh}` : ""}`);
+  const path = `/suppliers/${id}/official?section=${section}`;
+  const resource = useResource<OfficialData>(path);
+  const refreshKey = `antigravity-official:${id}:${section}`;
+  const refreshing = actions.isBusy(refreshKey);
+  const refreshOfficial = () =>
+    void actions.run(refreshKey, async () => {
+      const result = await request<OfficialData>(`${path}&refresh=true`);
+      if (result.refresh_error) throw new Error(result.refresh_error);
+      resource.reload();
+    });
   useErrorToast(resource.error);
   useErrorToast(resource.data?.refresh_error);
   useEffect(() => {
@@ -81,17 +95,6 @@ export function useAntigravityOfficialData({
       Array.isArray(allowed) ? allowed.map(tierLabel).filter(Boolean).join("、") : undefined,
     ],
   ];
-  const models = (resource.data?.models ?? [])
-    .map((item) => ({
-      key: item.key,
-      model: item.models.join(" · "),
-      name: item.name,
-      usedPercent:
-        item.remaining_fraction == null
-          ? null
-          : Math.min(100, Math.max(0, (1 - item.remaining_fraction) * 100)),
-      resetAt: item.reset_at,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  return { setRefresh, now, resource, fields, models } as const;
+  const groups = resource.data?.groups ?? [];
+  return { refreshOfficial, refreshing, now, resource, fields, groups } as const;
 }

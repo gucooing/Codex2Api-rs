@@ -181,6 +181,7 @@ async fn unary(
         ));
     }
     log.measure(&observation);
+    value = convert::operation_response(wire, input, value)?;
     log.observe_operation(input.operation, &value);
     if log.lifecycle.outcome().is_none() {
         return Err(ApiError::upstream_incomplete());

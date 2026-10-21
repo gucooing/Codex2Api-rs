@@ -1,7 +1,10 @@
 //! Antigravity desktop client wire constants, independent of the Codex and Grok baselines.
 
 /// Client version carried by the User-Agent and the onboarding metadata.
-pub const VERSION: &str = "2.9.1";
+pub const VERSION: &str = "2.24.0";
+/// Public desktop build and subclient from the installed release's native runtime.
+pub const BUILD_CHANGE_LIST: &str = "1000335682";
+pub const SUBCLIENT: &str = "hub";
 
 /// Google OAuth endpoints of the official desktop client.
 pub const OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -19,13 +22,16 @@ pub const ACCESS_TOKEN_TTL: i64 = 3600;
 pub const BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 pub const DAILY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 pub const PATH_STREAM_GENERATE: &str = "/v1internal:streamGenerateContent";
+pub const PATH_GENERATE: &str = "/v1internal:generateContent";
 pub const PATH_LOAD_CODE_ASSIST: &str = "/v1internal:loadCodeAssist";
 pub const PATH_ONBOARD_USER: &str = "/v1internal:onboardUser";
 pub const PATH_FETCH_MODELS: &str = "/v1internal:fetchAvailableModels";
+pub const PATH_QUOTA_SUMMARY: &str = "/v1internal:retrieveUserQuotaSummary";
 
 /// v1internal envelope values sent by the desktop client.
 pub const ENVELOPE_USER_AGENT: &str = "antigravity";
 pub const REQUEST_TYPE_AGENT: &str = "agent";
+pub const REQUEST_TYPE_IMAGE: &str = "image_gen";
 pub const REQUEST_ID_PREFIX: &str = "agent-";
 pub const IDE_TYPE: &str = "ANTIGRAVITY";
 pub const IDE_NAME: &str = "antigravity";
@@ -52,8 +58,9 @@ pub fn paid_tier(tier: &str) -> bool {
     matches!(tier, TIER_PRO | TIER_ULTRA)
 }
 
-/// User-Agent formula of the desktop client: `antigravity/{version} {os}/{arch}`
-/// with Go-style platform tokens.
+/// The native desktop's UserAgent builder, with frozen account platform inputs.
 pub fn user_agent(os: &str, arch: &str) -> String {
-    format!("antigravity/{VERSION} {os}/{arch}")
+    format!(
+        "{ENVELOPE_USER_AGENT}/{SUBCLIENT}/{VERSION} (aidev_client; os_type={os}; arch={arch}; cl={BUILD_CHANGE_LIST})"
+    )
 }

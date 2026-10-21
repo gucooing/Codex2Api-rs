@@ -51,8 +51,9 @@ upstream 的 `providers/<channel>/`。先按 API 组号池与模型权限选中�
 | Responses、Chat、Messages | `messages` | `convert/messages/`：请求构造为交替的 user／assistant 内容块、`input_schema` 工具、`max_tokens` 与 thinking 预算，Messages 事件分别转为三种下游事件 |
 | `codex_client` | `codex` | 官方客户端请求只去往其线格式，渠道重绑供应身份 |
 | `grok_client` | `xai` | 同上 |
+| 图像生成、图像编辑 | `gemini` | `convert/gemini/images.rs`：非流式 `generateContent`，参考图映射为 `inlineData`，结果转为 `b64_json` |
 
-同名协议也要转换：Responses 调用方打到 ChatGPT 账户时按固定 Codex 的请求形态重建，打到 OpenAI Key 时按 OpenAI API 的字段范围重建。各渠道与官方客户端一致，始终以流式方式请求上游（Antigravity 使用 `alt=sse`，Chat Completions 带 `stream_options.include_usage`）。客户端选择同步时，网关把转换后的同协议事件聚合为该协议的完整 JSON，因此同步与流式输出一致。用量账本按上游线格式的真实事件计量（`convert::observe`），不以转换结果计费。转换后的终态事件在结算完成后才交付客户端；没有终态事件就结束的上游流按未完成失败处理。
+同名协议也要转换：Responses 调用方打到 ChatGPT 账户时按固定 Codex 的请求形态重建，打到 OpenAI Key 时按 OpenAI API 的字段范围重建。文本生成与官方客户端一致，始终以流式方式请求上游（Antigravity 使用 `alt=sse`，Chat Completions 带 `stream_options.include_usage`）。客户端选择同步时，网关把转换后的同协议事件聚合为该协议的完整 JSON，因此同步与流式输出一致。用量账本按上游线格式的真实事件计量（`convert::observe`），不以转换结果计费。转换后的终态事件在结算完成后才交付客户端；没有终态事件就结束的上游流按未完成失败处理。
 
 流式请求收到正文、思考或工具参数增量就向客户端发送，即使同一上游分块还包含结束标记，也只延后完成事件与最终用量。Messages 的并行工具块按创建顺序输出，前一块参数未结束时，后一块等待；不会为凑齐整个回答而缓存已可交付的内容。
 
@@ -112,7 +113,9 @@ Antigravity 按官方桌面客户端的 v1internal 信封发送：`project`、`a
 后台持久化作业、生成 `n>1`、查询/删除已存储响应不是 Codex 订阅协议提供的能力。
 固定 Images 协议不提供 mask、流式输出或托管图片 URL；对应请求明确返回不支持，
 不会伪造异步任务、下载地址或成功结果。Grok、Antigravity 与 API 渠道没有 Codex 搜索、
-压缩、计数和原生 Responses WebSocket 传输；Antigravity、Chat Completions 与 Messages 账户不提供 `previous_response_id` 续接，Antigravity 与 API 渠道不提供图像生成，这些路径明确拒绝。
+压缩、计数和原生 Responses WebSocket 传输；Antigravity、Chat Completions 与 Messages 账户不提供 `previous_response_id` 续接，API 渠道不提供图像生成，这些路径明确拒绝。
+
+Antigravity 图像接口采用官方 Desktop 的 `requestType: image_gen` 与非流式 `generateContent`。每次一张图（`n: 1`），输出 `b64_json`；编辑支持 base64 data URL 和 multipart，最多 14 张参考图。可设置 `aspect_ratio`，`size` 仅接受 `auto`。不支持的参数直接拒绝；图片数量和尺寸按实际响应结算，思考中间图不计入交付。完整约束与示例见 [Antigravity 图像接口](ANTIGRAVITY.md#图像接口)。
 
 ## 搜索与计数
 

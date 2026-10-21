@@ -1,4 +1,5 @@
 "use client";
+import { AntigravityQuotaGroups } from "@/components/providers/antigravity/quota";
 import { OAuthWizard } from "@/app/components/suppliers/oauth-wizard";
 import { SupplierRecordDialog } from "@/app/components/suppliers/supplier-record-dialog";
 import { SupplierTagsBatchDialog } from "@/app/components/suppliers/supplier-tag-dialog";
@@ -525,6 +526,9 @@ export default function SuppliersPage() {
                               item.quota ? "缓存于 " + date(item.quota.observed_at) : "暂无额度缓存"
                             }
                           >
+                            {item.provider_id === "antigravity" && (
+                              <AntigravityQuotaGroups groups={item.quota?.groups} now={now} />
+                            )}
                             {item.quota?.windows?.map((window) => (
                               <div
                                 key={window.id}
@@ -563,7 +567,7 @@ export default function SuppliersPage() {
                                 </div>
                               </div>
                             ))}
-                            {!item.quota?.windows?.length && (
+                            {!item.quota?.windows?.length && !item.quota?.groups?.length && (
                               <span className="text-xs text-muted-foreground">
                                 {item.quota?.windows
                                   ? "官方未提供额度窗口"
@@ -780,6 +784,9 @@ export default function SuppliersPage() {
                   aria-label="官方额度"
                   title={item.quota ? "缓存于 " + date(item.quota.observed_at) : "暂无额度缓存"}
                 >
+                  {item.provider_id === "antigravity" && (
+                    <AntigravityQuotaGroups groups={item.quota?.groups} now={now} />
+                  )}
                   {item.quota?.windows?.map((window) => (
                     <div key={window.id} className="min-w-0 flex-1 basis-64 space-y-1 text-xs">
                       <div className="flex items-center justify-between gap-2">
@@ -808,7 +815,7 @@ export default function SuppliersPage() {
                       </div>
                     </div>
                   ))}
-                  {!item.quota?.windows?.length && (
+                  {!item.quota?.windows?.length && !item.quota?.groups?.length && (
                     <span className="text-xs text-muted-foreground">
                       {item.quota?.windows
                         ? "官方未提供额度窗口"

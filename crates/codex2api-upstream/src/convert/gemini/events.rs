@@ -75,7 +75,7 @@ fn item_id(prefix: &str) -> String {
 
 /// Gemini counts cached prompt tokens inside the prompt total and thoughts outside the
 /// candidate total; Responses includes both in its totals and details them separately.
-fn usage(meta: &Value) -> Value {
+pub(super) fn usage(meta: &Value) -> Value {
     let input = meta["promptTokenCount"].as_u64();
     let thoughts = meta["thoughtsTokenCount"].as_u64();
     let output = meta["candidatesTokenCount"]
@@ -1071,6 +1071,72 @@ mod tests {
             response["usageMetadata"] = usage;
         }
         json!({"response":response})
+    }
+
+    #[test]
+    fn cached_prompt_counts_survive_split_chunks_in_every_downstream_format() {
+        use crate::supply::Wire;
+        for cached in [None, Some(0), Some(4000)] {
+            for inbound in [Inbound::Responses, Inbound::Chat, Inbound::Messages] {
+                let mut metadata = json!({"promptTokenCount":10000});
+                if let Some(cached) = cached {
+                    metadata["cachedContentTokenCount"] = cached.into();
+                }
+                let first = chunk(json!([{"text":"hello"}]), None, Some(metadata));
+                let observation = crate::convert::observe(Wire::Gemini, &first).usage.unwrap();
+                assert_eq!(observation.input, Some(10000));
+                assert_eq!(observation.cached, cached);
+                assert_eq!(observation.cache_write, None);
+                let mut converter = conversion(inbound, true, "gemini-4-argon");
+                let mut events = converter.event(first).unwrap();
+                events.extend(
+                    converter
+                        .event(chunk(
+                            json!([]),
+                            Some("STOP"),
+                            Some(json!({"candidatesTokenCount":20,"thoughtsTokenCount":5})),
+                        ))
+                        .unwrap(),
+                );
+                events.extend(converter.finish().unwrap());
+                let (counts, cached_key, input_key, expected_input) = match inbound {
+                    Inbound::Responses => (
+                        &events.last().unwrap()["response"]["usage"],
+                        "/input_tokens_details/cached_tokens",
+                        "input_tokens",
+                        10000,
+                    ),
+                    Inbound::Chat => (
+                        &events
+                            .iter()
+                            .rev()
+                            .find(|e| e["usage"].is_object())
+                            .unwrap()["usage"],
+                        "/prompt_tokens_details/cached_tokens",
+                        "prompt_tokens",
+                        10000,
+                    ),
+                    Inbound::Messages => (
+                        &events
+                            .iter()
+                            .rev()
+                            .find(|e| e["type"] == "message_delta")
+                            .unwrap()["usage"],
+                        "/cache_read_input_tokens",
+                        "input_tokens",
+                        10000 - cached.unwrap_or(0),
+                    ),
+                    _ => unreachable!(),
+                };
+                assert_eq!(counts[input_key], expected_input);
+                let expected = if inbound == Inbound::Messages {
+                    Some(cached.unwrap_or(0))
+                } else {
+                    cached
+                };
+                assert_eq!(counts.pointer(cached_key).and_then(Value::as_i64), expected);
+            }
+        }
     }
 
     #[test]

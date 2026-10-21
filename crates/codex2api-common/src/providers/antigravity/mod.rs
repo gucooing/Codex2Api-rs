@@ -148,6 +148,9 @@ mod tests {
             "gemini-2.5-flash-thinking": {"displayName": "Gemini 3.5 Flash Lite"},
             "gemini-3.5-flash-lite": {"displayName": "Gemini 3.5 Flash Lite"},
             "gemini-3.8-flash-high": {"displayName": "Gemini 3.8 Flash (High)"},
+            "gemini-4-argon-high": {"displayName": "Gemini 4 Argon (High)"},
+            "gemini-4-argon-low": {"displayName": "Gemini 4 Argon (Low)"},
+            "gemini-4-argon-medium": {"displayName": "Gemini 4 Argon (Medium)"},
             "gemini-3.8-flash-tiered": {"displayName": "gemini-3.8-flash-tiered"},
             "gpt-oss-120b-medium": {"displayName": "GPT-OSS 120B (Medium)",
                 "modelProvider": "MODEL_PROVIDER_OPENAI"},
@@ -175,6 +178,11 @@ mod tests {
             Some("gemini-3.8-flash-tiered")
         );
         assert_eq!(group("gemini-3.8-flash").efforts.len(), 1);
+        let argon = group("gemini-4-argon");
+        assert_eq!(argon.efforts["high"], "gemini-4-argon-high");
+        assert_eq!(argon.efforts["low"], "gemini-4-argon-low");
+        assert_eq!(argon.efforts["medium"], "gemini-4-argon-medium");
+        assert_eq!(argon.upstream_model, None);
         assert_eq!(
             group("gpt-oss-120b").efforts["medium"],
             "gpt-oss-120b-medium"
@@ -192,7 +200,7 @@ mod tests {
             group("tab_flash_lite_preview").upstream_model.as_deref(),
             Some("tab_flash_lite_preview")
         );
-        assert_eq!(groups.len(), 7);
+        assert_eq!(groups.len(), 8);
         assert_eq!(display_effort("Claude Sonnet 4.5 (Thinking)").1, None);
         assert_eq!(
             model_name("Claude Sonnet 4.5 (Thinking)"),

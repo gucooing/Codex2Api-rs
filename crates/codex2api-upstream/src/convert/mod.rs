@@ -60,7 +60,7 @@ pub fn request(input: &InboundRequest, wire: Wire) -> Result<WireRequest> {
 }
 
 /// Channel operations with their own official bodies: compaction, counting, search
-/// and images. They exist on the ChatGPT and Grok wires only.
+/// and images. The matrix only admits implemented pairs.
 fn operation(input: &InboundRequest, wire: Wire) -> Result<WireRequest> {
     match (wire, input.operation) {
         (Wire::Codex, Operation::Compact | Operation::InputTokens | Operation::Search) => {
@@ -80,9 +80,22 @@ fn operation(input: &InboundRequest, wire: Wire) -> Result<WireRequest> {
                 &input.headers,
             )
         }
+        (Wire::Gemini, Operation::ImageGeneration | Operation::ImageEdit) => {
+            gemini::images::prepare(input)
+        }
         _ => Err(Error::bad_request(
             "This endpoint is not offered by the selected supplier's platform",
         )),
+    }
+}
+
+/// Convert a unary operation result directly from the supplier wire.
+pub fn operation_response(wire: Wire, input: &InboundRequest, value: Value) -> Result<Value> {
+    match (wire, input.operation) {
+        (Wire::Gemini, Operation::ImageGeneration | Operation::ImageEdit) => {
+            gemini::images::response(value, input.model().unwrap_or_default())
+        }
+        _ => Ok(value),
     }
 }
 

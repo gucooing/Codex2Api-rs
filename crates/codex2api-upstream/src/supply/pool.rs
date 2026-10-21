@@ -23,6 +23,9 @@ impl UpstreamPool {
             (_, Operation::Generate) => codex2api_common::supported_provider(&account.provider_id),
             (codex2api_common::CHATGPT, _) => true,
             (codex2api_common::GROK, Operation::ImageGeneration | Operation::ImageEdit) => true,
+            (codex2api_common::ANTIGRAVITY, Operation::ImageGeneration | Operation::ImageEdit) => {
+                true
+            }
             _ => false,
         }
     }
@@ -70,7 +73,11 @@ impl UpstreamPool {
                     .await
             }
             codex2api_common::ANTIGRAVITY => {
-                self.antigravity().generate(&account.id, request.body).await
+                if request.operation.image() {
+                    self.antigravity().image(&account.id, request.body).await
+                } else {
+                    self.antigravity().generate(&account.id, request.body).await
+                }
             }
             codex2api_common::API => self.api().send(&account.id, request).await,
             _ => Err(UpstreamError::Internal("Unsupported provider".into())),
