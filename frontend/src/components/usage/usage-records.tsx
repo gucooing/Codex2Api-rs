@@ -22,12 +22,9 @@ import {
 } from "@/components/ui/select";
 import { UsageTable } from "@/components/usage/usage-table";
 import { validateForm } from "@/lib/actions";
-import {
-  emptyFilters,
-  useUsagePageView,
-  type ConsumerOption,
-  type SupplierOption,
-} from "@/lib/usage";
+import { apiKeyOptionLabel, type ApiKeyOption } from "@/lib/api-key-lookup";
+import { providerOptions } from "@/lib/providers";
+import { emptyFilters, useUsagePageView, type SupplierOption } from "@/lib/usage";
 import { usageStatuses } from "@/lib/usage-display";
 import { userOptionLabel, type UserOption } from "@/lib/user-lookup";
 import {
@@ -44,21 +41,18 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
   const {
     fieldId,
     userLookup,
+    apiKeyLookup,
     filters,
     setFilters,
     setApplied,
     setPage,
     supplierOpen,
     setSupplierOpen,
-    consumerOpen,
-    setConsumerOpen,
     setSupplierSearch,
-    setConsumerSearch,
     selectedUser,
     selectedSupplier,
-    selectedConsumer,
+    selectedApiKey,
     suppliers,
-    consumers,
     resource,
     pagination,
     update,
@@ -210,64 +204,64 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                 </Field>
                 {!consumerId && (
                   <Field className="min-w-0 sm:w-36 lg:flex-1 lg:max-w-44">
-                    <FieldLabel className="sr-only" htmlFor={fieldId + "-consumer"}>
-                      消费账户
+                    <FieldLabel className="sr-only" htmlFor={fieldId + "-api-key"}>
+                      ApiKey
                     </FieldLabel>
-                    <Combobox<ConsumerOption>
-                      items={consumers.data?.items ?? []}
-                      value={selectedConsumer ?? null}
+                    <Combobox<ApiKeyOption>
+                      items={apiKeyLookup.data?.items ?? []}
+                      value={selectedApiKey}
                       onValueChange={(item) => {
                         setFilters((current) => ({
                           ...current,
-                          virtual_account: item?.id ?? "",
-                          consumer_label: item?.username ?? "",
+                          key_id: item?.id ?? "",
+                          key_label: item ? apiKeyOptionLabel(item) : "",
                         }));
-                        setConsumerSearch("");
+                        apiKeyLookup.setSearch("");
                       }}
-                      itemToStringLabel={(item) => item.username}
+                      itemToStringLabel={apiKeyOptionLabel}
                       itemToStringValue={(item) => item.id}
                       isItemEqualToValue={(item, value) => item.id === value.id}
                       filter={null}
-                      open={consumerOpen}
+                      open={apiKeyLookup.open}
                       onOpenChange={(open, details) => {
-                        setConsumerOpen(open);
-                        if (open && details.reason !== "input-change") setConsumerSearch("");
+                        apiKeyLookup.setOpen(open);
+                        if (open && details.reason !== "input-change") apiKeyLookup.setSearch("");
                       }}
                       onInputValueChange={(text, details) => {
                         if (details.reason === "input-change") {
-                          setConsumerSearch(text);
+                          apiKeyLookup.setSearch(text);
                           if (!text) {
                             setFilters((current) => ({
                               ...current,
-                              virtual_account: "",
-                              consumer_label: "",
+                              key_id: "",
+                              key_label: "",
                             }));
                           }
                         }
                       }}
                     >
                       <ComboboxInput
-                        id={fieldId + "-consumer"}
-                        aria-label="消费账户"
-                        placeholder="全部消费账户"
+                        id={fieldId + "-api-key"}
+                        aria-label="ApiKey"
+                        placeholder="全部 ApiKey"
                         showClear
                         className="w-full"
                       />
                       <ComboboxContent>
                         <ComboboxEmpty>
-                          {consumers.loading
+                          {apiKeyLookup.loading
                             ? "正在加载…"
-                            : consumers.error
+                            : apiKeyLookup.error
                               ? "加载失败，请重新搜索"
-                              : "没有匹配账户"}
+                              : "没有匹配 ApiKey"}
                         </ComboboxEmpty>
-                        <ComboboxList aria-busy={consumers.loading}>
-                          {(item: ConsumerOption) => (
+                        <ComboboxList aria-busy={apiKeyLookup.loading}>
+                          {(item: ApiKeyOption) => (
                             <ComboboxItem key={item.id} value={item}>
                               <span className="flex min-w-0 flex-col">
-                                <span className="truncate">{item.username}</span>
+                                <span className="truncate">{apiKeyOptionLabel(item)}</span>
                                 <span className="truncate text-xs text-muted-foreground">
-                                  {item.email}
+                                  {item.username}
                                 </span>
                               </span>
                             </ComboboxItem>
@@ -277,6 +271,34 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     </Combobox>
                   </Field>
                 )}
+                <Field className="min-w-0 sm:w-36">
+                  <FieldLabel className="sr-only" htmlFor={fieldId + "-supplier-platform"}>
+                    供货平台
+                  </FieldLabel>
+                  <Select
+                    value={filters.supplier_platform || "all"}
+                    onValueChange={(value) =>
+                      setFilters((current) => ({
+                        ...current,
+                        supplier_platform: value === "all" ? "" : value,
+                        supplier_id: "",
+                        supplier_label: "",
+                      }))
+                    }
+                  >
+                    <SelectTrigger id={fieldId + "-supplier-platform"} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      <SelectItem value="all">全部供货平台</SelectItem>
+                      {providerOptions.map((provider) => (
+                        <SelectItem key={provider.value} value={provider.value}>
+                          {provider.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
                 <Field className="min-w-0 sm:w-32 lg:flex-1 lg:max-w-40">
                   <FieldLabel
                     className="sr-only"
@@ -359,9 +381,9 @@ export function UsagePageView({ consumerId }: { consumerId?: string }) {
                     size="sm"
                     type="button"
                     onClick={() => {
-                      const next = { ...emptyFilters, virtual_account: consumerId ?? "" };
+                      const next = { ...emptyFilters };
                       setSupplierSearch("");
-                      setConsumerSearch("");
+                      apiKeyLookup.setSearch("");
                       setFilters(next);
                       setApplied(next);
                       resource.reload();

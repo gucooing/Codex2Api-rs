@@ -3,6 +3,7 @@ pub mod oauth;
 pub mod version;
 
 pub const SEARCH_OPERATION: &str = "search";
+pub const PREVIOUS_RESPONSE_NOT_FOUND: &str = "previous_response_not_found";
 
 pub fn billing_operation(endpoint: &str) -> Option<&'static str> {
     matches!(endpoint, "/v1/alpha/search").then_some(SEARCH_OPERATION)

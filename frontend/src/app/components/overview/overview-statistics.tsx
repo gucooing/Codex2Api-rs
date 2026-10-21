@@ -1,10 +1,5 @@
 "use client";
-import {
-  SubjectOption,
-  defaultVisibility,
-  defaults,
-  useOverviewStatistics,
-} from "@/app/data/overview";
+import { defaultVisibility, defaults, useOverviewStatistics } from "@/app/data/overview";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -35,15 +30,14 @@ import {
 } from "@/components/ui/select";
 import { validateForm } from "@/lib/actions";
 import { type Supplier } from "@/lib/api";
+import { apiKeyOptionLabel, type ApiKeyOption } from "@/lib/api-key-lookup";
+import { providerOptions } from "@/lib/providers";
 import { tokenCount, usageStatuses } from "@/lib/usage-display";
 import { percent, statisticsRange, usageGroups, usd } from "@/lib/usage-statistics";
 import { RefreshCw, RotateCcw, Search } from "lucide-react";
 import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from "recharts";
 
 export type SupplierOption = Pick<Supplier, "id" | "display_name" | "email">;
-
-export const subjectOptionLabel = (item: SubjectOption) =>
-  `${item.kind === "user" ? "用户" : "账户"} · ${item.label}`;
 
 export const supplierOptionLabel = (item: SupplierOption) =>
   item.display_name || item.email || item.id;
@@ -63,14 +57,12 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
     applied,
     visible,
     setVisible,
-    userLookup,
+    apiKeyLookup,
     supplierOpen,
     setSupplierOpen,
     setSupplierSearch,
-    selectedSubject,
+    selectedApiKey,
     selectedSupplier,
-    consumers,
-    subjects,
     suppliers,
     resource,
     update,
@@ -94,66 +86,65 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
             }}
           >
             <Field className="min-w-0 sm:w-40 lg:flex-1 lg:max-w-44">
-              <FieldLabel className="sr-only" htmlFor="overview-subject">
-                用户/账户
+              <FieldLabel className="sr-only" htmlFor="overview-api-key">
+                ApiKey
               </FieldLabel>
-              <Combobox<SubjectOption>
-                items={subjects}
-                value={selectedSubject}
+              <Combobox<ApiKeyOption>
+                items={apiKeyLookup.data?.items ?? []}
+                value={selectedApiKey}
                 onValueChange={(item) => {
                   setFilters((current) => ({
                     ...current,
-                    user_id: item?.kind === "user" ? item.id : "",
-                    user_label: item?.kind === "user" ? item.label : "",
-                    virtual_account: item?.kind === "virtual_account" ? item.id : "",
-                    consumer_label: item?.kind === "virtual_account" ? item.label : "",
+                    key_id: item?.id ?? "",
+                    key_label: item ? apiKeyOptionLabel(item) : "",
                   }));
-                  userLookup.setSearch("");
+                  apiKeyLookup.setSearch("");
                 }}
-                itemToStringLabel={subjectOptionLabel}
-                itemToStringValue={(item) => `${item.kind}:${item.id}`}
-                isItemEqualToValue={(item, value) =>
-                  item.kind === value.kind && item.id === value.id
-                }
+                itemToStringLabel={apiKeyOptionLabel}
+                itemToStringValue={(item) => item.id}
+                isItemEqualToValue={(item, value) => item.id === value.id}
                 filter={null}
-                open={userLookup.open}
+                open={apiKeyLookup.open}
                 onOpenChange={(open, details) => {
-                  userLookup.setOpen(open);
-                  if (open && details.reason !== "input-change") userLookup.setSearch("");
+                  apiKeyLookup.setOpen(open);
+                  if (open && details.reason !== "input-change") apiKeyLookup.setSearch("");
                 }}
                 onInputValueChange={(text, details) => {
                   if (details.reason === "input-change") {
-                    userLookup.setSearch(text);
+                    apiKeyLookup.setSearch(text);
                     if (!text) {
                       setFilters((current) => ({
                         ...current,
-                        user_id: "",
-                        user_label: "",
-                        virtual_account: "",
-                        consumer_label: "",
+                        key_id: "",
+                        key_label: "",
                       }));
                     }
                   }
                 }}
               >
                 <ComboboxInput
-                  id="overview-subject"
-                  placeholder="全部用户/账户"
+                  id="overview-api-key"
+                  placeholder="全部 ApiKey"
                   showClear
                   className="w-full"
                 />
                 <ComboboxContent>
                   <ComboboxEmpty>
-                    {userLookup.loading || consumers.loading
+                    {apiKeyLookup.loading
                       ? "正在加载…"
-                      : userLookup.error || consumers.error
+                      : apiKeyLookup.error
                         ? "加载失败，请重新搜索"
-                        : "没有匹配用户/账户"}
+                        : "没有匹配 ApiKey"}
                   </ComboboxEmpty>
-                  <ComboboxList aria-busy={userLookup.loading || consumers.loading}>
-                    {(item: SubjectOption) => (
-                      <ComboboxItem key={`${item.kind}:${item.id}`} value={item}>
-                        {subjectOptionLabel(item)}
+                  <ComboboxList aria-busy={apiKeyLookup.loading}>
+                    {(item: ApiKeyOption) => (
+                      <ComboboxItem key={item.id} value={item}>
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate">{apiKeyOptionLabel(item)}</span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {item.username}
+                          </span>
+                        </span>
                       </ComboboxItem>
                     )}
                   </ComboboxList>
@@ -225,6 +216,34 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                   </ComboboxList>
                 </ComboboxContent>
               </Combobox>
+            </Field>
+            <Field className="min-w-0 sm:w-36">
+              <FieldLabel className="sr-only" htmlFor="overview-supplier-platform">
+                供货平台
+              </FieldLabel>
+              <Select
+                value={filters.supplier_platform || "all"}
+                onValueChange={(value) =>
+                  setFilters((current) => ({
+                    ...current,
+                    supplier_platform: value === "all" ? "" : value,
+                    supplier_id: "",
+                    supplier_label: "",
+                  }))
+                }
+              >
+                <SelectTrigger id="overview-supplier-platform" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="all">全部供货平台</SelectItem>
+                  {providerOptions.map((provider) => (
+                    <SelectItem key={provider.value} value={provider.value}>
+                      {provider.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <Field className="min-w-0 sm:w-32 lg:flex-1 lg:max-w-40">
               <FieldLabel className="sr-only" htmlFor="overview-model">
@@ -362,7 +381,7 @@ export function OverviewStatistics({ onRefresh }: { onRefresh: () => void }) {
                 size="sm"
                 onClick={() => {
                   setFilters(defaults);
-                  userLookup.setSearch("");
+                  apiKeyLookup.setSearch("");
                   setSupplierSearch("");
                   setVisible(defaultVisibility);
                   apply(defaults);

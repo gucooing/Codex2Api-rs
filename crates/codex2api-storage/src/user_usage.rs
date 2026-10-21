@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UserUsageFilter {
     pub source: Option<crate::usage::UsageSource>,
@@ -19,6 +19,7 @@ pub struct UserUsageFilter {
     pub status: String,
     pub page: i64,
     pub limit: i64,
+    pub summary_only: bool,
 }
 impl Default for UserUsageFilter {
     fn default() -> Self {
@@ -35,8 +36,25 @@ impl Default for UserUsageFilter {
             status: String::new(),
             page: 1,
             limit: 20,
+            summary_only: false,
         }
     }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct UserStatistics {
+    from_ms: i64,
+    until_ms: i64,
+    tz_offset: i32,
+    summary: UsageTotals,
+    rows: Vec<UsageStatisticsRow>,
+}
+
+#[derive(FromRow)]
+struct StatisticsRow {
+    key: Option<String>,
+    #[sqlx(flatten)]
+    totals: UsageTotals,
 }
 
 #[derive(FromRow, Serialize)]
@@ -209,34 +227,45 @@ impl Storage {
         {
             return Err(StorageError::InvalidAdminUpdate("使用记录时间范围无效"));
         }
-        let totals = crate::usage_statistics::TOTALS;
+        if filter.summary_only {
+            // Check the current account even on a cache hit. Owner identity is part of the key.
+            self.require_account_scope(owner, crate::AccountScope::User)
+                .await?;
+            let mut cached_filter = filter.clone();
+            cached_filter.page = 1;
+            cached_filter.limit = 20;
+            let key = crate::usage_statistics::statistics_cache_key(
+                "user-usage-statistics",
+                (owner, &cached_filter, from),
+            )?;
+            let statistics = self
+                .runtime
+                .snapshots
+                .read(key, async {
+                    let result = user_statistics_on(
+                        &mut *self.pool().acquire().await?,
+                        owner,
+                        filter,
+                        from,
+                        until,
+                    )
+                    .await?;
+                    Ok((result, crate::usage_statistics::STATISTICS_TTL))
+                })
+                .await?;
+            return Ok(serde_json::to_value(statistics)?);
+        }
         let mut tx = self
             .pool()
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .await?;
         crate::account_scope::require_on(&mut tx, owner, crate::AccountScope::User).await?;
-        let mut summary = QueryBuilder::new(format!("SELECT {totals} FROM usage_records"));
-        scope(&mut summary, owner, filter, from, until);
-        let summary = summary
-            .build_query_as::<UsageTotals>()
-            .fetch_one(&mut *tx)
-            .await?;
+        let UserStatistics { summary, rows, .. } =
+            user_statistics_on(&mut tx, owner, filter, from, until).await?;
         let page = filter
             .page
             .min(((summary.request_count.saturating_sub(1) / filter.limit) + 1).max(1));
         let offset = (page - 1) * filter.limit;
-        let bucket = format!(
-            "to_char(to_timestamp(((requested_at_ms - ({zone_ms}))/1000.0)::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD')"
-        );
-        let mut series = QueryBuilder::new(format!(
-            "SELECT {bucket} AS key,{bucket} AS label,{totals} FROM usage_records"
-        ));
-        scope(&mut series, owner, filter, from, until);
-        series.push(" GROUP BY key ORDER BY key");
-        let rows = series
-            .build_query_as::<UsageStatisticsRow>()
-            .fetch_all(&mut *tx)
-            .await?;
         let mut records = QueryBuilder::new(format!(
             "SELECT id,{} AS consumer_name,subject_kind,reasoning_effort,service_tier,image_usage_json,image_input_usage_json,key_id,source_name,endpoint,client_ip,transport,stream,public_error_code AS error_code,public_error_message AS error_reason,multiplier_micros,wallet_debit_cents,image_count,image_size,provider_id,model,actual_model,requested_at_ms,status,input_tokens,output_tokens,cached_tokens,cache_write_tokens,reasoning_tokens,total_ms,first_token_ms,cost_nano_usd,billing_status,pricing_snapshot_json FROM usage_records",
             crate::usage::CONSUMER_NAME,
@@ -265,4 +294,46 @@ impl Storage {
             json!({"wallet_pending_nano_usd":pending,"from_ms":from,"until_ms":until,"tz_offset":filter.tz_offset,"summary":summary,"rows":rows,"items":items,"total":summary.request_count,"page":page,"limit":filter.limit}),
         )
     }
+}
+
+async fn user_statistics_on(
+    connection: &mut sqlx::PgConnection,
+    owner: &str,
+    filter: &UserUsageFilter,
+    from: i64,
+    until: i64,
+) -> Result<UserStatistics> {
+    let totals = crate::usage_statistics::TOTALS;
+    let bucket = crate::usage_statistics::time_bucket_sql(86_400_000, filter.tz_offset);
+    let mut query = QueryBuilder::new(format!(
+        "SELECT to_char(to_timestamp(bucket*86400.0::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD') AS key,
+         {totals} FROM (SELECT {bucket} AS bucket,status,input_tokens,output_tokens,cached_tokens,
+         cache_write_tokens,reasoning_tokens,cost_nano_usd FROM usage_records"
+    ));
+    scope(&mut query, owner, filter, from, until);
+    query.push(") AS ledger GROUP BY GROUPING SETS ((bucket),()) ORDER BY bucket");
+    let aggregates = query
+        .build_query_as::<StatisticsRow>()
+        .fetch_all(connection)
+        .await?;
+    let mut rows = Vec::new();
+    let mut summary = None;
+    for row in aggregates {
+        if let Some(key) = row.key {
+            rows.push(UsageStatisticsRow {
+                label: key.clone(),
+                key,
+                totals: row.totals,
+            });
+        } else {
+            summary = Some(row.totals);
+        }
+    }
+    Ok(UserStatistics {
+        from_ms: from,
+        until_ms: until,
+        tz_offset: filter.tz_offset,
+        summary: summary.ok_or(sqlx::Error::RowNotFound)?,
+        rows,
+    })
 }

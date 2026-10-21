@@ -24,6 +24,10 @@ pub(crate) struct Filters {
     #[serde(default)]
     pub supplier_id: String,
     #[serde(default)]
+    pub supplier_platform: String,
+    #[serde(default)]
+    pub key_id: String,
+    #[serde(default)]
     pub virtual_account: String,
     #[serde(default)]
     pub model: String,
@@ -44,6 +48,14 @@ impl Filters {
     pub fn storage_filter(&self) -> Result<UsageFilter, String> {
         if self.user_id.len() > 128 {
             return Err("用户筛选条件无效".into());
+        }
+        if self.key_id.len() > 128 {
+            return Err("ApiKey 筛选条件无效".into());
+        }
+        if !self.supplier_platform.is_empty()
+            && !codex2api_common::supported_provider(&self.supplier_platform)
+        {
+            return Err("供货平台无效".into());
         }
         codex2api_storage::table_page_size(self.page_size).map_err(|e| e.to_string())?;
         let parse = |value: &str| -> Result<Option<i64>, String> {
@@ -79,6 +91,8 @@ impl Filters {
             user_id: Some(self.user_id.clone()),
             account: Some(self.account.trim().into()),
             account_id: Some(self.supplier_id.clone()),
+            account_provider_id: Some(self.supplier_platform.clone()),
+            key_id: Some(self.key_id.clone()),
             subject_id: Some(self.virtual_account.clone()),
             model: Some(self.model.trim().into()),
             status: Some(self.status.clone()),

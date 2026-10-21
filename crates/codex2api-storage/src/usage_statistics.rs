@@ -1,6 +1,8 @@
 use crate::{Result, Storage, UsageFilter, usage::conditions};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, QueryBuilder};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -12,7 +14,7 @@ pub enum UsageGroup {
     Subject,
 }
 
-#[derive(Debug, FromRow, Serialize)]
+#[derive(Clone, Debug, FromRow, Deserialize, Serialize)]
 pub struct UsageTotals {
     pub request_count: i64,
     pub completed_requests: i64,
@@ -30,7 +32,7 @@ pub struct UsageTotals {
     pub unpriced_requests: i64,
 }
 
-#[derive(Debug, FromRow, Serialize)]
+#[derive(Clone, Debug, FromRow, Deserialize, Serialize)]
 pub struct UsageStatisticsRow {
     pub key: String,
     pub label: String,
@@ -39,7 +41,7 @@ pub struct UsageStatisticsRow {
     pub totals: UsageTotals,
 }
 
-#[derive(Debug, FromRow, Serialize)]
+#[derive(Clone, Debug, FromRow, Deserialize, Serialize)]
 pub struct ModelUsageBucket {
     pub bucket: String,
     pub model: String,
@@ -47,7 +49,7 @@ pub struct ModelUsageBucket {
     pub missing_token_requests: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct UsageStatistics {
     pub group_by: UsageGroup,
     pub from_ms: i64,
@@ -56,6 +58,31 @@ pub struct UsageStatistics {
     pub summary: UsageTotals,
     pub rows: Vec<UsageStatisticsRow>,
     pub model_usage: Vec<ModelUsageBucket>,
+}
+
+#[derive(FromRow)]
+struct AggregateRow {
+    level: i32,
+    key: Option<String>,
+    model: Option<String>,
+    label: Option<String>,
+    #[sqlx(flatten)]
+    totals: UsageTotals,
+}
+
+pub(crate) const STATISTICS_TTL: Duration = Duration::from_secs(15);
+
+pub(crate) fn time_bucket_sql(duration_ms: i64, tz_offset: i32) -> String {
+    let local = format!("(requested_at_ms - ({}))", i64::from(tz_offset) * 60_000);
+    // Integer division truncates toward zero; the remainder correction also covers pre-epoch data.
+    format!("({local}/{duration_ms} - CASE WHEN {local}%{duration_ms}<0 THEN 1 ELSE 0 END)")
+}
+
+pub(crate) fn statistics_cache_key(family: &str, filters: impl Serialize) -> Result<String> {
+    Ok(format!(
+        "{family}:{:x}",
+        Sha256::digest(serde_json::to_vec(&filters)?)
+    ))
 }
 
 // Aggregate the ledger, never the current record page or current model prices.
@@ -100,64 +127,86 @@ impl Storage {
                 "统计时间或时区无效，当前分组最多查询 {max_days} 天"
             )));
         }
-        let local_time = format!(
-            "(requested_at_ms - {}) / 1000.0",
-            i64::from(tz_offset) * 60_000
-        );
-        let key = match group_by {
-            UsageGroup::Hour => format!(
-                "to_char(to_timestamp(({local_time})::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:00')"
+        let mut cache_filter = filter.clone();
+        cache_filter.page = 0;
+        cache_filter.page_size = None;
+        let cache_key =
+            statistics_cache_key("usage-statistics", (&cache_filter, group_by, tz_offset))?;
+        self.runtime
+            .snapshots
+            .read(cache_key, async {
+                let statistics = self
+                    .load_usage_statistics(filter, group_by, tz_offset, from_ms, until_ms)
+                    .await?;
+                Ok((statistics, STATISTICS_TTL))
+            })
+            .await
+    }
+
+    async fn load_usage_statistics(
+        &self,
+        filter: &UsageFilter,
+        group_by: UsageGroup,
+        tz_offset: i32,
+        from_ms: i64,
+        until_ms: i64,
+    ) -> Result<UsageStatistics> {
+        let (key, display_key) = match group_by {
+            UsageGroup::Hour => (
+                time_bucket_sql(3_600_000, tz_offset),
+                "to_char(to_timestamp(bucket*3600.0::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:00')",
             ),
-            UsageGroup::Day => format!(
-                "to_char(to_timestamp(({local_time})::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD')"
+            UsageGroup::Day => (
+                time_bucket_sql(86_400_000, tz_offset),
+                "to_char(to_timestamp(bucket*86400.0::double precision) AT TIME ZONE 'UTC','YYYY-MM-DD')",
             ),
-            UsageGroup::Model => "COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'')".into(),
-            UsageGroup::Subject => "subject_id".into(),
+            UsageGroup::Model => (
+                "COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'')".into(),
+                "bucket",
+            ),
+            UsageGroup::Subject => ("subject_id".into(), "bucket"),
         };
         let label = match group_by {
             UsageGroup::Subject => {
-                "COALESCE((SELECT username FROM platform_principals WHERE id=subject_id),NULLIF(MAX(subject_name),''),subject_id)"
+                "COALESCE((SELECT username FROM platform_principals WHERE id=bucket),NULLIF(MAX(subject_name),''),bucket)"
             }
-            _ => &key,
+            _ => display_key,
         };
-        let mut tx = self
-            .pool()
-            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            .await?;
-        let mut summary = QueryBuilder::new(format!("SELECT {TOTALS} FROM usage_records"));
-        conditions(&mut summary, filter);
-        let summary = summary
-            .build_query_as::<UsageTotals>()
-            .fetch_one(&mut *tx)
-            .await?;
-        let mut rows = QueryBuilder::new(format!(
-            "SELECT {key} AS key, {label} AS label, {TOTALS} FROM usage_records"
-        ));
-        conditions(&mut rows, filter);
-        rows.push(" GROUP BY ").push(&key).push(" ORDER BY key");
-        let rows = rows
-            .build_query_as::<UsageStatisticsRow>()
-            .fetch_all(&mut *tx)
-            .await?;
         let model_key = "COALESCE(NULLIF(actual_model,''),NULLIF(model,''),'')";
-        let mut model_usage = QueryBuilder::new(format!(
-            "SELECT {key} AS bucket,
-             {model_key} AS model,
-             SUM(CASE WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
-                 THEN COALESCE(input_tokens,0)+COALESCE(output_tokens,0) END)::bigint AS total_tokens,
-             SUM((input_tokens IS NULL OR output_tokens IS NULL)::int)::bigint AS missing_token_requests
+        // One ledger scan and one MVCC snapshot for the summary, chart and model stacks.
+        let mut query = QueryBuilder::new(format!(
+            "SELECT GROUPING(bucket,chart_model) AS level,{display_key} AS key,chart_model AS model,
+             {label} AS label,{TOTALS} FROM (
+             SELECT {key} AS bucket,{model_key} AS chart_model,subject_name,status,
+             input_tokens,output_tokens,cached_tokens,cache_write_tokens,reasoning_tokens,cost_nano_usd
              FROM usage_records"
         ));
-        conditions(&mut model_usage, filter);
-        model_usage
-            .push(" GROUP BY bucket, ")
-            .push(model_key)
-            .push(" ORDER BY bucket, model");
-        let model_usage = model_usage
-            .build_query_as::<ModelUsageBucket>()
-            .fetch_all(&mut *tx)
+        conditions(&mut query, filter);
+        query.push(") AS ledger GROUP BY GROUPING SETS ((bucket,chart_model),(bucket),()) ORDER BY bucket,chart_model");
+        let aggregates = query
+            .build_query_as::<AggregateRow>()
+            .fetch_all(self.pool())
             .await?;
-        tx.commit().await?;
+        let mut summary = None;
+        let mut rows = Vec::new();
+        let mut model_usage = Vec::new();
+        for row in aggregates {
+            match row.level {
+                0 => model_usage.push(ModelUsageBucket {
+                    bucket: row.key.unwrap_or_default(),
+                    model: row.model.unwrap_or_default(),
+                    total_tokens: row.totals.total_tokens,
+                    missing_token_requests: row.totals.missing_token_requests,
+                }),
+                1 => rows.push(UsageStatisticsRow {
+                    key: row.key.unwrap_or_default(),
+                    label: row.label.unwrap_or_default(),
+                    totals: row.totals,
+                }),
+                _ => summary = Some(row.totals),
+            }
+        }
+        let summary = summary.ok_or(sqlx::Error::RowNotFound)?;
         // Empty time intervals are filled by the UI using the returned range;
         // an interval containing unknown usage remains a real row with NULLs.
         Ok(UsageStatistics {

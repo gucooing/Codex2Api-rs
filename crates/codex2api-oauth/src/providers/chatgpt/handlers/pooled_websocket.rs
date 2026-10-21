@@ -10,6 +10,7 @@ use axum::{
     },
     response::Response,
 };
+use codex2api_common::providers::chatgpt::PREVIOUS_RESPONSE_NOT_FOUND;
 use codex2api_storage::VirtualAccess;
 use codex2api_upstream::executor::{Attempts, Recovery};
 use codex2api_upstream::supply::Wire;
@@ -197,6 +198,62 @@ struct Pending {
     prelude_bytes: usize,
     committed: bool,
     attempts: Attempts,
+}
+
+fn previous_response_missing(value: &Value) -> bool {
+    let failure = codex2api_upstream::ResponseFailure::from_error(None, value);
+    failure.code.as_deref() == Some(PREVIOUS_RESPONSE_NOT_FOUND)
+        || (failure.code.as_deref() == Some("invalid_request_error")
+            && failure.message.as_deref().is_some_and(|message| {
+                message
+                    .trim()
+                    .trim_end_matches('.')
+                    .replace('`', "")
+                    .eq_ignore_ascii_case("Invalid previous_response_id")
+            }))
+}
+
+fn continuation_required() -> OAuthError {
+    OAuthError::openai(
+        http::StatusCode::BAD_REQUEST,
+        "invalid_request_error",
+        "Previous response was not found. Retrying the full request.",
+        Some(PREVIOUS_RESPONSE_NOT_FOUND),
+    )
+}
+
+impl Pending {
+    fn replay_previous_response(&mut self) -> bool {
+        if self.committed
+            || self
+                .original
+                .get("previous_response_id")
+                .and_then(Value::as_str)
+                .is_none()
+        {
+            return false;
+        }
+        let Some(input) = &self.full_input else {
+            return false;
+        };
+        let mut request = self.original.clone();
+        request
+            .as_object_mut()
+            .unwrap()
+            .remove("previous_response_id");
+        request["input"] = serde_json::json!(input);
+        if !serde_json::to_vec(&request)
+            .is_ok_and(|bytes| bytes.len() <= codex2api_upstream::MAX_REQUEST_BYTES)
+        {
+            return false;
+        }
+        // Removing the anchor also bounds recovery to one attempt. Every tool call,
+        // result and encrypted reasoning item remains in the known full history.
+        self.original = request;
+        self.prelude.clear();
+        self.prelude_bytes = 0;
+        true
+    }
 }
 
 async fn send(conn: &mut Connection, value: &Value, reviewer: bool) -> Result<()> {
@@ -440,6 +497,27 @@ async fn bridge(
                     let failed = matches!(ResponseOutcome::from_value(&value, None), Some(ResponseOutcome::Failed(_)));
                     let replay_safe = pending.as_ref().is_none_or(|p| !p.committed)
                         && !codex2api_upstream::executor::generation_observed(&value);
+                    if failed && replay_safe && previous_response_missing(&value)
+                        && let Some(p) = &mut pending
+                        && p.original.get("previous_response_id").and_then(Value::as_str).is_some()
+                    {
+                        let failure = codex2api_upstream::ResponseFailure::from_error(None, &value);
+                        ledger.lock().await.recovered_response(&failure).await?;
+                        if !p.replay_previous_response() {
+                            // The native client has the full prompt; a delta alone must never be replayed.
+                            return Err(continuation_required());
+                        }
+                        let selected = conn.ctx.clone();
+                        let mut schedule = super::super::scheduling::request(&headers, &p.original);
+                        schedule.previous_can_move = true;
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), conn.socket.close(None)).await;
+                        conn = open(&state, &oauth, endpoint, &headers, &mut p.attempts, &schedule, Some(selected)).await?;
+                        let account = conn.ctx.account.clone();
+                        ledger.lock().await.retry_supplier(context(&state, &oauth, &mut conn, endpoint, &headers), &account).await?;
+                        ledger.lock().await.response_headers(&conn.headers);
+                        send(&mut conn, &p.original, reviewer).await?;
+                        continue;
+                    }
                     if failed && replay_safe {
                         let failure = codex2api_upstream::supply::UpstreamFailure {
                             status: codex2api_upstream::ResponseFailure::from_error(None, &value).status,
@@ -581,6 +659,45 @@ async fn bridge(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn missing_continuation_replays_full_history_once_before_output() {
+        for event in [
+            json!({"type":"error","error":{"code":"invalid_request_error","message":"Invalid `previous_response_id`."}}),
+            json!({"type":"response.failed","response":{"error":{"code":PREVIOUS_RESPONSE_NOT_FOUND}}}),
+        ] {
+            assert!(previous_response_missing(&event));
+        }
+        assert!(!previous_response_missing(
+            &json!({"type":"error","error":{"code":"invalid_request_error","message":"Invalid model."}})
+        ));
+        let history = vec![
+            json!({"role":"user","content":"original prompt"}),
+            json!({"type":"reasoning","encrypted_content":"opaque-reasoning"}),
+            json!({"type":"function_call","call_id":"call-1","name":"shell","arguments":"{}"}),
+            json!({"type":"function_call_output","call_id":"call-1","output":"result"}),
+        ];
+        let mut pending = Pending {
+            original: json!({"type":"response.create","previous_response_id":"resp-old","input":[history[3].clone()],"tools":[{"type":"function","name":"shell"}],"model":"gpt-6-astra"}),
+            full_input: None,
+            prelude: vec![(String::new(), json!({"type":"response.created"}))],
+            prelude_bytes: 32,
+            committed: false,
+            attempts: Attempts::default(),
+        };
+        assert!(!pending.replay_previous_response());
+        pending.full_input = Some(history.clone());
+        pending.committed = true;
+        assert!(!pending.replay_previous_response());
+        pending.committed = false;
+        assert!(pending.replay_previous_response());
+        assert_eq!(pending.original["input"], json!(history));
+        assert_eq!(pending.original["tools"][0]["name"], "shell");
+        assert!(pending.original.get("previous_response_id").is_none());
+        assert!(pending.prelude.is_empty());
+        assert_eq!(pending.prelude_bytes, 0);
+        assert!(!pending.replay_previous_response());
+    }
 
     #[tokio::test]
     async fn disconnected_clients_keep_the_active_generation_until_final_usage() {

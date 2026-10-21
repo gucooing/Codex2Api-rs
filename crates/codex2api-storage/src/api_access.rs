@@ -39,6 +39,13 @@ pub struct CreatedApiKey {
     pub key: ApiKeyView,
     pub secret: String,
 }
+#[derive(FromRow, Serialize)]
+pub struct ApiKeyOption {
+    pub id: String,
+    pub name: String,
+    pub key_prefix: String,
+    pub username: String,
+}
 #[derive(FromRow)]
 struct KeyRow {
     id: String,
@@ -123,6 +130,23 @@ impl Storage {
     }
     pub async fn admin_api_keys(&self, query: &ApiListQuery) -> Result<ListPage<ApiKeyView>> {
         self.api_key_page(None, query).await
+    }
+    pub async fn admin_api_key_options(
+        &self,
+        search: &str,
+        limit: u32,
+    ) -> Result<Vec<ApiKeyOption>> {
+        Ok(sqlx::query_as(
+            "SELECT k.id,k.name,k.key_prefix,u.username FROM api_keys k
+             JOIN regular_users u ON u.id=k.user_id
+             WHERE k.deleted=FALSE
+             AND ($1='' OR strpos(lower(k.name||' '||k.key_prefix||' '||u.username),lower($1))>0)
+             ORDER BY k.created_at DESC,k.id LIMIT $2",
+        )
+        .bind(search)
+        .bind(i64::from(limit))
+        .fetch_all(self.pool())
+        .await?)
     }
     async fn api_key_page(
         &self,

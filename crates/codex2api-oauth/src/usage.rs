@@ -1194,6 +1194,31 @@ impl WsLedger {
             }
         }
     }
+    pub(crate) async fn recovered_response(
+        &mut self,
+        failure: &ResponseFailure,
+    ) -> crate::Result<()> {
+        for slot in &mut self.slots {
+            if let Some(log) = &mut slot.log
+                && let Some(record) = &log.record
+            {
+                let mut record = record.clone();
+                record.upstream_endpoint = log.endpoint_log.latest().or(record.upstream_endpoint);
+                log.storage
+                    .record_usage_attempt(
+                        &codex2api_upstream::request_failure::failed_response_attempt(
+                            &record,
+                            failure,
+                            "retry",
+                            record.requested_at_ms,
+                        ),
+                    )
+                    .await?;
+                log.attempt_reported = true;
+            }
+        }
+        Ok(())
+    }
     pub(crate) async fn retry_supplier(
         &mut self,
         context: ExecutionContext,

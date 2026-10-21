@@ -1,14 +1,8 @@
 "use client";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useErrorToast } from "@/lib/actions";
-import {
-  query,
-  type SubscriptionAccount,
-  type List,
-  type Supplier,
-  type UsagePage,
-  type UsageRecord,
-} from "@/lib/api";
+import { query, type List, type Supplier, type UsagePage, type UsageRecord } from "@/lib/api";
+import { useApiKeyLookup } from "@/lib/api-key-lookup";
 import { useColumnVisibility } from "@/lib/columns";
 import { useResource } from "@/lib/hooks";
 import { usePageControls } from "@/lib/pagination";
@@ -18,15 +12,14 @@ import { useId, useState } from "react";
 
 export type SupplierOption = Pick<Supplier, "id" | "display_name" | "email">;
 
-export type ConsumerOption = Pick<SubscriptionAccount, "id" | "username" | "email">;
-
 export const emptyFilters = {
   user_id: "",
   user_label: "",
   supplier_label: "",
-  consumer_label: "",
+  key_label: "",
+  key_id: "",
+  supplier_platform: "",
   supplier_id: "",
-  virtual_account: "",
   model: "",
   status: "",
   source: "",
@@ -37,6 +30,7 @@ export const emptyFilters = {
 export function useUsagePageView({ consumerId }: { consumerId?: string }) {
   const fieldId = useId();
   const userLookup = useUserLookup();
+  const apiKeyLookup = useApiKeyLookup();
   const {
     filters,
     setFilters,
@@ -47,9 +41,7 @@ export function useUsagePageView({ consumerId }: { consumerId?: string }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = usePreference<number>("usage.page-size", 20, validPageSize);
   const [supplierOpen, setSupplierOpen] = useState(false);
-  const [consumerOpen, setConsumerOpen] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState("");
-  const [consumerSearch, setConsumerSearch] = useState("");
   const selectedUser = filters.user_id
     ? { id: filters.user_id, username: "", name: filters.user_label }
     : null;
@@ -60,28 +52,24 @@ export function useUsagePageView({ consumerId }: { consumerId?: string }) {
         email: "",
       }
     : null;
-  const selectedConsumer = filters.virtual_account
+  const selectedApiKey = filters.key_id
     ? {
-        id: filters.virtual_account,
-        username: filters.consumer_label || filters.virtual_account,
-        email: "",
+        id: filters.key_id,
+        name: filters.key_label || filters.key_id,
+        key_prefix: "",
+        username: "",
       }
     : null;
   const suppliers = useResource<List<Supplier>>(
-    supplierOpen ? `/suppliers/options${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
+    supplierOpen
+      ? `/suppliers/options${query({ search: supplierSearch.trim(), provider_id: filters.supplier_platform, limit: 5 })}`
+      : null,
     supplierSearch.trim() ? 250 : 0,
   );
-  const consumers = useResource<List<SubscriptionAccount>>(
-    consumerOpen && !consumerId
-      ? `/subscriptions/options${query({ search: consumerSearch.trim(), limit: 5 })}`
-      : null,
-    consumerSearch.trim() ? 250 : 0,
-  );
   useErrorToast(suppliers.error);
-  useErrorToast(consumers.error);
   const resource = useResource<UsagePage>(
     preferencesReady
-      ? `/usage${query({ user_id: consumerId ? "" : applied.user_id, supplier_id: applied.supplier_id, virtual_account: consumerId ?? applied.virtual_account, model: applied.model, status: applied.status, source: applied.source, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
+      ? `/usage${query({ user_id: consumerId ? "" : applied.user_id, supplier_id: applied.supplier_id, supplier_platform: applied.supplier_platform, key_id: consumerId ? "" : applied.key_id, virtual_account: consumerId ?? "", model: applied.model, status: applied.status, source: applied.source, from: applied.from, until: applied.until, page, page_size: pageSize, tz_offset: new Date().getTimezoneOffset() })}`
       : null,
   );
   const pagination = usePageControls(
@@ -99,21 +87,18 @@ export function useUsagePageView({ consumerId }: { consumerId?: string }) {
   return {
     fieldId,
     userLookup,
+    apiKeyLookup,
     filters,
     setFilters,
     setApplied,
     setPage,
     supplierOpen,
     setSupplierOpen,
-    consumerOpen,
-    setConsumerOpen,
     setSupplierSearch,
-    setConsumerSearch,
     selectedUser,
     selectedSupplier,
-    selectedConsumer,
+    selectedApiKey,
     suppliers,
-    consumers,
     resource,
     pagination,
     update,

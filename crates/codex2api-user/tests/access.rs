@@ -909,6 +909,27 @@ async fn user_usage_filters_every_query_by_owner_and_never_serializes_supplier_d
     assert_eq!(value["summary"]["total_tokens"], 140);
     assert_eq!(value["rows"][0]["request_count"], 1);
     assert_eq!(value["items"][0]["id"], "own-request");
+    let filter = codex2api_storage::UserUsageFilter {
+        from_ms: Some(now - 1000),
+        until_ms: Some(now + 1000),
+        summary_only: true,
+        ..Default::default()
+    };
+    let user_store = storage.user_store();
+    let (alice, bob) = tokio::join!(
+        user_store.usage("alice-user", &filter),
+        user_store.usage("bob-user", &filter),
+    );
+    let alice = alice.unwrap();
+    let bob = bob.unwrap();
+    assert_eq!(alice["summary"]["total_tokens"], 140);
+    assert_eq!(bob["summary"]["total_tokens"], 1700);
+    assert_eq!(
+        user_store.usage("alice-user", &filter).await.unwrap(),
+        alice
+    );
+    assert!(alice.get("items").is_none());
+    assert!(!alice.to_string().contains("supplier-secret"));
     for forbidden in [
         "supplier-secret",
         "other-request",

@@ -3,7 +3,7 @@ import { useErrorToast } from "@/lib/actions";
 import { money, type Subscription } from "@/lib/api";
 import { type OrderPage } from "@/lib/orders";
 import { useResource } from "@/lib/resource";
-import { tokens, usageCost, usageSeries, type UserUsage } from "@/lib/usage";
+import { tokens, usageCost, usageSeries, type UserUsageStatistics } from "@/lib/usage";
 import { useState } from "react";
 
 export function useOverviewPage() {
@@ -11,8 +11,8 @@ export function useOverviewPage() {
   const subscriptions = useResource<{ items: Subscription[] }>("/subscriptions", 0);
   const wallet = useResource<{ balance_usd: string }>("/wallet", 0);
   const orders = useResource<OrderPage>("/orders?limit=5", 0);
-  const usage = useResource<UserUsage>(
-    `/usage?days=${days}&tz_offset=${new Date().getTimezoneOffset()}&limit=10`,
+  const usage = useResource<UserUsageStatistics>(
+    `/usage?days=${days}&tz_offset=${new Date().getTimezoneOffset()}&summary_only=true`,
     0,
   );
   useErrorToast(subscriptions.error);

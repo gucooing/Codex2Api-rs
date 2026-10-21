@@ -9,7 +9,18 @@ use codex2api_storage::ApiListQuery;
 use serde_json::json;
 
 pub(super) fn router() -> Router<AdminState> {
-    Router::new().route("/api-keys", get(keys))
+    Router::new()
+        .route("/api-keys", get(keys))
+        .route("/api-keys/options", get(options))
+}
+
+async fn options(
+    State(state): State<AdminState>,
+    Query(query): Query<super::dto::AccountListQuery>,
+) -> ApiResult {
+    let (search, limit) = query.search_params()?;
+    let items = state.storage.admin_api_key_options(search, limit).await?;
+    Ok(Json(json!({"items": items})))
 }
 
 async fn keys(State(state): State<AdminState>, Query(query): Query<ApiListQuery>) -> ApiResult {

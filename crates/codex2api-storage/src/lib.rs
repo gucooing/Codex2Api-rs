@@ -14,7 +14,7 @@ pub use admission_cache::{AdmissionError, ApiLimits, ApiPermit};
 pub use api_admission::{chatgpt_only_endpoint, ledger_platform};
 mod api_groups;
 mod usage_wallet;
-pub use api_access::{ApiKeyView, ApiPrincipal, CreatedApiKey};
+pub use api_access::{ApiKeyOption, ApiKeyView, ApiPrincipal, CreatedApiKey};
 pub use api_groups::{
     ApiCatalogModel, ApiGroup, ApiImagePrice, ApiListQuery, ApiPublicGroup, ApiTokenPrice,
     multiplier_micros,

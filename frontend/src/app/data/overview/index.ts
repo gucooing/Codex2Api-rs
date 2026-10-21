@@ -1,7 +1,8 @@
 "use client";
 import { type ChartConfig } from "@/components/ui/chart";
 import { toastError, useErrorToast } from "@/lib/actions";
-import { query, type SubscriptionAccount, type List, type Supplier } from "@/lib/api";
+import { query, type List, type Supplier } from "@/lib/api";
+import { useApiKeyLookup } from "@/lib/api-key-lookup";
 import { useResource } from "@/lib/hooks";
 import { usePreference, useSavedFilters } from "@/lib/preferences";
 import {
@@ -11,14 +12,12 @@ import {
   type UsageGroup,
   type UsageStatistics,
 } from "@/lib/usage-statistics";
-import { useUserLookup, userOptionLabel } from "@/lib/user-lookup";
 import { useMemo, useState } from "react";
 
 export const defaults = {
-  user_id: "",
-  user_label: "",
-  virtual_account: "",
-  consumer_label: "",
+  key_id: "",
+  key_label: "",
+  supplier_platform: "",
   supplier_id: "",
   supplier_label: "",
   model: "",
@@ -28,8 +27,6 @@ export const defaults = {
   from: "",
   until: "",
 };
-
-export type SubjectOption = { id: string; kind: "user" | "virtual_account"; label: string };
 
 export const chartConfig = {
   total_tokens: { label: "Token 用量", color: "var(--chart-1)" },
@@ -58,55 +55,36 @@ export function useOverviewStatistics() {
     defaults,
     (value) =>
       ["today", "1", "7", "30", "custom"].includes(value.preset) &&
-      Object.hasOwn(usageGroups, value.group_by) &&
-      !(value.user_id && value.virtual_account),
+      Object.hasOwn(usageGroups, value.group_by),
   );
   const applied = useMemo(
     () => ({ ...saved, ...(saved.preset === "custom" ? {} : statisticsRange(saved.preset)) }),
     [saved],
   );
   const [visible, setVisible] = usePreference("overview.series", defaultVisibility);
-  const userLookup = useUserLookup();
+  const apiKeyLookup = useApiKeyLookup();
   const [supplierOpen, setSupplierOpen] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState("");
-  const selectedSubject: SubjectOption | null = filters.user_id
-    ? { id: filters.user_id, kind: "user", label: filters.user_label || filters.user_id }
-    : filters.virtual_account
-      ? {
-          id: filters.virtual_account,
-          kind: "virtual_account",
-          label: filters.consumer_label || filters.virtual_account,
-        }
-      : null;
+  const selectedApiKey = filters.key_id
+    ? {
+        id: filters.key_id,
+        name: filters.key_label || filters.key_id,
+        key_prefix: "",
+        username: "",
+      }
+    : null;
   const selectedSupplier = filters.supplier_id
     ? { id: filters.supplier_id, display_name: filters.supplier_label, email: "" }
     : null;
-  const consumers = useResource<List<SubscriptionAccount>>(
-    userLookup.open
-      ? `/subscriptions/options${query({ search: userLookup.search.trim(), limit: 5 })}`
-      : null,
-    userLookup.search.trim() ? 250 : 0,
-  );
-  const subjects: SubjectOption[] = [
-    ...(userLookup.data?.items ?? []).map((item) => ({
-      id: item.id,
-      kind: "user" as const,
-      label: userOptionLabel(item),
-    })),
-    ...(consumers.data?.items ?? []).map((item) => ({
-      id: item.id,
-      kind: "virtual_account" as const,
-      label: item.username,
-    })),
-  ];
   const suppliers = useResource<List<Supplier>>(
-    supplierOpen ? `/suppliers/options${query({ search: supplierSearch.trim(), limit: 5 })}` : null,
+    supplierOpen
+      ? `/suppliers/options${query({ search: supplierSearch.trim(), provider_id: filters.supplier_platform, limit: 5 })}`
+      : null,
     supplierSearch.trim() ? 250 : 0,
   );
-  const path = `/overview/usage${query({ user_id: applied.user_id, virtual_account: applied.virtual_account, supplier_id: applied.supplier_id, model: applied.model, status: applied.status, group_by: applied.group_by, from: applied.from, until: applied.until, tz_offset: new Date().getTimezoneOffset() })}`;
+  const path = `/overview/usage${query({ key_id: applied.key_id, supplier_platform: applied.supplier_platform, supplier_id: applied.supplier_id, model: applied.model, status: applied.status, group_by: applied.group_by, from: applied.from, until: applied.until, tz_offset: new Date().getTimezoneOffset() })}`;
   const resource = useResource<UsageStatistics>(preferencesReady ? path : null);
   useErrorToast(resource.error);
-  useErrorToast(consumers.error);
   useErrorToast(suppliers.error);
   const update = (key: keyof typeof filters, value: string) =>
     setFilters((current) => ({ ...current, [key]: value }));
@@ -142,14 +120,12 @@ export function useOverviewStatistics() {
     applied,
     visible,
     setVisible,
-    userLookup,
+    apiKeyLookup,
     supplierOpen,
     setSupplierOpen,
     setSupplierSearch,
-    selectedSubject,
+    selectedApiKey,
     selectedSupplier,
-    consumers,
-    subjects,
     suppliers,
     resource,
     update,

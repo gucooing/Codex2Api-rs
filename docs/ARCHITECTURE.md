@@ -879,6 +879,17 @@ HTTP JSON, SSE and WS share the outcome state machine. Later disconnects cannot
 overwrite a completed generation. WS completion usage is persisted before releasing
 completion to the client. Warmups and interrupts do not create another generation.
 
+ChatGPT WebSocket continuation errors (`previous_response_not_found` or the
+upstream `Invalid previous_response_id` rejection) can replay once before output
+or usage is observed, using the complete connection-local input and prior output.
+The replay removes the expired anchor, reconnects, preserves tool and encrypted
+reasoning items, and reuses the generation's admission and ledger. The actual
+upstream failure remains in the administrator's retry-attempt view, including an
+unknown HTTP status when the event omitted one. If full context is unavailable,
+the server returns the official `previous_response_not_found` error and a close
+frame so the installed native client can retry its full prompt. No partial prompt
+is treated as complete, and a context error never blocks the supplier account.
+
 Client disconnection does not cancel an accepted upstream request. HTTP workers
 continue while waiting for headers, and detached response bodies continue through
 the same usage parser and account-local transforms. WebSocket relays finish the

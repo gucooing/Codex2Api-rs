@@ -22,6 +22,7 @@ pub(crate) enum Domain {
     Subscriptions,
     Settings,
     ApiGroups,
+    UsageStatistics,
 }
 
 fn domain(key: &str) -> Domain {
@@ -37,6 +38,7 @@ fn domain(key: &str) -> Domain {
         "billing-snapshot" => Domain::Billing,
         "gateway-settings" => Domain::Settings,
         "api-group" => Domain::ApiGroups,
+        "usage-statistics" | "user-usage-statistics" => Domain::UsageStatistics,
         "entitlements" | "execution-route" | "request-limits" | "spending-decision" => {
             Domain::Subscriptions
         }
@@ -269,6 +271,7 @@ impl crate::Storage {
             Subscriptions,
             Settings,
             ApiGroups,
+            UsageStatistics,
         ]);
     }
 }

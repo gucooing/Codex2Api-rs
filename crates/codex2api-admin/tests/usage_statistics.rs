@@ -20,6 +20,7 @@ async fn record(
         subject_name: "Shared display name".into(),
         account_id: "supplier".into(),
         account_name: "Supplier".into(),
+        account_provider_id: Some(if id == "other" { "api" } else { "chatgpt" }.into()),
         model: Some("requested-model".into()),
         actual_model: Some("actual-model".into()),
         requested_at_ms: at,
@@ -134,6 +135,13 @@ async fn overview_aggregates_full_ledger_with_weighted_cache_and_exact_account_f
         .await;
     assert_eq!(failed["summary"]["failed_requests"], 1);
     assert_eq!(failed["summary"]["total_tokens"], 9020); // Actual reported usage survives failure.
+    let supplier_platform = f
+        .get(&format!(
+            "/admin/api/overview/usage?{range}&supplier_platform=api"
+        ))
+        .await;
+    assert_eq!(supplier_platform["summary"]["request_count"], 1);
+    assert_eq!(supplier_platform["summary"]["total_tokens"], 9020);
 }
 
 #[tokio::test]

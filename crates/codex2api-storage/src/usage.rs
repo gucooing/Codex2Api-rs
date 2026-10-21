@@ -172,12 +172,14 @@ pub struct UsageAttempt {
     pub total_ms: i64,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct UsageFilter {
     pub source: Option<UsageSource>,
     pub user_id: Option<String>,
     pub account: Option<String>,
     pub account_id: Option<String>,
+    pub account_provider_id: Option<String>,
+    pub key_id: Option<String>,
     pub subject_id: Option<String>,
     pub model: Option<String>,
     pub from_ms: Option<i64>,
@@ -187,7 +189,7 @@ pub struct UsageFilter {
     pub page_size: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageSource {
     Api,
@@ -269,6 +271,18 @@ pub(crate) fn conditions(query: &mut QueryBuilder<'_, Postgres>, filter: &UsageF
     }
     if let Some(id) = filter.account_id.as_deref().filter(|s| !s.is_empty()) {
         query.push(" AND account_id = ").push_bind(id.to_string());
+    }
+    if let Some(provider) = filter
+        .account_provider_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        query
+            .push(" AND account_provider_id = ")
+            .push_bind(provider.to_owned());
+    }
+    if let Some(key) = filter.key_id.as_deref().filter(|s| !s.is_empty()) {
+        query.push(" AND key_id = ").push_bind(key.to_owned());
     }
     if let Some(account) = filter.account.as_deref().filter(|s| !s.is_empty()) {
         query

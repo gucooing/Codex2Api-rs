@@ -63,6 +63,10 @@ export type UserUsage = {
   page: number;
   limit: number;
 };
+export type UserUsageStatistics = Pick<
+  UserUsage,
+  "from_ms" | "until_ms" | "tz_offset" | "summary" | "rows"
+>;
 export const tokens = (value: number | null | undefined) =>
   value == null
     ? "—"
@@ -71,7 +75,7 @@ export const tokens = (value: number | null | undefined) =>
       );
 export const usageCost = (nano: number | null | undefined) =>
   nano == null ? "—" : `$${(nano / 1e9).toFixed(6)}`;
-export function usageSeries(data: UserUsage | undefined) {
+export function usageSeries(data: UserUsageStatistics | undefined) {
   if (!data) return [];
   const rows = new Map(data.rows.map((row) => [row.key, row]));
   const result = [];

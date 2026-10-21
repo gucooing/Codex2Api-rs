@@ -184,6 +184,15 @@ pub fn failed_attempt(
     if !matches!(error, crate::UpstreamError::Status { .. }) {
         failure.message = Some(error_diagnostic(error));
     }
+    failed_response_attempt(record, &failure, recovery, started_at_ms)
+}
+
+pub fn failed_response_attempt(
+    record: &UsageRecord,
+    failure: &crate::ResponseFailure,
+    recovery: &str,
+    started_at_ms: i64,
+) -> codex2api_storage::UsageAttempt {
     codex2api_storage::UsageAttempt {
         usage_record_id: record.id.clone(),
         account_id: record.account_id.clone(),
@@ -191,10 +200,14 @@ pub fn failed_attempt(
         account_provider_id: record.account_provider_id.clone().unwrap_or_default(),
         upstream_endpoint: record.upstream_endpoint.clone(),
         http_status: failure.status.map(i64::from),
-        error_code: failure.code.map(|code| diagnostic_text(&code, 128)),
+        error_code: failure
+            .code
+            .as_deref()
+            .map(|code| diagnostic_text(code, 128)),
         error_message: failure
             .message
-            .map(|message| diagnostic_text(&message, 512)),
+            .as_deref()
+            .map(|message| diagnostic_text(message, 512)),
         recovery: recovery.into(),
         started_at_ms,
         total_ms: (chrono::Utc::now().timestamp_millis() - started_at_ms).max(0),
