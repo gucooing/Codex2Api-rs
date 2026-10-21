@@ -24,18 +24,23 @@ export function FingerprintEditor({
     disabled,
   });
   const ChannelFingerprintFields = supplierChannel(account?.provider_id).FingerprintFields;
+  const isApi = account?.provider_id === "api";
   return (
     <Card>
       <CardHeader>
         <CardTitle role="heading" aria-level={2}>
-          {"指纹与出站网络"}
+          {isApi ? "接入配置" : "指纹与出站网络"}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <FieldGroup className="grid gap-4 sm:grid-cols-2 gap-3">
           {[
-            { label: "Originator", value: account?.originator },
-            { label: "安装标识", value: account?.installation_id },
+            ...(!isApi
+              ? [
+                  { label: "Originator", value: account?.originator },
+                  { label: "安装标识", value: account?.installation_id },
+                ]
+              : []),
             { label: "User-Agent", value: account?.user_agent },
           ].map(({ label, value }) => (
             <Field key={label}>
@@ -58,11 +63,13 @@ export function FingerprintEditor({
             >
               <FieldGroup className="gap-4">
                 <section className="space-y-3">
-                  <div className="space-y-1">
-                    <CardTitle role="heading" aria-level={3}>
-                      账户指纹
-                    </CardTitle>
-                  </div>
+                  {!isApi && (
+                    <div className="space-y-1">
+                      <CardTitle role="heading" aria-level={3}>
+                        账户指纹
+                      </CardTitle>
+                    </div>
+                  )}
                   <ChannelFingerprintFields
                     value={value}
                     onChange={setChanges}

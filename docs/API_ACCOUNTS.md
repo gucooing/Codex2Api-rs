@@ -14,9 +14,9 @@ API 渠道把任意以 Key 认证的 OpenAI Responses、Chat Completions 或 Ant
 
 1. 接入配置：名称、线格式、认证头（选项随线格式变化）、Base URL（选择线格式时自动填入官方地址，可改为任何兼容端点）、同号重试状态码与次数、出站代理，以及该账户的 API Key。一次创建一个账户。
 2. 模型列表：“获取上游模型”用当前配置与 Key 读取 Base URL 下的 `models` 列表（`POST /admin/api/suppliers/api/accounts/models`，`{fingerprint: 配置, api_key}`，返回 `{items: [模型名]}`，不保存任何内容）并加入列表；也可从计费目录选择或直接输入模型名。至少一个模型。
-3. 确认：展示全部配置、Key 尾号与模型列表，确认后 `POST /admin/api/suppliers/api/accounts/start`（`{fingerprint: 配置, api_key, models}`）在同一事务中保存账户、凭据与模型列表。
+3. 确认：展示全部配置、隐藏的 Key 与模型列表，确认后 `POST /admin/api/suppliers/api/accounts/start`（`{fingerprint: 配置, api_key, models}`）在同一事务中保存账户、凭据与模型列表。
 
-配置对象为 `{name, base_url, wire, auth_scheme, retry_statuses, retry_count, proxy_id}`，`GET …/setup` 返回表单默认值。账户详情“重新授权”只替换 Key（`POST /admin/api/suppliers/{id}/relogin`，`{api_key}`），名称、配置、账户 ID、标签、调度与可用模型保持。“指纹与网络”页签显示并编辑名称与接入配置（`PUT /admin/api/suppliers/{id}/fingerprint`，配置对象），只展示 Key 尾号，从不回显 Key；上游错误信息中出现的 Key 也会被隐去。“可用模型”的“同步上游模型”读取 `models` 列表并替换该账户的上游模型；自定义模型照常添加。该渠道没有官方额度或资料页。
+配置对象为 `{name, base_url, wire, auth_scheme, retry_statuses, retry_count, proxy_id}`，`GET …/setup` 返回表单默认值。账户详情“账户资料”提供 API Key 编辑与保存（`POST /admin/api/suppliers/{id}/relogin`，`{api_key}`），名称、配置、账户 ID、标签、调度与可用模型保持。创建、确认和详情中的 Key 默认按密码隐藏，眼睛按钮切换显隐；详情通过管理员专用的 `GET /admin/api/suppliers/api/accounts/{id}/key` 读取当前 Key，响应禁止缓存，不写入浏览器持久存储，上游错误信息中的 Key 仍被隐去。“接入配置”页签编辑名称与接入配置（`PUT /admin/api/suppliers/{id}/fingerprint`，配置对象）；同号重试状态码输入一个 400–599 的数字后按回车添加为标签，支持移除并防止重复，确认页同样以中性标签展示。“可用模型”的“同步上游模型”读取 `models` 列表并替换该账户的上游模型；自定义模型照常添加。该渠道没有官方额度或资料页，账户资料不展示回避原因、账户回避至、模型回避、上游订阅及套餐到期字段。
 
 ## 请求与转换
 

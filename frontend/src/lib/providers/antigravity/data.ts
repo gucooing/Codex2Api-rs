@@ -56,6 +56,32 @@ export const antigravityQuotaGroups = (groups: SupplierQuotaGroup[]) =>
     })),
   }));
 
+export function antigravityQuotaRows(groups: SupplierQuotaGroup[]) {
+  const periods = [
+    ...new Set(groups.flatMap((group) => group.windows.map((window) => window.window))),
+  ];
+  const order = (period: string) => (period === "5h" ? 0 : period === "weekly" ? 1 : 2);
+  return periods
+    .sort((left, right) => order(left) - order(right))
+    .map((period) => ({
+      id: period,
+      label: period === "weekly" ? "周额度" : period || "额度",
+      segments: groups.flatMap((group) =>
+        group.windows
+          .filter((window) => window.window === period)
+          .map((window) => ({
+            group,
+            id: window.id,
+            remainingPercent: window.disabled
+              ? 0
+              : window.remaining_fraction == null
+                ? null
+                : Math.round(window.remaining_fraction * 100),
+          })),
+      ),
+    }));
+}
+
 /** Official details and grouped quota windows, read from persisted snapshots. */
 export function useAntigravityOfficialData({
   id,

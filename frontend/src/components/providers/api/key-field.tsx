@@ -1,28 +1,51 @@
 "use client";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Eye, EyeOff } from "lucide-react";
+import { useState } from "react";
 
-/** The key an API-key account authenticates with; it is never shown again once saved. */
 export function ApiKeyField({
   id,
   value,
   onChange,
+  readOnly = false,
 }: {
   id: string;
   value: string;
-  onChange: (value: string) => void;
+  onChange?: (value: string) => void;
+  readOnly?: boolean;
 }) {
+  const [visible, setVisible] = useState(false);
   return (
     <Field>
       <FieldLabel htmlFor={id}>API Key</FieldLabel>
-      <Input
-        id={id}
-        required
-        autoComplete="off"
-        spellCheck={false}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <InputGroup>
+        <InputGroupInput
+          id={id}
+          type={visible ? "text" : "password"}
+          required={!readOnly}
+          readOnly={readOnly}
+          autoComplete="off"
+          spellCheck={false}
+          value={value}
+          onChange={(event) => onChange?.(event.target.value)}
+        />
+        <InputGroupAddon align="inline-end">
+          <InputGroupButton
+            size="icon-xs"
+            aria-label={visible ? "隐藏 API Key" : "显示 API Key"}
+            aria-pressed={visible}
+            onClick={() => setVisible((current) => !current)}
+          >
+            {visible ? <EyeOff /> : <Eye />}
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
     </Field>
   );
 }

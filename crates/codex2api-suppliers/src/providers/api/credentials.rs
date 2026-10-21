@@ -102,13 +102,6 @@ impl ApiCredentials {
         digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
     }
 
-    /// The last characters of the key, the only part an administrator sees again.
-    pub fn key_suffix(&self) -> String {
-        let chars: Vec<char> = self.api_key.chars().collect();
-        let keep = chars.len().min(4);
-        chars[chars.len() - keep..].iter().collect()
-    }
-
     /// The full URL of an endpoint path under the Base URL.
     pub fn endpoint(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
@@ -161,7 +154,6 @@ mod tests {
             credentials.endpoint("chat/completions"),
             "https://api.example.com/v1/chat/completions"
         );
-        assert_eq!(credentials.key_suffix(), "1234");
         assert_eq!(credentials.key_fingerprint().len(), 32);
         for (field, value) in [
             ("base_url", "ftp://x"),

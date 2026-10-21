@@ -1,13 +1,80 @@
 "use client";
-import { toastError, useErrorToast, type useActions } from "@/lib/actions";
+import { toastError, useActions, useErrorToast } from "@/lib/actions";
 import { query, request, type Fingerprint, type List, type OAuth } from "@/lib/api";
 import { useResource } from "@/lib/hooks";
 import { channelFingerprint } from "@/lib/providers";
 import { apiNameMax, apiRetryCountMax } from "@/lib/providers/api/channel";
-import { useState } from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 
 type CatalogModel = { platform: string; model: string; kind: string; enabled: boolean };
+
+function apiKeyProblem(value: string) {
+  return !value.trim() || /\s/.test(value.trim())
+    ? "API Key 须为不含空白字符的单行文本"
+    : undefined;
+}
+
+export function useApiKeyEditor({
+  id,
+  disabled,
+  onSaved,
+}: {
+  id: string;
+  disabled: boolean;
+  onSaved: () => void;
+}) {
+  const fieldId = useId();
+  const actions = useActions();
+  const resource = useResource<{ api_key: string }>(
+    `/suppliers/api/accounts/${encodeURIComponent(id)}/key`,
+  );
+  const [draft, setDraft] = useState<string>();
+  const value = draft ?? resource.data?.api_key ?? "";
+  const busy = actions.isBusy("supplier-api-key");
+  const ready = !disabled && resource.ready;
+  const changed = draft !== undefined && draft.trim() !== resource.data?.api_key;
+  useErrorToast(resource.error);
+  const submit = (event: React.SubmitEvent<HTMLFormElement>) =>
+    actions.submit(
+      event,
+      "supplier-api-key",
+      async () => {
+        if (!ready || !changed) throw new Error("请加载账户并修改 API Key 后再保存");
+        const problem = apiKeyProblem(value);
+        if (problem) throw new Error(problem);
+        await request(`/suppliers/${encodeURIComponent(id)}/relogin`, {
+          method: "POST",
+          body: { api_key: value.trim() },
+        });
+        setDraft(undefined);
+        resource.reload();
+        onSaved();
+      },
+      "API Key 已保存",
+    );
+  return { fieldId, resource, value, setDraft, ready, changed, busy, submit };
+}
+
+export function useApiRetryStatuses(value: Fingerprint, onChange: (value: Fingerprint) => void) {
+  const [input, setInput] = useState("");
+  const statuses = value.retry_statuses ?? [];
+  const change = (retry_statuses: number[]) => onChange({ ...value, retry_statuses });
+  const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    const status = Number(text);
+    if (!/^\d{3}$/.test(text) || status < 400 || status > 599) {
+      toastError("同号重试状态码须为 400 到 599 之间的 HTTP 状态");
+      return;
+    }
+    if (!statuses.includes(status)) change([...statuses, status]);
+    setInput("");
+  };
+  return { input, setInput, statuses, change, keyDown };
+}
 
 /** An API-key account is created from its configuration and key, then its model list,
  * then a confirmation; an existing account only replaces its key. */
@@ -45,8 +112,7 @@ export function useApiAccountWizard({
   ];
   const fetching = actions.isBusy("supplier-api-models");
 
-  const keyProblem = () =>
-    !apiKey.trim() || /\s/.test(apiKey.trim()) ? "API Key 须为不含空白字符的单行文本" : undefined;
+  const keyProblem = () => apiKeyProblem(apiKey);
   /** The first step's rules beyond the form's own required and range checks. */
   const configProblem = () => {
     const name = config?.name?.trim() ?? "";

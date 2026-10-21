@@ -7,6 +7,7 @@ import { OAuthWizard } from "@/app/components/suppliers/oauth-wizard";
 import { useSupplierDetail } from "@/app/data/suppliers";
 import { SupplierTagEditor } from "@/components/forms/supplier-tags-form";
 import { supplierChannel } from "@/components/providers";
+import { ApiKeyEditor } from "@/components/providers/api/key-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,6 +45,7 @@ export function SupplierDetail() {
       </Empty>
     );
   const channel = supplierChannel(account?.provider_id);
+  const isApi = account?.provider_id === "api";
   const ChannelOfficialData = channel.OfficialData;
   return (
     <>
@@ -95,8 +97,8 @@ export function SupplierDetail() {
             {[
               ["info", "账户资料"],
               ["tags", "标签"],
-              ["fingerprint", "指纹与网络"],
-              ["quota", "官方额度"],
+              ["fingerprint", isApi ? "接入配置" : "指纹与网络"],
+              ...(!isApi ? [["quota", "官方额度"]] : []),
               ["models", "可用模型"],
               ["scheduling", "调度"],
               ["local-usage", "本地用量"],
@@ -120,7 +122,7 @@ export function SupplierDetail() {
                 <FieldGroup className="grid gap-4 sm:grid-cols-2 gap-3">
                   {[
                     { label: "提供商", value: account?.provider_id },
-                    account?.provider_id === "api"
+                    isApi
                       ? { label: "名称", value: account?.display_name }
                       : { label: "邮箱", value: account?.email },
                     {
@@ -139,37 +141,40 @@ export function SupplierDetail() {
                         </Badge>
                       ),
                     },
-                    {
-                      label: "账户回避至",
-                      value: account?.block
-                        ? account.block.until_at === null
-                          ? "永久"
-                          : date(account.block.until_at)
-                        : undefined,
-                    },
-                    { label: "回避原因", value: account?.block?.code ?? account?.block?.message },
-                    {
-                      label: "模型回避",
-                      value: account?.model_blocks?.length
-                        ? account.model_blocks
-                            .map(
-                              (item) =>
-                                `${item.model} · ${item.until_at === null ? "永久" : date(item.until_at)}`,
-                            )
-                            .join("；")
-                        : undefined,
-                    },
-                    {
-                      label: "上游订阅",
-                      value: subscriptionLabel(account?.plan_type, account?.provider_id),
-                    },
-                    { label: "套餐到期", value: date(account?.subscription_expires_at) },
-                    ...(account?.provider_id === "api"
+                    ...(isApi
                       ? [
                           { label: "Base URL", value: account?.chatgpt_account_id },
                           { label: "线格式", value: apiWireLabel(account?.fingerprint?.wire) },
                         ]
                       : [
+                          {
+                            label: "账户回避至",
+                            value: account?.block
+                              ? account.block.until_at === null
+                                ? "永久"
+                                : date(account.block.until_at)
+                              : undefined,
+                          },
+                          {
+                            label: "回避原因",
+                            value: account?.block?.code ?? account?.block?.message,
+                          },
+                          {
+                            label: "模型回避",
+                            value: account?.model_blocks?.length
+                              ? account.model_blocks
+                                  .map(
+                                    (item) =>
+                                      `${item.model} · ${item.until_at === null ? "永久" : date(item.until_at)}`,
+                                  )
+                                  .join("；")
+                              : undefined,
+                          },
+                          {
+                            label: "上游订阅",
+                            value: subscriptionLabel(account?.plan_type, account?.provider_id),
+                          },
+                          { label: "套餐到期", value: date(account?.subscription_expires_at) },
                           { label: "上游空间编号", value: account?.chatgpt_account_id },
                           { label: "上游用户编号", value: account?.chatgpt_user_id },
                         ]),
@@ -182,10 +187,20 @@ export function SupplierDetail() {
                     </Field>
                   ))}
                 </FieldGroup>
+                {isApi && (
+                  <ApiKeyEditor
+                    key={id}
+                    id={id}
+                    disabled={!resource.ready}
+                    onSaved={resource.reload}
+                  />
+                )}
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Button disabled={!resource.ready} onClick={() => setRelogin(true)}>
-                    重新授权
-                  </Button>
+                  {!isApi && (
+                    <Button disabled={!resource.ready} onClick={() => setRelogin(true)}>
+                      重新授权
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="outline"
@@ -223,9 +238,10 @@ export function SupplierDetail() {
           {tab === "local-usage" && <LocalUsage account={account} />}
           {tab === "models" && <SupplierModels key={id} id={id} />}
           {tab === "scheduling" && <SupplierScheduling key={id} id={id} />}
-          {(tab === "quota" || channel.officialSections.some(([key]) => key === tab)) && (
-            <ChannelOfficialData key={tab} id={id} section={tab} onUpdated={resource.reload} />
-          )}
+          {ChannelOfficialData &&
+            (tab === "quota" || channel.officialSections.some(([key]) => key === tab)) && (
+              <ChannelOfficialData key={tab} id={id} section={tab} onUpdated={resource.reload} />
+            )}
         </TabsContent>
       </Tabs>
       {relogin && (

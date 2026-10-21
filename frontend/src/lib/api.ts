@@ -23,7 +23,6 @@ export type Fingerprint = {
   auth_scheme?: string;
   retry_statuses?: number[];
   retry_count?: number;
-  key_suffix?: string;
 };
 export type SupplierBlock = {
   scope: "account" | "model";

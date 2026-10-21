@@ -1,4 +1,12 @@
 "use client";
+import { useApiRetryStatuses } from "@/app/data/suppliers/api-accounts";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxValue,
+} from "@/components/ui/combobox";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,7 +38,7 @@ export function ApiFingerprintFields({
   const id = useId();
   const wire = value.wire ?? "";
   const authOptions = apiAuthSchemeOptions(wire);
-  const retryStatuses = value.retry_statuses ?? [];
+  const retry = useApiRetryStatuses(value, onChange);
   const selectWire = (next: string) => {
     const option = apiWireOptions.find((item) => item.value === next);
     const previous = apiWireOptions.find((item) => item.value === wire);
@@ -114,22 +122,29 @@ export function ApiFingerprintFields({
       </Field>
       <Field>
         <FieldLabel htmlFor={`${id}-retry`}>同号重试状态码</FieldLabel>
-        <Input
-          id={`${id}-retry`}
-          autoComplete="off"
-          placeholder="例如 500, 502"
-          value={retryStatuses.join(", ")}
-          onChange={(event) =>
-            onChange({
-              ...value,
-              retry_statuses: event.target.value
-                .split(/[\s,，]+/)
-                .filter(Boolean)
-                .map(Number)
-                .filter((status) => Number.isInteger(status)),
-            })
-          }
-        />
+        <Combobox
+          multiple
+          open={false}
+          value={retry.statuses}
+          onValueChange={retry.change}
+          inputValue={retry.input}
+          onInputValueChange={retry.setInput}
+        >
+          <ComboboxChips>
+            <ComboboxValue>
+              {(statuses: number[]) =>
+                statuses.map((status) => <ComboboxChip key={status}>{status}</ComboboxChip>)
+              }
+            </ComboboxValue>
+            <ComboboxChipsInput
+              id={`${id}-retry`}
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="输入状态码后按回车"
+              onKeyDown={retry.keyDown}
+            />
+          </ComboboxChips>
+        </Combobox>
         <FieldDescription>遇到这些 HTTP 状态时先在本账户重试，再换号</FieldDescription>
       </Field>
       <Field>
@@ -141,7 +156,7 @@ export function ApiFingerprintFields({
           max={apiRetryCountMax}
           step={1}
           required
-          disabled={retryStatuses.length === 0}
+          disabled={retry.statuses.length === 0}
           value={value.retry_count ?? ""}
           onChange={(event) =>
             onChange({
@@ -172,13 +187,6 @@ export function ApiFingerprintFields({
           </SelectContent>
         </Select>
       </Field>
-      {value.key_suffix && (
-        <Field>
-          <FieldLabel htmlFor={`${id}-key`}>当前 Key</FieldLabel>
-          <Input id={`${id}-key`} readOnly value={`…${value.key_suffix}`} />
-          <FieldDescription>更换 Key 请使用“重新授权”</FieldDescription>
-        </Field>
-      )}
     </div>
   );
 }

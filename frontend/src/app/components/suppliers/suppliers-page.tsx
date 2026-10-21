@@ -1,5 +1,5 @@
 "use client";
-import { AntigravityQuotaGroups } from "@/components/providers/antigravity/quota";
+import { AntigravityQuotaSummary } from "@/components/providers/antigravity/quota-summary";
 import { OAuthWizard } from "@/app/components/suppliers/oauth-wizard";
 import { SupplierRecordDialog } from "@/app/components/suppliers/supplier-record-dialog";
 import { SupplierTagsBatchDialog } from "@/app/components/suppliers/supplier-tag-dialog";
@@ -527,7 +527,7 @@ export default function SuppliersPage() {
                             }
                           >
                             {item.provider_id === "antigravity" && (
-                              <AntigravityQuotaGroups groups={item.quota?.groups} now={now} />
+                              <AntigravityQuotaSummary groups={item.quota?.groups} now={now} />
                             )}
                             {item.quota?.windows?.map((window) => (
                               <div
@@ -557,7 +557,7 @@ export default function SuppliersPage() {
                                         className="h-1 flex-1 [&>[data-slot=progress-indicator]]:bg-foreground"
                                         aria-label={quotaWindowLabel(window) + "额度已用"}
                                       />
-                                      <span className="shrink-0 whitespace-nowrap tabular-nums">
+                                      <span className="w-9 shrink-0 whitespace-nowrap text-right tabular-nums">
                                         {percentLabel(window.used_percent)}
                                       </span>
                                     </>
@@ -785,7 +785,7 @@ export default function SuppliersPage() {
                   title={item.quota ? "缓存于 " + date(item.quota.observed_at) : "暂无额度缓存"}
                 >
                   {item.provider_id === "antigravity" && (
-                    <AntigravityQuotaGroups groups={item.quota?.groups} now={now} />
+                    <AntigravityQuotaSummary groups={item.quota?.groups} now={now} />
                   )}
                   {item.quota?.windows?.map((window) => (
                     <div key={window.id} className="min-w-0 flex-1 basis-64 space-y-1 text-xs">
@@ -805,7 +805,7 @@ export default function SuppliersPage() {
                               className="h-1 flex-1 [&>[data-slot=progress-indicator]]:bg-foreground"
                               aria-label={quotaWindowLabel(window) + "额度已用"}
                             />
-                            <span className="shrink-0 whitespace-nowrap tabular-nums">
+                            <span className="w-9 shrink-0 whitespace-nowrap text-right tabular-nums">
                               {percentLabel(window.used_percent)}
                             </span>
                           </>

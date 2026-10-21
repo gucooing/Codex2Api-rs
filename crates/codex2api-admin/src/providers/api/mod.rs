@@ -18,7 +18,7 @@ use codex2api_suppliers::api::ApiCredentials;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// The account configuration an administrator edits; the key itself is never shown.
+/// The account configuration an administrator edits; the key has a separate endpoint.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -51,7 +51,7 @@ impl Config {
 fn config_view(name: Option<&str>, credentials: &ApiCredentials, proxy_id: Option<&str>) -> Value {
     json!({"name":name,"base_url":credentials.base_url,"wire":credentials.wire,
         "auth_scheme":credentials.auth_scheme,"retry_statuses":credentials.retry_statuses,
-        "retry_count":credentials.retry_count,"key_suffix":credentials.key_suffix(),"proxy_id":proxy_id})
+        "retry_count":credentials.retry_count,"proxy_id":proxy_id})
 }
 
 pub(crate) async fn fingerprint_view(
@@ -154,6 +154,22 @@ pub async fn start(State(s): State<AdminState>, Json(f): Json<Start>) -> ApiResu
 pub struct Relogin {
     api_key: String,
 }
+/// Read the saved key in the administrator's account editor. The admin router
+/// requires an admin web session and marks every response as no-store.
+pub async fn key(State(s): State<AdminState>, Path(id): Path<String>) -> ApiResult {
+    let account = s.storage.require_account(&id).await?;
+    if account.provider_id != codex2api_common::API {
+        return Err(ApiError::bad("提供商不匹配"));
+    }
+    let (credentials, _) = s
+        .upstream
+        .api()
+        .credentials(&id)
+        .await
+        .map_err(|_| ApiError::bad("API 账户凭据无效"))?;
+    Ok(Json(json!({"api_key": credentials.api_key})))
+}
+
 /// Replace the key; the name, endpoint configuration and account identity stay.
 pub async fn relogin(
     State(s): State<AdminState>,
@@ -229,6 +245,7 @@ pub fn account_routes() -> Router<AdminState> {
         .route("/setup", get(setup))
         .route("/models", post(models))
         .route("/start", post(start))
+        .route("/{id}/key", get(key))
 }
 
 pub(crate) fn request_identity() -> (&'static str, String) {
