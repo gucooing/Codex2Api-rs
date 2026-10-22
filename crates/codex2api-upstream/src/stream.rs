@@ -89,7 +89,9 @@ pub struct SseForwardStream {
 /// A single data line borrows the frame; only multiline SSE requires a join.
 pub fn sse_data(frame: &str) -> std::borrow::Cow<'_, str> {
     let mut lines = frame
-        .lines()
+        .strip_prefix('\u{feff}')
+        .unwrap_or(frame)
+        .split(['\r', '\n'])
         .filter_map(|line| line.strip_prefix("data:").map(str::trim_start));
     let Some(first) = lines.next() else {
         return std::borrow::Cow::Borrowed("");
@@ -108,44 +110,112 @@ pub fn sse_data(frame: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(data)
 }
 
+/// Incremental SSE line boundaries, shared by parsed events and raw-frame relays.
+/// Indices refer to the caller's buffer; consumed bytes are removed only by take.
+#[derive(Default)]
+struct SseLines {
+    scanned: usize,
+    start: usize,
+    after_cr: bool,
+}
+impl SseLines {
+    fn next(&mut self, bytes: &[u8]) -> Option<std::ops::Range<usize>> {
+        while self.scanned < bytes.len() {
+            let end = self.scanned;
+            let byte = bytes[end];
+            self.scanned += 1;
+            if self.after_cr && byte == b'\n' {
+                self.after_cr = false;
+                self.start = self.scanned;
+                continue;
+            }
+            self.after_cr = byte == b'\r';
+            if byte == b'\r' || byte == b'\n' {
+                let line = self.start..end;
+                self.start = self.scanned;
+                return Some(line);
+            }
+        }
+        None
+    }
+    fn take(&mut self) -> usize {
+        self.start = 0;
+        std::mem::take(&mut self.scanned)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SseChunks {
+    Lines,
+    Frames,
+}
+
 /// Feed complete lines to eventsource-stream. Its streaming parser otherwise
 /// rescans an incomplete long data line on every network chunk.
+/// Normalize line endings so a final CR dispatches without awaiting another chunk.
 pub fn buffered_sse_lines<S, E>(
     source: S,
 ) -> impl Stream<Item = std::io::Result<bytes::Bytes>> + Send
 where
-    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Send + 'static,
+    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Send,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    split_sse(source, SseChunks::Lines)
+}
+
+/// Complete SSE frames with their original bytes, for native client transforms.
+/// EOF retains an unfinished frame so each consumer can apply its protocol rules.
+pub fn sse_frames<S, E>(source: S) -> impl Stream<Item = std::io::Result<bytes::Bytes>> + Send
+where
+    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Send,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    split_sse(source, SseChunks::Frames)
+}
+
+fn split_sse<S, E>(
+    source: S,
+    chunks: SseChunks,
+) -> impl Stream<Item = std::io::Result<bytes::Bytes>> + Send
+where
+    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
     async_stream::try_stream! {
         let mut source = Box::pin(source);
         let mut buffer = bytes::BytesMut::new();
-        let mut scanned = 0;
+        let mut lines = SseLines::default();
         let mut first = true;
         while let Some(chunk) = source.next().await {
             buffer.extend_from_slice(&chunk.map_err(std::io::Error::other)?);
-            if first {
+            if first && chunks == SseChunks::Lines {
                 // SSE ignores one initial UTF-8 BOM. Remove all three bytes before
                 // eventsource-stream's single-byte BOM removal can split a character.
                 if buffer.len() < 3 && b"\xEF\xBB\xBF".starts_with(&buffer) { continue; }
                 if buffer.starts_with(b"\xEF\xBB\xBF") { let _ = buffer.split_to(3); }
                 first = false;
             }
-            while scanned < buffer.len() {
-                let byte = buffer[scanned];
-                if byte == b'\r' && scanned + 1 == buffer.len() { break; }
-                scanned += 1;
-                if byte != b'\r' && byte != b'\n' { continue; }
-                if byte == b'\r' && buffer[scanned] == b'\n' { scanned += 1; }
-                if scanned > crate::MAX_REQUEST_BYTES {
-                    Err(std::io::Error::other("Oversized upstream SSE line"))?;
+            while let Some(line) = lines.next(&buffer) {
+                if lines.scanned > crate::MAX_REQUEST_BYTES {
+                    Err(std::io::Error::other("Oversized upstream SSE data"))?;
                 }
-                yield buffer.split_to(scanned).freeze();
-                scanned = 0;
+                if chunks == SseChunks::Frames && !line.is_empty() {
+                    continue;
+                }
+                let mut chunk = buffer.split_to(lines.take());
+                if chunks == SseChunks::Lines {
+                    let _ = chunk.split_to(line.start);
+                    let end = chunk.len() - 1;
+                    chunk[end] = b'\n';
+                }
+                yield chunk.freeze();
             }
             if buffer.len() > crate::MAX_REQUEST_BYTES {
-                Err(std::io::Error::other("Oversized upstream SSE line"))?;
+                Err(std::io::Error::other("Oversized upstream SSE data"))?;
             }
+        }
+        if chunks == SseChunks::Lines {
+            let _ = buffer.split_to(lines.start);
         }
         if !buffer.is_empty() { yield buffer.freeze(); }
     }

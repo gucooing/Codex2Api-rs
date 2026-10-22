@@ -27,6 +27,14 @@ pub(crate) fn forward_response(status: StatusCode, mut headers: HeaderMap, body:
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("application/json"));
+    if codex2api_upstream::ResponseFormat::from_headers(&headers)
+        == codex2api_upstream::ResponseFormat::EventStream
+    {
+        // The account-local event transform may change bytes. Upstream lengths
+        // and encodings cannot describe the resulting downstream stream.
+        headers.remove(axum::http::header::CONTENT_LENGTH);
+        headers.remove(axum::http::header::CONTENT_ENCODING);
+    }
     let failed = status.is_client_error() || status.is_server_error();
     if failed {
         // A supplier's retry advice belongs to the executor's verdict, not the caller.

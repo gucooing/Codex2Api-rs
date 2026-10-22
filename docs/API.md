@@ -145,9 +145,15 @@ Antigravity 图像接口采用官方 Desktop 的 `requestType: image_gen` 与非
 
 HTTP JSON、SSE 和原生 WebSocket 共用请求准入、供应调度和 usage_records。
 共用响应识别器按实际帧识别 SSE，支持缺失或错误 Content-Type，以及 SSE event
-字段提供事件类型的响应。正常完成、未完成、流中错误和传输中断分别处理；HTTP 200
-只是连接状态。没有已生成输出或用量时才允许因确定的授权失效、额度耗尽或 402
-切换供应；普通限流交给客户端退避，并保留结构化错误和 Retry-After。
+字段提供事件类型的响应。前导预检和正式消费共用增量 SSE 解析，支持 CR、LF、CRLF
+混合及跨网络分块；可交付的内容不等待上游 EOF。正常完成、未完成、流中错误和传输
+中断分别处理；HTTP 200 只是连接状态。输出前的失败由供应渠道裁决重试或换号；
+上游 429 暂避供应账户并换号，耗尽候选时返回 503 `no_available_supplier`。
+已输出的请求不能重放，保留其结构化失败。
+
+结算只阻挡完成事件与最终用量；同一终态输入事件恢复出的正文、思考和工具参数先交付。
+Responses 转 Messages 在文本或工具参数的完成事件到达后关闭对应内容块，释放随后已就绪
+的内容，不额外等待整个输出项或响应结束；仍保持内容块按顺序、一次只打开一个。
 
 同步和流式 Chat 均保留真实工具调用、reasoning、refusal、annotations、logprobs、
 音频以及 usage。Chat 工具使用 `tools`、`tool_choice` 和 `tool_calls`。仅当调用者要求

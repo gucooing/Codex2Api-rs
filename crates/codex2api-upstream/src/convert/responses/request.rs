@@ -79,6 +79,7 @@ pub fn build(input: &InboundRequest, dialect: Dialect) -> Result<(Value, HeaderM
 /// Codex 0.163 sends system-level input with the developer role, always streams,
 /// never stores, and replays reasoning only through encrypted content.
 fn codex(object: &mut Map<String, Value>) -> Result<()> {
+    instruction_item(object);
     for name in CODEX_UNSUPPORTED {
         object.remove(name);
     }
@@ -113,6 +114,7 @@ fn codex(object: &mut Map<String, Value>) -> Result<()> {
 /// Grok Build sends system-level input with the system role, always streams,
 /// disables storage and replays encrypted reasoning.
 fn xai(object: &mut Map<String, Value>) {
+    instruction_item(object);
     for name in [
         "client_metadata",
         "prompt_cache_retention",
@@ -176,6 +178,23 @@ fn include_encrypted(object: &mut Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
+/// Native subscription clients put instructions in their leading input item.
+/// Public Responses suppliers retain the caller's separate instructions field.
+fn instruction_item(object: &mut Map<String, Value>) {
+    if let Some(Value::String(text)) = object.remove("instructions")
+        && !text.is_empty()
+    {
+        object
+            .get_mut("input")
+            .and_then(Value::as_array_mut)
+            .expect("validated input")
+            .insert(
+                0,
+                json!({"type":"message","role":"system","content":[{"type":"input_text","text":text}]}),
+            );
+    }
+}
+
 /// A named choice must reference a declared tool; otherwise the model chooses.
 fn tool_choice(object: &mut Map<String, Value>) {
     let Some(choice) = object.get("tool_choice").filter(|c| c.is_object()) else {
@@ -214,20 +233,10 @@ pub fn from_responses(body: &Value) -> Result<Value> {
         .as_object_mut()
         .ok_or_else(|| ApiError::bad_request("Request body must be an object"))?;
     normalize_tools(object)?;
-    let instructions = object.remove("instructions");
     let input = object
         .get_mut("input")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| ApiError::bad_request("input must be an array"))?;
-    // Both official clients send instructions as the leading system-level input item.
-    if let Some(Value::String(text)) =
-        instructions.filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
-    {
-        input.insert(
-            0,
-            json!({"type":"message","role":"system","content":[{"type":"input_text","text":text}]}),
-        );
-    }
     for item in input.iter_mut() {
         match item["type"].as_str() {
             Some("reasoning") => {

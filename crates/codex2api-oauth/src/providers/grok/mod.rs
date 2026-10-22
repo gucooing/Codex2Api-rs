@@ -391,8 +391,8 @@ fn isolate(body: Body) -> Body {
         codex2api_upstream::buffered_sse_lines(body.into_data_stream())
             .eventsource()
             .filter_map(|event| async move {
-                let event = match event {
-                    Ok(v) => v,
+                let mut event = match event {
+                    Ok(v) => codex2api_upstream::SseEvent::from(v),
                     Err(e) => return Some(Err(std::io::Error::other(e.to_string()))),
                 };
                 if event.data.trim() == "[DONE]" {
@@ -422,15 +422,10 @@ fn isolate(body: Body) -> Body {
                     codex2api_upstream::grok::errors::normalize_response(&mut value);
                 }
                 changed |= codex2api_upstream::convert::sanitize::metadata(&mut value);
-                let data = if changed {
-                    value.to_string()
-                } else {
-                    event.data
-                };
-                Some(Ok(Bytes::from(format!(
-                    "event: {}\ndata: {}\n\n",
-                    event.event, data
-                ))))
+                if changed {
+                    event.data = value.to_string();
+                }
+                Some(Ok(Bytes::from(event.to_sse_frame())))
             }),
     )
 }

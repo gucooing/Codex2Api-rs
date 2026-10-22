@@ -210,93 +210,60 @@ fn record_conversations(
 ) -> Body {
     let stream = futures::stream::try_unfold(
         (
-            body.into_data_stream(),
-            Vec::new(),
-            false,
+            Box::pin(codex2api_upstream::sse_frames(body.into_data_stream())),
             storage,
             owner,
             source,
         ),
-        |(mut input, mut buffer, mut ended, storage, owner, source)| async move {
-            loop {
-                let end = buffer
-                    .windows(2)
-                    .position(|w| w == b"\n\n")
-                    .map(|i| i + 2)
-                    .or_else(|| {
-                        buffer
-                            .windows(4)
-                            .position(|w| w == b"\r\n\r\n")
-                            .map(|i| i + 4)
-                    });
-                if let Some(end) =
-                    end.or_else(|| (ended && !buffer.is_empty()).then_some(buffer.len()))
-                {
-                    let frame: Vec<u8> = buffer.drain(..end).collect();
-                    let mut output = frame.clone();
-                    if let Ok(text) = std::str::from_utf8(&frame) {
-                        let data = text
-                            .lines()
-                            .filter_map(|l| l.strip_prefix("data:").map(str::trim_start))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if let Ok(value) = serde_json::from_str::<Value>(&data) {
-                            if value["type"] == "conversation_detail_metadata" {
-                                let mut local = storage
-                                    .virtual_config(&owner, "conversation_metadata")
-                                    .await
-                                    .map_err(std::io::Error::other)?
-                                    .value;
-                                if value.get("conversation_id").is_some() {
-                                    local["conversation_id"] = value["conversation_id"].clone();
-                                }
-                                let mut lines = text
-                                    .lines()
-                                    .filter(|line| !line.starts_with("data:") && !line.is_empty())
-                                    .map(str::to_owned)
-                                    .collect::<Vec<_>>();
-                                lines.push(format!("data: {local}"));
-                                output = format!("{}\n\n", lines.join("\n")).into_bytes();
-                            }
-                            if let Some(id) = value["conversation_id"]
-                                .as_str()
-                                .filter(|s| !s.is_empty() && s.len() <= 128)
-                            {
-                                let mut summary=storage.virtual_resource(&owner,"conversation",id).await.map_err(std::io::Error::other)?.map(|(_,v)|v).unwrap_or_else(||json!({"id":id,"conversation_id":id,"title":id,"create_time":chrono::Utc::now().timestamp(),"is_archived":false}));
-                                summary["update_time"] = chrono::Utc::now().timestamp().into();
-                                if let Some(status) = value["message"]["status"].as_str() {
-                                    summary["status"] = status.into();
-                                }
-                                storage
-                                    .save_virtual_resource(
-                                        &owner,
-                                        "conversation",
-                                        id,
-                                        Some(&source),
-                                        &summary,
-                                    )
-                                    .await
-                                    .map_err(std::io::Error::other)?;
-                            }
+        |(mut input, storage, owner, source)| async move {
+            let Some(frame) = input.next().await else {
+                return Ok(None);
+            };
+            let frame = frame?;
+            let mut output = frame.clone();
+            if let Ok(text) = std::str::from_utf8(&frame) {
+                let data = codex2api_upstream::sse_data(text);
+                if let Ok(value) = serde_json::from_str::<Value>(&data) {
+                    if value["type"] == "conversation_detail_metadata" {
+                        let mut local = storage
+                            .virtual_config(&owner, "conversation_metadata")
+                            .await
+                            .map_err(std::io::Error::other)?
+                            .value;
+                        if value.get("conversation_id").is_some() {
+                            local["conversation_id"] = value["conversation_id"].clone();
                         }
+                        let mut lines = text
+                            .split(['\r', '\n'])
+                            .filter(|line| !line.starts_with("data:") && !line.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>();
+                        lines.push(format!("data: {local}"));
+                        output = Bytes::from(format!("{}\n\n", lines.join("\n")));
                     }
-                    return Ok::<_, std::io::Error>(Some((
-                        Bytes::from(output),
-                        (input, buffer, ended, storage, owner, source),
-                    )));
-                }
-                if ended {
-                    return Ok(None);
-                }
-                match input.next().await {
-                    Some(Ok(bytes)) => buffer.extend_from_slice(&bytes),
-                    Some(Err(e)) => return Err(std::io::Error::other(e)),
-                    None => ended = true,
-                }
-                if buffer.len() > codex2api_upstream::MAX_REQUEST_BYTES {
-                    return Err(std::io::Error::other("Oversized conversation event"));
+                    if let Some(id) = value["conversation_id"]
+                        .as_str()
+                        .filter(|s| !s.is_empty() && s.len() <= 128)
+                    {
+                        let mut summary=storage.virtual_resource(&owner,"conversation",id).await.map_err(std::io::Error::other)?.map(|(_,v)|v).unwrap_or_else(||json!({"id":id,"conversation_id":id,"title":id,"create_time":chrono::Utc::now().timestamp(),"is_archived":false}));
+                        summary["update_time"] = chrono::Utc::now().timestamp().into();
+                        if let Some(status) = value["message"]["status"].as_str() {
+                            summary["status"] = status.into();
+                        }
+                        storage
+                            .save_virtual_resource(
+                                &owner,
+                                "conversation",
+                                id,
+                                Some(&source),
+                                &summary,
+                            )
+                            .await
+                            .map_err(std::io::Error::other)?;
+                    }
                 }
             }
+            Ok::<_, std::io::Error>(Some((output, (input, storage, owner, source))))
         },
     );
     Body::from_stream(stream)

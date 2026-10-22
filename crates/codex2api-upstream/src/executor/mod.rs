@@ -234,6 +234,7 @@ impl<'a, L: AttemptLedger> Execution<'a, L> {
                     // The Codex header and its body metadata are the same capability.
                     convert::bind_turn_state(&mut request);
                 }
+                let response_wire = request.wire;
                 let stream = request.stream;
                 let model = request.model.clone();
                 let operation = request.operation;
@@ -247,7 +248,7 @@ impl<'a, L: AttemptLedger> Execution<'a, L> {
                         None => send.await,
                     }
                     .map_err(|error| inspect::send_failure(error, model.as_deref()))?;
-                    inspect::inspect(wire, model.as_deref(), response).await
+                    inspect::inspect(response_wire, model.as_deref(), response).await
                 }
                 .await;
                 match attempt {
@@ -255,7 +256,7 @@ impl<'a, L: AttemptLedger> Execution<'a, L> {
                         return Ok(Executed {
                             response,
                             context,
-                            wire,
+                            wire: response_wire,
                             operation,
                             stream,
                             model,
@@ -265,10 +266,17 @@ impl<'a, L: AttemptLedger> Execution<'a, L> {
                     Err(AttemptFailure { error, failure }) => {
                         let revision = error.auth_revision().or(revision);
                         if failure.output_committed {
-                            self.ledger.measured_failure(wire, &failure);
+                            self.ledger.measured_failure(response_wire, &failure);
                         }
                         match attempts
-                            .failed(self.pool, self.storage, &account, revision, wire, &failure)
+                            .failed(
+                                self.pool,
+                                self.storage,
+                                &account,
+                                revision,
+                                response_wire,
+                                &failure,
+                            )
                             .await?
                         {
                             Recovery::Retry(delay) => {

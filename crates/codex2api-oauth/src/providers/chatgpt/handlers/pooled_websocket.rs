@@ -269,10 +269,13 @@ async fn send(conn: &mut Connection, value: &Value, reviewer: bool) -> Result<()
             .as_deref(),
         reviewer,
     )?;
-    conn.socket
-        .send(UpstreamMessage::Text(text.into()))
-        .await
-        .map_err(super::websocket::relay_error)
+    tokio::time::timeout(
+        codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
+        conn.socket.send(UpstreamMessage::Text(text.into())),
+    )
+    .await
+    .map_err(super::websocket::relay_error)?
+    .map_err(super::websocket::relay_error)
 }
 
 async fn deliver(
@@ -291,7 +294,14 @@ async fn deliver(
     let text =
         super::super::identity::websocket_event(&state.storage, &oauth.token_hash, text, value)
             .await?;
-    if client.send(Message::Text(text.into())).await.is_err() {
+    if !matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            client.send(Message::Text(text.into())),
+        )
+        .await,
+        Ok(Ok(()))
+    ) {
         *connected = false;
     }
     Ok(outcome)

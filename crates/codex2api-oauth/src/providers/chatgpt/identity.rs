@@ -319,88 +319,57 @@ pub fn isolate_sse(body: axum::body::Body, storage: Storage, id: String) -> axum
     use futures::StreamExt;
     let stream = futures::stream::try_unfold(
         (
-            body.into_data_stream(),
-            bytes::BytesMut::new(),
-            0usize,
-            false,
+            Box::pin(codex2api_upstream::sse_frames(body.into_data_stream())),
             storage,
             id,
         ),
-        |(mut source, mut buffer, mut scanned, mut ended, storage, id)| async move {
-            loop {
-                let mut boundary = None;
-                while scanned < buffer.len() {
-                    scanned += 1;
-                    if (scanned >= 2 && &buffer[scanned - 2..scanned] == b"\n\n")
-                        || (scanned >= 4 && &buffer[scanned - 4..scanned] == b"\r\n\r\n")
-                    {
-                        boundary = Some(scanned);
-                        break;
-                    }
-                }
-                if let Some(end) =
-                    boundary.or_else(|| (ended && !buffer.is_empty()).then_some(buffer.len()))
-                {
-                    let frame = buffer.split_to(end).freeze();
-                    scanned = 0;
-                    let mut output = frame.clone();
-                    if let Ok(text) = std::str::from_utf8(&frame) {
-                        let data = codex2api_upstream::sse_data(text);
-                        let event = serde_json::from_str::<Value>(&data);
-                        if let Ok(mut value) = event {
-                            if value["type"] == "codex.rate_limits" {
-                                let usage = storage
-                                    .execution_quota(&id)
-                                    .await
-                                    .map_err(std::io::Error::other)?;
-                                let window = |key: &str| {
-                                    let v = &usage["rate_limit"][key];
-                                    if v.is_null() {
-                                        Value::Null
-                                    } else {
-                                        json!({"used_percent":v["used_percent"],"window_minutes":v["limit_window_seconds"].as_i64().unwrap()/60,"reset_at":v["reset_at"]})
-                                    }
-                                };
-                                let value = json!({"type":"codex.rate_limits","plan_type":usage["plan_type"],"credits":usage["credits"],"rate_limits":{"primary":window("primary_window"),"secondary":window("secondary_window")}});
-                                let mut lines = text
-                                    .lines()
-                                    .filter(|line| !line.starts_with("data:") && !line.is_empty())
-                                    .map(str::to_owned)
-                                    .collect::<Vec<_>>();
-                                lines.push(format!("data: {value}"));
-                                output = Bytes::from(format!("{}\n\n", lines.join("\n")));
-                            } else if codex2api_upstream::convert::sanitize::metadata(&mut value) {
-                                let event_name = text.lines().find(|l| l.starts_with("event:"));
-                                output = Bytes::from(format!(
-                                    "{}data: {value}\n\n",
-                                    event_name
-                                        .map(|name| format!("{name}\n"))
-                                        .unwrap_or_default()
-                                ));
+        |(mut source, storage, id)| async move {
+            let Some(frame) = source.next().await else {
+                return Ok(None);
+            };
+            let frame = frame?;
+            let mut output = frame.clone();
+            if let Ok(text) = std::str::from_utf8(&frame) {
+                let data = codex2api_upstream::sse_data(text);
+                let event = serde_json::from_str::<Value>(&data);
+                if let Ok(mut value) = event {
+                    if value["type"] == "codex.rate_limits" {
+                        let usage = storage
+                            .execution_quota(&id)
+                            .await
+                            .map_err(std::io::Error::other)?;
+                        let window = |key: &str| {
+                            let v = &usage["rate_limit"][key];
+                            if v.is_null() {
+                                Value::Null
+                            } else {
+                                json!({"used_percent":v["used_percent"],"window_minutes":v["limit_window_seconds"].as_i64().unwrap()/60,"reset_at":v["reset_at"]})
                             }
-                        } else if !data.is_empty() && data != "[DONE]" {
-                            return Err(std::io::Error::other("Invalid service event"));
-                        }
-                    } else {
-                        return Err(std::io::Error::other("Invalid service event encoding"));
+                        };
+                        let value = json!({"type":"codex.rate_limits","plan_type":usage["plan_type"],"credits":usage["credits"],"rate_limits":{"primary":window("primary_window"),"secondary":window("secondary_window")}});
+                        let mut lines = text
+                            .split(['\r', '\n'])
+                            .filter(|line| !line.starts_with("data:") && !line.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>();
+                        lines.push(format!("data: {value}"));
+                        output = Bytes::from(format!("{}\n\n", lines.join("\n")));
+                    } else if codex2api_upstream::convert::sanitize::metadata(&mut value) {
+                        let event_name = text.split(['\r', '\n']).find(|l| l.starts_with("event:"));
+                        output = Bytes::from(format!(
+                            "{}data: {value}\n\n",
+                            event_name
+                                .map(|name| format!("{name}\n"))
+                                .unwrap_or_default()
+                        ));
                     }
-                    return Ok::<_, std::io::Error>(Some((
-                        output,
-                        (source, buffer, scanned, ended, storage, id),
-                    )));
+                } else if !data.is_empty() && data != "[DONE]" {
+                    return Err(std::io::Error::other("Invalid service event"));
                 }
-                if ended {
-                    return Ok(None);
-                }
-                match source.next().await {
-                    Some(Ok(bytes)) => buffer.extend_from_slice(&bytes),
-                    Some(Err(e)) => return Err(std::io::Error::other(e)),
-                    None => ended = true,
-                }
-                if buffer.len() > codex2api_upstream::MAX_REQUEST_BYTES {
-                    return Err(std::io::Error::other("Oversized upstream SSE event"));
-                }
+            } else {
+                return Err(std::io::Error::other("Invalid service event encoding"));
             }
+            Ok::<_, std::io::Error>(Some((output, (source, storage, id))))
         },
     );
     axum::body::Body::from_stream(stream)

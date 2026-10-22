@@ -85,51 +85,8 @@ impl Stream {
     /// A finish reason can share a chunk with the last text or tool arguments.
     /// Deliver that content now; hold only completion and usage until settlement.
     fn defer_completion(&mut self, events: Vec<Value>) -> Vec<Value> {
-        let mut ready = Vec::new();
-        for mut event in events {
-            if matches!(
-                event["type"].as_str(),
-                Some(
-                    "message_delta"
-                        | "message_stop"
-                        | "response.completed"
-                        | "response.incomplete"
-                        | "response.failed"
-                        | "error"
-                )
-            ) {
-                self.tail.push(event);
-            } else if let Some(choices) = event["choices"].as_array() {
-                if choices.is_empty() {
-                    self.tail.push(event);
-                } else if choices
-                    .iter()
-                    .any(|choice| choice["finish_reason"].is_string())
-                {
-                    let mut terminal = event.clone();
-                    let mut has_delta = false;
-                    for choice in event["choices"].as_array_mut().expect("choices") {
-                        has_delta |= choice["delta"]
-                            .as_object()
-                            .is_some_and(|delta| !delta.is_empty());
-                        choice["finish_reason"] = Value::Null;
-                    }
-                    if has_delta {
-                        event.as_object_mut().expect("event").remove("usage");
-                        ready.push(event);
-                        for choice in terminal["choices"].as_array_mut().expect("choices") {
-                            choice["delta"] = serde_json::json!({});
-                            choice["logprobs"] = Value::Null;
-                        }
-                    }
-                    self.tail.push(terminal);
-                } else {
-                    ready.push(event);
-                }
-            } else {
-                ready.push(event);
-            }
-        }
+        let (ready, completion) = split_completion(events);
+        self.tail.extend(completion);
         ready
     }
 
@@ -148,6 +105,58 @@ impl Stream {
             events: std::mem::take(&mut self.tail),
         })
     }
+}
+
+/// Separate deliverable content from completion and final usage. Used both when
+/// awaiting the upstream usage tail and when the listener awaits settlement.
+pub fn split_completion(events: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
+    let mut ready = Vec::new();
+    let mut completion = Vec::new();
+    for mut event in events {
+        if matches!(
+            event["type"].as_str(),
+            Some(
+                "message_delta"
+                    | "message_stop"
+                    | "response.completed"
+                    | "response.incomplete"
+                    | "response.failed"
+                    | "error"
+            )
+        ) {
+            completion.push(event);
+        } else if let Some(choices) = event["choices"].as_array() {
+            if choices.is_empty() {
+                completion.push(event);
+            } else if choices
+                .iter()
+                .any(|choice| choice["finish_reason"].is_string())
+            {
+                let mut terminal = event.clone();
+                let mut has_delta = false;
+                for choice in event["choices"].as_array_mut().expect("choices") {
+                    has_delta |= choice["delta"]
+                        .as_object()
+                        .is_some_and(|delta| !delta.is_empty());
+                    choice["finish_reason"] = Value::Null;
+                }
+                if has_delta {
+                    event.as_object_mut().expect("event").remove("usage");
+                    ready.push(event);
+                    for choice in terminal["choices"].as_array_mut().expect("choices") {
+                        choice["delta"] = serde_json::json!({});
+                        choice["logprobs"] = Value::Null;
+                    }
+                }
+                completion.push(terminal);
+            } else {
+                ready.push(event);
+            }
+        } else {
+            ready.push(event);
+        }
+    }
+    (ready, completion)
 }
 
 #[cfg(test)]

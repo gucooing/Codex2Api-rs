@@ -26,6 +26,10 @@ Chat Completions 的结束原因后仍继续读取最终用量，Messages 读取
 
 ## 错误处理与调度
 
+同协议转换保留供应协议自己的请求语义：OpenAI Responses 保留独立的 `instructions`，
+Messages 保留系统内容块上的 `cache_control` 与缓存时长。订阅客户端的请求规范化不应用到
+这些 API Key 供应协议。
+
 裁决位于 `codex2api-upstream/src/providers/api/verdict.rs`，依据 sub2api 对 OpenAI 与 Anthropic 接口的切换策略：
 
 | 上游情况 | 处理 |

@@ -442,7 +442,20 @@ the chosen account and preserves official compression. WebSocket accounting, err
 share parsed events. Queued WebSocket requests retain the parsed value and byte count;
 dequeue and ledger validation do not decode the frame again. SSE framing scans newly received bytes and splits buffers
 without moving the remaining stream. Complete lines feed the shared SSE parser,
-avoiding repeated scans of partial lines. ChatGPT preserves unchanged frames;
+avoiding repeated scans of partial lines. Prelude inspection and delivery use this
+same parser, including mixed CR, LF and CRLF endings across transport chunks.
+Inspection retains the exact bytes it reads and releases them at the first
+deliverable event, without waiting for upstream EOF. Line-ending normalization
+is confined to parsing; replay preserves the original bytes.
+Native ChatGPT quota and conversation transforms use the same incremental line
+scanner to frame their byte-preserving relays. Grok formats multiline SSE data
+with the shared event serializer. Converted text and tool deltas are delivered
+before settlement even when released by a terminal upstream event; only completion
+and final usage wait for the ledger. WebSocket writes have bounded waits so a
+stalled downstream cannot indefinitely block reading and settlement.
+Native HTTP delivery also ends after a successful or incomplete terminal event,
+without retaining its supplier lease until the upstream closes the response body.
+ChatGPT preserves unchanged frames;
 Grok preserves unchanged JSON while retaining its event framing.
 Sanitization reports changes directly instead of cloning whole events to compare.
 Both providers use the shared scheduler and snapshot store; their wire adapters,

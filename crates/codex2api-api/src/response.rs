@@ -426,8 +426,17 @@ async fn consume_stream(
                 collector.push(chunk)?;
             }
         }
+        let (chunks, completion) = if terminal {
+            convert::stream::split_completion(chunks)
+        } else {
+            (chunks, Vec::new())
+        };
+        for chunk in &chunks {
+            downstream.emit(frame(inbound, chunk)).await;
+        }
         if terminal {
-            // Prepare the caller's terminal payload before committing success.
+            // A final upstream event can release text or queued tool blocks.
+            // Only completion waits for the ledger, never that ready content.
             if failure.is_none()
                 && let Some(collector) = collector.take()
             {
@@ -439,11 +448,9 @@ async fn consume_stream(
             {
                 return Err(error);
             }
-        }
-        for chunk in &chunks {
-            downstream.emit(frame(inbound, chunk)).await;
-        }
-        if terminal {
+            for chunk in &completion {
+                downstream.emit(frame(inbound, chunk)).await;
+            }
             if inbound == Inbound::Chat && log.successful() {
                 downstream
                     .emit(Bytes::from_static(b"data: [DONE]\n\n"))

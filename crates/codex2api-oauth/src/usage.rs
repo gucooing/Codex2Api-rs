@@ -1087,6 +1087,12 @@ impl Stream for ObservedStream {
                     tokio::time::Instant::now() + codex2api_upstream::DEFAULT_STREAM_IDLE_TIMEOUT,
                 );
                 this.parser.feed(&bytes, this.sse, &mut this.log);
+                // A completed generation already contains its usage. Do not keep
+                // the reply and supplier lease open while waiting for transport EOF.
+                this.ended = matches!(
+                    this.log.lifecycle.outcome(),
+                    Some(ResponseOutcome::Completed | ResponseOutcome::Incomplete(_))
+                );
                 if this.log.lifecycle.outcome().is_some() {
                     this.log.finish("completed");
                 }

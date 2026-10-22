@@ -8,6 +8,7 @@ use crate::{
     supply::{TransportFault, UpstreamFailure, Wire},
 };
 use bytes::Bytes;
+use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde_json::Value;
 
@@ -318,31 +319,12 @@ pub(crate) async fn inspect(
     let extensions = std::mem::take(response.extensions_mut());
     let mut framing = None;
     let mut prefix = Vec::new();
-    let mut parsed = 0;
-    let mut scanned = 0;
-    'read: while prefix.len() < crate::MAX_REQUEST_BYTES {
-        if framing == Some(ResponseFormat::EventStream) && prefix.len() >= 256 * 1024 {
-            break;
-        }
-        let chunk = match tokio::time::timeout(crate::DEFAULT_STREAM_IDLE_TIMEOUT, response.chunk())
+    while prefix.len() < crate::MAX_REQUEST_BYTES {
+        if capture_chunk(&mut response, &mut prefix)
             .await
+            .map_err(|error| transport_failure(error, model))?
+            .is_none()
         {
-            Ok(Ok(chunk)) => chunk,
-            Ok(Err(error)) => return Err(transport_failure(error.into(), model)),
-            Err(_) => {
-                return Err(transport_failure(UpstreamError::StreamIdleTimeout, model));
-            }
-        };
-        let Some(chunk) = chunk else {
-            if framing == Some(ResponseFormat::Json)
-                && let Ok(value) = serde_json::from_slice::<Value>(
-                    prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&prefix),
-                )
-                && failure_event(wire, &value)
-                && !generation_observed(&value)
-            {
-                return Err(event_failure(wire, value, &headers, revision, model));
-            }
             if prefix.is_empty() {
                 return Err(transport_failure(
                     UpstreamError::Stream("Upstream reply was empty".into()),
@@ -350,83 +332,44 @@ pub(crate) async fn inspect(
                 ));
             }
             break;
-        };
-        if prefix.len().saturating_add(chunk.len()) > crate::MAX_REQUEST_BYTES {
-            return Err(transport_failure(
-                UpstreamError::Stream("Upstream response exceeded the size limit".into()),
-                model,
-            ));
         }
-        prefix.extend_from_slice(&chunk);
         if framing.is_none() {
             framing = ResponseFormat::from_prefix(&prefix);
-            match framing {
-                Some(ResponseFormat::EventStream) => {
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        http::HeaderValue::from_static("text/event-stream"),
-                    );
-                }
-                Some(ResponseFormat::Json) => {
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        http::HeaderValue::from_static("application/json"),
-                    );
-                }
-                Some(_) => break,
-                None => continue,
-            }
         }
-        if framing == Some(ResponseFormat::Json) {
-            continue;
+        if matches!(
+            framing,
+            Some(ResponseFormat::EventStream | ResponseFormat::Other)
+        ) {
+            break;
         }
-        loop {
-            let remaining = &prefix[parsed..];
-            let mut boundary = None;
-            while scanned < prefix.len() {
-                scanned += 1;
-                let separator = if scanned >= parsed + 2 && &prefix[scanned - 2..scanned] == b"\n\n"
-                {
-                    2
-                } else if scanned >= parsed + 4 && &prefix[scanned - 4..scanned] == b"\r\n\r\n" {
-                    4
-                } else {
-                    continue;
-                };
-                boundary = Some((scanned - parsed - separator, separator));
-                break;
-            }
-            let Some((end, separator)) = boundary else {
-                break;
-            };
-            let frame = String::from_utf8_lossy(&remaining[..end]);
-            let data = crate::sse_data(frame.strip_prefix('\u{feff}').unwrap_or(&frame));
-            parsed += end + separator;
-            if data.is_empty() || data.trim() == "[DONE]" {
-                continue;
-            }
-            let Ok(mut value) = serde_json::from_str::<Value>(&data) else {
-                break 'read;
-            };
-            if value.get("type").and_then(Value::as_str).is_none()
-                && let Some(event) = frame
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("event:"))
-                    .next_back()
-                && let Some(object) = value.as_object_mut()
+    }
+    match framing {
+        Some(ResponseFormat::EventStream) => {
+            headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("text/event-stream"),
+            );
+            if let Some(value) = inspect_sse(wire, &mut response, &mut prefix)
+                .await
+                .map_err(|error| transport_failure(error, model))?
             {
-                object.insert("type".into(), event.trim().into());
-            }
-            if generation_observed(&value) {
-                break 'read;
-            }
-            if failure_event(wire, &value) {
                 return Err(event_failure(wire, value, &headers, revision, model));
             }
-            if !is_prelude(wire, &value) {
-                break 'read;
+        }
+        Some(ResponseFormat::Json) => {
+            headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            if let Ok(value) = serde_json::from_slice::<Value>(
+                prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&prefix),
+            ) && failure_event(wire, &value)
+                && !generation_observed(&value)
+            {
+                return Err(event_failure(wire, value, &headers, revision, model));
             }
         }
+        _ => {}
     }
     let stream = futures::stream::once(async move { Ok::<_, reqwest::Error>(Bytes::from(prefix)) })
         .chain(response.bytes_stream());
@@ -441,6 +384,90 @@ pub(crate) async fn inspect(
             .insert(crate::SupplierAuthRevision(revision));
     }
     Ok((reqwest::Response::from(rebuilt), revision))
+}
+
+/// Retain only bytes actually read, so inspection can stop without losing any
+/// unparsed remainder of a transport chunk. The caller replays these exact bytes.
+async fn capture_chunk(
+    response: &mut reqwest::Response,
+    prefix: &mut Vec<u8>,
+) -> Result<Option<Bytes>, UpstreamError> {
+    let chunk = tokio::time::timeout(crate::DEFAULT_STREAM_IDLE_TIMEOUT, response.chunk())
+        .await
+        .map_err(|_| UpstreamError::StreamIdleTimeout)??;
+    if let Some(chunk) = &chunk {
+        if prefix.len().saturating_add(chunk.len()) > crate::MAX_REQUEST_BYTES {
+            return Err(UpstreamError::Stream(
+                "Upstream response exceeded the size limit".into(),
+            ));
+        }
+        prefix.extend_from_slice(chunk);
+    }
+    Ok(chunk)
+}
+
+/// Use the delivery parser to recognize events; never maintain a second SSE
+/// framing implementation in scheduling. Only pre-output events remain staged.
+async fn inspect_sse(
+    wire: Wire,
+    response: &mut reqwest::Response,
+    prefix: &mut Vec<u8>,
+) -> Result<Option<Value>, UpstreamError> {
+    let initial = Bytes::copy_from_slice(prefix);
+    let mut read_error = None;
+    let failure = {
+        let captured_error = &mut read_error;
+        let source = async_stream::stream! {
+            yield Ok::<_, std::io::Error>(initial);
+            while prefix.len() < 256 * 1024 {
+                match capture_chunk(response, prefix).await {
+                    Ok(Some(chunk)) => yield Ok(chunk),
+                    Ok(None) => break,
+                    Err(error) => {
+                        *captured_error = Some(error);
+                        break;
+                    }
+                }
+            }
+        };
+        let events = crate::buffered_sse_lines(source).eventsource();
+        futures::pin_mut!(events);
+        loop {
+            // Invalid SSE/JSON is replayed for the delivery reader to reject.
+            let Some(Ok(event)) = events.next().await else {
+                break None;
+            };
+            if event.data.trim() == "[DONE]" {
+                break None;
+            }
+            if event.data.trim().is_empty() {
+                continue;
+            }
+            let Ok(mut value) = serde_json::from_str::<Value>(&event.data) else {
+                break None;
+            };
+            if value.get("type").is_none()
+                && !event.event.is_empty()
+                && event.event != "message"
+                && let Some(object) = value.as_object_mut()
+            {
+                object.insert("type".into(), event.event.into());
+            }
+            if generation_observed(&value) {
+                break None;
+            }
+            if failure_event(wire, &value) {
+                break Some(value);
+            }
+            if !is_prelude(wire, &value) {
+                break None;
+            }
+        }
+    };
+    match read_error {
+        Some(error) => Err(error),
+        None => Ok(failure),
+    }
 }
 
 /// A failure event before output, as an attempt failure. The HTTP status was 2xx;

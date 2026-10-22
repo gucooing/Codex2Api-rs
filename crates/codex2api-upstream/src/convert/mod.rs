@@ -41,6 +41,9 @@ pub fn request(input: &InboundRequest, wire: Wire) -> Result<WireRequest> {
     if !input.operation.generation() {
         return operation(input, wire);
     }
+    if input.format == Inbound::GrokClient && wire == Wire::Xai {
+        return crate::providers::grok::api::native_request(input);
+    }
     let (body, headers) = match wire {
         Wire::Codex => responses::build(input, responses::Dialect::Codex)?,
         Wire::Xai => responses::build(input, responses::Dialect::Xai)?,

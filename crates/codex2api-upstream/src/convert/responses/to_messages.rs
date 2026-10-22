@@ -112,13 +112,22 @@ impl Stream {
             "response.output_text.delta" | "response.refusal.delta" => {
                 self.text(output, part, delta, false, &mut out)?
             }
-            "response.output_text.done" => self.text(
-                output,
-                part,
-                event["text"].as_str().unwrap_or(""),
-                true,
-                &mut out,
-            )?,
+            "response.output_text.done" | "response.refusal.done" => {
+                let text = event["text"]
+                    .as_str()
+                    .or_else(|| event["refusal"].as_str())
+                    .unwrap_or("");
+                self.text(output, part, text, true, &mut out)?;
+                self.writer.close(text_key(output, part), &mut out);
+            }
+            "response.content_part.done" => {
+                let text = event["part"]["text"]
+                    .as_str()
+                    .or_else(|| event["part"]["refusal"].as_str())
+                    .unwrap_or("");
+                self.text(output, part, text, true, &mut out)?;
+                self.writer.close(text_key(output, part), &mut out);
+            }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 self.thinking(output, &mut out);
                 let index = event["summary_index"].as_u64().unwrap_or(0);
@@ -134,11 +143,14 @@ impl Stream {
                 }
                 self.writer.append((output, 0), delta, &mut out)?;
             }
-            "response.function_call_arguments.done" => self.writer.reconcile(
-                (output, 0),
-                event["arguments"].as_str().unwrap_or(""),
-                &mut out,
-            )?,
+            "response.function_call_arguments.done" => {
+                self.writer.reconcile(
+                    (output, 0),
+                    event["arguments"].as_str().unwrap_or(""),
+                    &mut out,
+                )?;
+                self.writer.close((output, 0), &mut out);
+            }
             "response.output_item.done" => self.item(output, &event["item"], &mut out)?,
             "response.completed" | "response.done" | "response.incomplete" => {
                 for (index, item) in response["output"]

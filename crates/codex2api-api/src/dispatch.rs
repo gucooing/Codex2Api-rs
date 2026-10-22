@@ -82,7 +82,6 @@ pub(crate) async fn remember_affinity(
     response_id: Option<&str>,
     headers: Option<&HeaderMap>,
 ) -> Result<()> {
-    let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
     let response = response_id
         .filter(|id| !id.is_empty() && id.len() <= 256)
         .map(|id| codex2api_storage::RoutingKey::response(&route.owner_id, &route.scope, id));
@@ -96,6 +95,10 @@ pub(crate) async fn remember_affinity(
         .chain(turn.iter())
         .map(|key| (key, account))
         .collect();
+    if bindings.is_empty() {
+        return Ok(());
+    }
+    let ttl = state.storage.gateway_settings().await?.sticky_ttl_seconds;
     state
         .storage
         .save_routing_affinities(&bindings, ttl)

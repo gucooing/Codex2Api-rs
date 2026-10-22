@@ -1,7 +1,7 @@
 //! Messages requests built from a Responses, Chat or Messages request as the caller
 //! sent it: alternating user and assistant turns of content blocks, tools with input
 //! schemas, `max_tokens`, thinking budgets and stop sequences.
-use crate::inbound::messages::{schema, system_texts};
+use crate::inbound::messages::schema;
 use crate::inbound::request::{content_parts, normalize_tools};
 use crate::inbound::{Error as ApiError, Inbound, InboundRequest, Result};
 use serde_json::{Map, Value, json};
@@ -467,16 +467,16 @@ pub fn from_messages(body: &Value) -> Result<Value> {
         object.remove(key);
     }
     // The client attribution block is prompt metadata of another service.
-    if object.get("system").is_some_and(Value::is_array) {
-        let texts = system_texts(&body)?
-            .into_iter()
-            .map(|text| json!({"type":"text","text":text}))
-            .collect::<Vec<_>>();
-        let object = body.as_object_mut().expect("object");
-        if texts.is_empty() {
+    if let Some(system) = object.get_mut("system").and_then(Value::as_array_mut) {
+        for block in std::mem::take(system) {
+            let text = crate::inbound::messages::text(&block, "text")?;
+            if !text.is_empty() && !text.starts_with("x-anthropic-billing-header: ") {
+                // Preserve the caller's cache boundaries and TTL on retained blocks.
+                system.push(block);
+            }
+        }
+        if system.is_empty() {
             object.remove("system");
-        } else {
-            object.insert("system".into(), texts.into());
         }
     }
     Ok(body)
