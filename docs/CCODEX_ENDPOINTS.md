@@ -1,11 +1,24 @@
 # ccodex 服务接口
 
-官方协议基线为 Codex 0.163.0，commit `83086188ae0614bd882818ff1aa23f3194962012`。
+官方协议基线为 Codex 0.166.0，commit `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`。
 客户端维护于 gucooing/codex 的 ccodex 分支。下列路径相对客户端内置的服务根
 `https://oauth-ai.alsl.xyz/v1/chatgpt`。
 
 客户端源码中的官方服务地址替换为该服务根，方法、路径、查询、PKCE、state 和业务正文保持官方原样。
 供应请求继续使用官方地址、供应身份及逐账户指纹。
+
+模型描述包含 Terra 的推理强度与传输能力，套餐值接受 `sci` / `sci_plus`。
+Guardian WebSocket 按消费身份、供应账户、登录修订与父响应绑定连接路由 Cookie，
+保留原始有效期；`response.metadata` 的响应及动作绑定字段原样保留，不在代理判定执行许可。
+模型可用性、价格和权益仍由本地管理配置决定。
+
+已检查安装版本 Desktop `26.1029.7803.0`（内置 app-server `0.166.0-alpha.6`）的
+`early-bootstrap` 读取逻辑：账户套餐枚举接受 `sci` / `sci_plus`，模型选择读取
+`supportedReasoningEfforts` 与 `defaultReasoningEffort`。这只覆盖实际响应读取器，
+尚未验证该 Desktop 的任务创建或真实推理执行。
+
+可选的 `POST /accounts/switch-workspace-token` 和默认关闭的 runtime authentication
+未实现服务端业务能力；不提供空响应、模拟 token 或跨订阅切换。
 
 客户端断开 HTTP 或 WebSocket 连接后，已发往上游的生成继续到终态，并按最终实际用量结算。断连本身不计为平台失败；上游错误、空闲超时与凭据撤销仍按原有规则处理。
 

@@ -22,6 +22,8 @@ pub const SUBSCRIPTION_TIERS: &[&str] = &[
     "edu",
     "edu_plus",
     "edu_pro",
+    "sci",
+    "sci_plus",
     "self_serve_business_prolite",
     "self_serve_business_usage_based",
     "ent26",

@@ -8,8 +8,8 @@ All protocol/header/OAuth/upstream behavior MUST match official Codex at:
 
 - repo: https://github.com/openai/codex
 - path: `reference/codex`
-- commit: `83086188ae0614bd882818ff1aa23f3194962012` (2026-10-15T18:57:07Z)
-- constants: `crates/codex2api-common/src/version.rs`
+- commit: `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856` (2026-10-29T17:44:30Z)
+- constants: `crates/codex2api-common/src/providers/chatgpt/version.rs`
 
 Do not depend on official `codex-rs` crates. Official source is reference only.
 
@@ -27,8 +27,8 @@ routing layer or a configurable service root. Follow the ccodex section of
 [docs/CODEX_UPDATES.md](docs/CODEX_UPDATES.md). ccodex addresses and names never
 replace official supplier-side protocol constants.
 
-Current fork: official `rust-v0.163.0` (`83086188ae0614bd882818ff1aa23f3194962012`),
-ccodex `bf16b05196136aba7d28f89f8dac4d41c6c1d635` (`ccodex-v0.163.0`).
+Current fork: official `rust-v0.166.0` (`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`),
+ccodex `e49bd02ac2b85e81ed643a2bb9b90e885748c66f` (`ccodex-v0.166.0`).
 
 Validate proxy changes locally with the relevant compilation checks and regression
 tests before reporting completion. Do not compile ccodex locally; use source review,
@@ -165,7 +165,7 @@ data rather than inventing a replacement fingerprint. Do not add runtime legacy
 readers or repeat UA data migrations for future releases.
 
 - originator: `codex_cli_rs`
-- package version in UA: `0.163.0`
+- package version in UA: `0.166.0`
 - OAuth client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
 - issuer: `https://auth.openai.com`
 - token: `https://auth.openai.com/oauth/token`

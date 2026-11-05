@@ -9,6 +9,8 @@ pub struct ScheduleRequest {
     pub model: Option<String>,
     pub session_hash: Option<String>,
     pub previous_response: Option<String>,
+    /// A related response prefers its supplier without imposing continuation requirements.
+    pub parent_response: Option<String>,
     pub previous_can_move: bool,
     pub admission: Option<(u64, u64, i64)>,
 }
@@ -130,6 +132,7 @@ where
     let previous_key = request
         .previous_response
         .as_ref()
+        .or(request.parent_response.as_ref())
         .map(|id| previous_key(&route.owner_id, &route.scope, id));
     let [sticky, previous] = storage
         .routing_affinities([sticky_key.as_ref(), previous_key.as_ref()])

@@ -3,13 +3,13 @@
 ## Official protocol baseline
 
 - Official repository: https://github.com/openai/codex
-- Release: `0.163.0` / `rust-v0.163.0`
-- Commit: `83086188ae0614bd882818ff1aa23f3194962012`
-- Commit time: `2026-10-15T18:57:07Z`
-- Reference-only checkout: `reference/codex`; constants: `crates/codex2api-common/src/version.rs`
+- Release: `0.166.0` / `rust-v0.166.0`
+- Commit: `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`
+- Commit time: `2026-10-29T17:44:30Z`
+- Reference-only checkout: `reference/codex`; constants: `crates/codex2api-common/src/providers/chatgpt/version.rs`
 - Maintained client: [gucooing/codex, ccodex](https://github.com/gucooing/codex/tree/ccodex)
-- Client base: official `rust-v0.163.0` (`83086188ae0614bd882818ff1aa23f3194962012`)
-- Fork commit: `bf16b05196136aba7d28f89f8dac4d41c6c1d635` (`ccodex-v0.163.0`)
+- Client base: official `rust-v0.166.0` (`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`)
+- Fork commit: `e49bd02ac2b85e81ed643a2bb9b90e885748c66f` (`ccodex-v0.166.0`)
 
 The maintained client is rebuilt from the latest official stable release tag. It
 changes only its release channel (npm `@gucooing/ccodex`), the official server
@@ -400,6 +400,7 @@ Redis keys are organized by responsibility:
 | `cache:*` | One current snapshot per business object; bounded TTL |
 | `routing:session:*` | Provider, pool and consumer scoped session binding; configured affinity TTL |
 | `routing:response:*`, `routing:turn:*` | Provider and consumer scoped response/turn ownership; configured affinity TTL |
+| `chatgpt:response-pin:*` | Exact consumer response, supplier and authorization revision; configured affinity TTL, original cookie expiry |
 | `concurrency:*` | One sorted set per supplier, subscription, API user/group/model or key; 90-second renewable leases |
 | `login-attempts:*` | Hashed username, atomic ten-attempt limit, fixed 60-second TTL |
 | `rpm:*` | One rolling-minute sorted set per limited subscription or API user/group/model; 60-second TTL |
@@ -411,6 +412,18 @@ write unused response-owner mappings. API group/model RPM and concurrency are ch
 in one Lua operation before any scope is consumed, with Redis time as the clock;
 all API keys for one user share those scopes. Unlimited RPM creates no counter.
 Clients must send full context when a previous response has no ownership mapping.
+
+Successful ChatGPT WebSocket handshakes capture only `__oailb` and `__cflb` in a
+connection-owned routing snapshot. `response.created` atomically publishes its
+consumer-scoped owner and immutable connection snapshot before delivery, allowing
+in-flight Guardian reviews to prefer the parent supplier. A reviewer can still
+switch suppliers; a parent response is not a continuation requirement. The pin is
+applied only to the same supplier, authorization revision, secure origin and
+endpoint path. Other requests cannot overwrite it or restart cookie Max-Age.
+Expired cookies leave an existing reviewer connection intact; reconnects use only
+still-valid cookies. Duplicate or oversized routing cookies reject the pin, and
+unrelated infrastructure cookies remain account-scoped. Pins are best-effort
+routing hints, never credentials, and are never returned to downstream clients.
 
 Local capacity
 waiters wake on permit release; Redis-backed waits also poll for remote releases.
@@ -464,7 +477,7 @@ credentials and account-local HTTP clients remain provider-owned.
 ## Upstream identity and transport
 
 The supplier UA formula is
-`codex_cli_rs/0.163.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
+`codex_cli_rs/0.166.0 ({os_type} {os_version}; {arch}) {terminal_token}`.
 Official headers include `originator`, `User-Agent`, bearer authorization,
 `ChatGPT-Account-ID` and `x-codex-installation-id`; request-specific session,
 thread, turn and request IDs retain their actual lifecycle.
@@ -531,6 +544,12 @@ invalidates supplier eligibility caches. No manual authorization-recovery endpoi
 or button exists. Token refresh uses a revision check and cannot overwrite a
 concurrent login.
 
+ChatGPT refresh requests carry the actual `refresh_reason`: `proactive_expiry`
+near a known token expiry, `scheduled` for the age-based refresh when expiry is
+unknown, `unauthorized_recovery` after a rejected access token, and `forced` for
+explicit administrator refresh or refresh-token authorization. The diagnostic
+reason does not change authorization, refresh locking or revision guards.
+
 The ChatGPT channel follows `codex-api/src/api_bridge.rs`, `sse/responses_error.rs`
 and `login/src/auth/manager.rs` in the pinned reference. HTTP 401 after the inline
 refresh is a permanent `auth` block; refresh rejection follows the official permanent
@@ -544,7 +563,9 @@ record a `quota` block until the official reset in the error body, the quota hea
 or `Retry-After`, or a sixty-second probe when timing is absent. `rate_limit_exceeded`,
 `slow_down` and unclassified HTTP 429 record a `rate_limit` block until the retry
 advice; model entitlement failures (`model_not_found`, `usage_not_included`) block
-that model for an hour; other 403s block the account ten minutes; 529 blocks ten
+that model for an hour. `model_not_found` includes HTTP 400/403/404 and SSE/WS
+errors without an HTTP status; other models on the supplier remain available.
+Other 403s block the account ten minutes; 529 blocks ten
 minutes as `overload`; 5xx and timeouts avoid the supplier for this request only;
 connection failures block ten minutes as `transport`. Caller errors (400-class other
 than the above) return to the caller. Grok and Antigravity do not inherit these
@@ -807,6 +828,14 @@ login, and one channel (Antigravity, an API key) serves models of several vendor
 Provider adapters expose configured models within each consumer's entitlement,
 including model names absent from bundled or discovered metadata. Official
 descriptors and verified prices are defaults, never an admission allowlist.
+
+The pinned ChatGPT descriptors include `gpt-6.1-terra`, defaulting to `low` and
+supporting `low`, `medium`, `high`, `xhigh`, `max` and `ultra`, image input,
+Responses Lite and WebSocket transport; its Fast tier uses `priority`. The CLI
+descriptor supplies no price, so pricing remains explicit administrator data.
+ChatGPT plan values include `sci` and `sci_plus`, labelled Academic Researchers
+and Academic Researchers Plus in administration; these values do not create
+local subscription entitlements or spending limits.
 
 `codex2api-common/src/model_presets.rs` holds one table of every built-in model of
 every platform with its official price source, verification date, standard context

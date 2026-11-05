@@ -21,6 +21,7 @@ type RawWebSocket = WebSocketStream<MaybeTlsStream<MaybeTlsStream<TcpStream>>>;
 /// Observe supplier quotas before any downstream identity/quota rewriting.
 pub struct UpstreamWebSocket {
     socket: RawWebSocket,
+    routing_pin: Option<crate::ChatgptRoutingPin>,
     observer: Option<super::quota::QuotaObserver>,
     pending: Option<Pin<Box<dyn Future<Output = tungstenite::Message> + Send>>>,
     timing: Option<crate::ResponseTiming>,
@@ -30,6 +31,7 @@ impl From<RawWebSocket> for UpstreamWebSocket {
     fn from(socket: RawWebSocket) -> Self {
         Self {
             socket,
+            routing_pin: None,
             observer: None,
             pending: None,
             timing: None,
@@ -38,6 +40,17 @@ impl From<RawWebSocket> for UpstreamWebSocket {
 }
 
 impl UpstreamWebSocket {
+    pub async fn remember_response_routing(
+        &mut self,
+        storage: &codex2api_storage::Storage,
+        owner: &codex2api_storage::RoutingKey,
+    ) -> Result<()> {
+        if let Some(pin) = &self.routing_pin {
+            pin.remember(storage, owner).await?;
+        }
+        Ok(())
+    }
+
     pub fn generation_timing(&self) -> Option<crate::ResponseTiming> {
         self.timing.clone()
     }
@@ -150,6 +163,7 @@ impl UpstreamClient {
         &self,
         endpoint: Endpoint,
         inbound: HeaderMap,
+        parent_pin: Option<&crate::ChatgptRoutingPin>,
     ) -> Result<(
         UpstreamWebSocket,
         HeaderMap,
@@ -164,6 +178,7 @@ impl UpstreamClient {
             &endpoint.url().replacen("https://", "wss://", 1),
             endpoint.response_headers(inbound),
             true,
+            parent_pin,
         )
         .await
     }
@@ -174,7 +189,7 @@ impl UpstreamClient {
         url: &str,
         inbound: HeaderMap,
     ) -> Result<(UpstreamWebSocket, HeaderMap)> {
-        let (socket, headers, _) = self.connect_socket_inner(url, inbound, false).await?;
+        let (socket, headers, _) = self.connect_socket_inner(url, inbound, false, None).await?;
         Ok((socket, headers))
     }
 
@@ -183,6 +198,7 @@ impl UpstreamClient {
         url: &str,
         inbound: HeaderMap,
         workspace: bool,
+        parent_pin: Option<&crate::ChatgptRoutingPin>,
     ) -> Result<(
         UpstreamWebSocket,
         HeaderMap,
@@ -244,6 +260,16 @@ impl UpstreamClient {
             if let Some(cookies) = self.cookies.cookies(&cookie_url) {
                 request.headers_mut().insert("cookie", cookies);
             }
+            if let Some(cookies) = parent_pin.and_then(|pin| {
+                pin.merge_cookie_header(
+                    &cookie_url,
+                    &self.identity().account_id,
+                    auth.revision,
+                    request.headers().get("cookie"),
+                )
+            }) {
+                request.headers_mut().insert("cookie", cookies);
+            }
             let connected = tokio::time::timeout(Duration::from_secs(30), async {
                 let transport =
                     crate::proxy::connect(&destination, self.account_http.proxy_url(), tls.clone())
@@ -279,6 +305,12 @@ impl UpstreamClient {
                     }
                     let socket = UpstreamWebSocket {
                         socket,
+                        routing_pin: crate::ChatgptRoutingPin::capture(
+                            &self.identity().account_id,
+                            auth.revision,
+                            &cookie_url,
+                            response.headers(),
+                        ),
                         observer,
                         pending: None,
                         timing: None,
@@ -329,7 +361,7 @@ mod tests {
     async fn failed_secure_handshake_updates_only_the_current_accounts_infrastructure_cookies() {
         if std::env::var_os("CODEX2API_WS_COOKIE_CHILD").is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "websocket::tests::failed_secure_handshake_updates_only_the_current_accounts_infrastructure_cookies", "--nocapture"])
+                .args(["--exact", "providers::chatgpt::websocket::tests::failed_secure_handshake_updates_only_the_current_accounts_infrastructure_cookies", "--nocapture"])
                 .env("CODEX2API_WS_COOKIE_CHILD", "1")
                 .env("CODEX_CA_CERTIFICATE", concat!(env!("CARGO_MANIFEST_DIR"), "/../codex2api-suppliers/tests/fixtures/proxy-chatgpt-ca.pem"))
                 .output().unwrap();
@@ -362,7 +394,7 @@ mod tests {
         let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
         let (listener, address) = crate::proxy_fixture::listener().await;
         let server = tokio::spawn(async move {
-            for index in 0..3 {
+            for index in 0..5 {
                 let (mut tcp, _) = listener.accept().await.unwrap();
                 assert_eq!(
                     crate::proxy_fixture::http_tunnel(&mut tcp).await,
@@ -375,10 +407,17 @@ mod tests {
                         r#"{"error":{"code":"temporary_denial","message":"fixture denial"}}"#;
                     tls.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\nRetry-After: 7\r\nX-Request-Id: request-fixture\r\nX-Error-Json: {{\"error\":{{\"code\":\"temporary_denial\"}}}}\r\nSet-Cookie: __oailb=retry-route; Path=/; Secure\r\nSet-Cookie: chatgpt_session=must-not-store; Path=/; Secure\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                 } else {
-                    let mut ws = tokio_tungstenite::accept_hdr_async_with_config(tls, move |request: &tungstenite::handshake::server::Request, response: tungstenite::handshake::server::Response| {
+                    let mut ws = tokio_tungstenite::accept_hdr_async_with_config(tls, move |request: &tungstenite::handshake::server::Request, mut response: tungstenite::handshake::server::Response| {
                         if index == 1 {
                             assert_eq!(request.headers()["cookie"], "__oailb=retry-route");
+                        } else if index == 2 || index == 3 {
+                            assert_eq!(request.headers()["cookie"], "__oailb=parent-route");
                         } else { assert!(!request.headers().contains_key("cookie")); }
+                        if index == 1 {
+                            response.headers_mut().insert("set-cookie", "__oailb=parent-route; Path=/; Secure; Max-Age=600".parse().unwrap());
+                        } else if index == 2 {
+                            response.headers_mut().insert("set-cookie", "__oailb=other-route; Path=/; Secure; Max-Age=600".parse().unwrap());
+                        }
                         Ok(response)
                     }, Some(websocket_config())).await.unwrap();
                     ws.close(None).await.unwrap();
@@ -450,6 +489,35 @@ mod tests {
                 ws.next().await,
                 Some(Ok(tungstenite::Message::Close(_)))
             ));
+            if account == "a" {
+                let pin = ws.routing_pin.clone().expect("parent handshake pin");
+                for parent in [None, Some(&pin)] {
+                    let (mut socket, _, _) = client
+                        .connect_socket_inner(
+                            "wss://chatgpt.com/backend-api/codex/responses",
+                            HeaderMap::new(),
+                            false,
+                            parent,
+                        )
+                        .await
+                        .unwrap();
+                    assert!(matches!(
+                        socket.next().await,
+                        Some(Ok(tungstenite::Message::Close(_)))
+                    ));
+                }
+                assert_eq!(
+                    client
+                        .cookies
+                        .cookies(
+                            &"https://chatgpt.com/backend-api/codex/responses"
+                                .parse()
+                                .unwrap()
+                        )
+                        .unwrap(),
+                    "__oailb=other-route"
+                );
+            }
         }
         server.await.unwrap();
     }

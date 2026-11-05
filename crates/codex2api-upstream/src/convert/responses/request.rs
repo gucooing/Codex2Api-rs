@@ -76,7 +76,7 @@ pub fn build(input: &InboundRequest, dialect: Dialect) -> Result<(Value, HeaderM
     Ok((body, headers))
 }
 
-/// Codex 0.163 sends system-level input with the developer role, always streams,
+/// Codex sends system-level input with the developer role, always streams,
 /// never stores, and replays reasoning only through encrypted content.
 fn codex(object: &mut Map<String, Value>) -> Result<()> {
     instruction_item(object);

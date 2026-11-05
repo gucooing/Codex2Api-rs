@@ -9,6 +9,7 @@ pub(crate) mod proxy;
 pub(crate) mod quota;
 pub(crate) mod request;
 pub(crate) mod routing;
+pub(crate) mod routing_pin;
 pub(crate) mod timezone;
 pub(crate) mod websocket;
 

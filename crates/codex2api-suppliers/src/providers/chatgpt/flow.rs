@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::AuthDotJson;
 use crate::error::{AuthError, Result};
-use crate::oauth::{CallbackQuery, OAuthConfig};
+use crate::oauth::{CallbackQuery, OAuthConfig, RefreshReason};
 use crate::persist::{
     CompletedLogin, complete_login, load_auth, pending_from_account, persist_auth, refresh_account,
     revoke_account,
@@ -187,6 +187,14 @@ impl AuthService {
             &self.cfg,
             &account,
             force,
+            if force {
+                RefreshReason::Forced
+            } else {
+                match current.refresh_reason() {
+                    Some(reason) => reason,
+                    None => return Ok(current),
+                }
+            },
         )
         .await;
         if let Err(error) = &result
@@ -227,6 +235,7 @@ impl AuthService {
             &self.cfg,
             &account,
             true,
+            RefreshReason::UnauthorizedRecovery,
         )
         .await;
         if let Err(error) = &result

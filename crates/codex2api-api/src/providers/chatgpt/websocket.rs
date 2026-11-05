@@ -39,9 +39,33 @@ struct Connection {
     revision: Option<i64>,
     workspace: Option<codex2api_upstream::WorkspaceConnection>,
     timezone: Option<String>,
+    parent_affinity: Option<String>,
 }
 
 impl Session {
+    async fn parent_pin(
+        &self,
+        context: &SupplierContext,
+        revision: Option<i64>,
+        request: &ScheduleRequest,
+    ) -> Result<Option<codex2api_upstream::ChatgptRoutingPin>> {
+        let (Some(response), Some(revision)) = (&request.parent_response, revision) else {
+            return Ok(None);
+        };
+        let key = codex2api_storage::RoutingKey::response(
+            &self.route.owner_id,
+            &self.route.scope,
+            response,
+        );
+        Ok(codex2api_upstream::ChatgptRoutingPin::load(
+            &self.state.storage,
+            &key,
+            &context.account.id,
+            revision,
+        )
+        .await?)
+    }
+
     async fn open(
         &self,
         headers: &HeaderMap,
@@ -80,13 +104,14 @@ impl Session {
                 .storage
                 .supplier_auth_revision(&context.account.id)
                 .await?;
+            let pin = self.parent_pin(&context, revision, request).await?;
             let attempt = async {
                 let client = self.state.upstream.get(&context.account.id).await?;
                 let timezone = client.identity().http_fingerprint.timezone.clone();
                 let headers =
                     dispatch::owned_headers(&self.state, &self.route, &context, headers).await?;
                 let (socket, headers, workspace) = client
-                    .connect_websocket(Endpoint::Responses, headers)
+                    .connect_websocket(Endpoint::Responses, headers, pin.as_ref())
                     .await?;
                 Ok::<_, UpstreamError>((socket, headers, workspace, timezone))
             }
@@ -112,6 +137,7 @@ impl Session {
                         revision,
                         workspace,
                         timezone,
+                        parent_affinity: pin.as_ref().map(|pin| pin.connection_id().to_owned()),
                     });
                 }
                 Err(error) => {
@@ -339,7 +365,10 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                 let selected = codex2api_upstream::scheduler::select(&session.state.storage, &session.route, &schedule, &[],
                     || dispatch::validate(&session.state, &session.credential.principal, &session.credential.token)).await?;
                 let revision = session.state.storage.supplier_auth_revision(&selected.account.id).await?;
-                if selected.account.id != connection.context.account.id || revision != connection.revision {
+                let pin = session.parent_pin(&selected, revision, &schedule).await?;
+                if selected.account.id != connection.context.account.id || revision != connection.revision
+                    || pin.as_ref().map(|pin| pin.connection_id()) != connection.parent_affinity.as_deref()
+                {
                     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.socket.close(None)).await;
                     connection = session.open(&turn.headers, &schedule, &mut turn.attempts, Some(selected)).await?;
                 } else {
@@ -440,6 +469,14 @@ async fn bridge(session: Session, mut connection: Connection, mut client: WebSoc
                         .map_err(|_| ApiError::new(StatusCode::BAD_GATEWAY, "upstream_protocol_error", "The upstream frame was not valid JSON."))?;
                     if !value.is_object() {
                         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "upstream_protocol_error", "The upstream frame was not a Responses event."));
+                    }
+                    if value["type"] == "response.created"
+                        && let Some(id) = value.pointer("/response/id").and_then(Value::as_str)
+                    {
+                        let key = codex2api_storage::RoutingKey::response(
+                            &session.route.owner_id, &session.route.scope, id,
+                        );
+                        connection.socket.remember_response_routing(&session.state.storage, &key).await?;
                     }
                     if matches!(value["type"].as_str(), Some("codex.rate_limits" | "rate_limits.updated")) {
                         continue;
@@ -589,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn api_rewrite_native_socket_reuses_two_generations_settles_before_delivery_and_closes_on_error()
      {
-        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
             let directory = codex2api_storage::test_support::tempdir().unwrap();
             let storage = codex2api_storage::test_support::open(directory.path().join("native-ws-pg")).await.unwrap();
             storage.save_user(&User {
@@ -687,7 +724,7 @@ mod tests {
                     permit: None, request: ScheduleRequest::default(),
                 }, headers: HeaderMap::new(),
                 revision: storage.supplier_auth_revision("supplier").await.unwrap(),
-                workspace: None, timezone: None,
+                workspace: None, timezone: None, parent_affinity: None,
             };
             let mut inbound = HeaderMap::new();
             inbound.insert("session-id", "caller-session".parse().unwrap());

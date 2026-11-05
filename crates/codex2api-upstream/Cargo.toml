@@ -13,6 +13,7 @@ async-stream.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
+cookie_store.workspace = true
 codex2api-suppliers.workspace = true
 codex2api-storage.workspace = true
 eventsource-stream.workspace = true

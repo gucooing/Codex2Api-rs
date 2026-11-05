@@ -72,9 +72,14 @@ async fn oauth_exchange_refresh_and_revoke_use_the_right_identity() {
     );
     assert_eq!(form["requested_token"], "openai-api-key");
 
-    refresh_tokens(&http.authenticated, &cfg, "refresh")
-        .await
-        .unwrap();
+    refresh_tokens(
+        &http.authenticated,
+        &cfg,
+        "refresh",
+        codex2api_suppliers::oauth::RefreshReason::Forced,
+    )
+    .await
+    .unwrap();
     let (headers, body) = rx.recv().await.unwrap();
     assert_eq!(headers["user-agent"], identity.official_user_agent());
     assert_eq!(headers["originator"], "codex_cli_rs");
@@ -83,7 +88,7 @@ async fn oauth_exchange_refresh_and_revoke_use_the_right_identity() {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
         json!({
-            "client_id":codex2api_common::version::OAUTH_CLIENT_ID, "grant_type":"refresh_token", "refresh_token":"refresh"
+            "client_id":codex2api_common::version::OAUTH_CLIENT_ID, "grant_type":"refresh_token", "refresh_token":"refresh", "refresh_reason":"forced"
         })
     );
 
@@ -105,10 +110,14 @@ async fn oauth_exchange_refresh_and_revoke_use_the_right_identity() {
 #[tokio::test]
 async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
     let requests = Arc::new(AtomicUsize::new(0));
+    let reasons = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let observed_reasons = reasons.clone();
     let count = requests.clone();
-    let app = Router::new().route("/oauth/token", post(move || {
+    let app = Router::new().route("/oauth/token", post(move |Json(body): Json<serde_json::Value>| {
         let count = count.clone();
+        let reasons = observed_reasons.clone();
         async move {
+            reasons.lock().await.push(body["refresh_reason"].as_str().unwrap().to_owned());
             let n = count.fetch_add(1, Ordering::SeqCst) + 1;
             Json(json!({"access_token":format!("access-{n}"), "refresh_token":format!("refresh-{n}")}))
         }
@@ -160,6 +169,12 @@ async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
         "access-2"
     );
     assert_eq!(requests.load(Ordering::SeqCst), 2);
+    auth.refresh(&id, true).await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        *reasons.lock().await,
+        ["scheduled", "unauthorized_recovery", "forced"]
+    );
     let clients = auth.account_http(&id).await.unwrap();
     assert!(Arc::ptr_eq(
         &clients,
@@ -177,4 +192,93 @@ async fn proactive_refresh_and_concurrent_401s_do_not_reuse_rotated_tokens() {
     );
     server.abort();
     storage.close().await;
+}
+
+#[tokio::test]
+async fn a_late_refresh_success_or_rejection_cannot_replace_a_new_login() {
+    for rejected in [false, true] {
+        let received = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (started, finish) = (received.clone(), release.clone());
+        let app = Router::new().route("/oauth/token", post(move || {
+            let (started, finish) = (started.clone(), finish.clone());
+            async move {
+                started.notify_one();
+                finish.notified().await;
+                if rejected {
+                    (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"invalid_grant"})))
+                } else {
+                    (axum::http::StatusCode::OK, Json(json!({"access_token":"late-access","refresh_token":"late-refresh"})))
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/oauth/token", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = codex2api_storage::test_support::tempdir().unwrap();
+        let storage = codex2api_storage::test_support::open(directory.path().join("late-refresh"))
+            .await
+            .unwrap();
+        let accounts = SupplierAccountStore::open(storage.clone());
+        let pending = accounts.create_pending().await.unwrap();
+        let id = pending.account.id.clone();
+        let credentials = |access: &str, refresh: &str| {
+            codex2api_suppliers::persist::chatgpt_auth(
+                "fixture".into(),
+                access.into(),
+                refresh.into(),
+                Some("workspace".into()),
+            )
+        };
+        accounts
+            .save_auth_for_account(&id, &credentials("old-access", "old-refresh"))
+            .await
+            .unwrap();
+        let service = AuthService::with_config(
+            accounts.clone(),
+            OAuthConfig {
+                token_url: endpoint,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let refresh = {
+            let (service, id) = (service.clone(), id.clone());
+            tokio::spawn(async move { service.refresh(&id, true).await })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(60), received.notified())
+            .await
+            .unwrap();
+        accounts
+            .save_auth_for_account(&id, &credentials("new-login-access", "new-login-refresh"))
+            .await
+            .unwrap();
+        let revision = storage.supplier_auth_revision(&id).await.unwrap();
+        release.notify_one();
+        let result = refresh.await.unwrap();
+        assert_eq!(result.is_err(), rejected);
+        let current = service.credentials(&id).await.unwrap();
+        let tokens = current.auth.tokens.as_ref().unwrap();
+        assert_eq!(tokens.access_token, "new-login-access");
+        assert_eq!(tokens.refresh_token, "new-login-refresh");
+        assert_eq!(Some(current.revision), revision);
+        assert!(
+            !storage
+                .supplier_health(&id)
+                .await
+                .unwrap()
+                .authentication_invalid()
+        );
+        assert_eq!(
+            accounts
+                .load_context(&id)
+                .await
+                .unwrap()
+                .identity
+                .installation_id,
+            pending.identity.installation_id
+        );
+        server.abort();
+        storage.close().await;
+    }
 }

@@ -302,7 +302,13 @@ impl AuthService {
                 "refresh token is too long"
             )));
         }
-        let refresh = refresh_tokens(http, self.config(), refresh_token).await?;
+        let refresh = refresh_tokens(
+            http,
+            self.config(),
+            refresh_token,
+            crate::oauth::RefreshReason::Forced,
+        )
+        .await?;
         let mut auth = chatgpt_auth(String::new(), String::new(), refresh_token.to_owned(), None);
         apply_refresh(&mut auth, &refresh)?;
         if auth

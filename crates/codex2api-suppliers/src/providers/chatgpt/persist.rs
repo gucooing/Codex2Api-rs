@@ -1,7 +1,9 @@
 use chrono::Utc;
 
 use crate::error::{AuthError, Result};
-use crate::oauth::{OAuthConfig, exchange_code_for_tokens, refresh_tokens, revoke_tokens};
+use crate::oauth::{
+    OAuthConfig, RefreshReason, exchange_code_for_tokens, refresh_tokens, revoke_tokens,
+};
 use crate::tokens::{
     AUTH_MODE_CHATGPT, ExchangedTokens, IdTokenInfo, RefreshResponse, TokenSet, apply_refresh,
     parse_chatgpt_jwt_claims, should_refresh, token_set_from_auth,
@@ -125,6 +127,7 @@ pub async fn refresh_account(
     cfg: &OAuthConfig,
     account: &SupplierAccount,
     force: bool,
+    reason: RefreshReason,
 ) -> Result<AuthDotJson> {
     let storage = accounts.storage()?;
     let snapshot = storage
@@ -156,7 +159,15 @@ pub async fn refresh_account(
             .ok()?
             .chatgpt_user_id
     });
-    let refresh: RefreshResponse = refresh_tokens(http, cfg, &refresh_token).await?;
+    let reason = if force {
+        reason
+    } else {
+        match crate::tokens::refresh_reason(&auth) {
+            Some(reason) => reason,
+            None => return Ok(auth),
+        }
+    };
+    let refresh: RefreshResponse = refresh_tokens(http, cfg, &refresh_token, reason).await?;
     if let Some(id_token) = &refresh.id_token {
         let claims = parse_chatgpt_jwt_claims(id_token)?;
         let expected_user = previous_user_id

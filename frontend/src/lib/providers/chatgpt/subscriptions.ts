@@ -9,6 +9,8 @@ export const subscriptionChoices = [
   { value: "business", label: "ChatGPT Business" },
   { value: "enterprise", label: "ChatGPT Enterprise" },
   { value: "edu", label: "ChatGPT Edu" },
+  { value: "sci", label: "Academic Researchers" },
+  { value: "sci_plus", label: "Academic Researchers Plus" },
 ] as const;
 
 export function subscriptionLabel(value: unknown): string {

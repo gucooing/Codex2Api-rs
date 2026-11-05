@@ -130,6 +130,71 @@ async fn fixture_for(
 }
 
 #[tokio::test]
+async fn reviewer_prefers_the_parent_supplier_but_can_switch_without_continuation() {
+    let (_directory, state, access, mut request) = fixture().await;
+    let mut second =
+        NewSupplierAccount::pending_identity("installation-two", "Linux", "6", "x86_64", "{}");
+    second.id = Some("second".into());
+    second.chatgpt_account_id = Some("workspace-two".into());
+    second.chatgpt_user_id = Some("user-two".into());
+    state
+        .storage
+        .save_authorized_account(
+            second,
+            SupplierTokens {
+                access_token: Some("fixture-two".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    state
+        .storage
+        .add_supplier_model("second", "fixture-model")
+        .await
+        .unwrap();
+    state
+        .storage
+        .replace_supplier_tags(&["second".into()], &["pool".into()])
+        .await
+        .unwrap();
+    let selected = select(&state, &access, &request, &["second".into()])
+        .await
+        .unwrap();
+    assert_eq!(selected.account.id, "supplier");
+    drop(selected);
+    // A foreign consumer's response cannot override this consumer's session affinity.
+    state
+        .storage
+        .remember_response_owner(
+            previous_key("foreign", "chatgpt", "parent"),
+            "second".into(),
+        )
+        .await
+        .unwrap();
+    request.parent_response = Some("parent".into());
+    let selected = select(&state, &access, &request, &[]).await.unwrap();
+    assert_eq!(selected.account.id, "supplier");
+    drop(selected);
+    state
+        .storage
+        .remember_response_owner(
+            previous_key(&access.virtual_account_id, "chatgpt", "parent"),
+            "second".into(),
+        )
+        .await
+        .unwrap();
+    let selected = select(&state, &access, &request, &[]).await.unwrap();
+    assert_eq!(selected.account.id, "second");
+    drop(selected);
+    let selected = select(&state, &access, &request, &["second".into()])
+        .await
+        .unwrap();
+    assert_eq!(selected.account.id, "supplier");
+}
+
+#[tokio::test]
 async fn both_providers_share_concurrent_scheduling_and_recheck_stale_model_snapshots() {
     for provider in ["chatgpt", "grok"] {
         for mode in ["traditional", "advanced"] {

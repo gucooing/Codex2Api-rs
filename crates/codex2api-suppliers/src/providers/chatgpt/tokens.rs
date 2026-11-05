@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::error::{AuthError, Result};
-use crate::oauth::OAuthConfig;
+use crate::oauth::{OAuthConfig, RefreshReason};
 use crate::{AuthDotJson, TokenData};
 
 pub use crate::{AuthDotJson as AccountAuthJson, TokenData as AccountTokenData};
@@ -41,13 +41,10 @@ impl ChatgptCredentials {
         })
     }
     pub(crate) fn needs_refresh(&self) -> bool {
-        if let Some(expires) = self.expires_at {
-            expires <= Utc::now() + chrono::Duration::minutes(ACCESS_TOKEN_REFRESH_WINDOW_MINUTES)
-        } else {
-            self.auth.last_refresh.is_some_and(|last| {
-                last < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL_DAYS)
-            })
-        }
+        self.refresh_reason().is_some()
+    }
+    pub(crate) fn refresh_reason(&self) -> Option<RefreshReason> {
+        refresh_reason_for(self.expires_at, self.auth.last_refresh)
     }
 }
 
@@ -315,17 +312,31 @@ pub fn now_rfc3339() -> String {
 }
 
 pub fn should_refresh(auth: &AuthDotJson) -> bool {
-    if let Some(tokens) = auth.tokens.as_ref()
-        && !tokens.access_token.is_empty()
-        && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
-    {
-        return expires_at
-            <= Utc::now() + chrono::Duration::minutes(ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);
+    refresh_reason(auth).is_some()
+}
+
+pub(crate) fn refresh_reason(auth: &AuthDotJson) -> Option<RefreshReason> {
+    let expires = auth
+        .tokens
+        .as_ref()
+        .and_then(|tokens| parse_jwt_expiration(&tokens.access_token).ok().flatten());
+    refresh_reason_for(expires, auth.last_refresh)
+}
+
+fn refresh_reason_for(
+    expires: Option<DateTime<Utc>>,
+    last_refresh: Option<DateTime<Utc>>,
+) -> Option<RefreshReason> {
+    if let Some(expires) = expires {
+        (expires <= Utc::now() + chrono::Duration::minutes(ACCESS_TOKEN_REFRESH_WINDOW_MINUTES))
+            .then_some(RefreshReason::ProactiveExpiry)
+    } else {
+        last_refresh
+            .is_some_and(|last| {
+                last < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL_DAYS)
+            })
+            .then_some(RefreshReason::Scheduled)
     }
-    let Some(last_refresh) = auth.last_refresh else {
-        return false;
-    };
-    last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL_DAYS)
 }
 
 pub fn apply_refresh(auth: &mut AuthDotJson, refresh: &RefreshResponse) -> Result<()> {
@@ -396,9 +407,10 @@ pub async fn refresh_chatgpt_tokens(
     cfg: &OAuthConfig,
     refresh_token: &str,
     user_agent: &str,
+    reason: RefreshReason,
 ) -> Result<RefreshResponse> {
     let http = refresh_http_client(user_agent)?;
-    crate::oauth::refresh_tokens(&http, cfg, refresh_token).await
+    crate::oauth::refresh_tokens(&http, cfg, refresh_token, reason).await
 }
 
 #[cfg(test)]
@@ -422,6 +434,32 @@ mod tests {
         let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
         let signature_b64 = b64url_no_pad(b"sig");
         format!("{header_b64}.{payload_b64}.{signature_b64}")
+    }
+
+    #[test]
+    fn refresh_trigger_uses_token_expiry_before_the_scheduled_age() {
+        let mut auth = AuthDotJson::chatgpt(
+            TokenData {
+                access_token: "opaque-access".into(),
+                ..Default::default()
+            },
+            Some(Utc::now() - chrono::Duration::days(9)),
+        );
+        assert!(matches!(
+            refresh_reason(&auth),
+            Some(RefreshReason::Scheduled)
+        ));
+        auth.tokens.as_mut().unwrap().access_token = fake_jwt(serde_json::json!({
+            "exp": (Utc::now() + chrono::Duration::minutes(1)).timestamp(),
+        }));
+        assert!(matches!(
+            refresh_reason(&auth),
+            Some(RefreshReason::ProactiveExpiry)
+        ));
+        auth.tokens.as_mut().unwrap().access_token = fake_jwt(serde_json::json!({
+            "exp": (Utc::now() + chrono::Duration::hours(1)).timestamp(),
+        }));
+        assert!(refresh_reason(&auth).is_none());
     }
 
     #[test]

@@ -64,7 +64,7 @@ pub struct AccountCookieStore {
     jar: Jar,
 }
 
-fn allowed_url(url: &reqwest::Url) -> bool {
+pub fn chatgpt_cookie_url_allowed(url: &reqwest::Url) -> bool {
     url.scheme() == "https"
         && url.host_str().is_some_and(|host| {
             matches!(
@@ -100,14 +100,16 @@ fn allowed_cookie(value: &HeaderValue) -> bool {
 
 impl CookieStore for AccountCookieStore {
     fn set_cookies(&self, cookies: &mut dyn Iterator<Item = &HeaderValue>, url: &reqwest::Url) {
-        if allowed_url(url) {
+        if chatgpt_cookie_url_allowed(url) {
             self.jar
                 .set_cookies(&mut cookies.filter(|value| allowed_cookie(value)), url);
         }
     }
 
     fn cookies(&self, url: &reqwest::Url) -> Option<HeaderValue> {
-        allowed_url(url).then(|| self.jar.cookies(url)).flatten()
+        chatgpt_cookie_url_allowed(url)
+            .then(|| self.jar.cookies(url))
+            .flatten()
     }
 }
 

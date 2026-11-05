@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 #[derive(Clone, Debug)]
-pub struct RoutingKey(String);
+pub struct RoutingKey(pub(crate) String);
 impl RoutingKey {
     pub fn session(owner: &str, provider: &str, pool: &str, session_hash: &str) -> Self {
         Self(format!(

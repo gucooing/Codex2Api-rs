@@ -15,10 +15,10 @@ pub const CODEX_REPO: &str = "https://github.com/openai/codex";
 pub const CODEX_REF_BRANCH: &str = CODEX_RELEASE_TAG;
 
 /// Exact official source commit used for the supplier contract.
-pub const CODEX_REF_COMMIT: &str = "83086188ae0614bd882818ff1aa23f3194962012";
+pub const CODEX_REF_COMMIT: &str = "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856";
 
 /// Commit timestamp (UTC).
-pub const CODEX_REF_COMMIT_DATE: &str = "2026-10-15T18:57:07Z";
+pub const CODEX_REF_COMMIT_DATE: &str = "2026-10-29T17:44:30Z";
 
 /// First-line commit message of the reference snapshot.
 pub const CODEX_REF_COMMIT_MESSAGE: &str = "## New Features";
@@ -28,14 +28,14 @@ pub const CODEX_REF_PATH: &str = "reference/codex";
 
 /// Current official packaged CLI release this proxy pretends to be.
 ///
-/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.163.0
+/// GitHub latest stable: https://github.com/openai/codex/releases/tag/rust-v0.166.0
 /// (`CARGO_PKG_VERSION` stamped into that binary). Not the source-tree `0.0.0`.
-pub const CODEX_RELEASE_VERSION: &str = "0.163.0";
+pub const CODEX_RELEASE_VERSION: &str = "0.166.0";
 
 /// GitHub release tag for [`CODEX_RELEASE_VERSION`].
-pub const CODEX_RELEASE_TAG: &str = "rust-v0.163.0";
+pub const CODEX_RELEASE_TAG: &str = "rust-v0.166.0";
 
-/// Commit the `rust-v0.163.0` tag points at.
+/// Commit the `rust-v0.166.0` tag points at.
 pub const CODEX_RELEASE_COMMIT: &str = CODEX_REF_COMMIT;
 
 /// User-Agent version token. Always the packaged release, never source `0.0.0`.
@@ -106,6 +106,7 @@ pub const HEADER_FEDRAMP: &str = "x-openai-fedramp";
 pub const HEADER_ORGANIZATION: &str = "openai-organization";
 pub const HEADER_PROJECT: &str = "openai-project";
 pub const HEADER_OPENAI_BETA: &str = "openai-beta";
+pub const ROUTING_COOKIE_NAMES: [&str; 2] = ["__oailb", "__cflb"];
 
 /// Default OAuth callback port used by Codex CLI.
 pub const OAUTH_CALLBACK_PORT: u16 = 1455;

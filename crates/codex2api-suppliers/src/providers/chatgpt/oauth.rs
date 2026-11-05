@@ -17,6 +17,7 @@ use codex2api_common::version::{
     OAUTH_ISSUER, OAUTH_REVOKE_URL, OAUTH_SCOPE, OAUTH_TOKEN_URL,
 };
 
+pub use codex2api_common::providers::chatgpt::oauth::RefreshReason;
 /// Official loopback callback path used by Codex CLI.
 pub use codex2api_common::version::OAUTH_CALLBACK_PATH as CALLBACK_PATH;
 pub use codex2api_common::version::OAUTH_CANCEL_PATH as CANCEL_PATH;
@@ -287,11 +288,12 @@ pub async fn obtain_api_key(
     Ok(response.json::<ApiKeyResponse>().await?.access_token)
 }
 
-/// Refresh POST JSON `{ client_id, grant_type: "refresh_token", refresh_token }`.
+/// Refresh using the official ChatGPT JSON grant and its actual trigger.
 pub async fn refresh_tokens(
     http: &reqwest::Client,
     cfg: &OAuthConfig,
     refresh_token: &str,
+    refresh_reason: RefreshReason,
 ) -> Result<RefreshResponse> {
     if refresh_token.is_empty() {
         return Err(AuthError::MissingRefreshToken);
@@ -300,6 +302,7 @@ pub async fn refresh_tokens(
         client_id: cfg.client_id.clone(),
         grant_type: "refresh_token",
         refresh_token: refresh_token.to_string(),
+        refresh_reason,
     };
     let endpoint = cfg.token_endpoint();
     let resp = http
@@ -631,6 +634,7 @@ struct RefreshRequest {
     client_id: String,
     grant_type: &'static str,
     refresh_token: String,
+    refresh_reason: RefreshReason,
 }
 
 #[derive(Serialize)]

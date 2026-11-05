@@ -12,9 +12,9 @@ OAuth 模块专用于已配置本服务地址的 ccodex、cgrok 和 hook Desktop
 
 官方协议目标：
 
-- 发布版: `0.163.0`（tag `rust-v0.163.0`，commit `83086188ae0614bd882818ff1aa23f3194962012`）
-- 源码快照: `83086188ae0614bd882818ff1aa23f3194962012`（2026-10-15T18:57:07Z）
-- User-Agent 使用公共版本常量 `0.163.0` 与账户冻结指纹在运行时生成，不将派生 UA 存入账户记录
+- 发布版: `0.166.0`（tag `rust-v0.166.0`，commit `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`）
+- 源码快照: `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`（2026-10-29T17:44:30Z）
+- User-Agent 使用公共版本常量 `0.166.0` 与账户冻结指纹在运行时生成，不将派生 UA 存入账户记录
 - 协议常量: `crates/codex2api-common/src/version.rs`
 - 架构说明: `docs/ARCHITECTURE.md`
 

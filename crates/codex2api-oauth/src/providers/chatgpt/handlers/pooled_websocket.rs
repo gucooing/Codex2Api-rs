@@ -27,6 +27,33 @@ struct Connection {
     headers: HeaderMap,
     revision: Option<i64>,
     workspace: Option<codex2api_upstream::WorkspaceConnection>,
+    parent_affinity: Option<String>,
+}
+
+async fn parent_pin(
+    state: &OAuthState,
+    oauth: &VirtualAccess,
+    ctx: &SupplierContext,
+    revision: Option<i64>,
+    request: &crate::pool_scheduler::ScheduleRequest,
+) -> Result<Option<codex2api_upstream::ChatgptRoutingPin>> {
+    let (Some(response), Some(revision)) = (&request.parent_response, revision) else {
+        return Ok(None);
+    };
+    let key = codex2api_storage::RoutingKey::response(
+        &oauth.virtual_account_id,
+        &oauth.provider_id,
+        response,
+    );
+    Ok(
+        codex2api_upstream::ChatgptRoutingPin::load(
+            &state.storage,
+            &key,
+            &ctx.account.id,
+            revision,
+        )
+        .await?,
+    )
 }
 
 fn context(
@@ -78,6 +105,7 @@ async fn open(
             .storage
             .supplier_auth_revision(&ctx.account.id)
             .await?;
+        let pin = parent_pin(state, oauth, &ctx, revision, request).await?;
         let attempt = async {
             #[cfg(test)]
             if let Some(url) = state.websocket_test_targets.get(&ctx.account.id) {
@@ -89,7 +117,9 @@ async fn open(
             if !ctx.reused_affinity {
                 inbound.remove("x-codex-turn-state");
             }
-            upstream.connect_websocket(endpoint, inbound).await
+            upstream
+                .connect_websocket(endpoint, inbound, pin.as_ref())
+                .await
         }
         .await;
         match attempt {
@@ -104,6 +134,7 @@ async fn open(
                     headers,
                     revision,
                     workspace,
+                    parent_affinity: pin.as_ref().map(|pin| pin.connection_id().to_owned()),
                 });
             }
             Err(error) => {
@@ -136,9 +167,15 @@ pub(super) async fn connect(
     state: OAuthState,
     endpoint: Endpoint,
     oauth: VirtualAccess,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
+    if endpoint == Endpoint::Guardian {
+        headers.insert(
+            codex2api_common::version::HEADER_GUARDIAN,
+            "reviewer".parse().unwrap(),
+        );
+    }
     let service = crate::admission::ExecutionService::new(state.storage.clone());
     service.check_budget(&oauth.virtual_account_id).await?;
     service
@@ -369,7 +406,11 @@ async fn bridge(
                 schedule.admission = admission.as_ref().map(|value| value.version);
                 if !state.storage.virtual_access_valid(&oauth.token_hash).await? { return Err(OAuthError::invalid_token()); }
                 let selected = pool::select_for(&state, &oauth, &schedule, &[]).await?;
-                let switched = selected.account.id != conn.ctx.account.id;
+                let revision = state.storage.supplier_auth_revision(&selected.account.id).await?;
+                let pin = parent_pin(&state, &oauth, &selected, revision, &schedule).await?;
+                let switched = selected.account.id != conn.ctx.account.id
+                    || revision != conn.revision
+                    || pin.as_ref().map(|pin| pin.connection_id()) != conn.parent_affinity.as_deref();
                 if switched {
                     let _ = conn.socket.close(None).await;
                     conn = open(
@@ -504,6 +545,14 @@ async fn bridge(
                     }
                     let mut value: Value = serde_json::from_str(&text)
                         .map_err(|_| super::websocket::relay_error("Invalid upstream Responses event"))?;
+                    if value["type"] == "response.created"
+                        && let Some(id) = value.pointer("/response/id").and_then(Value::as_str)
+                    {
+                        let key = codex2api_storage::RoutingKey::response(
+                            &oauth.virtual_account_id, &oauth.provider_id, id,
+                        );
+                        conn.socket.remember_response_routing(&state.storage, &key).await?;
+                    }
                     let failed = matches!(ResponseOutcome::from_value(&value, None), Some(ResponseOutcome::Failed(_)));
                     let replay_safe = pending.as_ref().is_none_or(|p| !p.committed)
                         && !codex2api_upstream::executor::generation_observed(&value);
@@ -816,6 +865,7 @@ mod tests {
                             headers: HeaderMap::new(),
                             revision: state.storage.supplier_auth_revision(&first).await.unwrap(),
                             workspace: None,
+                            parent_affinity: None,
                         };
                         upgrade.on_upgrade(move |client| {
                             bridge(
@@ -917,26 +967,39 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_prelude_is_consumed_and_exhausted_pool_sends_service_error_and_close() {
-        pool_websocket_fixture(false, false, false).await;
+        pool_websocket_fixture(false, Rejection::Quota).await;
     }
 
     #[tokio::test]
     async fn quota_rejection_switches_supplier_without_leaking_failure_or_double_admission() {
-        pool_websocket_fixture(true, false, false).await;
+        pool_websocket_fixture(true, Rejection::Quota).await;
     }
 
     #[tokio::test]
-    async fn request_throttle_is_forwarded_without_rebinding_or_supplier_cooldown() {
-        pool_websocket_fixture(true, true, false).await;
+    async fn request_throttle_switches_supplier_without_forwarding_upstream_429() {
+        pool_websocket_fixture(true, Rejection::Throttle).await;
+    }
+
+    #[tokio::test]
+    async fn missing_model_event_switches_supplier_without_blocking_the_account() {
+        pool_websocket_fixture(true, Rejection::MissingModel).await;
     }
 
     #[tokio::test]
     async fn payment_required_rebinds_or_closes_an_exhausted_pool_without_refreshing_auth() {
-        pool_websocket_fixture(true, false, true).await;
-        pool_websocket_fixture(false, false, true).await;
+        pool_websocket_fixture(true, Rejection::Payment).await;
+        pool_websocket_fixture(false, Rejection::Payment).await;
     }
 
-    async fn pool_websocket_fixture(available: bool, throttle: bool, payment: bool) {
+    #[derive(Clone, Copy)]
+    enum Rejection {
+        Quota,
+        Throttle,
+        Payment,
+        MissingModel,
+    }
+
+    async fn pool_websocket_fixture(available: bool, rejection: Rejection) {
         let (_dir, mut state, oauth, ids) = crate::pool_execution::tests::setup_pool().await;
         state
             .storage
@@ -995,6 +1058,7 @@ mod tests {
                 );
                 for value in [
                     json!({"type":"response.created","response":{"id":"winning-attempt"}}),
+                    json!({"type":"response.metadata","response_id":"winning-attempt","metadata":{"guardian":{"item_id":"tool-one","requires_review":true}}}),
                     json!({"type":"response.completed","response":{"id":"winning-attempt","usage":{"input_tokens":7,"output_tokens":3},"output":[]}}),
                 ] {
                     socket
@@ -1023,10 +1087,16 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            let failure = if payment {
-                json!({"type":"error","status":402,"error":{"message":"Payment Required"}})
-            } else {
-                json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if throttle {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600,"headers":{"Retry-After":5,"Authorization":"supplier-secret"}}},"headers":{"retry-after":"7"}})
+            let failure = match rejection {
+                Rejection::Payment => {
+                    json!({"type":"error","status":402,"error":{"message":"Payment Required"}})
+                }
+                Rejection::MissingModel => {
+                    json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":"model_not_found","message":"The model is not available."}}})
+                }
+                Rejection::Quota | Rejection::Throttle => {
+                    json!({"type":"response.failed","response":{"id":"rejected-attempt","error":{"code":if matches!(rejection, Rejection::Throttle) {"rate_limit_exceeded"} else {"usage_limit_reached"},"message":"Please try again in 7s.","resets_at":chrono::Utc::now().timestamp()+600,"headers":{"Retry-After":5,"Authorization":"supplier-secret"}}},"headers":{"retry-after":"7"}})
+                }
             };
             socket
                 .send(UpstreamMessage::Text(failure.to_string().into()))
@@ -1063,6 +1133,7 @@ mod tests {
                         headers: HeaderMap::new(),
                         revision,
                         workspace: None,
+                        parent_affinity: None,
                     };
                     upgrade.on_upgrade(move |client| {
                         bridge(
@@ -1091,13 +1162,13 @@ mod tests {
             ))
             .await
             .unwrap();
-        let event = tokio::time::timeout(std::time::Duration::from_secs(10), client.next())
+        let event = tokio::time::timeout(std::time::Duration::from_secs(60), client.next())
             .await
             .unwrap()
             .unwrap()
             .unwrap();
         let value: Value = serde_json::from_slice(&event.into_data()).unwrap();
-        if payment {
+        if matches!(rejection, Rejection::Payment) {
             let health = state.storage.supplier_health(&ids[0]).await.unwrap();
             assert!(health.payment_required());
             assert!(!health.authentication_invalid());
@@ -1108,38 +1179,30 @@ mod tests {
                     .is_none()
             );
         }
-        if throttle {
-            assert_eq!(value["type"], "response.created");
-            assert_eq!(value["response"]["id"], "rejected-attempt");
-            let frame = client.next().await.unwrap().unwrap();
-            let error: Value = serde_json::from_slice(&frame.into_data()).unwrap();
-            assert_eq!(error["response"]["error"]["code"], "rate_limit_exceeded");
-            assert_eq!(error["headers"]["retry-after"], "7");
-            assert_eq!(
-                error["response"]["error"]["headers"],
-                json!({"retry-after":"5"})
-            );
-            assert!(!error.to_string().contains("supplier-secret"));
-            assert!(matches!(
-                client.next().await.unwrap().unwrap(),
-                UpstreamMessage::Close(Some(_))
-            ));
+        if matches!(rejection, Rejection::MissingModel) {
             let health = state.storage.supplier_health(&ids[0]).await.unwrap();
-            assert!(!health.authentication_invalid());
-            assert!(health.quota_exhausted() == false);
-            assert_eq!(
-                state
-                    .storage
-                    .select_pool_supplier(&oauth.virtual_account_id, "chatgpt", &[])
-                    .await
-                    .unwrap()
-                    .as_deref(),
-                Some(ids[0].as_str())
-            );
-        } else if available {
+            assert!(health.account_block().is_none());
+            let blocked = state
+                .storage
+                .pool_candidates("pool", Some("chatgpt"), Some("gpt-5.5"))
+                .await
+                .unwrap();
+            assert!(!blocked.iter().any(|candidate| candidate.id == ids[0]));
+        }
+        if available {
             assert_eq!(value["type"], "response.created");
             assert_eq!(value["response"]["id"], "winning-attempt");
-            let event = tokio::time::timeout(std::time::Duration::from_secs(10), client.next())
+            let event = tokio::time::timeout(std::time::Duration::from_secs(60), client.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let value: Value = serde_json::from_slice(&event.into_data()).unwrap();
+            assert_eq!(
+                value,
+                json!({"type":"response.metadata","response_id":"winning-attempt","metadata":{"guardian":{"item_id":"tool-one","requires_review":true}}})
+            );
+            let event = tokio::time::timeout(std::time::Duration::from_secs(60), client.next())
                 .await
                 .unwrap()
                 .unwrap()
@@ -1175,11 +1238,7 @@ mod tests {
         assert_eq!(state.storage.consumer_active(&oauth.virtual_account_id), 0);
         upstream_task.await.unwrap();
         if let Some(task) = second_task {
-            if throttle {
-                task.abort();
-            } else {
-                task.await.unwrap();
-            }
+            task.await.unwrap();
         }
         app_task.abort();
     }

@@ -30,6 +30,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde", "clock"] }
 chrono-tz = "0.10"
+cookie_store = { version = "=0.22.1", default-features = false, features = ["serde"] }
 codex2api-admin = { path = "crates/codex2api-admin" }
 codex2api-oauth = { path = "crates/codex2api-oauth" }
 codex2api-suppliers = { path = "crates/codex2api-suppliers" }

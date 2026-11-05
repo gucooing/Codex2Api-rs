@@ -198,13 +198,17 @@ pub(crate) fn verdict(failure: &UpstreamFailure) -> Verdict {
             Some(&code),
             parsed.message.as_deref(),
         ),
-        Some(404) if model_entitlement => Verdict::avoid(
-            AvoidScope::Until(now.saturating_add(3600)),
-            model_target(),
-            BlockKind::ModelMissing,
-            Some(&code),
-            parsed.message.as_deref(),
-        ),
+        Some(400 | 404)
+            if code == "model_not_found" || (status == Some(404) && model_entitlement) =>
+        {
+            Verdict::avoid(
+                AvoidScope::Until(now.saturating_add(3600)),
+                model_target(),
+                BlockKind::ModelMissing,
+                Some(&code),
+                parsed.message.as_deref(),
+            )
+        }
         Some(429) if quota => Verdict::avoid(
             AvoidScope::Until(quota_reset(error, &observed_headers(failure), now)),
             AvoidTarget::Account,
@@ -257,6 +261,13 @@ pub(crate) fn verdict(failure: &UpstreamFailure) -> Verdict {
                 parsed.message.as_deref(),
             )
         }
+        None if code == "model_not_found" => Verdict::avoid(
+            AvoidScope::Until(now.saturating_add(3600)),
+            model_target(),
+            BlockKind::ModelMissing,
+            Some(&code),
+            parsed.message.as_deref(),
+        ),
         None if parsed.kind == crate::FailureKind::InvalidRequest => Verdict::ClientError {
             status: 400,
             body: failure.body.clone(),
@@ -350,6 +361,31 @@ mod tests {
                 scope: AvoidScope::Request,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn missing_model_switches_only_that_model_before_any_output() {
+        for status in [Some(400), Some(403), Some(404), None] {
+            for body in [
+                json!({"error":{"code":"model_not_found","message":"not available"}}),
+                json!({"type":"response.failed","response":{"error":{"code":"model_not_found"}}}),
+            ] {
+                let mut rejected = failure(status, body);
+                assert!(matches!(verdict(&rejected), Verdict::Avoid {
+                    target: AvoidTarget::Model(ref model), kind: BlockKind::ModelMissing,
+                    scope: AvoidScope::Until(3700), ..
+                } if model == "gpt-5"));
+                rejected.output_committed = true;
+                assert!(matches!(verdict(&rejected), Verdict::Stop { .. }));
+            }
+        }
+        assert!(matches!(
+            verdict(&failure(
+                Some(400),
+                json!({"error":{"code":"model_not_allowed"}})
+            )),
+            Verdict::ClientError { status: 400, .. }
         ));
     }
 }

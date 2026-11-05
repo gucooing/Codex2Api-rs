@@ -168,6 +168,16 @@ pub(crate) fn scheduling(headers: &HeaderMap, body: &Value) -> crate::scheduler:
         model: text(body, "model"),
         session_hash: seed.map(|seed| hash(&seed)),
         previous_response: text(body, "previous_response_id"),
+        parent_response: headers
+            .get(codex2api_common::version::HEADER_GUARDIAN)
+            .is_some_and(|value| value == "reviewer")
+            .then(|| {
+                body.pointer("/client_metadata/parent_response_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .flatten(),
         ..Default::default()
     }
 }

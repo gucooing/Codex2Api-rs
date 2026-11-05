@@ -2,7 +2,7 @@
 //!
 //! The ChatGPT provider talks to official Codex servers with the same request
 //! identity as a logged-in Codex CLI at commit
-//! `83086188ae0614bd882818ff1aa23f3194962012`.
+//! `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
 //!
 //! Transport uses stock reqwest and the pinned WebSocket transport dependencies.
 //! This crate does not spoof TLS/JA3.
@@ -83,6 +83,7 @@ pub use headers::{
 };
 pub use operations::{ChatgptEndpoint, responses_subpath_url};
 pub use pool::UpstreamPool;
+pub use providers::chatgpt::routing_pin::ChatgptRoutingPin;
 pub use request::{
     MAX_REQUEST_BYTES, decode_body, normalize_response_identity, serialize_responses_request,
 };

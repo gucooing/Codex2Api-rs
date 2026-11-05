@@ -522,6 +522,7 @@ dependencies = [
  "codex2api-common",
  "codex2api-storage",
  "codex2api-suppliers",
+ "cookie_store",
  "eventsource-stream",
  "futures",
  "http",
